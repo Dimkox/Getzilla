@@ -2647,11 +2647,6 @@ _INERT_SECRET = frozenset({
     'readlink',
 })
 _GREP_FAMILY = frozenset({'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ack-grep'})
-_ALWAYS_RECURSIVE_GREP = frozenset({'rg', 'ag', 'ack', 'ack-grep'})
-_GREP_VALUE_OPTIONS = frozenset({
-    '-m', '--max-count', '-A', '-B', '-C', '--before-context', '--after-context', '--context', '-d', '-D', '--devices',
-    '--binary-files', '--color', '--colour', '--include', '--exclude', '--exclude-dir', '--include-dir',
-})
 _COPY_READERS = frozenset({'cp', 'rsync', 'scp'})
 _WINDOWS_COPY_READERS = frozenset({'robocopy', 'xcopy', 'copy-item', 'copy', 'cpi'})
 _WINDOWS_ARCHIVE_READERS = frozenset({'compress-archive'})
@@ -2843,7 +2838,7 @@ def _read_target(raw: str, directory: Path, budget: _Budget) -> tuple[str, bool]
 
 def _walk_for_secret(
     root: Path, directory: str, patterns: list[str], budget: _Budget, glob_filter: str | None = None,
-    *, skip_hidden: bool = False,
+    *, skip_hidden: bool = False, exclude_dirs: tuple[str, ...] = (),
 ) -> str | None:
     """Inspect metadata under a bounded recursive scope; unknown scope refuses."""
     stack = [directory]
@@ -2860,11 +2855,12 @@ def _walk_for_secret(
             with os.scandir(current) as entries:
                 for entry in entries:
                     budget.tick()
-                    if entry.name == '.git' or (skip_hidden and entry.name.startswith('.')):
+                    if skip_hidden and entry.name.startswith('.'):
                         continue
                     metadata = entry.stat(follow_symlinks=True)
                     if stat.S_ISDIR(metadata.st_mode):
-                        stack.append(entry.path)
+                        if not any(fnmatch.fnmatchcase(entry.name, pattern) for pattern in exclude_dirs):
+                            stack.append(entry.path)
                     elif not stat.S_ISREG(metadata.st_mode):
                         raise _BudgetExceeded
                     elif (not glob_filter or any(fnmatch.fnmatch(entry.name, g) for g in _brace_expand(glob_filter))) and _secret_reference(
@@ -2916,50 +2912,149 @@ def _git_path_words(rest: list[str]) -> list[str]:
     return words
 
 
-def _grep_path_words(rest: list[str], *, pattern_files: bool = True) -> list[str]:
-    words: list[str] = []
-    have_pattern = False
-    index = 0
+_UNKNOWN_GREP_SCOPE = 'unproved search utility argument grammar'
+
+
+@dataclass(frozen=True)
+class _GrepReadScope:
+    read_files: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    recursive: bool = False
+    files_only: bool = False
+    unknown: bool = False
+    exclude_dirs: tuple[str, ...] = ()
+
+
+# GNU grep3.11 and ripgrep15 help define these option arities. Unknown grammar
+# refuses; option values never become flags. Filters do not remove scope unless
+# their exclusion is explicitly represented below.
+_GREP_SHORT_FLAGS = frozenset('EGFPiwxyzsvVbnhHoqalLcTZUIrR')
+_GREP_SHORT_VALUES = {'e': 'pattern', 'f': 'pattern-file', 'm': 'value', 'A': 'value',
+                      'B': 'value', 'C': 'value', 'd': 'directories', 'D': 'value'}
+_RG_SHORT_FLAGS = frozenset('sFivxUPSawL.ubhnN0opqHIclV')
+_RG_SHORT_VALUES = {letter: 'value' for letter in 'EmjgdtTABCMr'}
+_RG_SHORT_VALUES.update({'e': 'pattern', 'f': 'pattern-file'})
+_GREP_LONG_FLAGS = frozenset('''extended-regexp fixed-strings basic-regexp perl-regexp
+ignore-case no-ignore-case word-regexp line-regexp null-data no-messages invert-match
+byte-offset line-number with-filename no-filename only-matching quiet silent text
+files-without-match files-with-matches count initial-tab null binary line-buffered
+no-group-separator recursive dereference-recursive help version'''.split())
+_GREP_LONG_VALUES = {name: 'value' for name in '''max-count before-context after-context
+context label binary-files devices include exclude group-separator'''.split()}
+_GREP_LONG_VALUES.update({'regexp': 'pattern', 'file': 'pattern-file',
+                          'exclude-from': 'read-file', 'exclude-dir': 'exclude-dir',
+                          'directories': 'directories'})
+_RG_LONG_FLAGS = frozenset('''case-sensitive crlf fixed-strings ignore-case invert-match
+line-regexp mmap no-mmap multiline multiline-dotall no-unicode unicode null-data pcre2
+smart-case stop-on-nonmatch text auto-hybrid-regex no-pcre2-unicode binary follow no-follow
+glob-case-insensitive hidden no-hidden ignore-file-case-insensitive no-ignore no-ignore-dot
+no-ignore-exclude no-ignore-files no-ignore-global no-ignore-parent no-ignore-vcs
+no-require-git one-file-system unrestricted block-buffered column heading no-heading
+include-zero line-buffered line-number no-line-number max-columns-preview null
+only-matching passthru pretty quiet trim vimgrep with-filename no-filename sort-files
+count count-matches files-with-matches files-without-match json debug no-ignore-messages
+no-messages stats trace files no-config help pcre2-version type-list version'''.split())
+_RG_LONG_VALUES = {name: 'value' for name in '''dfa-size-limit encoding engine max-count
+regex-size-limit threads glob iglob max-depth max-filesize type type-not type-add type-clear
+after-context before-context color colors context context-separator field-context-separator
+field-match-separator hyperlink-format max-columns path-separator replace sort sortr'''.split()}
+_RG_LONG_VALUES.update({'regexp': 'pattern', 'file': 'pattern-file', 'ignore-file': 'read-file'})
+
+
+def _grep_read_scope(argv: list[str]) -> _GrepReadScope:
+    """Parse bounded actual utility argv; keep patterns, file inputs and targets separate."""
+    name, rest = argv[0], argv[1:]
+    if name not in {'grep', 'egrep', 'fgrep', 'rg'}:
+        return _GrepReadScope(unknown=True)
+    rg = name == 'rg'
+    flags = _RG_SHORT_FLAGS if rg else _GREP_SHORT_FLAGS
+    values = _RG_SHORT_VALUES if rg else _GREP_SHORT_VALUES
+    long_flags = _RG_LONG_FLAGS if rg else _GREP_LONG_FLAGS
+    long_values = _RG_LONG_VALUES if rg else _GREP_LONG_VALUES
+    recursive, files_only, explicit_pattern = rg, False, False
+    read_files: list[str] = []
+    positional: list[str] = []
+    exclude_dirs: list[str] = []
+    index, end_options = 0, False
     while index < len(rest):
-        token = rest[index]
-        if token == '--':  # nosec B105
-            tail = rest[index + 1:]
-            if not have_pattern and tail:
-                tail = tail[1:]
-            words.extend(tail)
-            break
-        if token in {'-e', '--regexp'}:  # the regexp is data, not a path
-            have_pattern = True
-            index += 2
-            continue
-        if token.startswith('--regexp='):
-            have_pattern = True
-            index += 1
-            continue
-        if token in {'-f', '--file'}:  # a pattern file is itself a path to read
-            if pattern_files and index + 1 < len(rest):
-                words.append(rest[index + 1])
-            have_pattern = True
-            index += 2
-            continue
-        if token.startswith('--file='):
-            if pattern_files:
-                words.append(token.split('=', 1)[1])
-            have_pattern = True
-            index += 1
-            continue
-        if token in _GREP_VALUE_OPTIONS:
-            index += 2
-            continue
-        if token.startswith('-') and len(token) > 1:
-            index += 1
-            continue
-        if not have_pattern:
-            have_pattern = True  # the first bare operand is the pattern
-        else:
-            words.append(token)
+        word = rest[index]
         index += 1
-    return words
+        if end_options or word == '-' or not word.startswith('-'):
+            positional.append(word)
+            continue
+        if word == '--':
+            end_options = True
+            continue
+        options: list[tuple[str, str | None, str]] = []
+        if word.startswith('--'):
+            option, separator, value = word[2:].partition('=')
+            if option in long_values:
+                if not separator:
+                    if index >= len(rest):
+                        return _GrepReadScope(unknown=True)
+                    value = rest[index]
+                    index += 1
+                options.append((option, value, long_values[option]))
+            elif not rg and option in {'color', 'colour'}:
+                options.append((option, value if separator else None, 'value'))
+            elif option in long_flags and not separator:
+                options.append((option, None, 'flag'))
+            else:
+                return _GrepReadScope(unknown=True)
+        else:
+            offset = 1
+            while offset < len(word):
+                option = word[offset]
+                offset += 1
+                if option in values:
+                    value = word[offset:]
+                    if not value:
+                        if index >= len(rest):
+                            return _GrepReadScope(unknown=True)
+                        value = rest[index]
+                        index += 1
+                    options.append((option, value, values[option]))
+                    break  # the rest of this token is one value, never more flags
+                if option in flags or (not rg and option.isascii() and option.isdigit()):
+                    options.append((option, None, 'flag'))
+                else:
+                    return _GrepReadScope(unknown=True)
+        for option, value, kind in options:
+            if kind in {'pattern', 'pattern-file'}:
+                explicit_pattern = True
+            if kind in {'pattern-file', 'read-file'} and value != '-':
+                read_files.append(value or '')
+            if kind == 'exclude-dir':
+                # GNU directory exclusions match descendant directory basenames.
+                # Path-bearing patterns are not used to reduce inspection scope.
+                if value and '/' not in value and '\\' not in value:
+                    exclude_dirs.append(value)
+            if kind == 'directories':
+                if value not in {'read', 'skip', 'recurse'}:
+                    return _GrepReadScope(unknown=True)
+                recursive = value == 'recurse'
+            if not rg and option in {'r', 'R', 'recursive', 'dereference-recursive'}:
+                recursive = True
+            if option in ({'h', 'V', 'help', 'version', 'pcre2-version', 'type-list'} if rg
+                          else {'V', 'help', 'version'}):
+                return _GrepReadScope(files_only=True)
+            if rg and option == 'files':
+                files_only = True
+    if not explicit_pattern and not files_only:
+        if not positional:
+            return _GrepReadScope(unknown=True)
+        positional = positional[1:]  # exactly one positional regexp, regardless of option order
+    return _GrepReadScope(tuple(read_files), tuple(path for path in positional if path != '-'),
+                          recursive, files_only, False, tuple(exclude_dirs))
+
+
+def _grep_path_words(rest: list[str], *, pattern_files: bool = True) -> list[str]:
+    """Compatibility view for GNU grep operands; new consumers retain parsed scope."""
+    scope = _grep_read_scope(['grep', *rest])
+    if scope.unknown:
+        return [_UNKNOWN_GREP_SCOPE]
+    return [*(scope.read_files if pattern_files else ()), *scope.paths]
+
 
 
 def _skip_first_positional(rest: list[str], value_options: frozenset[str]) -> list[str]:
@@ -3122,15 +3217,12 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
     if name == 'git':
         return _git_path_words(rest)
     if name in _GREP_FAMILY:
-        # ripgrep's file listing does not read file contents. Pattern files still do.
-        if name == 'rg' and '--files' in rest and not any(
-            word in {'-f', '--file'} or word.startswith('--file=') for word in rest
-        ):
-            return None
-        words = _grep_path_words(rest)
-        if _is_recursive_reader(argv) and not _grep_path_words(rest, pattern_files=False):
-            words.append('.')
-        return words
+        scope = _grep_read_scope(argv)
+        if scope.unknown:
+            return [_UNKNOWN_GREP_SCOPE]
+        if scope.files_only:
+            return list(scope.read_files) or None
+        return [*scope.read_files, *scope.paths, *(['.'] if scope.recursive and not scope.paths else [])]
     if name in {'jq', 'yq'}:
         return _skip_first_positional(rest, frozenset({'--arg', '--argjson', '--slurpfile', '--rawfile', '-L'}))
     if name == 'awk':
@@ -3179,14 +3271,9 @@ def _secret_path_words(argv: list[str]) -> list[str] | None:
 
 def _is_recursive_reader(argv: list[str]) -> bool:
     name, rest = argv[0], argv[1:]
-    if name in _ALWAYS_RECURSIVE_GREP:
-        return True
     if name in _GREP_FAMILY:
-        return any(
-            token in {'--recursive', '--dereference-recursive', '-r', '-R'}
-            or (token.startswith('-') and not token.startswith('--') and ('r' in token[1:] or 'R' in token[1:]))
-            for token in rest
-        )
+        scope = _grep_read_scope(argv)
+        return scope.unknown or (scope.recursive and not scope.files_only)
     if name in _COPY_READERS:
         return any(
             token in {'-r', '-R', '-a', '--recursive', '--archive'}
@@ -3219,6 +3306,9 @@ def _argv_secret_reference(
 ) -> str | None:
     if not argv:
         return None
+    grep_scope = _grep_read_scope(argv) if argv[0] in _GREP_FAMILY else None
+    if grep_scope is not None and grep_scope.unknown:
+        return _UNKNOWN_GREP_SCOPE
     words = _secret_path_words(argv)
     if words is None:
         return None
@@ -3243,7 +3333,8 @@ def _argv_secret_reference(
                     raise _BudgetExceeded
                 full, is_directory = _read_target(target, execution_cwd or root, budget)
                 if is_directory:
-                    hit = _walk_for_secret(root, full, patterns, budget)
+                    hit = _walk_for_secret(root, full, patterns, budget,
+                                           exclude_dirs=grep_scope.exclude_dirs if grep_scope else ())
                     if hit is not None:
                         rel = safe_relative_path(root, hit)
                         return rel if rel is not None else hit
