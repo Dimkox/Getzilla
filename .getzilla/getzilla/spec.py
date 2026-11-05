@@ -650,7 +650,7 @@ def _safe_contract_path(root: Path, raw: str, *, anchor=None) -> Path | None:
     return candidate
 
 
-def _contract_digest(root: Path, raw: str) -> str | None:
+def _contract_digest(root: Path, raw: str, *, anchor=None) -> str | None:
     rel = Path(raw)
     if (
         not raw
@@ -661,6 +661,14 @@ def _contract_digest(root: Path, raw: str) -> str | None:
         or any(part in {"", "."} for part in rel.parts)
     ):
         raise SpecError(f"unsafe contract path: {raw!r}", code="path")
+    if anchor is not None:
+        try:
+            anchor.check_root(root)
+            return hashlib.sha256(anchor.read(raw,MAX_SPEC_BYTES,public_source=True)).hexdigest()
+        except FileNotFoundError:
+            return None
+        except (OSError,ValueError) as exc:
+            raise SpecError('native contract input unavailable',code='path') from exc
     descriptors: list[int] = []
     handles: list[fsx.DirHandle] = []
     try:
@@ -703,26 +711,41 @@ def _contract_digest(root: Path, raw: str) -> str | None:
             fsx.close_dir(handle)
 
 
+def _native_spec_relative(root: Path, path: Path, anchor) -> str:
+    anchor.check_root(root)
+    candidate = path if path.is_absolute() else Path(anchor.workspace)/path
+    try:
+        return Path(os.path.abspath(candidate)).relative_to(Path(anchor.workspace)).as_posix()
+    except ValueError as exc:
+        raise SpecError('native spec path escapes repository',code='path') from exc
+
+
 def spec_fingerprint(
     root: Path,
     path: Path,
     spec: dict[str, Any],
     route: dict[str, Any] | None = None,
+    *,anchor=None,
 ) -> str:
     contracts: list[dict[str, str]] = []
     for group in (spec.get("contracts") or {}).values():
         for raw in group or []:
-            contract_digest = _contract_digest(root, str(raw))
+            contract_digest = _contract_digest(root, str(raw),anchor=anchor)
             if contract_digest is not None:
                 contracts.append({"path": str(raw), "digest": contract_digest})
     head = None
-    try:
-        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8", capture_output=True, timeout=10, check=False)
-        head = proc.stdout.strip() if proc.returncode == 0 else None
-    except OSError:
-        pass
+    if anchor is not None:
+        head = anchor.git_source()['head']
+        spec_path = _native_spec_relative(root,path,anchor)
+    else:
+        try:
+            proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8", capture_output=True, timeout=10, check=False)
+            head = proc.stdout.strip() if proc.returncode == 0 else None
+        except OSError:
+            pass
+        spec_path = path.resolve().relative_to(root.resolve()).as_posix()
     payload = {
-        "spec_path": path.resolve().relative_to(root.resolve()).as_posix(),
+        "spec_path": spec_path,
         "spec_digest": canonical_spec_digest(spec),
         "base_commit": (route or {}).get("base_commit"),
         "git_head": head,
@@ -830,6 +853,7 @@ def validate_spec(
     route: dict[str, Any] | None = None,
     changed: list[str] | None = None,
     schema_only: bool = False,
+    anchor=None,
 ) -> list[str] | dict[str, Any]:
     """Validate either the current path API or the historical in-memory adapter."""
     if isinstance(root_or_spec, dict):
@@ -838,15 +862,23 @@ def validate_spec(
             validate_schema(spec, path_or_schema, path_or_schema)
             if schema_only:
                 return {"ok": True, "digest": canonical_spec_digest(spec), "change_id": spec.get("change_id")}
-        return _validate_document(spec, gate=gate and not schema_only)
+        return _validate_document(spec, gate=gate and not schema_only,anchor=anchor)
     root = Path(root_or_spec)
     if not isinstance(path_or_schema, Path):
         raise TypeError("path must be a Path")
     try:
-        spec = load_spec(path_or_schema, allow_legacy=False)
-        _validate_document(spec, gate=gate, root=root)
+        if anchor is not None:
+            relative = _native_spec_relative(root,path_or_schema,anchor)
+            spec = _parse_canonical_json(anchor.read(relative,MAX_SPEC_BYTES),path_or_schema)
+        else:
+            spec = load_spec(path_or_schema, allow_legacy=False)
+        _validate_document(spec, gate=gate, root=root,anchor=anchor)
     except SpecError as exc:
         return [f"{path_or_schema}: {exc}"]
+    except (OSError,ValueError) as exc:
+        if anchor is None:
+            raise
+        return [f'{path_or_schema}: native spec input unavailable ({type(exc).__name__})']
     return []
 
 

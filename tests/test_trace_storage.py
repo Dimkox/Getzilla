@@ -39,6 +39,60 @@ class NativeStorageTests(unittest.TestCase):
         self.assertEqual(self.parent.stat().st_mode & 0o777, 0o775)
         self.assertEqual((self.root / '.getzilla/runtime/result.json').stat().st_mode & 0o777, 0o600)
 
+    def test_public_source_uses_exact_frozen_modes_before_any_bytes(self):
+        from getzilla.trace_storage import native_root
+        path = self.root/'source.txt'
+        path.write_bytes(b'owned-source')
+        with native_root(self.root) as anchor:
+            for mode in (0o444,0o644,0o555,0o755):
+                path.chmod(mode)
+                self.assertEqual(anchor.read('source.txt', public_source=True), b'owned-source')
+            for mode in (0o600,0o640,0o744,0o664):
+                path.chmod(mode)
+                with mock.patch('os.read', side_effect=AssertionError('private bytes read')):
+                    with self.assertRaises(ValueError):
+                        anchor.read('source.txt', public_source=True)
+            path.chmod(0o644)
+            os.link(path, path.with_name('source-alias.txt'))
+            with mock.patch('os.read', side_effect=AssertionError('hardlinked bytes read')):
+                with self.assertRaises(ValueError):
+                    anchor.read('source.txt', public_source=True)
+
+    def test_public_source_mode_loss_during_chunked_read_refuses(self):
+        from getzilla.trace_storage import native_root
+        path = self.root/'source.txt'
+        path.write_bytes(b'x'*100_000)
+        path.chmod(0o644)
+        original, calls = os.read, []
+        def changing(descriptor, size):
+            raw = original(descriptor,size)
+            calls.append(len(raw))
+            if len(calls) == 1:
+                path.chmod(0o600)
+            return raw
+        with native_root(self.root) as anchor:
+            with mock.patch('os.read', side_effect=changing):
+                with self.assertRaises(ValueError):
+                    anchor.read('source.txt', public_source=True)
+        self.assertEqual(calls, [65536])
+
+    def test_root_descriptor_and_metadata_stay_on_actual_resource_after_parent_move(self):
+        from getzilla.trace_storage import native_root
+        expected = self.journal.stat()
+        with native_root(self.root) as anchor:
+            descriptor = anchor.duplicate_root_fd()
+            try:
+                self.parent.rename(self.parent.with_name('moved'))
+                (self.root/'.getzilla/runtime').mkdir(parents=True)
+                (self.root/'.getzilla/runtime/metrics.jsonl').write_bytes(b'foreign')
+                info = anchor.stat('.getzilla/runtime/metrics.jsonl')
+                self.assertEqual((info.st_dev,info.st_ino),(expected.st_dev,expected.st_ino))
+                self.assertEqual((anchor.root_info().st_dev,anchor.root_info().st_ino),anchor.identity)
+                opened = os.stat('.getzilla/runtime/metrics.jsonl',dir_fd=descriptor,follow_symlinks=False)
+                self.assertEqual((opened.st_dev,opened.st_ino),(expected.st_dev,expected.st_ino))
+            finally:
+                os.close(descriptor)
+
     def test_actual_privacy_consumer_uses_the_cwd_anchor_under_shared_parent(self):
         from getzilla.observation_privacy import load_local, revalidate_local
         self.journal.write_bytes(b'{"event":"route","route_id":"PRIVATE_SENTINEL"}\n')

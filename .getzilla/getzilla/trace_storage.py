@@ -297,6 +297,28 @@ class _NativeRoot:
         if os.path.abspath(root) != self.workspace:
             raise ValueError('native_trace_project_mismatch')
 
+    def root_info(self):
+        self.check()
+        return os.fstat(self._fd)
+
+    def duplicate_root_fd(self):
+        """Internal reader adapter: the actual caller owns and closes this dup.
+
+        The descriptor is never serialized or accepted as an authority claim.
+        Callers retain this live native object for lifetime/root revalidation.
+        """
+        self.check()
+        descriptor = os.dup(self._fd)
+        try:
+            os.set_inheritable(descriptor, False)
+            self.check()
+            if _identity(os.fstat(descriptor)) != self.identity:
+                raise ValueError('native_trace_root_changed')
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
     @property
     def binding(self):
         self.check()
@@ -371,26 +393,32 @@ class _NativeRoot:
             raise ValueError('native_trace_parent_required')
         self._validate_names(self._parents[parent])
 
-    def _regular(self, info, *, private=True, source=False, limit=1_048_576):
+    def _regular(self, info, *, private=True, source=False, public_source=False, limit=1_048_576):
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != self._uid or info.st_nlink != 1
                 or info.st_size > limit or info.st_mode & 0o022
                 or not source and info.st_mode & 0o111
                 or private and not source and stat.S_IMODE(info.st_mode) != 0o600):
             raise ValueError('private_observation_file_required')
+        if public_source and stat.S_IMODE(info.st_mode) not in {0o444,0o644,0o555,0o755}:
+            raise ValueError('public_source_file_required')
 
     @contextmanager
-    def file(self, relative, *, writable=False, private=True, source=False, limit=1_048_576):
+    def file(self, relative, *, writable=False, private=True, source=False, public_source=False, limit=1_048_576):
+        if public_source:
+            if writable:
+                raise ValueError('public_source_read_only')
+            source = True
         with self.parent(relative, private=private, source=source) as (parent, name):
             flags = os.O_RDWR | os.O_APPEND if writable else os.O_RDONLY
             descriptor = fsx.open_at(parent, name, flags | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC)
             try:
                 info = os.fstat(descriptor)
-                self._regular(info, private=private, source=source, limit=limit)
+                self._regular(info, private=private, source=source, public_source=public_source, limit=limit)
                 if _identity(fsx.lstat_at(parent, name)) != _identity(info):
                     raise ValueError('trace_file_changed')
                 yield descriptor, parent
                 after = os.fstat(descriptor)
-                self._regular(after, private=private, source=source, limit=limit)
+                self._regular(after, private=private, source=source, public_source=public_source, limit=limit)
                 if not writable and (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
                     raise ValueError('trace_file_changed')
                 if _identity(fsx.lstat_at(parent, name)) != _identity(info):
@@ -398,18 +426,48 @@ class _NativeRoot:
             finally:
                 os.close(descriptor)
 
-    def read(self, relative, limit=1_048_576, *, private=True, source=False):
-        with self.file(relative, private=private, source=source, limit=limit) as (descriptor, _):
+    def _source_unchanged(self, descriptor, parent, name, expected, limit):
+        self.check_parent(parent)
+        opened = os.fstat(descriptor)
+        named = fsx.lstat_at(parent,name)
+        self._regular(opened, source=True, public_source=True, limit=limit)
+        self._regular(named, source=True, public_source=True, limit=limit)
+        def identity(info):
+            return (info.st_dev,info.st_ino,info.st_uid,info.st_mode,info.st_nlink,
+                    info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+        if identity(opened) != identity(expected) or identity(named) != identity(expected):
+            raise ValueError('public_source_changed')
+
+    def read(self, relative, limit=1_048_576, *, private=True, source=False, public_source=False):
+        with self.file(relative, private=private, source=source, public_source=public_source, limit=limit) as (descriptor, parent):
             chunks, size = [], 0
+            expected = os.fstat(descriptor) if public_source else None
             while True:
+                if public_source:
+                    self._source_unchanged(descriptor,parent,Path(relative).name,expected,limit)
                 chunk = os.read(descriptor, min(65536, limit + 1-size))
+                self.charge(size=len(chunk))
+                if public_source:
+                    self._source_unchanged(descriptor,parent,Path(relative).name,expected,limit)
                 if not chunk:
                     return b''.join(chunks)
                 size += len(chunk)
-                self.charge(size=len(chunk))
                 if size > limit:
                     raise ValueError('trace_io_limit')
                 chunks.append(chunk)
+
+    def stat(self, relative, *, private=True, source=False):
+        """Named metadata from the same resource; no root-hint path reopening."""
+        with self.parent(relative, private=private, source=source) as (parent,name):
+            info = fsx.lstat_at(parent,name)
+            if stat.S_ISDIR(info.st_mode):
+                if (info.st_uid != self._uid or info.st_mode & 0o022
+                        or private and not source and stat.S_IMODE(info.st_mode) != 0o700):
+                    raise ValueError('private_observation_directory_required')
+            else:
+                self._regular(info,private=private,source=source)
+            self.check_parent(parent)
+            return info
 
     def exists(self, relative, *, private=True, source=False):
         try:

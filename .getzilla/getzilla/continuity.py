@@ -177,19 +177,19 @@ def validate_route(root: Path, route: dict[str, Any], *, anchor=None) -> None:
             raise ValueError('invalid handoff transaction')
 
 
-def _active_workers(root: Path) -> dict[str, Any]:
+def _active_workers(root: Path, *, anchor=None) -> dict[str, Any]:
     path = state.agent_state_path(root)
-    if not path.exists() and not path.is_symlink():
+    if not state._present(root, path, anchor):
         return {}
     try:
-        ledger = state._route_document(root, path)
+        ledger = state._route_document(root, path, anchor=anchor)
         active = ledger['active']
         if not isinstance(active, dict) or not isinstance(ledger.get('history'), list):
             raise ValueError('malformed worker ledger')
         for identifier, record in active.items():
             if (not _identifier(identifier) or not isinstance(record, dict) or
                     any(not _identifier(record.get(key)) for key in ('route_id', 'task_id', 'generation', 'agent_type')) or
-                    record.get('workspace') != str(root.resolve()) or
+                    record.get('workspace') != (anchor.workspace if anchor is not None else str(root.resolve())) or
                     record.get('lifecycle') not in {'running', 'interrupt-requested', 'interrupted'}):
                 raise ValueError('malformed worker identity')
         return active
@@ -250,8 +250,8 @@ def _passive(text: str) -> bool:
     return not value or is_system_notice(value) or should_reuse_active_route(value)
 
 
-def _ensure_idle(root: Path) -> None:
-    if _active_workers(root):
+def _ensure_idle(root: Path, *, anchor=None) -> None:
+    if _active_workers(root, anchor=anchor):
         raise ValueError('active or interrupted worker prevents task handoff; finish the original instance first')
 
 
@@ -572,24 +572,24 @@ def legacy_evidence_allowed(route: dict[str, Any] | None) -> bool:
             context.get('rejected') is None and context.get('last_ack') is None)
 
 
-def scope_gaps(root: Path, route: dict[str, Any] | None = None) -> list[str]:
-    route = state.get_active_route(root) if route is None else route
+def scope_gaps(root: Path, route: dict[str, Any] | None = None, *, anchor=None) -> list[str]:
+    route = state.get_active_route(root, anchor=anchor) if route is None else route
     if not route:
-        return ['task authority unavailable'] if state.route_authority_present(root) else []
+        return ['task authority unavailable'] if state.route_authority_present(root, anchor=anchor) else []
     if legacy_evidence_allowed(route):
         return []
     try:
-        validate_route(root, route)
-        state.require_route_owner(root, route)
+        validate_route(root, route, anchor=anchor)
+        state.require_route_owner(root, route, anchor=anchor)
         context = route['context']
         gaps = []
         if context['pending']:
             gaps.append('scope_sync_required: pending amendments need explicit typed synchronization')
         if context['rejected'] is not None:
             gaps.append('scope_sync_required: NOT-admitted input needs exact explicit resolution')
-        binding = context_binding(root, route)
+        binding = context_binding(root, route, anchor=anchor)
         if binding['variant'] == 'package':
-            documents = package_documents(root, route)
+            documents = package_documents(root, route, anchor=anchor)
             ack = context['last_ack']
             if (not ack or ack['revision'] != context['revision'] or
                     ack.get('authority_epoch') != route['authority_epoch'] or
@@ -730,12 +730,12 @@ def _typed_targets(spec: dict[str, Any]) -> set[str]:
     return result
 
 
-def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str, Any]) -> bool:
+def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str, Any], *, anchor=None) -> bool:
     observed = receipt.get('continuity')
     if observed is None:
         return legacy_evidence_allowed(route)
     try:
-        return not scope_gaps(root, route) and observed == context_binding(root, route)
+        return not scope_gaps(root, route, anchor=anchor) and observed == context_binding(root, route, anchor=anchor)
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

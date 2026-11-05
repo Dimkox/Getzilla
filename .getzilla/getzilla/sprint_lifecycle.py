@@ -13,10 +13,10 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 
 from . import fsx, state
-from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, digest
+from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, digest, validate
 from .observation_privacy import initialize_private, local_identity, owned_journal, initial_owner
 from .trace_contracts import utc, validate_v3, validate_delivery, delivery_utc
-from .util import git_head, git_output, now_utc
+from .util import now_utc
 
 MAX_PENDING = 64
 DELIVERY_SECONDS = 0.05
@@ -43,7 +43,10 @@ def append_batch(root, observations, *, anchor, deadline):
             return None
         expected = {}
         for row in observations:
-            validate_v3(row)
+            validate(row)
+            from .trace_contracts import native_context
+            if native_context(row) is None:
+                return None
             if any(row[key] != value for key, value in anchor.binding.items()):
                 return None
             previous = expected.setdefault(row['event_id'], row)

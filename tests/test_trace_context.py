@@ -1,6 +1,7 @@
 """A trace context cut cannot fall back to pathname package/schema reads."""
 import os
 import shutil
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -44,6 +45,74 @@ class AnchoredContextTests(unittest.TestCase):
             with patch('getzilla.package_status.read_package_file', side_effect=AssertionError('path read fallback')):
                 actual = context_binding(self.root, self.route, anchor=anchor)
         self.assertEqual(actual, expected)
+
+    def test_original_scope_gap_checks_use_the_same_anchored_context(self):
+        from getzilla.continuity import scope_gaps
+        expected = scope_gaps(self.root, self.route)
+        with native_root(self.root) as anchor:
+            with patch('getzilla.package_status.read_package_file', side_effect=AssertionError('path read fallback')):
+                actual = scope_gaps(self.root, self.route, anchor=anchor)
+        self.assertEqual(actual, expected)
+
+    def test_original_spec_validation_uses_anchored_package_and_schema(self):
+        from getzilla.spec import validate_spec
+        path = self.root/state.get_active_change(self.root)['path']/'change-spec.yaml'
+        expected = validate_spec(self.root,path,gate=False,route=self.route)
+        with native_root(self.root) as anchor:
+            with patch('getzilla.spec.load_spec',side_effect=AssertionError('path fallback')):
+                actual = validate_spec(self.root,path,gate=False,route=self.route,anchor=anchor)
+        self.assertEqual(actual,expected)
+
+    def test_unqualified_private_spec_returns_original_validation_failure_shape(self):
+        from getzilla.spec import validate_spec
+        path = self.root/state.get_active_change(self.root)['path']/'change-spec.yaml'
+        path.chmod(0o644)
+        with native_root(self.root) as anchor:
+            errors = validate_spec(self.root,path,gate=False,route=self.route,anchor=anchor)
+        self.assertTrue(errors)
+        self.assertTrue(all(isinstance(item,str) for item in errors))
+
+    def test_original_receipt_spec_binding_uses_same_native_package(self):
+        from getzilla import receipts
+        subprocess.run(['git','init','-q'],cwd=self.root,check=True)
+        subprocess.run(['git','-c','user.name=Test','-c','user.email=test@example.invalid',
+                        '-c','maintenance.auto=false','commit','--allow-empty','-qm','fixture'],
+                       cwd=self.root,check=True)
+        expected = receipts._active_spec_binding(self.root,self.route,'verification')
+        with native_root(self.root) as anchor:
+            with patch.object(receipts,'load_spec',side_effect=AssertionError('path fallback')):
+                actual = receipts._active_spec_binding(self.root,self.route,'verification',anchor=anchor)
+        self.assertEqual(actual,expected)
+
+    def test_original_receipt_spec_binding_refuses_unqualified_active_spec(self):
+        from getzilla import receipts
+        path = self.root/state.get_active_change(self.root)['path']/'change-spec.yaml'
+        path.chmod(0o644)
+        with native_root(self.root) as anchor:
+            with self.assertRaises((ValueError,OSError)):
+                receipts._active_spec_binding(self.root,self.route,'verification',anchor=anchor)
+
+    def test_original_spec_fingerprint_keeps_native_contract_and_cwd_source(self):
+        from getzilla import spec as module
+        subprocess.run(['git','init','-q'],cwd=self.root,check=True)
+        subprocess.run(['git','-c','user.name=Test','-c','user.email=test@example.invalid',
+                        '-c','maintenance.auto=false','commit','--allow-empty','-qm','fixture'],
+                       cwd=self.root,check=True)
+        directory = self.root/'contracts'
+        directory.mkdir(mode=0o755)
+        contract = directory/'one.json'
+        contract.write_text('{"synthetic":true}\n')
+        contract.chmod(0o644)
+        path = self.root/state.get_active_change(self.root)['path']/'change-spec.yaml'
+        spec = module.load_spec(path,allow_legacy=False)
+        spec['contracts']['json_schema'] = ['contracts/one.json']
+        expected = module.spec_fingerprint(self.root,path,spec,self.route)
+        with native_root(self.root) as anchor:
+            self.assertEqual(module.spec_fingerprint(self.root,path,spec,self.route,anchor=anchor),expected)
+            contract.chmod(0o600)
+            with patch('os.read',side_effect=AssertionError('private source read')):
+                with self.assertRaises(module.SpecError):
+                    module._contract_digest(self.root,'contracts/one.json',anchor=anchor)
 
     def test_changed_context_package_is_refused(self):
         with native_root(self.root) as anchor:

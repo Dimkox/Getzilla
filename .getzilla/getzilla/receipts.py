@@ -136,6 +136,21 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
+def _decode_receipt_bytes(content: bytes, label: str) -> dict[str, Any]:
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in items:
+            if key in value:
+                raise RuntimeError(f'{label} contains a duplicate JSON key')
+            value[key] = item
+        return value
+    data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
+                      parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
+    if not isinstance(data, dict):
+        raise RuntimeError(f'{label} must be a JSON object')
+    return data
+
+
 def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
     if fsx.WINDOWS:
         opened = _windows_open_regular(directory_fd, name, os.O_RDONLY)
@@ -165,20 +180,8 @@ def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label
         if fsx.WINDOWS:
             _windows_confirm_directories([directory_fd])
 
-        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in items:
-                if key in value:
-                    raise RuntimeError(f'{label} contains a duplicate JSON key')
-                value[key] = item
-            return value
-
         content = b''.join(chunks)
-        data = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs,
-                          parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
-        if not isinstance(data, dict):
-            raise RuntimeError(f'{label} must be a JSON object')
-        return data, content
+        return _decode_receipt_bytes(content, label), content
     finally:
         os.close(descriptor)
 
@@ -303,7 +306,7 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
                 fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any]) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle | None, route_id: str, receipt: dict[str, Any], *, anchor=None) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -319,8 +322,12 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, rec
         raise RuntimeError('verification report reference is outside the closed contract')
     reports_fd = None
     try:
-        reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
-        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
+        if anchor is not None:
+            content = anchor.read(reference['path'], MAX_VERIFICATION_REPORT_BYTES)
+            artifact = _decode_receipt_bytes(content, 'verification report')
+        else:
+            reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
+            artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
@@ -356,8 +363,35 @@ class _AuthorityState:
     architecture_identity: tuple[int, int, int, int, int] | None
 
 
-def _authority_presence(root: Path, *, root_fd: int | None = None) -> _AuthorityState:
+def _authority_presence(root: Path, *, root_fd: int | None = None, anchor=None) -> _AuthorityState:
     """Establish stable fixed-entry absence without requiring byte-read primitives."""
+    if anchor is not None:
+        anchor.check_root(root)
+        before_root = _metadata_identity(anchor.root_info())
+        try:
+            before = anchor.stat('architecture', private=False, source=True)
+        except FileNotFoundError:
+            try:
+                anchor.stat('architecture', private=False, source=True)
+            except FileNotFoundError:
+                if _metadata_identity(anchor.root_info()) != before_root:
+                    raise ArchitectureError('repository root changed during authority inspection',code='io')
+                return _AuthorityState((False,False,False),before_root,None)
+            raise ArchitectureError('architecture authority appeared during absence inspection',code='io')
+        if not stat.S_ISDIR(before.st_mode):
+            raise ArchitectureError('architecture authority directory is unsafe',code='io')
+        present = []
+        for relative in (ADOPTION_PATH,SYSTEM_PATH,RULES_PATH):
+            try:
+                anchor.stat(relative.as_posix(),private=False,source=True)
+            except FileNotFoundError:
+                present.append(False)
+            else:
+                present.append(True)
+        if (_metadata_identity(anchor.stat('architecture',private=False,source=True)) != _metadata_identity(before)
+                or _metadata_identity(anchor.root_info()) != before_root):
+            raise ArchitectureError('architecture authority changed during inspection',code='io')
+        return _AuthorityState(tuple(present),before_root,_metadata_identity(before))
     resolved = root.resolve(strict=True)
     architecture = resolved / "architecture"
     try:
@@ -430,21 +464,23 @@ def _confirm_legacy_absence(
     root: Path,
     root_fd: int | None,
     initial: _AuthorityState,
+    *, anchor=None,
 ) -> None:
-    current = _authority_presence(root, root_fd=root_fd)
+    current = _authority_presence(root, root_fd=root_fd, anchor=anchor)
     if current != initial or current.entries != (False, False, False):
         raise RuntimeError("architecture authority appeared during legacy detection")
 
 
-def _architecture_adoption(root: Path, *, present: bool | None = None) -> dict[str, str] | None:
+def _architecture_adoption(root: Path, *, present: bool | None = None, anchor=None) -> dict[str, str] | None:
     if present is None:
-        present = _authority_presence(root).entries[0]
+        present = _authority_presence(root,anchor=anchor).entries[0]
     if not present:
         return None
     data = _read_regular_bytes(
         root,
         ADOPTION_PATH.as_posix(),
         label="architecture adoption",
+        anchor=anchor,
     )
     return parse_adoption_marker(data)
 
@@ -755,16 +791,24 @@ def receipt_dir(root: Path, route_id: str) -> Path:
     return path
 
 
-def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[str, Any] | None:
-    active = get_active_change(root) or {}
+def _active_spec_binding(root: Path, route: dict[str, Any], kind: str, *, anchor=None) -> dict[str, Any] | None:
+    active = get_active_change(root, anchor=anchor) or {}
     rel = active.get('path')
     if not rel:
         return None
     path = root / str(rel) / 'change-spec.yaml'
-    if not path.is_file():
-        return None
-    spec = load_spec(path, allow_legacy=False)
-    errors = validate_spec(root, path, gate=False, route=route)
+    if anchor is not None:
+        from .spec import MAX_SPEC_BYTES, _parse_canonical_json
+        try:
+            content = anchor.read(str(rel) + '/change-spec.yaml', MAX_SPEC_BYTES)
+        except FileNotFoundError:
+            return None
+        spec = _parse_canonical_json(content, path)
+    else:
+        if not path.is_file():
+            return None
+        spec = load_spec(path, allow_legacy=False)
+    errors = validate_spec(root, path, gate=False, route=route, anchor=anchor)
     if errors:
         raise RuntimeError('active change spec is invalid: ' + '; '.join(errors))
     criterion_ids = sorted({
@@ -775,7 +819,7 @@ def _active_spec_binding(root: Path, route: dict[str, Any], kind: str) -> dict[s
     return {
         'criterion_ids': criterion_ids,
         'spec_digest': canonical_spec_digest(spec),
-        'spec_fingerprint': spec_fingerprint(root, path, spec, route),
+        'spec_fingerprint': spec_fingerprint(root, path, spec, route, anchor=anchor),
     }
 
 
@@ -979,21 +1023,26 @@ def write_receipt(
     return path
 
 
-def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
+def get_receipt(root: Path, route_id: str, kind: str, *, anchor=None) -> dict[str, Any] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
-        directory_fd = _open_receipt_directory(root, route_id)
-        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
+        if anchor is not None:
+            anchor.check_root(root)
+            content = anchor.read(f'.getzilla/runtime/receipts/{route_id}/{kind}.json', MAX_RECEIPT_BYTES)
+            data = _decode_receipt_bytes(content, 'receipt')
+        else:
+            directory_fd = _open_receipt_directory(root, route_id)
+            data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
         if kind == 'verification':
-            _hydrate_verification_report(directory_fd, route_id, data)
+            _hydrate_verification_report(directory_fd, route_id, data, anchor=anchor)
         return data
     except FileNotFoundError:
         return None
     except RuntimeError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise RuntimeError(f"receipt cannot be read safely: {exc}") from exc
     finally:
         if directory_fd is not None:

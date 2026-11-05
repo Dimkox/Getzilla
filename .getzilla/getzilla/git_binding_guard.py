@@ -1,7 +1,8 @@
 """Private, finite Linux history guard for Git output admission.
 
-This is not a mount-namespace boundary. Only the locally qualified overlayfs
-backend is enabled. All other acquisition outcomes retain strict Git binding.
+This is not a mount-namespace boundary. The overlayfs history backend is
+optional; explicit native callers use the same operation's strict FD graph.
+Unsupported native acquisition never falls back to path-based qualification.
 """
 
 from __future__ import annotations
@@ -111,6 +112,239 @@ class _Watch:
     names: dict[bytes, str] = field(default_factory=dict)
     history: set[bytes] = field(default_factory=set)
     all_names: str | None = None
+
+
+class NativeGitGraph:
+    """Strict FD backend of GitOperation; no inotify/history relaxation."""
+
+    mode = 'native-fd-strict-v1'
+
+    def __init__(self, anchor):
+        if sys.platform != 'linux' or fsx.WINDOWS:
+            raise GuardUnavailable('native-platform')
+        anchor.check_cwd()
+        if os.getcwd() != anchor.workspace:
+            raise GuardUnavailable('native-workspace-name')
+        self.anchor = anchor
+        self.root = Path(anchor.workspace)
+        self._pid,self._owner = os.getpid(),threading.get_ident()
+        self._started,self._sealed,self._closed = time.monotonic(),False,False
+        self._directories = {}
+        self._custody = {}
+        self._files = {}
+        self._trees = {}
+        self._stable = set()
+        self._entry_count = 0
+        descriptor = anchor.duplicate_root_fd()
+        self._directories[self.root] = _Directory(descriptor,_identity(os.fstat(descriptor)),0,None,'worktree root')
+        self._custody[self.root] = (os.fstat(descriptor).st_uid,os.fstat(descriptor).st_nlink)
+        try:
+            self.address(self.root)
+            self.check()
+        except OSError:
+            self.close()
+            raise GuardUnavailable('native-proc-addressing') from None
+        except BaseException:
+            self.close()
+            raise
+
+    def _fail(self,label='path ancestor',reason='changed'):
+        raise ArchitectureError(f'Git {label} binding {reason}',code='git') from None
+
+    def _active(self):
+        if (self._closed or os.getpid() != self._pid or threading.get_ident() != self._owner
+                or time.monotonic()-self._started >= (OPERATION_SECONDS if self._sealed else SETUP_SECONDS)):
+            self._fail(reason='guard is unavailable')
+        self.anchor.check()
+
+    def remaining(self):
+        self._active()
+        return max(0.001,(OPERATION_SECONDS if self._sealed else SETUP_SECONDS)-(time.monotonic()-self._started))
+
+    def _add(self,path,parent,label):
+        self._active()
+        if self._sealed or len(self._directories) >= MAX_DIRECTORIES:
+            self._fail(label,'guard limit exceeded')
+        descriptor = (os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                      if parent is None else os.open(path.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,
+                                                    dir_fd=self._directories[parent].descriptor))
+        self._directories[path] = _Directory(descriptor,_identity(os.fstat(descriptor)),0,parent,label)
+        self._custody[path] = (os.fstat(descriptor).st_uid,os.fstat(descriptor).st_nlink)
+
+    def directory(self,path,label):
+        self._active()
+        if not path.is_absolute():
+            raise GuardUnavailable('path-alias')
+        if path == self.root or self.root in path.parents:
+            current,parts = self.root,path.relative_to(self.root).parts
+        else:
+            current,parts = Path('/'),path.parts[1:]
+            if current not in self._directories:
+                self._add(current,None,'path ancestor')
+        for name in parts:
+            if name == '..':
+                current = current.parent
+                continue
+            child = current/name
+            if child not in self._directories:
+                self._add(child,current,label)
+            else:
+                record = self._directories[child]
+                named = os.stat(name,dir_fd=self._directories[current].descriptor,follow_symlinks=False)
+                if _identity(named) != record.identity:
+                    self._fail(label)
+            current = child
+        if label == 'object store':
+            self._stable.add(current)
+        if label in {'directory','common directory','object store'}:
+            info = os.fstat(self._directories[current].descriptor)
+            if info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink < 1:
+                raise GuardUnavailable('native-directory')
+        self.check()
+        return current
+
+    def protect(self,directory,name,label):
+        self._active()
+        if directory not in self._directories or name in {'','.','..'} or '/' in name:
+            self._fail(label,'guard is incomplete')
+
+    def stat(self,path):
+        self._active()
+        if path in self._directories:
+            return os.fstat(self._directories[path].descriptor)
+        self.protect(path.parent,path.name,'registration')
+        return os.stat(path.name,dir_fd=self._directories[path.parent].descriptor,follow_symlinks=False)
+
+    def file(self,path,label):
+        self.protect(path.parent,path.name,label)
+        try:
+            info = self.stat(path)
+        except FileNotFoundError:
+            info = None
+        if info is not None and (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                                 or info.st_nlink != 1 or info.st_mode & 0o022):
+            raise GuardUnavailable('native-leaf')
+        identity = None if info is None else _identity(info)
+        previous = self._files.get(path)
+        if previous is not None and previous[0] != identity:
+            self._fail(label)
+        self._files[path] = identity,label
+        return info
+
+    def read(self,path,limit=4096):
+        info = self.file(path,'registration')
+        if info is None:
+            raise FileNotFoundError(path)
+        if info.st_size > limit:
+            raise GuardUnavailable('native-byte-limit')
+        descriptor = os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,
+                             dir_fd=self._directories[path.parent].descriptor)
+        try:
+            if _identity(os.fstat(descriptor)) != _identity(info):
+                self._fail('registration')
+            raw = os.read(descriptor,limit+1)
+            if len(raw) != info.st_size or _identity(os.fstat(descriptor)) != _identity(info):
+                self._fail('registration')
+            self.check()
+            return raw
+        finally:
+            os.close(descriptor)
+
+    def tree(self,path,label):
+        self.protect(path.parent,path.name,label)
+        try:
+            info = self.stat(path)
+        except FileNotFoundError:
+            self._files[path] = None,label
+            return ()
+        if not stat.S_ISDIR(info.st_mode):
+            raise GuardUnavailable('path-alias')
+        current = self.directory(path,label)
+        names = tuple(sorted(os.listdir(self._directories[current].descriptor)))
+        self._trees[current] = names
+        result = []
+        for name in names:
+            self._entry_count += 1
+            if self._entry_count > MAX_ENTRIES:
+                self._fail(label,'guard limit exceeded')
+            child = current/name
+            info = self.stat(child)
+            if stat.S_ISDIR(info.st_mode):
+                result.extend(self.tree(child,label))
+            else:
+                self.file(child,label)
+                result.append(child)
+        return tuple(result)
+
+    def check(self):
+        self._active()
+        for path,record in self._directories.items():
+            info = os.fstat(record.descriptor)
+            if (info.st_uid,info.st_nlink) != self._custody[path] or info.st_nlink < 1:
+                self._fail(record.label)
+            actual,expected = _identity(info),record.identity
+            if (actual[:3] != expected[:3] if path in self._stable else actual != expected):
+                self._fail(record.label)
+            if record.parent is not None:
+                named = os.stat(path.name,dir_fd=self._directories[record.parent].descriptor,follow_symlinks=False)
+                if (named.st_uid,named.st_nlink) != self._custody[path]:
+                    self._fail(record.label)
+                actual = _identity(named)
+                if (actual[:3] != expected[:3] if path in self._stable else actual != expected):
+                    self._fail(record.label)
+        for path,(identity,label) in self._files.items():
+            try:
+                info = self.stat(path)
+            except FileNotFoundError:
+                if identity is None:
+                    continue
+                self._fail(label)
+            if _identity(info) != identity:
+                self._fail(label)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o022):
+                self._fail(label)
+        for path,names in self._trees.items():
+            if tuple(sorted(os.listdir(self._directories[path].descriptor))) != names:
+                self._fail('selector tree')
+
+    def seal(self):
+        self.check()
+        self._sealed = True
+
+    def covers(self,path,identity):
+        self._active()
+        record = self._directories.get(path)
+        return record is not None and record.identity == identity
+
+    def key(self):
+        self.check()
+        return (self.mode,tuple(sorted((str(path),record.identity) for path,record in self._directories.items())),
+                tuple(sorted((str(path),identity) for path,(identity,_label) in self._files.items())))
+
+    def address(self,path):
+        self._active()
+        record = self._directories[path]
+        value = Path('/proc/self/fd')/str(record.descriptor)
+        if _identity(os.stat(value)) != _identity(os.fstat(record.descriptor)):
+            self._fail('proc descriptor')
+        return value
+
+    def pass_fds(self,paths=None):
+        self.check()
+        selected = (self.root,) if paths is None else paths
+        return tuple(dict.fromkeys(self._directories[path].descriptor for path in selected))
+
+    def close(self):
+        self._closed = True
+        if os.getpid() == self._pid:
+            for record in self._directories.values():
+                try:
+                    if _identity(os.fstat(record.descriptor))[:3] == record.identity[:3]:
+                        os.close(record.descriptor)
+                except OSError:
+                    pass
+        self._directories.clear()
 
 
 class LinuxGitGuard:

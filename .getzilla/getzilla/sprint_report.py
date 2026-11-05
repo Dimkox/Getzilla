@@ -6,7 +6,6 @@ import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from .trace_contracts import validate_v3, validate_delivery, delivery_utc
-from .metrics_journal import digest
 
 TARGET = 'qualified_original_scope_task_completion_count_v1'
 
@@ -53,12 +52,15 @@ def summarize_sprint(events, *, start, as_of, source_manifest=None):
                 try:
                     validate_delivery(proof, row)
                 except ValueError:
-                    gaps.add('native_delivery_proof_missing'); continue
+                    gaps.add('native_delivery_proof_missing')
+                    continue
                 if delivery_utc(proof['delivered_by']) > cutoff:
-                    gaps.add('native_delivery_proof_missing'); continue
+                    gaps.add('native_delivery_proof_missing')
+                    continue
             observed = timestamp(row['captured_at'])
             if observed >= cutoff:
-                gaps.add('late_observations'); continue
+                gaps.add('late_observations')
+                continue
             identity = row['event_id']
             if identity in seen:
                 if seen[identity] != row:

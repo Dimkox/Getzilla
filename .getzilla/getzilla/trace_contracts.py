@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 MAX_RECORDS, MAX_ROW, MAX_NUMBER = 4096, 8192, 10**18
 STAGES = frozenset({'lexical', 'structural', 'semantic', 'fusion', 'rerank',
@@ -69,6 +69,117 @@ def validate_delivery(proof, row):
             raise ValueError
     except (ValueError, KeyError, TypeError):
         raise ValueError('invalid_delivery_proof') from None
+
+
+V4_FIELDS = frozenset({'schema_version','event','event_id','kind','at','captured_at',
+    'producer_version','repository_digest','workspace_digest','observer','payload'})
+V4_KINDS = frozenset({'native_coverage_open','native_coverage_close','economics_observation'})
+NATIVE_CONTEXT = frozenset({'route_id','logical_task_id','session_id','authority_epoch',
+    'state_revision','context_revision','scope_digest','spec_digest','evidence_digest','head','tree','base'})
+COVERAGE_OPEN = frozenset({'definition_version','policy','window_start','window_end','roster_digest',
+    'roster_count','source_inventory_digest','journal_prefix_digest','journal_prefix_rows'})
+COVERAGE_CLOSE = COVERAGE_OPEN | {'open_event_id','outcomes_digest','outcome_count'}
+_V4_ID = re.compile(r'[A-Za-z0-9_.:-]{1,64}\Z')
+
+
+def _v4_digest(value):
+    return type(value) is str and _HEX.fullmatch(value) is not None
+
+
+def _v4_context(row):
+    observer = row['observer']
+    if type(observer) is not dict or any(type(key) is not str for key in observer):
+        raise ValueError
+    if observer.get('profile') == 'core_native':
+        if (set(observer) != {'profile','operation_id','context'} or type(observer['profile']) is not str
+                or type(observer['operation_id']) is not str or not _V4_ID.fullmatch(observer['operation_id'])):
+            raise ValueError
+        context = observer['context']
+        if type(context) is not dict or set(context) != NATIVE_CONTEXT:
+            raise ValueError
+        for key,value in context.items():
+            if key in {'authority_epoch','state_revision','context_revision'}:
+                if type(value) is not int:
+                    raise ValueError
+            elif value is not None and type(value) is not str:
+                raise ValueError
+        # Reuse unchanged v3 scalar semantics; this creates no source proof.
+        validate_v3({**context,'schema_version':3,'event':'task','kind':'scope_changed',
+                     'event_id':row['event_id'],'at':row['at'],'captured_at':row['captured_at'],
+                     'producer_version':1,'repository_digest':row['repository_digest'],
+                     'workspace_digest':row['workspace_digest']})
+        return context
+    if (set(observer) != {'profile','operation_digest','binding_digest','scope_digest'}
+            or type(observer['profile']) is not str or observer['profile'] != 'registered_host'
+            or any(not _v4_digest(observer[key]) for key in ('operation_digest','binding_digest','scope_digest'))):
+        raise ValueError
+    return None
+
+
+def _validate_v4(row):
+    if (type(row) is not dict or set(row) != V4_FIELDS or any(type(key) is not str for key in row)
+            or type(row['schema_version']) is not int or row['schema_version'] != 4
+            or type(row['producer_version']) is not int or row['producer_version'] != 1
+            or type(row['event']) is not str or row['event'] != 'observation'
+            or type(row['kind']) is not str or row['kind'] not in V4_KINDS
+            or any(not _v4_digest(row[key]) for key in ('event_id','repository_digest','workspace_digest'))
+            or type(row['at']) is not str or type(row['captured_at']) is not str
+            or utc(row['at']) > utc(row['captured_at'])):
+        raise ValueError
+    context = _v4_context(row)
+    payload = row['payload']
+    if type(payload) is not dict or any(type(key) is not str for key in payload):
+        raise ValueError
+    if row['kind'] == 'economics_observation':
+        # No unreviewed copy or generic-payload fallback. Integration waits for
+        # the separately reviewed pure200 component and its exact validator.
+        from .route_metrics import validate_economics_payload
+        validate_economics_payload(payload)
+    else:
+        opening = row['kind'] == 'native_coverage_open'
+        if context is None or set(payload) != (COVERAGE_OPEN if opening else COVERAGE_CLOSE):
+            raise ValueError
+        if (type(payload['definition_version']) is not int or payload['definition_version'] != 1
+                or type(payload['policy']) is not str or payload['policy'] != 'prospective_original_roster_v1'
+                or type(payload['window_start']) is not str or type(payload['window_end']) is not str):
+            raise ValueError
+        start,end = utc(payload['window_start']),utc(payload['window_end'])
+        if end-start != timedelta(days=14):
+            raise ValueError
+        digests = {'roster_digest','source_inventory_digest','journal_prefix_digest'}
+        if not opening:
+            digests |= {'open_event_id','outcomes_digest'}
+        if any(not _v4_digest(payload[key]) for key in digests):
+            raise ValueError
+        if (type(payload['roster_count']) is not int or not 0 <= payload['roster_count'] <= 64
+                or type(payload['journal_prefix_rows']) is not int or not 0 <= payload['journal_prefix_rows'] <= 4096):
+            raise ValueError
+        if opening:
+            if utc(row['captured_at']) >= start:
+                raise ValueError
+        elif (utc(row['captured_at']) < end or type(payload['outcome_count']) is not int
+                or not 0 <= payload['outcome_count'] <= payload['roster_count']):
+            raise ValueError
+    if len(json.dumps(row,sort_keys=True,separators=(',',':'),allow_nan=False).encode('utf-8')) > MAX_ROW:
+        raise ValueError
+
+
+def validate_v4(row):
+    """Closed syntax only; source/access/coverage need actual native admission."""
+    try:
+        _validate_v4(row)
+    except (ValueError,TypeError,KeyError,AttributeError,ImportError,RecursionError,UnicodeError):
+        raise ValueError('invalid_observation') from None
+
+
+def native_context(row):
+    """Owned scalar binding projection, never an access/execution handle."""
+    if row.get('schema_version') == 3:
+        validate_v3(row)
+        return {key:row[key] for key in NATIVE_CONTEXT}
+    validate_v4(row)
+    context = _v4_context(row)
+    return dict(context) if context is not None else None
 
 
 def native_id(value):

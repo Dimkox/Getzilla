@@ -74,6 +74,10 @@ def regular(root, relative, *, create=False):
 
 
 def validate(item):
+    if isinstance(item, dict) and item.get('schema_version') == 4:
+        from .trace_contracts import validate_v4
+        validate_v4(item)
+        return
     if isinstance(item, dict) and item.get('schema_version') == 3:
         from .trace_contracts import validate_v3
         validate_v3(item)

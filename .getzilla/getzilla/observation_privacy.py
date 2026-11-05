@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
-from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, EVENTS, digest
+from .metrics_journal import MAX_BYTES, MAX_RECORDS, MAX_ROW, EVENTS
 
 
 def _decode_observation(raw):
@@ -151,12 +151,16 @@ def local_identity(root, *, anchor=None):
 
 def _delivery_proofs(root, rows, *, anchor):
     """Read bounded native canonical acknowledgements, never an imported label."""
-    from .trace_contracts import utc, validate_delivery, delivery_utc
-    native = [row for row in rows if row.get('schema_version') == 3]
+    from .trace_contracts import validate_delivery, delivery_utc, native_context
+    native = [row for row in rows if row.get('schema_version') in {3,4}]
     proofs, gaps = {}, set()
     grouped = {}
     for row in native:
-        grouped.setdefault(row['route_id'], []).append(row)
+        context = native_context(row)
+        if context is None:
+            gaps.add('native_observer_unqualified')
+            continue
+        grouped.setdefault(context['route_id'], []).append(row)
     with owned_journal(root, anchor=anchor) as (_, parent, binding):
         try:
             directory = _directory(parent, 'routes', os.getuid(), private=True)
@@ -168,7 +172,8 @@ def _delivery_proofs(root, rows, *, anchor):
             with os.scandir(directory) as inventory:
                 for index, entry in enumerate(inventory):
                     if index >= 4096:
-                        gaps.add('native_inventory_limit'); break
+                        gaps.add('native_inventory_limit')
+                        break
                     if re.fullmatch(r'[0-9a-f]{12}\.json', entry.name):
                         names.append(entry.name[:-5])
                     else:
@@ -188,7 +193,8 @@ def _delivery_proofs(root, rows, *, anchor):
                     consumed += info.st_size
                     anchor.charge(size=info.st_size)
                     if consumed > MAX_BYTES:
-                        gaps.add('native_inventory_limit'); break
+                        gaps.add('native_inventory_limit')
+                        break
                     raw = os.read(descriptor, 1_048_577)
                     after = os.fstat(descriptor)
                     named = os.stat(route_id+'.json', dir_fd=directory, follow_symlinks=False)
@@ -198,7 +204,7 @@ def _delivery_proofs(root, rows, *, anchor):
                         raise ValueError('canonical_record_changed')
                     route = _decode_observation(raw)
                     if (route.get('route_id') != route_id or route.get('workspace') != str(root.absolute())
-                            or selected and route.get('logical_task_id') != selected[0]['logical_task_id']):
+                            or selected and route.get('logical_task_id') != native_context(selected[0])['logical_task_id']):
                         raise ValueError('canonical_binding_mismatch')
                     if 'observation_publication' not in route:
                         continue
@@ -213,14 +219,16 @@ def _delivery_proofs(root, rows, *, anchor):
                     if frozen.keys() - present:
                         gaps.add('native_journal_gap')
                     for row in selected:
+                        context = native_context(row)
                         proof = publication['delivery'].get(row['event_id'])
                         validate_delivery(proof, row)
                         if (frozen.get(row['event_id']) != row
-                                or route['authority_epoch'] < row['authority_epoch']
-                                or route['state_revision'] < row['state_revision']
-                                or route['context']['revision'] < row['context_revision']
+                                or route['authority_epoch'] < context['authority_epoch']
+                                or route['state_revision'] < context['state_revision']
+                                or route['context']['revision'] < context['context_revision']
                                 or delivery_utc(proof['delivered_by']) > datetime.now(timezone.utc)):
-                            gaps.add('native_delivery_proof_missing'); continue
+                            gaps.add('native_delivery_proof_missing')
+                            continue
                         proofs[row['event_id']] = dict(proof)
                 except (OSError, ValueError, TypeError, KeyError, RecursionError):
                     gaps.add('native_delivery_proof_missing')
@@ -275,7 +283,8 @@ def _load_local(root, anchor):
         rows, row_ids, gaps, seen, disputed = [], [], [], {}, set()
         for index, line in enumerate(raw.splitlines(keepends=True)):
             if index >= MAX_RECORDS:
-                gaps.append('record_limit'); break
+                gaps.append('record_limit')
+                break
             try:
                 if len(line) > MAX_ROW or not line.endswith(b'\n'):
                     raise ValueError('row_bound')
@@ -290,13 +299,19 @@ def _load_local(root, anchor):
                             disputed.add(identity)
                         continue
                     seen[identity] = row
-                if row.get('schema_version') == 3:
+                if row.get('schema_version') in {3,4}:
                     if not private:
-                        gaps.append('restricted_rows_unavailable'); continue
-                    from .trace_contracts import validate_v3
-                    validate_v3(row)
+                        gaps.append('restricted_rows_unavailable')
+                        continue
+                    from .metrics_journal import validate
+                    from .trace_contracts import native_context
+                    validate(row)
+                    if native_context(row) is None:
+                        gaps.append('native_observer_unqualified')
+                        continue
                     if any(row[name] != expected for name, expected in binding.items()):
-                        gaps.append('project_binding_mismatch'); continue
+                        gaps.append('project_binding_mismatch')
+                        continue
                     rows.append(row)
                     row_ids.append(identity)
                 elif row.get('event') in EVENTS:
@@ -312,6 +327,9 @@ def _load_local(root, anchor):
         if private:
             proofs, proof_gaps = _delivery_proofs(root, rows, anchor=anchor)
             gaps += proof_gaps
+            # Unlike historical v3 observations, new v4 requires native
+            # canonical/proof admission before it becomes a supplied cut.
+            rows = [row for row in rows if row.get('schema_version') != 4 or row['event_id'] in proofs]
         return _LocalRead({'access': 'local_owner' if private else 'metadata_only', 'events': rows,
                 'input_digest': hashlib.sha256(raw).hexdigest(),
                 'scope': 'canonical_root_only', 'delivery_proofs': proofs, 'gaps': sorted(set(gaps))}, token)
@@ -328,4 +346,5 @@ def revalidate_local(root, captured):
             and fresh['access'] == captured['access']
             and fresh['input_digest'] == captured['input_digest']
             and fresh['events'] == captured['events']
+            and fresh['gaps'] == captured['gaps']
             and fresh['delivery_proofs'] == captured['delivery_proofs'])

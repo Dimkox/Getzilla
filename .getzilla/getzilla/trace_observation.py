@@ -9,7 +9,7 @@ from . import state
 from .metrics_journal import digest
 from .observation_privacy import local_identity
 from .trace_contracts import validate_v3
-from .util import git_head, git_output, now_utc
+from .util import now_utc
 
 
 @dataclass(frozen=True)
