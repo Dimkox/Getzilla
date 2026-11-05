@@ -395,9 +395,9 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [QUICKSTART.md](../QUICKSTART.md)
 - [VERSION](../VERSION)
 - [`.grok/skills/`](../.grok/skills/)
-- [`.grok/agents/`](../.grok/agents/)
-- [`.grok/hooks/`](../.grok/hooks/)
-- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.grok/hooks/`, the canonical source.
+- [`.getzilla/agents/`](../.getzilla/agents/)
+- [`.getzilla/hooks/`](../.getzilla/hooks/)
+- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.getzilla/hooks/`, the canonical source.
 - [`scripts/getzilla_route.py`](../scripts/getzilla_route.py)
 - [`scripts/getzilla_change.py`](../scripts/getzilla_change.py)
 - [`scripts/getzilla_agent.py`](../scripts/getzilla_agent.py) — local heartbeat, checkpoints, watchdog and recovery; [watchdog runbook](../engineering/runbooks/local-agent-watchdog.md), [repeated-failure guard](../engineering/runbooks/session-progress.md)
@@ -639,7 +639,7 @@ A keep declaration can include the component manifest itself. Add, adoption, gen
 
 The project update requires a committed valid v2 manifest and a clean Git checkout. It builds the selected files and target ledger in one private-index commit, checks the original HEAD and observations before creating a new branch, then checks the branch and actual file contents after checkout. Existing kept-local settings retain their separate `.getzilla/AGBP_SYNC.json` contract, including when legacy migration adds a sync record or log. An ownership conflict still needs reviewed resolution; `--accept-local` only acknowledges changed declared kept-local digests and does not grant ownership or permission to replace the kept files.
 
-Component writers share a persistent advisory guard. It coordinates cooperating writers, not operating-system isolation from other processes. Preflight conflicts stop before product writes. A later I/O failure can leave partial files with the old manifest or uncertain final publication; inspect the reported residue and retry explicitly. Update failures after branch creation retain that branch and report an incomplete checkout; no automatic rollback discards concurrent work. Adapter removal, shared-namespace relocation and native-hook deactivation are outside this selection change. In particular, `agents: []` does not remove `.grok/hooks.json` or `.grok/hooks/adaptive.json` or prove that native hooks are disabled.
+Component writers share a persistent advisory guard. It coordinates cooperating writers, not operating-system isolation from other processes. Preflight conflicts stop before product writes. A later I/O failure can leave partial files with the old manifest or uncertain final publication; inspect the reported residue and retry explicitly. Update failures after branch creation retain that branch and report an incomplete checkout; no automatic rollback discards concurrent work. Adapter removal and native-hook deactivation require separate checks. An empty selection does not prove that native hooks are disabled in an existing repository. See [neutral source migration](../engineering/runbooks/getzilla-neutral-hooks.md) for proof-checked relocation.
 
 ## Scripts
 
@@ -784,12 +784,9 @@ Browser assets are same-origin only under `default-src 'self'`, render text thro
 
 ## Hooks
 
-Lifecycle adapters live in `.grok/hooks/` and are registered in both:
+Shared lifecycle code lives in `.getzilla/hooks/`. `.getzilla/config/hooks.json` declares its events. The generator writes each selected adapter, including Grok project discovery at `.grok/hooks.json`. Codex overlays live in `.getzilla/config/codex-hooks.json`.
 
-- `.grok/hooks.json` — doctor/structure contract (`command` + `commandWindows`)
-- `.grok/hooks/adaptive.json` — Grok project-hook discovery
-
-An empty managed adapter selection does not remove these shared registrations or disable native Grok hooks. See [managed adapter selection](#managed-adapter-selection) for generation, ownership and explicit legacy adoption.
+An empty managed selection does not prove native hooks are disabled in an existing repository. See [managed adapter selection](#managed-adapter-selection) for generation, ownership and explicit legacy adoption.
 
 Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts and enforce local policy (secrets, Bitrix core, destructive commands, control-plane mutations, and exact delegated side-effect grants). Hook failure remains fail-open to avoid locking an interactive agent; this is why hooks are not merge authority. External gates retain their own enforcement: public GitHub Actions or the private App-owned Trust CI required Check Run.
 

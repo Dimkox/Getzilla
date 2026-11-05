@@ -316,7 +316,7 @@ class ProtectedSourceMoveTests(_ProjectCase):
         for command in (
             'mv .cursor /tmp/cursor-away',
             'mv .cursor/rules/getzilla/00-core.mdc /tmp/x',
-            'mv -f .grok/cursor-rules /tmp/away',
+            'mv -f .getzilla/cursor-rules /tmp/away',
             'mv -t /tmp .cursor',
             'mv --target-directory=/tmp AGENTS.md',
             'mv AGENTS.md notes.md',

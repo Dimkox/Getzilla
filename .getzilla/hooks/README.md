@@ -1,25 +1,10 @@
-# Grok Build hooks (Adaptive)
+# Getzilla shared hooks
 
-Project hooks need `/hooks-trust` in the Grok TUI.
+Shared hooks live in `.getzilla/hooks/`. Their event declarations live in `.getzilla/config/hooks.json`. The generator builds each selected client adapter from that source. Grok reads the generated `.grok/hooks.json` after `/hooks-trust` in its TUI.
 
-## Soft mode (default since v2.0.4)
+PreToolUse keeps the policy's existing protected-action denials when imports fail. A missing canonical hook in a root compatibility alias denies tool use. The adapters never emit an allow fallback after a launcher failure. Stop retains bounded continuation and independent verification checks.
 
-- **PreToolUse**: real policy when import works; on any error → **allow**
-- **Stop**: an owned unfinished root task requests bounded continuation on Claude/Codex and Grok end_turn, even without a completion claim; unsupported adapters report remaining work, and verification-claim checks remain a separate policy
-
-Hard lockouts (exit 2 / infinite stop loops) are intentional bugs — fixed in 2.0.4.
-Canonical source hooks live in `.grok/hooks/`. For older `adaptive.json` files that call `python3 pre_tool_use.py` from a consumer project root, the installer generates nine compatibility aliases from `.getzilla/templates/hook_root_shim.py`; these aliases dispatch to canonical hooks or preserve the fail-open JSON fallback. Generated consumer aliases are not tracked source-root files.
-
-## Disable all hooks
-
-```bash
-mv .grok/hooks .grok/hooks.disabled
-# or set in config:
-# [features]
-# hooks = false
-```
-
-Then restart `grok`.
+The installer keeps root aliases only for old consumers that already use them. Fresh installs use neutral launchers. To disable the Grok adapter, set `[features] hooks = false` in `.grok/config.toml`; this setting affects Grok only.
 
 ## Task continuation
 

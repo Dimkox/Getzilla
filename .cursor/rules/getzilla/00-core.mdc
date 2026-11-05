@@ -3,7 +3,7 @@ description: "Core boundaries for every Getzilla-assisted development task"
 alwaysApply: true
 ---
 
-<!-- Generated from .grok/cursor-rules/00-core.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/00-core.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Getzilla engineering contract
 

@@ -4,8 +4,11 @@
   getzilla components status [--project DIR]
   getzilla components add agent:<name>|factory|compliance:eu-ai-act|extra:bitrix|extra:seo-landing [--project DIR]
   getzilla components adopt --agents 'qwen,codex'  (complete legacy selection; '' selects none)
+  getzilla components remove agent:<name> [...]  (clean Git consumer at cwd)
+  getzilla components uninstall  (all selected adapters; shared engine stays)
 
-Existing files are never overwritten; additions are recorded in .getzilla/managed-components.json.
+Additions preserve existing files. Removal requires a clean Git consumer with committed
+selection and exact ownership; retained Entire/custom fragments and shared engine stay.
 """
 from __future__ import annotations
 
@@ -59,6 +62,7 @@ def _module_command(args, project):
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog='getzilla components', description=__doc__.split('\n')[0])
     sub = parser.add_subparsers(dest='command')
     status = sub.add_parser('status')
@@ -68,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument('--project', type=Path)
     adopt = sub.add_parser('adopt', help='Record a complete legacy selection without changing adapter files.')
     adopt.add_argument('--agents', required=True)
+    remove = sub.add_parser('remove', help='Remove proven adapter outputs in a recoverable Git branch.')
+    remove.add_argument('components', nargs='+')
+    sub.add_parser('uninstall', help='Remove all selected adapters; retain shared engine and unknown files.')
+
+
     module = sub.add_parser('module', help='Explicit optional module lifecycle; no addon runs during these commands.')
     module.add_argument('operation', choices=('registry', 'status', 'install', 'update', 'enable', 'disable', 'uninstall', 'recover', 'rollback', 'quiesce'))
     module.add_argument('modules', nargs='*', help='exact id@version for install/update; installed id for other operations')
@@ -76,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     module.add_argument('--registry', default=REGISTRY)
     module.add_argument('--grant', action='append', default=[])
     module.add_argument('--plan', action='store_true')
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if args.command is None:
         parser.print_help()
         return 2
@@ -98,6 +107,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'adopt':
             manifest = adopt_selection(project, parse_agents(args.agents))
             print(json.dumps({'ok': True, 'selection_state': 'selected', **manifest}, indent=2, sort_keys=True))
+            return 0
+        if args.command in {'remove', 'uninstall'}:
+            try:
+                from getzilla.adapter_removal import UpdateError, remove_adapters
+            except ImportError as error:
+                raise ValueError('packaged adapter-removal runtime is unavailable; update or reinstall Getzilla') from error
+            try:
+                source = ROOT if is_source_checkout(ROOT) else getzilla_home()
+            except RuntimeError as error:
+                raise ValueError('adapter removal requires an available full Getzilla source checkout') from error
+            if not is_source_checkout(source):
+                raise ValueError('adapter removal source is not a full Getzilla checkout')
+            agents = None
+            if args.command == 'remove':
+                if any(not component.startswith('agent:') for component in args.components):
+                    raise ValueError('removal accepts only agent:<name>; shared engine components stay')
+                agents = parse_agents(','.join(component.removeprefix('agent:') for component in args.components))
+            try:
+                result = remove_adapters(source, project, agents)
+            except UpdateError as error:
+                raise ValueError(str(error)) from error
+            print(json.dumps({'ok': True, **result}, indent=2, sort_keys=True))
             return 0
         results = ensure_components(project, list(args.components), source=ROOT if is_source_checkout(ROOT) else getzilla_home())
     except (ValueError, OSError) as error:
