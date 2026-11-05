@@ -435,6 +435,14 @@
     },
     {
       "compatibility": "bidirectional",
+      "id": "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/landing-backend-capability.v3.schema.json",
+      "role": "bidirectional",
+      "version": "3"
+    },
+    {
+      "compatibility": "bidirectional",
       "id": "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
       "kind": "json_schema",
       "path": "factory/contracts/jsonschema/landing-attempt-status.v1.schema.json",
@@ -488,6 +496,14 @@
       "path": "factory/contracts/openapi/landing-failover.v2.json",
       "role": "bidirectional",
       "version": "2"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
+      "kind": "openapi",
+      "path": "factory/contracts/openapi/landing-failover.v3.json",
+      "role": "bidirectional",
+      "version": "3"
     },
     {
       "compatibility": "bidirectional",
@@ -2010,7 +2026,8 @@
         "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
         "CONTRACT-FACTORY-SEMANTIC-OPENAPI",
         "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2"
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3"
       ],
       "repository_paths": [
         "factory/.env.example",
@@ -2661,7 +2678,8 @@
         "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V2",
         "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
         "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1"
+        "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
+        "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3"
       ],
       "repository_paths": [
         "factory/contracts/jsonschema/landing-attempt.v1.schema.json",
@@ -2697,7 +2715,8 @@
         "factory/contracts/jsonschema/landing-backend-capability.v2.schema.json",
         "factory/contracts/jsonschema/landing-attempt-status.v1.schema.json",
         "factory/contracts/jsonschema/landing-failover-config.v1.schema.json",
-        "factory/contracts/jsonschema/landing-failover-result.v1.schema.json"
+        "factory/contracts/jsonschema/landing-failover-result.v1.schema.json",
+        "factory/contracts/jsonschema/landing-backend-capability.v3.schema.json"
       ],
       "runtime": {
         "evidence": "source_described",
