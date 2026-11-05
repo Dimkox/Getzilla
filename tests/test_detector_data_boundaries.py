@@ -80,6 +80,100 @@ NAMESPACE_CAPABILITIES = (
 
 
 class CompleteSourceProofTests(unittest.TestCase):
+    def test_each_consumed_result_and_escaping_closure_keeps_source_demand(self):
+        operations = {
+            'inline-method': 'class Holder:\n    def select(self): return bridge.helper()\nHolder().select().enqueue(work)',
+            'assigned-method': 'class Holder:\n    def select(self): return bridge.helper()\nholder = Holder()\nholder.select().enqueue(work)',
+            'nested-receiver': 'class Holder:\n    def select(self): return bridge.helper()\n(Holder() if flag else Holder()).select().enqueue(work)',
+            'class-attribute': 'class Holder:\n    jobs = bridge.helper()\nHolder.jobs.enqueue(work)',
+            'closure': 'def select():\n    def inner(): return bridge.helper()\n    return inner\nselect()().enqueue(work)',
+            'closure-list': 'def select():\n    def inner(): return bridge.helper()\n    return [inner]\nselect()[0]().enqueue(work)',
+            'lambda': 'def select(): return lambda: bridge.helper()\nselect()().enqueue(work)',
+            'lambda-list': 'def select(): return [lambda: bridge.helper()]\nselect()[0]().enqueue(work)',
+            'nested-closure': 'def select():\n    def middle(): return lambda: bridge.helper()\n    return [middle]\nselect()[0]()().enqueue(work)',
+            'named-expression': 'if (jobs := bridge.helper()):\n    jobs.put(work())',
+            'match': 'match bridge.helper():\n    case jobs:\n        jobs.put(work())',
+            'with': 'with bridge.helper() as jobs:\n    jobs.enqueue(work)',
+            'for': 'for jobs in bridge.helper():\n    jobs.enqueue(work)',
+            'getter-result': "if (jobs := getattr(bridge, 'helper')()):\n    jobs.put(work())",
+            'stored-argument': 'saved = []\ndef store(value): saved.append(value)\nstore(bridge.helper())\nsaved[0].enqueue(work)',
+            'default-capture': 'jobs = bridge.helper()\ndef select(value=jobs): return value\nselect().enqueue(work)',
+            'comprehension-capture': 'jobs = bridge.helper()\n[jobs.put(work()) for jobs in (jobs,)]',
+            'yield': 'def select(): yield bridge.helper()\nnext(select()).enqueue(work)',
+        }
+        providers = (
+            ('rq', 'from rq import Queue\ndef helper(): return Queue()\n'),
+            ('stdlib', 'from queue import Queue\ndef helper(): return Queue()\n'),
+            ('ordinary', 'class Ordinary:\n    def enqueue(self, work): pass\n    def put(self, work): pass\ndef helper(): return Ordinary()\n'),
+        )
+        for provider_name, provider in providers:
+            for label, operation in operations.items():
+                with self.subTest(provider=provider_name, operation=label):
+                    repo = GitArchitectureRepo(self)
+                    repo.model(_system(), _rules())
+                    repo.write_text('provider.py', provider)
+                    repo.write_text('bridge.py', 'from provider import helper\n')
+                    base = repo.commit('queue-returning or ordinary source')
+                    # With/for are source-policy contrasts, not a claim that real
+                    # queue classes implement context/iteration protocols.
+                    if provider_name == 'stdlib':
+                        operation = operation.replace('.enqueue(work)', '.put(work)')
+                    repo.write_text('consumer.py', 'import bridge\n' + operation + '\n')
+                    head = repo.commit('consumed result or escaping closure')
+                    snapshot = ARCHITECTURE.load_architecture(repo.root)
+                    diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                    report = FIT.evaluate_fitness(repo.root, snapshot, diff, diff.changed_paths, pre_risk='green')
+                    result = next(item for item in report.results if item.category == 'background_job')
+                    self.assertEqual(result.status, 'not_applicable' if provider_name == 'ordinary' else 'unsupported')
+                    self.assertEqual('new_queue' in report.triggers, provider_name != 'ordinary')
+
+    def test_discarded_result_proof_preserves_lexical_bindings_and_unknown_escapes(self):
+        for source in ('import bridge\nbridge.helper()\n',
+                       'import bridge\nunused = bridge.helper()\n',
+                       'import bridge\nunused = [bridge.helper()]\n'):
+            with self.subTest(discarded=source):
+                observed = FIT._callable_use_proof(ast.parse(source), namespace_closed=True, patches={})
+                self.assertIn('bridge.helper', observed.identity)
+        source = ('import left\nimport right\ndef first():\n    value = left.helper()\n'
+                  'def second():\n    value = right.helper()\n    value.enqueue(work)\n')
+        observed = FIT._callable_use_proof(ast.parse(source), namespace_closed=True, patches={})
+        self.assertIn('left.helper', observed.identity)
+        self.assertIn('right.helper', observed.returns)
+        observed = FIT._callable_use_proof(ast.parse('import bridge\nclass Holder:\n    jobs = bridge.helper()\n'),
+                                           namespace_closed=True, patches={})
+        self.assertIn('bridge.helper', observed.returns)
+        for escape in ('sink(value)', 'def select(): return value',
+                       'def select(other=value): return other',
+                       'def select():\n    global value\n    return value',
+                       '[item for item in value]', 'match value:\n    case selected: selected.put(work)',
+                       'value = replacement', 'try: pass\nexcept Exception as value: pass',
+                       'match other:\n    case value: pass'):
+            with self.subTest(escape=escape):
+                tree = ast.parse('import bridge\nvalue = bridge.helper()\n' + escape + '\n')
+                observed = FIT._callable_use_proof(tree, namespace_closed=True, patches={})
+                self.assertIn('bridge.helper', observed.returns)
+
+    def test_result_use_proof_rechecks_caller_bytes_and_exhaustion(self):
+        source = b'import bridge\nbridge.helper()\n'
+        changed = b'import bridge\nif (value := bridge.helper()): value.put(work)\n'
+        caller = ast.parse(source)
+        original = ast.dump(caller, include_attributes=True)
+        initial = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
+        self.assertIn('bridge.helper', initial.identity)
+        self.assertEqual(ast.dump(caller, include_attributes=True), original)
+        caller.body[:] = ast.parse(changed).body
+        observed = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
+        self.assertIn('bridge.helper', observed.returns)
+        first = FIT._queue_source_preparation('result-version.py', source)
+        current = FIT._queue_source_preparation('result-version.py', changed)
+        self.assertIn('bridge.helper', first.callable_uses.identity)
+        self.assertIn('bridge.helper', current.callable_uses.returns)
+        chain = 'import bridge\nfirst = bridge.helper()\nsecond = first\nthird = second\n'
+        with patch.object(FIT, 'MAX_QUEUE_DEPENDENCY_WORK', 2):
+            observed = FIT._callable_use_proof(ast.parse(chain), namespace_closed=True, patches={})
+        self.assertNotIn('bridge.helper', observed.identity)
+        self.assertIn('bridge.helper', observed.returns)
+
     def test_repeated_identical_imports_keep_direct_calls_within_source_budget(self):
         repo = GitArchitectureRepo(self)
         repo.model(_system(), _rules())

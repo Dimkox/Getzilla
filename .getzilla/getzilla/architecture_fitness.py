@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from collections import deque
+from collections import Counter, defaultdict, deque
 import hashlib
 import json
 import re
@@ -38,7 +38,7 @@ from .architecture_diff import (
     read_diff_files,
 )
 from .queue_provenance import QueueAnalysisLimit, analyze_queue_tree, literal_patch_members, _CONTAINER_MUTATORS
-from .python_source_proof import binding_events, literal_import_reads, namespace_is_closed
+from .python_source_proof import binding_events, binding_owner, literal_import_reads, namespace_is_closed
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -2579,6 +2579,187 @@ class _CallableUseProof(NamedTuple):
     function_calls: tuple[tuple[str, frozenset[str]], ...]
 
 
+def _discarded_call_results(nodes: tuple[ast.AST, ...], parents: dict[ast.AST, ast.AST],
+                            bindings: tuple) -> frozenset[ast.Call]:
+    """Prove complete local data flow to discard; unknown consumption stays live.
+
+    Calls, statement protocols, returns and escaping closures are never data
+    sinks. Plain aliases require one lexical binding and every reader. These
+    facts live only in this analysis; caller AST identities are not cache keys.
+    """
+    counts = Counter((binding_owner(event.node, parents), event.name) for event in bindings)
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+              ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+    declarations = defaultdict(set)
+    unknown_reads = set()
+    for node in nodes:
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            declarations[binding_owner(node, parents)].update(node.names)
+        headers = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            for field, value in ast.iter_fields(node):
+                if field != 'body':
+                    headers.extend(value if isinstance(value, list) else [value])
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)) and node.generators:
+            headers.append(node.generators[0].iter)
+        for header in headers:
+            if isinstance(header, ast.AST):
+                unknown_reads.update(child for child in ast.walk(header)
+                                     if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load))
+
+    @lru_cache(maxsize=None)
+    def owner(node):
+        current = parents.get(node)
+        while current is not None and not isinstance(current, scopes):
+            current = parents.get(current)
+        return current
+
+    unknown = object()
+
+    @lru_cache(maxsize=None)
+    def resolved(node):
+        if node in unknown_reads:
+            return unknown
+        scope = owner(node)
+        while True:
+            if node.id in declarations[scope]:
+                return unknown
+            if counts[(scope, node.id)]:
+                if isinstance(scope, ast.ClassDef) and owner(node) is not scope:
+                    return unknown
+                return scope
+            if scope is None:
+                return None
+            scope = owner(scope)
+
+    reads = defaultdict(list)
+    attributes = defaultdict(list)
+    getters = defaultdict(list)
+    unknown_getter = any(event.name == 'getattr' for event in bindings)
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            reads[node.id].append(node)
+            if node.id == 'getattr':
+                use = parents.get(node)
+                unknown_getter |= not isinstance(use, ast.Call) or use.func is not node
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            attributes[node.attr].append(node)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr':
+            if (len(node.args) in (2, 3) and not node.keywords and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                getters[node.args[1].value].append(node)
+            else:
+                unknown_getter = True
+    memo = {}
+    active = set()
+    function_memo = {}
+    function_active = set()
+    work = 0
+
+    def callable_use_safe(node, depth):
+        parent = parents.get(node)
+        if isinstance(parent, ast.Call) and parent.func is node:
+            return safe(parent, depth + 1)
+        if isinstance(parent, ast.Expr) and parent.value is node:
+            return True
+        if isinstance(parent, ast.Assign) and parent.value is node and len(parent.targets) == 1:
+            return binding_safe(parent.targets[0], depth + 1, callable_value=True)
+        return False
+
+    def function_result_safe(function, depth):
+        nonlocal work
+        if function in function_memo:
+            return function_memo[function]
+        if function in function_active or depth > 64 or work >= MAX_QUEUE_DEPENDENCY_WORK:
+            return False
+        work += 1
+        function_active.add(function)
+        if isinstance(function, ast.Lambda):
+            answer = callable_use_safe(function, depth + 1)
+        else:
+            scope = binding_owner(function, parents)
+            answer = (not function.decorator_list and counts[(scope, function.name)] == 1
+                      and not any(function.name in names for names in declarations.values()))
+            references = []
+            for read in reads[function.name]:
+                selected = resolved(read)
+                if selected is unknown:
+                    answer = False
+                elif selected is scope:
+                    references.append(read)
+            if isinstance(scope, ast.ClassDef):
+                class_scope = binding_owner(scope, parents)
+                # Unknown receivers/getters or an escaping class do not prove
+                # which method will run. Unused sibling methods stay separate.
+                receiver_used = any(
+                    resolved(read) in (unknown, method)
+                    for method in scope.body if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    for argument in [*method.args.posonlyargs, *method.args.args][:1]
+                    for read in reads[argument.arg])
+                answer &= not (scope.bases or scope.keywords or scope.decorator_list or receiver_used
+                               or any(name.startswith('__') for name in attributes))
+                answer &= not unknown_getter and not any(
+                    resolved(read) in (unknown, class_scope) for read in reads[scope.name])
+                references.extend(attributes[function.name])
+                references.extend(getters[function.name])
+            answer = answer and all(callable_use_safe(read, depth + 1) for read in references)
+        function_active.remove(function)
+        function_memo[function] = answer
+        return answer
+
+    def binding_safe(target, depth, origin=None, *, callable_value=False):
+        if not isinstance(target, ast.Name):
+            return False
+        scope = binding_owner(target, parents)
+        if (isinstance(scope, ast.ClassDef) or counts[(scope, target.id)] != 1
+                or target.id in declarations[scope]):
+            return False
+        for read in reads[target.id]:
+            selected = resolved(read)
+            checked = (callable_use_safe(read, depth + 1) if callable_value
+                       else safe(read, depth + 1, origin)) if selected is scope else True
+            if selected is unknown or not checked:
+                return False
+        return True
+
+    initial_origin = object()
+
+    def safe(node, depth=0, origin=initial_origin):
+        nonlocal work
+        if origin is initial_origin:
+            origin = owner(node)
+        key = (node, origin)
+        if key in memo:
+            return memo[key]
+        if key in active or work >= MAX_QUEUE_DEPENDENCY_WORK or depth > 64:
+            return False
+        work += 1
+        active.add(key)
+        parent = parents.get(node)
+        answer = False
+        if isinstance(parent, ast.Expr) and parent.value is node:
+            answer = True
+        elif isinstance(parent, ast.Assign) and parent.value is node:
+            answer = all(binding_safe(target, depth + 1, origin) for target in parent.targets)
+        elif isinstance(parent, ast.AnnAssign) and parent.value is node:
+            answer = binding_safe(parent.target, depth + 1, origin)
+        elif isinstance(parent, (ast.Return, ast.Yield, ast.YieldFrom)) or (
+                isinstance(parent, ast.Lambda) and parent.body is node):
+            function = parent if isinstance(parent, ast.Lambda) else owner(parent)
+            answer = (function is origin and isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+                      and function_result_safe(function, depth + 1))
+        elif isinstance(parent, (ast.Attribute, ast.Subscript)) and parent.value is node and isinstance(parent.ctx, ast.Load):
+            answer = safe(parent, depth + 1, origin)
+        elif isinstance(parent, (ast.List, ast.Tuple, ast.Set, ast.Dict, ast.Compare, ast.BinOp,
+                                 ast.UnaryOp, ast.BoolOp, ast.IfExp, ast.Starred)):
+            answer = not isinstance(getattr(parent, 'ctx', ast.Load()), (ast.Store, ast.Del)) and safe(parent, depth + 1, origin)
+        active.remove(key)
+        memo[key] = answer
+        return answer
+
+    return frozenset(node for node in nodes if isinstance(node, ast.Call) and safe(node))
+
+
 def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict) -> _CallableUseProof:
     """Positive proof for plain callees/aliases; all other value uses are opaque.
 
@@ -2592,6 +2773,7 @@ def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict)
     nodes = tuple(ast.walk(tree))
     parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
     bindings = binding_events(tree)
+    discarded_results = _discarded_call_results(nodes, parents, bindings) if namespace_closed else frozenset()
     counts: dict[str, int] = {}
     for event in bindings:
         counts[event.name] = counts.get(event.name, 0) + 1
@@ -2646,9 +2828,9 @@ def _callable_use_proof(tree: ast.AST, *, namespace_closed: bool, patches: dict)
             return memo[node]
         parent = parents.get(node)
         if isinstance(parent, ast.Call) and parent.func is node:
-            # This proves a direct use of the callable object. Its result is
-            # governed separately by scoped consumed-return/source demand.
-            result = 0 if namespace_closed else 1
+            # Object identity does not prove that the returned value is data.
+            # Every unproved result retains its full return/source demand.
+            result = 0 if parent in discarded_results else 1
         elif (namespace_closed and isinstance(parent, ast.Assign) and parent.value is node
               and len(parent.targets) == 1 and isinstance(parent.targets[0], ast.Name)
               and counts.get(parent.targets[0].id) == 1 and parent.targets[0].id not in declared_nonlocal):
@@ -3338,7 +3520,9 @@ def _queue_adapter_names(
         for value in use_proof.returns | use_proof.opaque:
             if value == access or value.startswith(access + '.') or access.startswith(value + '.'):
                 dependencies.add(name)
-                return_demands |= {value, name}
+                return_demands |= {value}
+                if value == access or access.startswith(value + '.'):
+                    return_demands |= {name}
                 if value in use_proof.opaque:
                     callback_demands.add(value)
                     if not use_namespace_closed or access.startswith(value + '.'):
