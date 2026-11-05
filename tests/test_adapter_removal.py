@@ -11,10 +11,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / '.getzilla'), str(ROOT / 'scripts')]
 
 from getzilla import harnesses  # noqa: E402
+from getzilla import adapter_removal as publication  # noqa: E402
 from getzilla.component_state import MANIFEST, V2, BoundRoot, encode_manifest, record_owned  # noqa: E402
 
 
@@ -250,7 +252,7 @@ class RemovalGitTests(unittest.TestCase):
 
     def test_before_publication_cut_keeps_original_state_and_route(self) -> None:
         import getzilla_upgrade
-        with mock.patch.object(getzilla_upgrade, 'commit_changes', side_effect=OSError('public cut')):
+        with mock.patch.object(publication, 'commit_changes', side_effect=OSError('public cut')):
             with self.assertRaises(getzilla_upgrade.UpdateError):
                 self.remove(('claude',))
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
@@ -259,7 +261,7 @@ class RemovalGitTests(unittest.TestCase):
 
     def test_failed_checkout_retains_recoverable_commit_and_does_not_retry(self) -> None:
         import getzilla_upgrade
-        original_git = getzilla_upgrade.git
+        original_git = publication.git
         switches = []
 
         def git(project, *args, **kwargs):
@@ -268,7 +270,7 @@ class RemovalGitTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 1, '', 'public checkout cut')
             return original_git(project, *args, **kwargs)
 
-        with mock.patch.object(getzilla_upgrade, 'git', side_effect=git):
+        with mock.patch.object(publication, 'git', side_effect=git):
             with self.assertRaisesRegex(getzilla_upgrade.UpdateError, 'checking it out failed'):
                 self.remove(('claude',))
         self.assertEqual(len(switches), 1)
@@ -281,7 +283,7 @@ class RemovalGitTests(unittest.TestCase):
 
     def test_current_file_cut_before_ref_leaves_product_and_branch_unpublished(self) -> None:
         import getzilla_upgrade
-        original = getzilla_upgrade.commit_changes
+        original = publication.commit_changes
         changed = self.project / '.claude/settings.json'
 
         def commit(*args, **kwargs):
@@ -289,7 +291,7 @@ class RemovalGitTests(unittest.TestCase):
             changed.write_bytes(b'{"user":"concurrent public fixture"}\n')
             return result
 
-        with mock.patch.object(getzilla_upgrade, 'commit_changes', side_effect=commit):
+        with mock.patch.object(publication, 'commit_changes', side_effect=commit):
             with self.assertRaisesRegex(getzilla_upgrade.UpdateError, 'uncommitted|file changed'):
                 self.remove(('claude',))
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
@@ -298,7 +300,7 @@ class RemovalGitTests(unittest.TestCase):
 
     def test_after_ref_cut_reports_retained_commit_without_checkout(self) -> None:
         import getzilla_upgrade
-        original = getzilla_upgrade._git_out
+        original = publication._git_out
         changed = self.project / '.claude/settings.json'
 
         def git_out(project, *args, **kwargs):
@@ -307,7 +309,7 @@ class RemovalGitTests(unittest.TestCase):
                 changed.write_bytes(b'{"user":"after ref public fixture"}\n')
             return result
 
-        with mock.patch.object(getzilla_upgrade, '_git_out', side_effect=git_out):
+        with mock.patch.object(publication, '_git_out', side_effect=git_out):
             with self.assertRaisesRegex(getzilla_upgrade.UpdateError, 'retained.*checkout not completed'):
                 self.remove(('claude',))
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)

@@ -416,8 +416,8 @@ class ComponentTransactionTests(unittest.TestCase):
 
 
 class FreshSelectionTests(unittest.TestCase):
-    def test_shipped_components_removal_uses_full_source_once_in_both_layouts(self) -> None:
-        from getzilla.component_state import read_state
+    def test_shipped_components_removal_uses_packaged_runtime_once_in_both_layouts(self) -> None:
+        from getzilla.component_state import mode_matches, owned_proof, read_state
         environment = {**os.environ, 'GETZILLA_HOME': str(ROOT), 'PYTHONDONTWRITEBYTECODE': '1',
                        'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
                        'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
@@ -435,6 +435,21 @@ class FreshSelectionTests(unittest.TestCase):
                     unknown.write_bytes(b'public foreign bytes\n')
                     engine = target / INSTALL.ENGINE_ARCHIVE if archive else target / '.getzilla/getzilla/harnesses.py'
                     engine_before = engine.read_bytes()
+                    proof = owned_proof(read_state(target).manifest, engine.relative_to(target).as_posix())
+                    self.assertEqual(proof['sha256'], hashlib.sha256(engine_before).hexdigest())
+                    self.assertTrue(mode_matches(engine.stat().st_mode, proof['mode']))
+                    probe = Path(tmp) / f'import-{archive}.py'
+                    probe.write_text(
+                        'import socket,subprocess,sys\nfrom unittest import mock\n'
+                        f'sys.path.insert(0,{str(target / ".getzilla")!r})\n'
+                        'with mock.patch.object(subprocess,"Popen",side_effect=AssertionError("process on import")), '
+                        'mock.patch.object(socket,"socket",side_effect=AssertionError("network on import")):\n'
+                        ' from getzilla import adapter_removal\n'
+                        ' assert callable(adapter_removal.remove_adapters)\n'
+                        ' assert "getzilla_upgrade" not in sys.modules\n')
+                    imported = subprocess.run([sys.executable, '-B', str(probe)], cwd=target, env=environment,
+                                              capture_output=True, text=True, timeout=30)
+                    self.assertEqual(imported.returncode, 0, imported.stdout + imported.stderr)
 
                     def git(*args):
                         return subprocess.run(['git', '-C', str(target), *args], env=environment,
@@ -478,6 +493,11 @@ class FreshSelectionTests(unittest.TestCase):
                            'PYTHONDONTWRITEBYTECODE': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
             manifest = (target / MANIFEST).read_bytes()
             role = (target / '.codex/agents/general_implementer.toml').read_bytes()
+            environment.update({'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                                'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'})
+            for args in (('init', '--quiet', '--initial-branch=main'), ('add', '-A'),
+                         ('commit', '--quiet', '-m', 'canonical-data refusal fixture')):
+                subprocess.run(['git', '-C', str(target), *args], env=environment, check=True, capture_output=True)
             for scenario in ('unavailable', 'incomplete'):
                 with self.subTest(scenario=scenario):
                     if scenario == 'incomplete':
@@ -496,8 +516,9 @@ class FreshSelectionTests(unittest.TestCase):
                     self.assertEqual((target / MANIFEST).read_bytes(), manifest)
                     self.assertEqual((target / '.codex/agents/general_implementer.toml').read_bytes(), role)
 
-    def test_installed_removal_forwards_nonzero_result_once_without_overriding_context(self) -> None:
-        spec = importlib.util.spec_from_file_location('installed_forwarding_control', ROOT / 'scripts/getzilla_components.py')
+    def test_installed_removal_calls_runtime_transaction_once_without_external_execution(self) -> None:
+        from getzilla import adapter_removal as helper
+        spec = importlib.util.spec_from_file_location('installed_direct_control', ROOT / 'scripts/getzilla_components.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as tmp:
@@ -506,18 +527,167 @@ class FreshSelectionTests(unittest.TestCase):
                                      selection=INSTALL.PayloadSelection(('codex',)))
             manifest = (target / MANIFEST).read_bytes()
             arguments = ['remove', 'agent:codex']
-            for outcome in ('nonzero', 'uncertain'):
+            cwd, session = Path.cwd(), os.environ.get('GETZILLA_SESSION_ID')
+            for outcome in ('success', 'refusal', 'uncertain'):
                 with self.subTest(outcome=outcome), mock.patch.object(module, 'ROOT', target), \
                         mock.patch.object(module, 'getzilla_home', return_value=ROOT), \
                         mock.patch.object(module, 'find_installed_project', return_value=target), \
-                        mock.patch.object(subprocess, 'run') as forward:
-                    if outcome == 'nonzero':
-                        forward.return_value = subprocess.CompletedProcess([], 37)
+                        mock.patch.object(helper, 'remove_adapters') as transaction, \
+                        mock.patch.object(subprocess, 'run', side_effect=AssertionError('external handoff attempted')):
+                    if outcome == 'success':
+                        transaction.return_value = {'live_client_state': 'unverified'}
+                    elif outcome == 'refusal':
+                        transaction.side_effect = helper.UpdateError('public fixture transaction refusal')
                     else:
-                        forward.side_effect = OSError('public fixture launch uncertainty')
-                    self.assertEqual(module.main(arguments), 37 if outcome == 'nonzero' else 2)
-                    forward.assert_called_once_with([sys.executable, str(ROOT / 'scripts/getzilla_components.py'), *arguments], check=False)
+                        transaction.side_effect = OSError('public fixture transaction uncertainty')
+                    self.assertEqual(module.main(arguments), 0 if outcome == 'success' else 2)
+                    transaction.assert_called_once_with(ROOT, target, ('codex',))
                     self.assertEqual((target / MANIFEST).read_bytes(), manifest)
+                    self.assertEqual(Path.cwd(), cwd)
+                    self.assertEqual(os.environ.get('GETZILLA_SESSION_ID'), session)
+
+    def test_compressed_removal_does_not_execute_late_replaced_external_source(self) -> None:
+        environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1',
+                       'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+                       'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                       'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            target, source = base / 'project', base / 'canonical-data'
+            INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                     selection=INSTALL.PayloadSelection(('codex',), engine_archive=True))
+            for relative in ('scripts/install_into.py', 'factory/pyproject.toml',
+                             '.getzilla/config/hooks.json', '.getzilla/config/codex-hooks.json',
+                             *[str(p.relative_to(ROOT)).replace(os.sep, '/') for p in (ROOT / '.getzilla/agents').glob('*.toml')]):
+                destination = source / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((ROOT / relative).read_bytes())
+            marker = base / 'foreign-executed'
+            entry = source / 'scripts/getzilla_components.py'
+            entry.write_bytes(b'raise SystemExit("admitted fixture entrypoint must not execute")\n')
+            (source / 'scripts/getzilla_upgrade.py').write_bytes(b'# inert external helper must not import\n')
+            foreign = 'from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("executed")\n'
+            environment['GETZILLA_HOME'] = str(source)
+            for args in (('init', '--quiet', '--initial-branch=main'), ('add', '-A'),
+                         ('commit', '--quiet', '-m', 'late external replacement fixture')):
+                subprocess.run(['git', '-C', str(target), *args], env=environment, check=True, capture_output=True)
+            before = subprocess.run(['git', '-C', str(target), 'rev-parse', 'HEAD'], env=environment,
+                                    check=True, capture_output=True, text=True).stdout.strip()
+            launcher = base / 'public-boundary-control.py'
+            launcher.write_text(
+                'import pathlib,runpy,sys\n'
+                f'sys.path[:0]=[{str(target / "scripts")!r},{str(target / ".getzilla")!r}]\n'
+                'from getzilla.component_state import BoundRoot\n'
+                'import getzilla.component_state as state\n'
+                'assert "/getzilla.zip/" in state.__file__.replace("\\\\","/")\n'
+                'original=BoundRoot.__exit__\n'
+                'def replace_after_close(binding,*args):\n'
+                ' result=original(binding,*args)\n'
+                f' if binding.path==pathlib.Path({str(source)!r}):\n'
+                f'  pathlib.Path({str(entry)!r}).write_text({foreign!r})\n'
+                ' return result\n'
+                'BoundRoot.__exit__=replace_after_close\n'
+                f'sys.argv=[{str(target / "scripts/getzilla_components.py")!r},"remove","agent:codex"]\n'
+                'runpy.run_path(sys.argv[0],run_name="__main__")\n')
+            result = subprocess.run([sys.executable, '-B', str(launcher)], cwd=target, env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(marker.exists(), 'external source Python executed after FD validation closed')
+            self.assertEqual(entry.read_text(), foreign)
+            self.assertEqual(json.loads(result.stdout)['removed_agents'], ['codex'])
+            parent = subprocess.run(['git', '-C', str(target), 'rev-parse', 'HEAD^'], env=environment,
+                                    check=True, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(parent, before)
+
+    def test_compressed_runtime_update_owns_archive_and_preserves_foreign_archive(self) -> None:
+        from getzilla.component_state import encode_manifest, mode_matches, owned_proof, read_state, record_owned
+        with mock.patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
+            import getzilla_upgrade as helper
+        environment = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+                       'GIT_AUTHOR_NAME': 'public fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                       'GIT_COMMITTER_NAME': 'public fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, environment):
+            for scenario in ('owned-old', 'foreign'):
+                with self.subTest(scenario=scenario):
+                    target = Path(tmp) / scenario
+                    INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                             selection=INSTALL.PayloadSelection(('codex',), engine_archive=True))
+                    relative = INSTALL.ENGINE_ARCHIVE
+                    artifact = target / relative
+                    manifest = read_state(target).manifest
+                    core = manifest['components']['core']
+                    old = b'public prior engine archive bytes\n'
+                    foreign = b'public foreign archive bytes; never execute or overwrite\n'
+                    if scenario == 'foreign':
+                        artifact.write_bytes(foreign)
+                        artifact.chmod(0o444)
+                        core.get('owned', {}).pop(relative, None)
+                    else:
+                        artifact.write_bytes(old)
+                        record_owned(manifest, relative, old, 0o644)
+                    (target / MANIFEST).write_bytes(encode_manifest(manifest))
+
+                    def git(*args):
+                        return subprocess.run(['git', '-C', str(target), *args], check=True,
+                                              capture_output=True, text=True).stdout.strip()
+
+                    git('init', '--quiet', '--initial-branch=main')
+                    git('add', '-A')
+                    git('commit', '--quiet', '-m', 'previous installed runtime archive')
+                    before, saved = git('rev-parse', 'HEAD'), (target / MANIFEST).read_bytes()
+                    if scenario == 'foreign':
+                        with self.assertRaisesRegex(helper.UpdateError, 'conflict'):
+                            helper.sync_project(ROOT, target)
+                        self.assertEqual(artifact.read_bytes(), foreign)
+                        self.assertTrue(mode_matches(artifact.stat().st_mode, 0o444))
+                        self.assertEqual((target / MANIFEST).read_bytes(), saved)
+                        self.assertEqual(git('rev-parse', 'HEAD'), before)
+                        self.assertEqual(len(git('for-each-ref', '--format=%(refname)', 'refs/heads').splitlines()), 1)
+                    else:
+                        helper.sync_project(ROOT, target)
+                        self.assertEqual(git('rev-parse', 'HEAD^'), before)
+                        expected = next(entry.content for entry in INSTALL.build_payload(
+                            ROOT, selection=INSTALL.PayloadSelection(('codex',), engine_archive=True))
+                                        if entry.path == relative)
+                        self.assertEqual(artifact.read_bytes(), expected)
+                        proof = owned_proof(read_state(target).manifest, relative)
+                        self.assertEqual(proof['sha256'], hashlib.sha256(artifact.read_bytes()).hexdigest())
+                        self.assertTrue(mode_matches(artifact.stat().st_mode, proof['mode']))
+
+    def test_installed_removal_missing_runtime_refuses_without_external_fallback(self) -> None:
+        import io
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            target = base / 'project'
+            INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                     selection=INSTALL.PayloadSelection(('codex',), engine_archive=True))
+            archive = target / INSTALL.ENGINE_ARCHIVE
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(archive) as current, zipfile.ZipFile(buffer, 'w') as incomplete:
+                for info in current.infolist():
+                    if info.filename != 'getzilla/adapter_removal.py':
+                        incomplete.writestr(info, current.read(info.filename))
+            archive.write_bytes(buffer.getvalue())
+            saved = (target / MANIFEST).read_bytes()
+            marker = base / 'external-launch'
+            source = base / 'source'
+            (source / 'scripts').mkdir(parents=True)
+            (source / 'factory').mkdir()
+            (source / 'scripts/install_into.py').write_bytes(b'# source marker\n')
+            (source / 'factory/pyproject.toml').write_bytes(b'# source marker\n')
+            (source / 'scripts/getzilla_upgrade.py').write_text(
+                'from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("imported")\n')
+            (source / 'scripts/getzilla_components.py').write_text(
+                'from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("launched")\n')
+            result = subprocess.run([sys.executable, '-B', str(target / 'scripts/getzilla_components.py'), 'uninstall'],
+                                    cwd=target, env={**os.environ, 'GETZILLA_HOME': str(source),
+                                                     'PYTHONPATH': str(source / 'scripts'), 'PYTHONDONTWRITEBYTECODE': '1'},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn('packaged adapter-removal runtime', json.loads(result.stdout)['error'])
+            self.assertFalse(marker.exists())
+            self.assertEqual((target / MANIFEST).read_bytes(), saved)
 
     def test_grok_removal_includes_stock_native_briefs_and_config_only(self) -> None:
         sys.path.insert(0, str(ROOT / 'scripts'))

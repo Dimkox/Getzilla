@@ -25,11 +25,9 @@ import hashlib
 import importlib.util
 import json
 import math
-import os
 import re
 import subprocess
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -37,6 +35,10 @@ HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla import fsx
+from getzilla.adapter_removal import (
+    UpdateError, git, _git_out, head_tree, _require_clean_project, _committed_manifest, _publish_changes,
+    commit_changes as commit_changes, remove_adapters as remove_adapters,
+)
 from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
@@ -56,28 +58,6 @@ STEPS = {
     'project': 'update only the project, on a new branch',
     'tools': 'update only the third-party tools (getzilla_update.py options apply)',
 }
-
-
-class UpdateError(RuntimeError):
-    pass
-
-
-def git(cwd: Path, *args: str, data: bytes | None = None,
-        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Run git in cwd; output stays bytes when data is given, else text."""
-    return subprocess.run(['git', '-C', str(cwd), *args], input=data, capture_output=True,
-                          text=data is None, encoding='utf-8' if data is None else None,
-                          errors='replace' if data is None else None, env=env, check=False)
-
-
-def _git_out(cwd: Path, *args: str, data: bytes | None = None, env: dict[str, str] | None = None) -> str:
-    proc = git(cwd, *args, data=data, env=env)
-    out, err = proc.stdout, proc.stderr
-    if isinstance(out, bytes):
-        out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-    if proc.returncode != 0:
-        raise UpdateError(f"git {args[0]} failed in {cwd}: {(err or out).strip()}")
-    return out.strip()
 
 
 def update_self(home: Path, ref: str | None) -> str:
@@ -135,20 +115,6 @@ def merge_agents(installer, existing: bytes | None, block: bytes) -> bytes:
     if text[end:end + 1] == '\n':
         end += 1
     return (text[:start] + managed + text[end:]).encode('utf-8')
-
-
-def head_tree(project: Path, ref: str = 'HEAD') -> dict[str, tuple[str, str]]:
-    """path -> (mode, object id) for every file and link committed at HEAD."""
-    raw = git(project, 'ls-tree', '-r', '-z', '--full-tree', ref, data=b'')
-    if raw.returncode != 0:
-        raise UpdateError(f'{project} has no commit yet: commit once first')
-    tree = {}
-    for record in raw.stdout.split(b'\0'):
-        if record:
-            meta, path = record.split(b'\t', 1)
-            mode, _kind, oid = meta.decode().split()
-            tree[path.decode('utf-8', 'surrogateescape')] = (mode, oid)
-    return tree
 
 
 def blob_id(content: bytes, object_format: str) -> str:
@@ -509,51 +475,6 @@ def version_of(home: Path) -> str:
         return 'latest'
 
 
-def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], message: str, *, expected_head: str) -> str:
-    """Build the commit in a private index; the work tree and the project's index stay untouched.
-
-    A change with content None removes that path.
-    """
-    zero = '0' * len(expected_head)
-    with tempfile.TemporaryDirectory(prefix='getzilla-update-') as scratch:
-        env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
-        _git_out(project, 'read-tree', expected_head, env=env)
-        lines = []
-        for path, content, mode in changes:
-            if content is None:
-                lines.append(f'0 {zero}\t{path}')
-                continue
-            oid = _git_out(project, 'hash-object', '-w', '--stdin', data=content)
-            lines.append(f'{mode} {oid}\t{path}')
-        _git_out(project, 'update-index', '--index-info', data=('\n'.join(lines) + '\n').encode('utf-8'), env=env)
-        tree = _git_out(project, 'write-tree', env=env)
-    return _git_out(project, 'commit-tree', tree, '-p', expected_head, '-m', message)
-
-
-def _require_clean_project(project: Path) -> None:
-    top = git(project, 'rev-parse', '--show-toplevel')
-    if top.returncode != 0 or os.path.normcase(fsx.system_canonical(top.stdout.strip())) != os.path.normcase(str(project)):
-        raise UpdateError(f'{project} is not the root of a Git repository')
-    status = _git_out(project, 'status', '--porcelain', '--untracked-files=all',
-                      env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
-    # The persistent administrative guard is not product content. Every other
-    # tracked or untracked change still blocks the update.
-    if any(line != '?? .getzilla/runtime/.components.guard.lock' for line in status.splitlines()):
-        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
-
-
-def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction, head: str,
-                        tree: dict[str, tuple[str, str]]):
-    state = read_state(project, binding=binding)
-    state.require_selection()
-    snapshot = binding.read(MANIFEST)
-    committed = git(project, 'cat-file', 'blob', f'{head}:{MANIFEST}', data=b'')
-    if (tree.get(MANIFEST, ('', ''))[0] != '100644' or committed.returncode != 0
-            or snapshot is None or snapshot.content != committed.stdout):
-        raise UpdateError('the selected component manifest must be a committed regular file; review and commit it before updating')
-    return state, snapshot
-
-
 def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False) -> str:
     """Publish target selection and managed bytes in the same private-index commit."""
     project = Path(fsx.system_canonical(project))
@@ -689,103 +610,6 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
     kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
     return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
                       'review it and open a pull request', *notes])
-
-
-def _publish_changes(project: Path, transaction: ComponentTransaction, changes: list, observations: dict,
-                     expected_head: str, branch: str, message: str, check_current) -> str:
-    """Shared guarded Git publication; no direct deletion or new recovery ledger."""
-    _git_out(project, 'check-ref-format', '--branch', branch)
-    if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
-        raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
-    # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
-    ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
-                       *(path for path, _, _ in changes))
-    if ignored:
-        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
-    check_current()
-    commit = commit_changes(project, changes, message, expected_head=expected_head)
-    check_current()
-    # Verify the pinned parent and create an absent branch in one Git ref
-    # transaction. A concurrent writer cannot replace an existing update branch.
-    commands = f'start\nverify HEAD {expected_head}\ncreate refs/heads/{branch} {commit}\nprepare\ncommit\n'
-    _git_out(project, 'update-ref', '--stdin', data=commands.encode('utf-8'))
-    try:
-        check_current()
-    except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}') from exc
-    switched = git(project, 'switch', '--quiet', branch)
-    if switched.returncode != 0:
-        raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
-                          f'{switched.stderr.strip()}; run `git switch {branch}`')
-    try:
-        transaction.check()
-        if (_git_out(project, 'rev-parse', 'HEAD') != commit
-                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
-            raise UpdateError('HEAD or branch changed after checkout')
-        _require_clean_project(project)
-        expected_files = {path: (snapshot.content, snapshot.mode) if snapshot is not None else (None, 0)
-                          for path, snapshot in observations.items()}
-        expected_files.update({path: (content, 0o755 if mode == '100755' else 0o644)
-                               for path, content, mode in changes})
-        for path, (content, mode) in expected_files.items():
-            snapshot = transaction.read(path)
-            if ((content is None and snapshot is not None)
-                    or (content is not None and (snapshot is None or snapshot.content != content
-                                                or not mode_matches(snapshot.mode, mode)))):
-                raise UpdateError(f'project file differs after checkout: {path}')
-        transaction.check()
-        if (_git_out(project, 'rev-parse', 'HEAD') != commit
-                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
-            raise UpdateError('HEAD or branch changed while checking the checkout')
-    except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}') from exc
-    return commit
-
-
-def remove_adapters(home: Path, project: Path, agents: tuple[str, ...] | None = None) -> dict:
-    """Remove selected adapters in one guarded Git commit; never operate a live client."""
-    from getzilla.adapter_removal import plan_removal
-    from getzilla.on_demand import is_installed_project, is_source_checkout
-    project = Path(fsx.system_canonical(project))
-    try:
-        if is_source_checkout(project) or not is_installed_project(project):
-            raise UpdateError('adapter removal requires an installed consumer project, not a source checkout')
-        # Refuse before even taking the administrative guard when the plan is unsafe.
-        with BoundRoot(project) as binding:
-            _require_clean_project(project)
-            head = _git_out(project, 'rev-parse', 'HEAD')
-            _committed_manifest(project, binding, head, head_tree(project, head))
-            plan_removal(home, binding, agents)
-        with component_transaction(project) as transaction:
-            _require_clean_project(project)
-            expected_head = _git_out(project, 'rev-parse', 'HEAD')
-            expected_branch = git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
-            _committed_manifest(project, transaction, expected_head, head_tree(project, expected_head))
-            plan = plan_removal(home, transaction, agents)
-
-            def check_current() -> None:
-                transaction.check()
-                if (_git_out(project, 'rev-parse', 'HEAD') != expected_head
-                        or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != expected_branch):
-                    raise UpdateError('project HEAD or branch changed during adapter removal')
-                _require_clean_project(project)
-                for path, snapshot in plan.observations.items():
-                    if transaction.read(path) != snapshot:
-                        raise UpdateError(f'project file changed during adapter removal: {path}')
-
-            check_current()
-            branch = None
-            commit = expected_head
-            if plan.changes:
-                branch = 'getzilla-remove-' + expected_head[:12] + '-' + '-'.join(sorted(plan.removed_agents))
-                commit = _publish_changes(project, transaction, plan.changes, plan.observations, expected_head,
-                                          branch, 'chore: remove Getzilla adapters ' + ', '.join(plan.removed_agents),
-                                          check_current)
-            return {'removed_agents': list(plan.removed_agents), 'selection': plan.manifest['agents'],
-                    'configuration': 'removed' if plan.changes else 'unchanged', 'branch': branch,
-                    'commit': commit, 'retained': plan.retained, 'live_client_state': plan.native_state}
-    except (ComponentStateError, OSError, ValueError) as exc:
-        raise UpdateError(str(exc)) from exc
 
 
 def run_tools(home: Path, args: list[str]) -> int:

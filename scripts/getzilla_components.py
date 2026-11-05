@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.on_demand import adopt_selection, ensure_components, find_installed_project, is_installed_project, is_source_checkout, getzilla_home  # noqa: E402
-from getzilla.component_state import BoundRoot, parse_agents, read_state  # noqa: E402
+from getzilla.component_state import parse_agents, read_state  # noqa: E402
 from dataclasses import asdict
 from getzilla.module_runtime import quiesce_module
 from getzilla.optional_modules import (  # noqa: E402
@@ -111,28 +110,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {'remove', 'uninstall'}:
             try:
+                from getzilla.adapter_removal import UpdateError, remove_adapters
+            except ImportError as error:
+                raise ValueError('packaged adapter-removal runtime is unavailable; update or reinstall Getzilla') from error
+            try:
                 source = ROOT if is_source_checkout(ROOT) else getzilla_home()
             except RuntimeError as error:
                 raise ValueError('adapter removal requires an available full Getzilla source checkout') from error
             if not is_source_checkout(source):
                 raise ValueError('adapter removal source is not a full Getzilla checkout')
-            with BoundRoot(source) as binding:
-                if (binding.read('scripts/getzilla_components.py') is None
-                        or binding.read('scripts/getzilla_upgrade.py') is None):
-                    raise ValueError('adapter removal source entrypoint or helper is unavailable')
-            if source.resolve() != ROOT.resolve():
-                # The full source owns the single Git transaction. Inherit cwd,
-                # session/environment and arguments; never retry a child result.
-                return subprocess.run([sys.executable, str(source / 'scripts/getzilla_components.py'),
-                                       *arguments], check=False).returncode
-            from getzilla_upgrade import UpdateError, remove_adapters
             agents = None
             if args.command == 'remove':
                 if any(not component.startswith('agent:') for component in args.components):
                     raise ValueError('removal accepts only agent:<name>; shared engine components stay')
                 agents = parse_agents(','.join(component.removeprefix('agent:') for component in args.components))
             try:
-                result = remove_adapters(ROOT, project, agents)
+                result = remove_adapters(source, project, agents)
             except UpdateError as error:
                 raise ValueError(str(error)) from error
             print(json.dumps({'ok': True, **result}, indent=2, sort_keys=True))

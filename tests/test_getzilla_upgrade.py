@@ -12,11 +12,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 import getzilla_upgrade as upgrade  # noqa: E402
+from getzilla import adapter_removal as publication  # noqa: E402
 
 GIT_ENV = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid',
            'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
@@ -642,13 +644,13 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / 'scripts').exists())
 
     def test_changed_files_after_checkout_report_the_retained_branch_as_incomplete(self) -> None:
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
                 (project / 'scripts/getzilla_route.py').write_text('# changed after checkout\n')
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
@@ -656,7 +658,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_manifest_changed_after_checkout_is_detected_even_when_git_status_is_clean(self) -> None:
         from getzilla.component_state import MANIFEST
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
@@ -665,20 +667,20 @@ class ProjectSyncTests(unittest.TestCase):
                 manifest['agents'] = []
                 (project / MANIFEST).write_text(json.dumps(manifest))
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
         self.assertEqual(json.loads((self.project / MANIFEST).read_bytes())['agents'], [])
 
     def test_branch_changed_after_checkout_is_detected_even_at_the_same_commit(self) -> None:
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
                 git(project, 'switch', '--quiet', '-c', 'post-checkout')
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(ROOT, self.project)
         branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
@@ -877,14 +879,14 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
     def test_a_failure_before_the_branch_leaves_the_project_unchanged(self) -> None:
-        real = upgrade._git_out
+        real = publication._git_out
 
         def failing(cwd, *args, **kwargs):
             if args[0] == 'commit-tree':
                 raise upgrade.UpdateError('simulated commit failure')
             return real(cwd, *args, **kwargs)
 
-        with mock.patch.object(upgrade, '_git_out', side_effect=failing):
+        with mock.patch.object(publication, '_git_out', side_effect=failing):
             with self.assertRaisesRegex(upgrade.UpdateError, 'simulated'):
                 upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
