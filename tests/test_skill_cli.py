@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -198,8 +200,19 @@ class SkillCliTests(unittest.TestCase):
             def code(self):
                 raise AssertionError('PRIVATE_EXIT_DESCRIPTOR')
 
+        class ReadOnlyInterruption(BaseException):
+            @property
+            def publication_state(self):
+                raise AssertionError('PRIVATE_FLAG_DESCRIPTOR')
+
+        class ReadOnlyExit(SystemExit):
+            @property
+            def publication_state(self):
+                raise AssertionError('PRIVATE_EXIT_FLAG_DESCRIPTOR')
+
         for error in (KeyboardInterrupt('PRIVATE_INTERRUPT'), SystemExit(37), DirectInterruption('PRIVATE_BASE_EXIT'),
-                      MetadataInterruption('PRIVATE_META_INTERRUPT'), MetadataExit(37)):
+                      MetadataInterruption('PRIVATE_META_INTERRUPT'), MetadataExit(37),
+                      ReadOnlyInterruption('PRIVATE_FLAG_INTERRUPT'), ReadOnlyExit(37)):
             with self.subTest(kind=type(error).__name__):
                 fixture = self.fixture()
                 write, read = ComponentTransaction.write, ComponentTransaction.read
@@ -255,6 +268,14 @@ class MetadataExit(SystemExit):
 class MetadataMap(dict):
     def get(self,*args,**kwargs):
         raise RuntimeError('PRIVATE_MAPPING_METHOD')
+class ReadOnlyFlag(RuntimeError):
+    @property
+    def publication_state(self):
+        raise RuntimeError('PRIVATE_FLAG_DESCRIPTOR')
+class ReadOnlyExit(SystemExit):
+    @property
+    def publication_state(self):
+        raise RuntimeError('PRIVATE_EXIT_FLAG_DESCRIPTOR')
 script,root,kind,mode=sys.argv[1:]
 private='PRIVATE_CHILD_DETAIL /private/child-location payload=never-print'
 errors={'keyboard':KeyboardInterrupt(private),'system':SystemExit(37),'zero':SystemExit(0),
@@ -262,11 +283,12 @@ errors={'keyboard':KeyboardInterrupt(private),'system':SystemExit(37),'zero':Sys
         'system-text':SystemExit(private),'custom':DirectInterruption(private),
         'value':ValueError(private),'io':OSError(private),
         'dict-descriptor':MetadataError(private),'code-descriptor':MetadataExit(37),
-        'mapping-method':ValueError(private)}
+        'mapping-method':ValueError(private),'readonly-flag':ReadOnlyFlag(private),
+        'readonly-exit':ReadOnlyExit(37)}
 if kind=='mapping-method':errors[kind].__dict__=MetadataMap()
 error=errors[kind]
 write,read=ComponentTransaction.write,ComponentTransaction.read
-complete=[]
+complete=[];failed=[]
 def lose_completion(transaction,name,content,permissions,*,expected):
     result=write(transaction,name,content,permissions,expected=expected)
     if name.endswith('/skill-publications/example.json') and json.loads(content)['status']=='complete':
@@ -275,12 +297,19 @@ def lose_completion(transaction,name,content,permissions,*,expected):
     return result
 def observe(transaction,name,**kwargs):
     if mode=='unknown' and complete and name.endswith('/skill-publications/example.json'):
+        failed.append(True)
         raise OSError(private)
     return read(transaction,name,**kwargs)
 ComponentTransaction.write=lose_completion
 ComponentTransaction.read=observe
 sys.argv=[script,'install','intake/example','--root',root]
-runpy.run_path(script,run_name='__main__')
+try:
+    runpy.run_path(script,run_name='__main__')
+finally:
+    storage=BaseException.__dict__['__dict__'].__get__(error,BaseException)
+    (Path(root)/'cli-fault-observation.json').write_text(json.dumps({
+        'complete_writes':len(complete),'failed_reads':len(failed),
+        'stored_unknown':dict.get(storage,'publication_state')=='unknown'}))
 '''
         result = subprocess.run([sys.executable, '-c', driver, str(ROOT / 'scripts/getzilla_skill_preflight.py'),
                                  str(fixture.root), kind, 'unknown' if unknown else 'ordinary'],
@@ -439,3 +468,63 @@ runpy.run_path(script,run_name='__main__')
         for code, expected in ((37, 37), (0, 1), (None, 1), (True, 1), ('PRIVATE_CODE', 1)):
             self.assertEqual(CLI._terminal_unknown_exit(MetadataExit(code)), expected)
         self.assertEqual(hooks, [])
+
+    def test_actual_terminal_producer_marks_unknown_despite_readonly_flag(self):
+        for kind, expected in (('readonly-flag', 1), ('readonly-exit', 37)):
+            with self.subTest(kind=kind):
+                process, fixture = self.subprocess_fault(kind)
+                self.assertEqual(process.returncode, expected)
+                self.assertTrue(process.stdout, 'actual unverified custody lost unknown JSON')
+                result = json.loads(process.stdout)
+                self.assertEqual(result['status'], 'unknown')
+                self.assertTrue(result['inspection_required'])
+                self.assertFalse(result['retryable'])
+                self.assertEqual(process.stderr, b'')
+                self.assertNotIn(b'PRIVATE', process.stdout)
+                marker = fixture.root / '.getzilla/runtime/skill-publications/example.json'
+                self.assertEqual(json.loads(marker.read_bytes())['status'], 'complete')
+                self.assertEqual(json.loads((fixture.root / 'cli-fault-observation.json').read_bytes()),
+                                 {'complete_writes': 1, 'failed_reads': 2, 'stored_unknown': True})
+
+    def test_concurrent_shared_metadata_never_dispatches_foreign_key_equality(self):
+        calls = []
+        reader = threading.get_ident()
+
+        class Key(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other):
+                if threading.get_ident() == reader:
+                    calls.append(True)
+                return str.__eq__(self, other)
+
+        key = Key('publication_state')
+        error = ValueError('PRIVATE_SHARED_METADATA')
+        shared = error.__dict__
+        shared.update({str(i): None for i in range(63)})
+        stop = threading.Event()
+        mutations = [0]
+        previous = sys.getswitchinterval()
+
+        def mutate():
+            while not stop.is_set():
+                shared[key] = 'unknown'
+                shared.pop(key, None)
+                mutations[0] += 1
+
+        thread = threading.Thread(target=mutate)
+        sys.setswitchinterval(.000001)
+        thread.start()
+        count, deadline = 0, time.monotonic() + 6
+        try:
+            while time.monotonic() < deadline and not calls:
+                CLI._unknown_publication(error)
+                count += 1
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+            sys.setswitchinterval(previous)
+        self.assertFalse(thread.is_alive())
+        self.assertGreater(count, 0)
+        self.assertGreater(mutations[0], 0)
+        self.assertEqual(calls, [])

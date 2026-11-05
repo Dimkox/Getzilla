@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.component_state import BoundRoot  # noqa: E402
 from getzilla.skill_onboarding import install_external, interview, installation_context  # noqa: E402
 from getzilla.policy import evaluate_pre_tool  # noqa: E402
+from getzilla.publication_metadata import metadata_snapshot, MAX_METADATA_ENTRIES  # noqa: E402
 from getzilla.skill_preflight import (  # noqa: E402
     CATALOG_PATH, DESCRIPTOR, MAX_DESCRIPTOR_BYTES, MAX_TOTAL_BYTES, assess, read_snapshot, native_contract,
 )
@@ -39,18 +40,16 @@ def _unknown_publication(error: BaseException) -> bool:
             return True
         seen.add(id(current))
         try:
-            # Calling __getattribute__ still dispatches subclass descriptors.
-            # Use only the trusted base-owned storage descriptors and dict APIs.
-            values = BaseException.__dict__['__dict__'].__get__(current, BaseException)
-            if not isinstance(values, dict) or dict.__len__(values) > 64:
+            # Validate and consult only the same owned bounded tuple. A live
+            # dictionary can gain foreign keys after an earlier validation pass.
+            entries = metadata_snapshot(current)
+            if entries is None or len(entries) > MAX_METADATA_ENTRIES:
                 return True
-            # Unknown keys could run equality hooks inside even builtin dict.get.
-            if any(type(key) is not str for key in dict.keys(values)):
+            if any(type(key) is not str for key, value in entries):
                 return True
-            missing = object()
-            state = dict.get(values, 'publication_state', missing)
-            if state is not missing and (type(state) is not str or state == 'unknown'):
-                return True
+            for key, value in entries:
+                if key == 'publication_state' and (type(value) is not str or value == 'unknown'):
+                    return True
             for name in ('__cause__', '__context__'):
                 linked = BaseException.__dict__[name].__get__(current, BaseException)
                 if linked is not None:

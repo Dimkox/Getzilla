@@ -12,6 +12,7 @@ from . import fsx, state
 from .component_state import BoundRoot, component_transaction, mode_matches, path_parts
 from .continuity import has_task_context
 from .policy import evaluate_pre_tool
+from .publication_metadata import mark_publication_unknown
 from .skill_preflight import (CATALOG_PATH, DESCRIPTOR, MAX_DESCRIPTOR_BYTES, MAX_SKILLS,
                               MAX_TOTAL_BYTES, SkillSnapshot, assess, canonical, digest, read_snapshot)
 from .skill_preflight import native_contract
@@ -263,13 +264,7 @@ def install_external(root: Path, relative: str) -> dict:
                         # restoration response. Never replace the original exit.
                         continue
                 if not restored:
-                    try:
-                        BaseException.__setattr__(interrupted, 'publication_state', 'unknown')
-                        add_note = getattr(BaseException, 'add_note', None)
-                        if add_note is not None:
-                            add_note(interrupted, 'PUBLICATION_CUSTODY_UNKNOWN: denial restoration was not verified; inspection required.')
-                    except BaseException:
-                        raise interrupted from None  # Reporting must not replace the original exit.
+                    mark_publication_unknown(interrupted)
                 raise
     return {'schema_version': 1, 'status': 'staged', 'destination': destination,
             'snapshot_digest': snapshot.digest, 'descriptor_digest': digest(descriptor),

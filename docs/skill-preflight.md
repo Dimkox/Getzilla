@@ -94,3 +94,16 @@ Exception metadata uses trusted built-in storage descriptors for the dictionary,
 SystemExit code. Subclass properties and dictionary methods cannot supply these values. Metadata
 has at most64 entries with exact string keys; unreadable, oversized or malformed metadata requires
 inspection. Unknown scalar objects are never formatted, hashed, compared or converted to truth.
+
+The API writes unknown through the native BaseException dictionary storage descriptor. It replaces
+the diagnostic namespace with a fresh plain dictionary. Up to64 exact-string-keyed old entries are
+preserved by reference; malformed, unreadable or oversized namespaces receive the fixed unknown
+marker and bounded note instead. Subclass properties/setters and virtual note methods cannot block
+this write. Original exception identity, args, code slots, cause and context stay intact. Catastrophic
+allocation/runtime failure has no annotation guarantee.
+
+Producer and reader share a bounded snapshot routine: it copies at most65 built-in dictionary items
+into a private tuple before validation. The reader validates and uses only that same tuple. Concurrent
+changes to the original map cannot insert a foreign key into the validated snapshot; an interrupted
+observation conservatively requires inspection. This provides bounded diagnostic custody, not a
+physical fence against arbitrary Python writers or persistent denial under unavailable storage.
