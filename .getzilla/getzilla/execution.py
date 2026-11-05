@@ -263,19 +263,26 @@ def _source(root, route):
         raise ExecutionError('source_inventory_unavailable') from None
     entries = []
     total = 0
+    visited = 0
     pending = [root]
     while pending:
         folder = pending.pop()
         with os.scandir(folder) as listing:
-            for entry in sorted(listing, key=lambda item: item.name):
+            admitted = []
+            for entry in listing:
                 path = Path(entry.path)
                 relative = path.relative_to(root).as_posix()
                 if entry.name in {'.git', '__pycache__', '.pytest_cache'} or relative == '.getzilla/runtime':
                     continue
+                visited += 1
+                if visited > 4096:
+                    raise ExecutionError('source_inventory_unavailable')
+                admitted.append(entry)
+            for entry in sorted(admitted, key=lambda item: item.name):
+                path = Path(entry.path)
+                relative = path.relative_to(root).as_posix()
                 if (entry.name == '.env' or entry.name.startswith('.env.') or entry.name in {'.ssh', 'id_rsa'}
                         or path.suffix.lower() in {'.pem', '.key'}):
-                    raise ExecutionError('source_inventory_unavailable')
-                if len(entries) + len(pending) >= 4096:
                     raise ExecutionError('source_inventory_unavailable')
                 if entry.is_symlink():
                     raise ExecutionError('source_inventory_unavailable')

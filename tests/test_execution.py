@@ -723,3 +723,97 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaises(store.RegistryError) as caught:
             execution.trusted_caller(self.root, execution_id=first['execution_id'])
         self.assertEqual(caught.exception.code, 'registry_unavailable')
+
+
+class SourceInventoryEntryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        environment = patch.dict(os.environ, {'GETZILLA_SESSION_ID': 'owner'})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.addCleanup(state.bind_session, None)
+        self.route = owned_route(self.root)
+        # The admitted .getzilla directory counts once; its runtime subtree is excluded.
+        self.assertEqual([path.name for path in self.root.iterdir()], ['.getzilla'])
+
+    def source(self):
+        return execution._source(self.root, self.route)
+
+    def assert_refused(self):
+        with self.assertRaises(execution.ExecutionError) as caught:
+            self.source()
+        self.assertEqual(caught.exception.code, 'source_inventory_unavailable')
+
+    def test_4290_completed_empty_directories_refuse_before_dispatch(self):
+        for parent_index in range(65):
+            parent = self.root / f'parent-{parent_index:02}'
+            parent.mkdir(mode=0o700)
+            for child_index in range(65):
+                (parent / f'child-{child_index:02}').mkdir(mode=0o700)
+        backend = CountingBackend()
+        request = execution.SubmitRequest(intent_key='public-directory-bound', arguments={},
+                                          hard_timeout_seconds=60, label='public-control')
+        with self.assertRaises(execution.ExecutionError) as caught:
+            execution.submit(self.root, execution.trusted_caller(self.root), request, backend=backend)
+        self.assertEqual(caught.exception.code, 'source_inventory_unavailable')
+        self.assertEqual(backend.calls, 0)
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_exact_4096_entries_qualify_but_next_empty_directory_refuses(self):
+        for index in range(4095):
+            (self.root / f'empty-{index:04}').mkdir(mode=0o700)
+        self.assertEqual(len(self.source()['fingerprint']), 64)
+        (self.root / 'one-more').mkdir(mode=0o700)
+        self.assert_refused()
+
+    def test_empty_source_qualifies_with_the_real_route_binding(self):
+        observed = self.source()
+        from getzilla.continuity import context_binding
+        self.assertEqual(observed['context_digest'], context_binding(self.root, self.route)['digest'])
+        self.assertIsNone(observed['git_head'])
+        self.assertEqual(len(observed['fingerprint']), 64)
+
+    def test_nested_directory_boundary_retains_completed_ancestors(self):
+        parent = self.root / 'parent'
+        parent.mkdir(mode=0o700)
+        for index in range(4094):
+            (parent / f'empty-{index:04}').mkdir(mode=0o700)
+        self.assertEqual(len(self.source()['fingerprint']), 64)
+        (parent / 'one-more').mkdir(mode=0o700)
+        self.assert_refused()
+
+    def test_mixed_file_directory_budget_is_one_cumulative_limit(self):
+        for index in range(2047):
+            (self.root / f'empty-{index:04}').mkdir(mode=0o700)
+        for index in range(2048):
+            path = self.root / f'public-{index:04}.txt'
+            path.write_bytes(b'')
+            path.chmod(0o644)
+        self.assertEqual(len(self.source()['fingerprint']), 64)
+        (self.root / 'one-more').mkdir(mode=0o700)
+        self.assert_refused()
+
+    def test_directory_listing_stops_before_an_unbounded_sort(self):
+        for index in range(4290):
+            (self.root / f'empty-{index:04}').mkdir(mode=0o700)
+        original = os.scandir
+        consumed = []
+        class Listing:
+            def __init__(self, folder):
+                self.folder = folder
+                self.listing = original(folder)
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                self.listing.close()
+            def __iter__(self):
+                for entry in self.listing:
+                    if Path(self.folder) == self_root:
+                        consumed.append(entry.name)
+                    yield entry
+        self_root = self.root
+        with patch.object(os, 'scandir', side_effect=Listing):
+            self.assert_refused()
+        self.assertEqual(len(consumed), 4097)

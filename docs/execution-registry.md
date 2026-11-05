@@ -100,7 +100,10 @@ regular file with public mode0444/0644/0555/0755. Anchored no-follow root and
 directory checks reject writable ancestry, except a root-owned sticky system
 parent. File and named-path identities are rechecked before each chunk and after
 reading. Private, foreign, linked, oversized or changed input rejects the whole
-snapshot. The4096-entry and16MiB aggregate bounds remain in force. Each file's
+snapshot. The4096-entry limit counts admitted files and directories cumulatively,
+including completed directories. It is checked while listing, before collecting
+entries for sorting, enqueueing directories or reading files. The fixed Git,
+cache and runtime subtree exclusions remain. The16MiB aggregate byte bound remains. Each file's
 read limit is the remaining aggregate budget, with a16MiB maximum for this opt-in
 reader. Oversized metadata refuses before bytes; growth cannot consume bytes past
 the supplied budget. Archives receive the same public custody checks as other files.
