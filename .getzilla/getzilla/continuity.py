@@ -434,6 +434,11 @@ def _sync_gate_projection(root: Path, route: dict[str, Any]) -> dict[str, Any]:
     if (context['pending'] or context['rejected']) and (
             value['status'] in {'verifying', 'reviewing', 'ready'} or
             value['status'] == 'implementing' and route.get('status') in {'verifying', 'reviewing', 'ready'}):
+        if context.get('version') == 2:
+            # The old stage is historical while scope is pending. Do not enter
+            # implementing to invalidate evidence: the actual intake admission
+            # consumers already refuse old cuts and preserve the queued input.
+            return route
         transition(root, route['change_id'], 'implementing', 'scope synchronization required')
         return state.canonical_route(root, route['route_id'])
     return route
@@ -475,7 +480,7 @@ def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_
         raise ValueError('invalid selected package checkpoints')
 
 
-def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False) -> dict[str, Any] | None:
+def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False, draft: bool = False) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
     from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
@@ -494,7 +499,11 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
     validate_package_state(package_state, route, change_id)
     raw_spec = read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable)
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
-    _validate_document(spec, gate=True, root=root)
+    # Enabled intake can consistently observe an incomplete typed draft. Its
+    # actual pre-code consumers require current semantic readiness separately.
+    # The explicit draft observation is also used only to bootstrap that ingress.
+    intake = (route.get('context') or {}).get('version') == 2
+    _validate_document(spec, gate=not (draft or intake), root=root)
     if spec.get('change_id') != change_id:
         raise ValueError('typed spec change identity mismatch')
     requirements = read_package_file(root, active['path'] + '/requirements.md', sync=durable)

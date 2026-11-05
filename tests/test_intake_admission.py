@@ -7,6 +7,7 @@ from unittest.mock import patch
 from tests._support import project_copy,run_hook
 from tests import test_intake_publication as publication_tests
 from getzilla import state
+from getzilla import continuity
 from getzilla.change import transition
 from getzilla.agent_lifecycle import start_agent
 from getzilla.policy import evaluate_pre_tool
@@ -34,6 +35,19 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 transition(root,change,'implementing','must not start')
             self.assertEqual((package/'state.json').read_bytes(),before)
+
+    def test_followup_intake_preserves_pending_scope_without_starting_implementation(self):
+        with project_copy() as root:
+            _,intent=self.fixture(root)
+            self.publish(root,intent)
+            change=state.require_route_owner(root)['change_id']
+            for target in ('scoped','approved','implementing','verifying'):
+                transition(root,change,target,'fixture stage')
+            updated=continuity.submit(root,'Also retain an explicit deletion dependency in the requirement draft.',
+                                      'fixture-owner',event_id='scope-two')
+            self.assertEqual(len(updated['context']['pending']),1)
+            self.assertEqual(updated['status'],'verifying')
+            self.assertFalse(evaluate_pre_tool(root,{'tool_name':'Write','tool_input':{'file_path':'src/retention.py'}})[0])
 
     def test_writer_start_refuses_pending_before_registration(self):
         with project_copy() as root:

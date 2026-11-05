@@ -217,7 +217,7 @@ def _make_intent(root, route, request, expected_cut, expected_state):
     old_state = _strict_json(old_raw,limit=MAX_RETAINED_BYTES) if old_raw is not None else None
     if old_cut is not None and old_cut['M'] != expected_state:
         raise IntakeError('stale_expected_state')
-    documents = package_documents(root,route)
+    documents = package_documents(root,route,draft=True)
     data = request['snapshot']
     projection = project_requirements(data)
     spec = copy.deepcopy(data['spec'])

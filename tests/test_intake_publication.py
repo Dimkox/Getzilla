@@ -61,6 +61,28 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(require_intake_ready(root)['assessment']['status'], 'ready')
             self.assertEqual(result, self.publish(root, intent))
 
+    def test_vague_native_draft_commits_missing_questions_without_coding_admission(self):
+        with project_copy() as root:
+            _,intent=self.fixture(root)
+            intent['snapshot']['spec']['objective']['target']='UNKNOWN'
+            result=self.publish(root,intent)
+            observed=read_intake_cut(root)
+            self.assertEqual(observed['cut'],result['cut'])
+            self.assertEqual(observed['assessment']['status'],'missing')
+            self.assertEqual(observed['assessment']['questions'][0]['field'],'objective.target')
+            with self.assertRaises(IntakeError):
+                require_intake_ready(root)
+
+    def test_supported_ingress_bootstraps_a_native_incomplete_spec(self):
+        with project_copy() as root:
+            package,intent=self.fixture(root)
+            intent['snapshot']['spec']['objective']['target']='UNKNOWN'
+            (package/'change-spec.yaml').write_text(dump_canonical_spec(intent['snapshot']['spec']))
+            result=self.publish(root,intent)
+            self.assertEqual(read_intake_cut(root)['cut'],result['cut'])
+            self.assertEqual(read_intake_cut(root)['assessment']['status'],'missing')
+            self.assertTrue(state.require_route_owner(root)['context']['intake']['required'])
+
     def test_crashes_after_each_durable_boundary_recover_exactly_once(self):
         for point in ('staged', 'pending', 'spec', 'requirements', 'ack', 'target_state', 'state', 'commit'):
             with self.subTest(point=point), project_copy() as root:
