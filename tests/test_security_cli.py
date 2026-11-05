@@ -158,6 +158,21 @@ class SecurityCliTests(unittest.TestCase):
             with self.subTest(expression=expression[:80], allowed=allowed), self.assertRaises(ValueError):
                 _select_expression(expression, allowed, require_all=True)
 
+    def test_exact_license_policy_guard_is_independently_enforced(self):
+        allowed = list(ALLOWED)
+        expression = ' AND '.join(allowed)
+        selected, identifiers = _select_expression(expression, allowed, require_all=True)
+        self.assertEqual(selected, allowed)
+        self.assertEqual(identifiers, set(allowed))
+        # Each rejected selection matches a complete expression branch. A later
+        # branch-mismatch refusal must not conceal a missing policy guard.
+        for expression, selected in (
+                (expression, allowed + [allowed[0]]),
+                (' AND '.join(allowed + ['GPL-3.0-only']), allowed + ['GPL-3.0-only']),
+                ('GPL-3.0-only', ['GPL-3.0-only'])):
+            with self.subTest(expression=expression, selected=selected), self.assertRaises(ValueError):
+                _select_expression(expression, selected, require_all=True)
+
     def test_accepted_exception_validity_stops_at_the_inclusive_utc_date_boundary(self):
         source,checks=self.report()
         checks[1]['details'][0]['accepted']=[self.accepted('2026-11-03')]
