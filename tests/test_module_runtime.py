@@ -1,7 +1,6 @@
 """Public fixtures for the generic opt-in lifecycle; no native client is started."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import sys
