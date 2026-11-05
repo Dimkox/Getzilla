@@ -139,3 +139,70 @@ class GrepReadGrammarTests(unittest.TestCase):
                                        (['-nesynthetic', 'PUBLIC.md'], 'allow')):
                     with self.subTest(executable=executable, args=args):
                         self.check(root, [executable, *args], expected)
+
+    def test_help_version_parse_all_auxiliary_inputs_in_every_option_order(self) -> None:
+        rows = (
+            (['-fview.txt', '--help'], 'deny'),
+            (['--help', '-fview.txt'], 'deny'),
+            (['-fview.txt', '--version'], 'deny'),
+            (['--version', '-fview.txt'], 'deny'),
+            (['-Vfview.txt'], 'deny'),
+            (['-Vnfview.txt'], 'deny'),
+            (['--exclude-from=view.txt', '--help'], 'deny'),
+            (['--help', '--exclude-from=view.txt'], 'deny'),
+            (['--exclude-from', 'view.txt', '--version'], 'deny'),
+            (['--version', '--exclude-from', 'view.txt'], 'deny'),
+            (['-fpatterns.txt', '--help', '--file=view.txt', '--version'], 'deny'),
+            (['-fview.txt', '--help', '-fpatterns.txt'], 'deny'),
+            (['--help', '-f', 'server.key'], 'deny'),
+            (['--version', '-f', 'server.key'], 'deny'),
+            (['--help'], 'allow'),
+            (['--version'], 'allow'),
+            (['-V'], 'allow'),
+            (['-fpatterns.txt', '--help'], 'allow'),
+            (['--help', '-fpatterns.txt'], 'allow'),
+            (['-fpatterns.txt', '--version'], 'allow'),
+            (['--version', '-fpatterns.txt'], 'allow'),
+            (['-Vfpatterns.txt'], 'allow'),
+            (['--exclude-from=patterns.txt', '--help'], 'allow'),
+            (['--help', '--exclude-from=patterns.txt'], 'allow'),
+            (['--help', '-f', 'missing-public-patterns.txt'], 'allow'),
+            (['--help', 'view.txt'], 'allow'),
+            (['--version', 'server.key'], 'allow'),
+            (['--help', '--', '-fview.txt', 'view.txt'], 'allow'),
+            (['--help', '-f'], 'deny'),
+            (['-Vf'], 'deny'),
+            (['--version', '--exclude-from'], 'deny'),
+            (['--help', '--unproved-option'], 'deny'),
+        )
+        for fault in authority.FAULTS:
+            with project_copy() as root:
+                self.fixture(root, fault)
+                for args, expected in rows:
+                    with self.subTest(fault=fault, args=args):
+                        self.check(root, ['grep', *args], expected if fault is None else 'deny')
+
+    def test_info_flags_are_not_inferred_from_payloads_or_end_option_operands(self) -> None:
+        with project_copy() as root:
+            self.fixture(root, None)
+            (root / '--help').symlink_to('private-data/marker.txt')
+            (root / '-Vfview.txt').symlink_to('private-data/marker.txt')
+            for argv, expected in (
+                (['grep', '-e', '--help', 'view.txt'], 'deny'),
+                (['grep', '-e--version', 'view.txt'], 'deny'),
+                (['grep', '-e-Vfview.txt', 'PUBLIC.md'], 'allow'),
+                (['grep', '-f--help', 'PUBLIC.md'], 'deny'),
+                (['grep', '--help', '-f-Vfview.txt'], 'deny'),
+                (['grep', '--', 'synthetic', '--help'], 'deny'),
+                (['grep', '--help', '--', '--help'], 'allow'),
+                (['egrep', '-Vfview.txt'], 'deny'),
+                (['fgrep', '--help', '-fview.txt'], 'deny'),
+                (['egrep', '-Vfpatterns.txt'], 'allow'),
+                (['fgrep', '--help', 'view.txt'], 'allow'),
+                (['rg', '--help', '-fview.txt'], 'deny'),
+                (['rg', '-fview.txt', '--version'], 'deny'),
+                (['rg', '--help', '-fpatterns.txt'], 'allow'),
+                (['rg', '--help', 'view.txt'], 'allow'),
+            ):
+                with self.subTest(argv=argv):
+                    self.check(root, argv, expected)

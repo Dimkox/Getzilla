@@ -3037,7 +3037,9 @@ def _grep_read_scope(argv: list[str]) -> _GrepReadScope:
                 recursive = True
             if option in ({'h', 'V', 'help', 'version', 'pcre2-version', 'type-list'} if rg
                           else {'V', 'help', 'version'}):
-                return _GrepReadScope(files_only=True)
+                # GNU reads auxiliary inputs during option parsing, before this exit.
+                # Suppress search contents, but retain all earlier/later file inputs.
+                files_only = True
             if rg and option == 'files':
                 files_only = True
     if not explicit_pattern and not files_only:
