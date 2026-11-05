@@ -2137,7 +2137,7 @@ class QualityContourTests(unittest.TestCase):
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             recorded: list[str] = []
-            real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
+            real_check = verification_module._command_check
 
             def fake_exists(name: str) -> bool:
                 if name == 'ruff':

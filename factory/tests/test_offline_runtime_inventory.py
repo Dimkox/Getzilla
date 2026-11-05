@@ -15,6 +15,11 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.lock = Path(self.temp.name) / "uv.lock"
         self.builder = load("build_offline_release")
+        # Explicit pure resolution target; native host admission is tested separately.
+        self.environment = {"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
+                            "platform_machine": "x86_64", "implementation_name": "cpython",
+                            "platform_python_implementation": "CPython", "python_version": "3.12",
+                            "python_full_version": "3.12.3"}
 
     def write_lock(self, *, edge=None, extra_edge=None, duplicate=False):
         edge = edge or '{ name = "runtime", extra = ["binary"] }'
@@ -35,7 +40,7 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
 
     def test_only_runtime_and_requested_extra_are_published(self):
         self.write_lock()
-        inventory = self.builder.derive_inventory(self.lock)
+        inventory = self.builder.derive_inventory(self.lock, target_environment=self.environment)
         self.assertEqual([item["name"] for item in inventory["wheels"]], ["binary", "runtime"])
 
     def test_unrequested_extra_and_inactive_platform_are_absent(self):
@@ -43,7 +48,7 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
                        {"extra_edge": '{ name = "binary", marker = "sys_platform == \'win32\'" }'}):
             with self.subTest(kwargs=kwargs):
                 self.write_lock(**kwargs)
-                inventory = self.builder.derive_inventory(self.lock)
+                inventory = self.builder.derive_inventory(self.lock, target_environment=self.environment)
                 self.assertEqual([item["name"] for item in inventory["wheels"]], ["runtime"])
 
     def test_ambiguous_missing_or_unsupported_runtime_edges_refuse(self):
@@ -53,20 +58,30 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
             {"edge": '{ name = "runtime", version = "9.0.0" }'},
             {"edge": '{ name = "runtime", extra = ["missing"] }'},
             {"edge": '{ name = "runtime", extra = "binary" }'},
-            {"edge": '{ name = "runtime", marker = "python_full_version < \'3.12.7\'" }'},
+            {"edge": '{ name = "runtime", marker = "python_full_version ~= \'3.12.7\'" }'},
         ]
         for kwargs in cases:
             with self.subTest(kwargs=kwargs):
                 self.write_lock(**kwargs)
                 with self.assertRaises(setup.InstallerError) as error:
-                    self.builder.derive_inventory(self.lock)
+                    self.builder.derive_inventory(self.lock, target_environment=self.environment)
                 self.assertEqual(error.exception.code, "LOCK_PROFILE_UNRESOLVED")
+        # The former negative is supported by the accepted patch-version reader.
+        self.write_lock(edge='{ name = "runtime", marker = "python_full_version < \'3.12.7\'" }')
+        inventory = self.builder.derive_inventory(self.lock, target_environment=self.environment)
+        self.assertEqual([item["name"] for item in inventory["wheels"]], ["runtime"])
+        for version, expected in (("3.12.6", ["binary", "runtime"]), ("3.12.7", ["runtime"])):
+            with self.subTest(patch_version=version):
+                self.write_lock(extra_edge='{ name = "binary", marker = "python_full_version < \'3.12.7\'" }')
+                environment = dict(self.environment, python_full_version=version)
+                inventory = self.builder.derive_inventory(self.lock, target_environment=environment)
+                self.assertEqual([item["name"] for item in inventory["wheels"]], expected)
 
     def test_current_runtime_wheels_are_unchanged_by_test_group(self):
         repository = Path(__file__).resolve().parents[2]
         expected = json.loads((repository / "factory/runtime/runtime-wheels-linux-x86_64-cpython312.json")
                               .read_text(encoding="utf-8"))["wheels"]
-        actual = self.builder.derive_inventory(repository / "factory/uv.lock")["wheels"]
+        actual = self.builder.derive_inventory(repository / "factory/uv.lock", target_environment=self.environment)["wheels"]
         self.assertEqual(actual, expected)
         self.assertEqual(len(actual), 20)
 
@@ -79,11 +94,11 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
         packages = {item["name"]: item for item in lock["package"]}
         self.assertEqual(packages["jsonschema"]["version"], "4.26.0")
         self.assertIn({"name": "jsonschema"}, packages["getzilla-factory"]["dev-dependencies"]["dev"])
-        runtime = self.builder.derive_inventory(repository / "factory/uv.lock")["wheels"]
+        runtime = self.builder.derive_inventory(repository / "factory/uv.lock", target_environment=self.environment)["wheels"]
         self.assertNotIn("jsonschema", {item["name"] for item in runtime})
 
     def test_incompatible_or_unresolved_python_contract_refuses(self):
-        for requirement in (">=3.13", "<3.12", ">=3.12.7", ">=3.11,<4"):
+        for requirement in (">=3.13", "<3.12", ">=3.12.7", "~=3.12"):
             with self.subTest(requirement=requirement):
                 self.write_lock()
                 value = self.lock.read_text(encoding="utf-8")
@@ -91,8 +106,22 @@ class OfflineRuntimeInventoryTests(unittest.TestCase):
                                                     'requires-python = ' + json.dumps(requirement)),
                                      encoding="utf-8")
                 with self.assertRaises(setup.InstallerError) as error:
-                    self.builder.derive_inventory(self.lock)
+                    self.builder.derive_inventory(self.lock, target_environment=self.environment)
                 self.assertEqual(error.exception.code, "LOCK_PROFILE_UNRESOLVED")
+        for requirement, version in ((">=3.11,<4", "3.12.3"), (">=3.12.7,<3.13", "3.12.7")):
+            with self.subTest(compatible_requirement=requirement, patch_version=version):
+                self.write_lock()
+                value = self.lock.read_text(encoding="utf-8")
+                self.lock.write_text(value.replace('requires-python = ">=3.11"',
+                                                  'requires-python = ' + json.dumps(requirement)), encoding="utf-8")
+                environment = dict(self.environment, python_full_version=version)
+                inventory = self.builder.derive_inventory(self.lock, target_environment=environment)
+                self.assertEqual([item["name"] for item in inventory["wheels"]], ["binary", "runtime"])
+        self.write_lock()
+        unsupported = dict(self.environment, python_version="3.13", python_full_version="3.13.0")
+        with self.assertRaises(setup.InstallerError) as error:
+            self.builder.derive_inventory(self.lock, target_environment=unsupported)
+        self.assertEqual(error.exception.code, "UNSUPPORTED_TARGET_PROFILE")
 
 
 if __name__ == "__main__":
