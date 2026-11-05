@@ -637,6 +637,12 @@ def collect_worktree(root: Path, route: dict[str, Any] | None, initial_checkpoin
         result['findings'].append(_finding(code, '', message, 'warning'))
 
     try:
+        # An empty prefix inside a work tree identifies its actual root without
+        # decoding an absolute path (which may contain non-UTF8 bytes/newlines).
+        code, location = _git_read(root, ['rev-parse', '--show-prefix', '--is-inside-work-tree'])
+        if code or location != b'\ntrue\n':
+            warn('git_root_unknown', 'selected directory is not a Git working-tree root')
+            return result
         code, output = _git_read(root, ['rev-parse', '--verify', 'HEAD^{commit}'])
         head = output.decode('ascii', 'strict').strip()
         if code or not _SHA.fullmatch(head):
