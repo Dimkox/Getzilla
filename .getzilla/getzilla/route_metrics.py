@@ -620,14 +620,49 @@ def render_report_text(result):
     if value['status'] in ('unavailable', 'invalid_request'):
         return 'Economics unavailable: ' + value['reason'] + '\n'
     lines = ['Economics calculation: ' + value['status'], 'Snapshot: ' + value['snapshot_ref']]
-    accepted = value['ratios']['accepted_tasks']
-    lines.append('Accepted tasks: ' + ('unknown' if accepted is None else str(accepted)))
+    ratios = value['ratios']
+    if ratios is not None:
+        accepted = ratios['accepted_tasks']
+        lines.append('accepted_tasks=' + ('unknown' if accepted is None else str(accepted)))
+    def amount_line(name, amount):
+        number = amount['value']
+        display = 'unknown' if number is None else str(_economic_fraction(number))
+        currency = amount['currency'] or 'currency_unknown'
+        line = f"{name} {amount['basis']}: {display} {currency}"
+        if number is None and amount['known_subtotal'] is not None:
+            line += f" (known subtotal {_economic_fraction(amount['known_subtotal'])})"
+        return line
     for view, amounts in value['totals'].items():
         for amount in amounts:
-            number = amount['value']
-            display = 'unknown' if number is None else str(_economic_fraction(number))
-            currency = amount['currency'] or 'currency_unknown'
-            lines.append(f"{view} {amount['basis']}: {display} {currency}")
+            lines.append(amount_line(view, amount))
+    if ratios is not None:
+        for name in ('accepted_task_mean', 'cohort_spend_per_accepted', 'rejected_abandoned_share', 'unsuccessful_attempt_share'):
+            for amount in ratios[name]:
+                denominator = amount['denominator']
+                if type(denominator) is dict:
+                    denominator = str(_economic_fraction(denominator))
+                lines.append(amount_line(name, amount) + f"; {amount['denominator_definition']}={denominator if denominator is not None else 'unknown'}")
+    lines.append('Conflicting observations: ' + str(value['reconciliation']['conflict_count']))
+    for amount in value['reconciliation']['unallocated']:
+        lines.append(amount_line('Unallocated', amount))
+    if value['friction138'] is not None:
+        friction = value['friction138']
+        minutes = friction['human_minutes']
+        lines.append('Human minutes: ' + ('unknown' if minutes is None else str(_economic_fraction(minutes))))
+        decisions = friction['human_decision_count']
+        lines.append('Human decisions: ' + ('unknown' if decisions is None else str(decisions)))
+    for converted in value['fx_totals']:
+        for amount in converted['amounts']:
+            lines.append(amount_line(f"FX {converted['view']} {converted['from_currency']}->{converted['to_currency']}", amount))
+    for pair in value['cache_comparison']:
+        lines.append(f"Cache pair {pair['pair_ref']} {pair['basis'] or 'unknown'}: {pair['status']}")
+        for side in ('normal', 'long', 'savings'):
+            for amount in pair[side]:
+                lines.append(amount_line('Cache ' + side, amount))
+    for group in value['groups']:
+        for amount in group['amounts']:
+            lines.append(amount_line('Group ' + group['view'] + ' ' + _economic_json(group['dimensions']), amount))
+    _economic_require(len(('\n'.join(lines) + '\n').encode('utf-8')) <= 1_048_576)
     return '\n'.join(lines) + '\n'
 
 
@@ -1332,11 +1367,15 @@ def _economic_fx(items, requested, views, bases, gaps, basis_gaps=None):
     return output
 
 
-def _economic_groups(weighted, dimensions, task_rows, bases, currencies, gaps, basis_gaps=None):
+def _economic_groups(weighted, dimensions, task_rows, bases, currencies, gaps, basis_gaps=None, view='task_lifetime'):
     if not dimensions:
         return []
     dispositions = {_task_key(row['task']): row['disposition'] for row in task_rows}
     groups = {}
+    if set(dimensions) <= {'task', 'disposition'}:
+        for task in task_rows:
+            selected = {dimension: task['task'] if dimension == 'task' else task['disposition'] for dimension in dimensions}
+            groups.setdefault(_economic_json(selected), {'dimensions': selected, 'rows': []})
     # Weighted contributions are already scoped to selected tasks. Build each
     # task's rows directly so a shared operation gets each exact share once.
     for task_key, rows in weighted.items():
@@ -1351,7 +1390,7 @@ def _economic_groups(weighted, dimensions, task_rows, bases, currencies, gaps, b
                 _economic_require(len(groups) < 256)
                 groups[key] = {'dimensions': selected, 'rows': []}
             groups[key]['rows'].append((contribution, weight, extra))
-    return [{'dimensions': groups[key]['dimensions'],
+    return [{'view': view, 'dimensions': groups[key]['dimensions'],
              'amounts': _economic_money_rows(groups[key]['rows'], bases=bases, gaps=gaps, currencies=currencies,
                                                basis_gaps=basis_gaps)}
             for key in sorted(groups)]
@@ -1452,6 +1491,7 @@ def compute_economics(cut: EconomicsInput, request) -> ReportResult:
         currencies = {(row['basis'], row['currency']) for row in contributions}
         weighted, period_weighted, scope_period, unallocated = [], [], [], []
         by_task = {key: [] for key in task_keys}
+        period_by_task = {key: [] for key in task_keys}
         for contribution in contributions:
             _economic_budget(started)
             shares, missing = _economic_shares(contribution['operation'], bindings, allocations)
@@ -1473,7 +1513,9 @@ def compute_economics(cut: EconomicsInput, request) -> ReportResult:
                 weighted.append(row)
                 by_task[key].append(row)
                 if in_period is not False:
-                    period_weighted.append((contribution, weight, row[2] | period_extra))
+                    period_row = (contribution, weight, row[2] | period_extra)
+                    period_weighted.append(period_row)
+                    period_by_task[key].append(period_row)
         bases = query['money_bases']
         missing_bases = _economic_basis_gaps(bindings, allocations, contributions, task_keys, bases)
         money = _economic_money_rows(weighted, bases=bases, gaps=gaps, currencies=currencies, basis_gaps=missing_bases)
@@ -1545,23 +1587,44 @@ def compute_economics(cut: EconomicsInput, request) -> ReportResult:
                            'gaps': cut['gaps']})
         if requested_snapshot is not None and requested_snapshot != snapshot:
             return _unavailable_economics('snapshot_unavailable')
-        complete = (not gaps and not state_gaps and accepted_count is not None
-                    and all(row['value'] is not None for row in money)
-                    and all(amount['value'] is not None for task in task_rows for amount in task['money']))
+        cache = (_economic_cache_pairs(items, query['cache_pair_refs'], contributions, bases, gaps)
+                 if 'cache_comparison' in query['views'] else [])
+        friction = _economic_friction(items, task_keys, usage, gaps) if 'friction138' in query['views'] else None
+        views = {}
+        grouped = []
+        if 'task_lifetime' in query['views']:
+            views['task_lifetime'] = weighted
+            grouped.extend(_economic_groups(by_task, query['group_by'], task_rows, bases, currencies, gaps, missing_bases))
+        if 'period_spend' in query['views']:
+            views.update(cohort_period_spend=period_weighted, scope_period_spend=scope_period)
+            grouped.extend(_economic_groups(period_by_task, query['group_by'], task_rows, bases, currencies, gaps,
+                                            missing_bases, view='cohort_period_spend'))
+        complete = not gaps and not state_gaps
+        if 'task_lifetime' in query['views']:
+            complete = (complete and accepted_count is not None and all(row['value'] is not None for row in money)
+                        and all(amount['value'] is not None for task in task_rows for amount in task['money']))
+        if 'period_spend' in query['views']:
+            complete = complete and all(row['value'] is not None for row in period_money + scope_money)
+        if 'cache_comparison' in query['views']:
+            complete = complete and bool(cache) and all(pair['status'] == 'ok' for pair in cache)
+        if 'friction138' in query['views']:
+            # No full commit/fast-path/evidence/defect census is supplied yet.
+            complete = False
         result = {'definition_version': ECONOMICS_DEFINITION, 'status': 'ok' if complete else 'partial',
                   'calculation_only': True, 'query': query, 'snapshot_ref': snapshot, 'source_refs': source_refs,
                   'coverage': {'complete': complete, 'gaps': sorted(gaps | state_gaps),
                                'census_known': cut['census'] is not None, 'source_cut_digest': cut['source_cut_digest']},
-                  'tasks': task_rows, 'totals': {'task_lifetime': money, 'cohort_period_spend': period_money,
-                                                'scope_period_spend': scope_money}, 'ratios': ratios,
+                  'tasks': task_rows if 'task_lifetime' in query['views'] else [],
+                  'totals': {'task_lifetime': money if 'task_lifetime' in query['views'] else [],
+                             'cohort_period_spend': period_money if 'period_spend' in query['views'] else [],
+                             'scope_period_spend': scope_money if 'period_spend' in query['views'] else []},
+                  'ratios': ratios if 'task_lifetime' in query['views'] else None,
                   'reconciliation': {'conflict_count': len(conflicts), 'conflict_refs': conflicts,
                                      'coalesced_observations': coalesced,
                                      'unallocated': _economic_money_rows(unallocated, bases=bases, gaps=gaps, currencies=currencies)},
-                  'cache_comparison': _economic_cache_pairs(items, query['cache_pair_refs'], contributions, bases, gaps),
-                  'fx_totals': _economic_fx(items, query['fx_refs'], {'task_lifetime': weighted,
-                      'cohort_period_spend': period_weighted, 'scope_period_spend': scope_period}, bases, gaps, missing_bases),
-                  'groups': _economic_groups(by_task, query['group_by'], task_rows, bases, currencies, gaps, missing_bases),
-                  'friction138': _economic_friction(items, task_keys, usage, gaps),
+                  'cache_comparison': cache,
+                  'fx_totals': _economic_fx(items, query['fx_refs'], views, bases, gaps, missing_bases),
+                  'groups': grouped, 'friction138': friction,
                   'limitations': ['protected_read_unavailable', 'actual_producer_integration_pending']}
         prepared = ReportResult(_economic_json(result))
         _economic_budget(started)
@@ -1590,7 +1653,7 @@ def _validate_money_result(rows, *, ratio=False):
         seen.add(identity)
         _economic_require(type(row['unknown_reasons']) is list
                           and all(reason in _RESULT_REASONS for reason in row['unknown_reasons']))
-        _economic_require(type(row['source_refs']) is list and len(row['source_refs']) <= 4096)
+        _economic_require(type(row['source_refs']) is list and len(row['source_refs']) <= 8192)
         for ref in row['source_refs']:
             _economic_digest(ref)
         for key in ('value', 'known_subtotal'):
@@ -1624,7 +1687,7 @@ def _validate_computed_economics(value):
                       and value['calculation_only'] is True)
     _normalize_report_query(value['query'])
     _economic_digest(value['snapshot_ref'])
-    _economic_require(type(value['source_refs']) is list and len(value['source_refs']) <= 8192)
+    _economic_require(type(value['source_refs']) is list and len(value['source_refs']) <= 8193)
     for ref in value['source_refs']:
         _economic_digest(ref)
     coverage = value['coverage']
@@ -1673,14 +1736,18 @@ def _validate_computed_economics(value):
     for rows in value['totals'].values():
         _validate_money_result(rows)
     ratios = value['ratios']
-    _economic_object(ratios, ('accepted_tasks', 'accepted_task_mean', 'cohort_spend_per_accepted', 'rejected_abandoned_share',
-                              'unsuccessful_attempt_spend', 'unsuccessful_attempt_share', 'reasons'))
-    if ratios['accepted_tasks'] is not None:
-        _economic_int(ratios['accepted_tasks'], maximum=256)
-    for key in ('accepted_task_mean', 'cohort_spend_per_accepted', 'rejected_abandoned_share', 'unsuccessful_attempt_share'):
-        _validate_money_result(ratios[key], ratio=True)
-    _validate_money_result(ratios['unsuccessful_attempt_spend'])
-    _economic_require(type(ratios['reasons']) is list and all(reason in _RESULT_REASONS for reason in ratios['reasons']))
+    if ratios is None:
+        _economic_require('task_lifetime' not in value['query']['views'])
+    else:
+        _economic_require('task_lifetime' in value['query']['views'])
+        _economic_object(ratios, ('accepted_tasks', 'accepted_task_mean', 'cohort_spend_per_accepted', 'rejected_abandoned_share',
+                                  'unsuccessful_attempt_spend', 'unsuccessful_attempt_share', 'reasons'))
+        if ratios['accepted_tasks'] is not None:
+            _economic_int(ratios['accepted_tasks'], maximum=256)
+        for key in ('accepted_task_mean', 'cohort_spend_per_accepted', 'rejected_abandoned_share', 'unsuccessful_attempt_share'):
+            _validate_money_result(ratios[key], ratio=True)
+        _validate_money_result(ratios['unsuccessful_attempt_spend'])
+        _economic_require(type(ratios['reasons']) is list and all(reason in _RESULT_REASONS for reason in ratios['reasons']))
     reconciliation = value['reconciliation']
     _economic_object(reconciliation, ('conflict_count', 'conflict_refs', 'coalesced_observations', 'unallocated'))
     _economic_int(reconciliation['conflict_count'], maximum=4096)
@@ -1691,22 +1758,27 @@ def _validate_computed_economics(value):
         _economic_digest(ref)
     _validate_money_result(reconciliation['unallocated'])
     friction = value['friction138']
-    _economic_object(friction, ('human_decision_count', 'human_decision_known_subtotal', 'human_minutes',
-        'human_minutes_known_subtotal', 'review_round_known_subtotal', 'approval_count_per_commit',
-        'fast_path_coverage', 'evidence_added_lines', 'defect_catch_latency', 'unknown_reasons'))
-    for key in ('human_decision_count', 'human_decision_known_subtotal', 'review_round_known_subtotal'):
-        if friction[key] is not None:
-            _economic_int(friction[key], maximum=4096)
-    for key in ('human_minutes', 'human_minutes_known_subtotal'):
-        if friction[key] is not None:
-            _economic_fraction(friction[key])
-    _economic_require(all(friction[key] is None for key in ('approval_count_per_commit', 'fast_path_coverage',
-                                                           'evidence_added_lines', 'defect_catch_latency')))
-    _economic_require(type(friction['unknown_reasons']) is list
-                      and all(reason in _RESULT_REASONS for reason in friction['unknown_reasons']))
+    if friction is None:
+        _economic_require('friction138' not in value['query']['views'])
+    else:
+        _economic_require('friction138' in value['query']['views'])
+        _economic_object(friction, ('human_decision_count', 'human_decision_known_subtotal', 'human_minutes',
+            'human_minutes_known_subtotal', 'review_round_known_subtotal', 'approval_count_per_commit',
+            'fast_path_coverage', 'evidence_added_lines', 'defect_catch_latency', 'unknown_reasons'))
+        for key in ('human_decision_count', 'human_decision_known_subtotal', 'review_round_known_subtotal'):
+            if friction[key] is not None:
+                _economic_int(friction[key], maximum=4096)
+        for key in ('human_minutes', 'human_minutes_known_subtotal'):
+            if friction[key] is not None:
+                _economic_fraction(friction[key])
+        _economic_require(all(friction[key] is None for key in ('approval_count_per_commit', 'fast_path_coverage',
+                                                               'evidence_added_lines', 'defect_catch_latency')))
+        _economic_require(type(friction['unknown_reasons']) is list
+                          and all(reason in _RESULT_REASONS for reason in friction['unknown_reasons']))
     _economic_require(type(value['groups']) is list and len(value['groups']) <= 256)
     for group in value['groups']:
-        _economic_object(group, ('dimensions', 'amounts'))
+        _economic_object(group, ('view', 'dimensions', 'amounts'))
+        _economic_require(group['view'] in ('task_lifetime', 'cohort_period_spend'))
         _economic_object(group['dimensions'], value['query']['group_by'])
         for dimension, observed in group['dimensions'].items():
             if dimension == 'task':
@@ -1746,3 +1818,22 @@ def _validate_computed_economics(value):
         _economic_require(type(pair['unknown_reasons']) is list
                           and all(reason in _RESULT_REASONS for reason in pair['unknown_reasons']))
     _economic_require(value['limitations'] == ['protected_read_unavailable', 'actual_producer_integration_pending'])
+    if 'task_lifetime' not in value['query']['views']:
+        _economic_require(value['tasks'] == [] and value['totals']['task_lifetime'] == [])
+    if 'period_spend' not in value['query']['views']:
+        _economic_require(value['totals']['cohort_period_spend'] == [] and value['totals']['scope_period_spend'] == [])
+    if 'cache_comparison' not in value['query']['views']:
+        _economic_require(value['cache_comparison'] == [])
+    if coverage['complete']:
+        _economic_require(coverage['census_known'] and not coverage['gaps'])
+        if 'task_lifetime' in value['query']['views']:
+            _economic_require(ratios is not None and ratios['accepted_tasks'] is not None
+                              and bool(value['totals']['task_lifetime'])
+                              and all(row['value'] is not None for row in value['totals']['task_lifetime']))
+        if 'period_spend' in value['query']['views']:
+            _economic_require(bool(value['totals']['cohort_period_spend']) and bool(value['totals']['scope_period_spend'])
+                              and all(row['value'] is not None for name in ('cohort_period_spend', 'scope_period_spend')
+                                      for row in value['totals'][name]))
+        if 'cache_comparison' in value['query']['views']:
+            _economic_require(bool(value['cache_comparison']) and all(pair['status'] == 'ok' for pair in value['cache_comparison']))
+        _economic_require('friction138' not in value['query']['views'])

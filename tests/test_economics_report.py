@@ -145,10 +145,6 @@ class EconomicPayloadTests(unittest.TestCase):
             self.assertEqual(str(caught.exception), 'invalid_economics_payload')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class EconomicQueryTests(unittest.TestCase):
     def setUp(self):
         self.assertTrue(callable(getattr(metrics, 'parse_report_query', None)), 'typed report query is absent')
@@ -173,9 +169,10 @@ class EconomicQueryTests(unittest.TestCase):
     def test_closed_query_rejects_effects_roles_bad_times_and_unbounded_dimensions(self):
         for field in ('import', 'write', 'path', 'sql', 'shell', 'url', 'destination', 'role', 'source_grade'):
             invalid = dict(query(), **{field: 'synthetic-disallowed'})
-            with self.subTest(field=field), self.assertRaises(ValueError) as caught:
-                metrics.parse_report_query(invalid)
-            self.assertEqual(str(caught.exception), 'invalid_report_query')
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as caught:
+                    metrics.parse_report_query(invalid)
+                self.assertEqual(str(caught.exception), 'invalid_report_query')
         for field, value in (('scope_ids', []), ('scope_ids', ['a']*9), ('group_by', ['task']*3),
                              ('views', ['invented']), ('as_of', '2026-02-30T00:00:00Z')):
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -226,6 +223,16 @@ class EconomicQueryTests(unittest.TestCase):
         schema = json.loads(path.read_text())
         self.assertEqual(set(schema['properties']), metrics._QUERY_FIELDS)
         self.assertIs(schema['additionalProperties'], False)
+
+    def test_published_result_contract_is_closed_and_covers_computed_and_unavailable(self):
+        path = Path(__file__).resolve().parents[1] / 'schemas/economics-result.schema.json'
+        self.assertTrue(path.is_file(), 'closed result schema is absent')
+        schema = json.loads(path.read_text())
+        self.assertEqual(len(schema['oneOf']), 2)
+        for name in ('ComputedResult', 'Unavailable', 'TaskRow', 'Money', 'Ratio', 'Usage'):
+            value = schema['$defs'][name]
+            self.assertIs(value['additionalProperties'], False)
+            self.assertEqual(set(value['required']), set(value['properties']))
 
 
 class EconomicReducerTests(unittest.TestCase):
@@ -312,14 +319,16 @@ class EconomicReducerTests(unittest.TestCase):
     def test_unknown_census_zero_accepted_and_missing_human_are_distinct(self):
         data = calculation_input([observation(self.charge(0), 'known-zero')])
         data['census'] = None
-        unknown = self.compute(data)
+        request = query()
+        request['views'].append('friction138')
+        unknown = self.compute(data, request)
         self.assertIsNone(unknown['ratios']['accepted_tasks'])
         self.assertIsNone(unknown['friction138']['human_minutes'])
         data['census'] = [TASK]
         rejected = payloads()['task_disposition']
         rejected['decision'] = 'rejected'
         data['observations'].append(observation(rejected, 'explicit-rejection'))
-        known = self.compute(data)
+        known = self.compute(data, request)
         self.assertEqual(known['ratios']['accepted_tasks'], 0)
         self.assertIsNone(self.money(known['ratios']['cohort_spend_per_accepted']))
         self.assertIn('zero_denominator', known['ratios']['reasons'])
@@ -347,7 +356,9 @@ class EconomicReducerTests(unittest.TestCase):
         duration = payloads()['human_usage']
         duration['human_time']['value'] = 1200 * 10**9
         rows = [observation(duration, 'duration'), observation(payloads()['human_decision'], 'decision')]
-        result = self.compute(calculation_input(rows))
+        request = query()
+        request['views'].append('friction138')
+        result = self.compute(calculation_input(rows), request)
         self.assertEqual(result['friction138']['human_decision_count'], 1)
         self.assertEqual(result['friction138']['human_minutes'], {'numerator': '20', 'denominator': '1'})
         self.assertIsNone(result['friction138']['approval_count_per_commit'])
@@ -432,6 +443,7 @@ class EconomicReducerTests(unittest.TestCase):
         pair_row = observation(pair, 'pair')
         request = query()
         request['cache_pair_refs'] = [pair_row['row']['event_id']]
+        request['views'].append('cache_comparison')
         data = calculation_input([observation(normal, 'normal'), observation(long, 'long'), pair_row],
                                  bindings=[binding(), binding(long_operation)])
         result = self.compute(data, request)
@@ -446,6 +458,7 @@ class EconomicReducerTests(unittest.TestCase):
     def test_requested_allowlisted_grouping_is_derived_from_same_contributions(self):
         request = query()
         request['group_by'] = ['task', 'disposition']
+        request['views'] = ['task_lifetime']
         result = self.compute(calculation_input([observation(self.charge(100), 'charge'),
                                                  observation(payloads()['task_disposition'], 'accept')]), request)
         self.assertEqual(len(result['groups']), 1)
@@ -527,7 +540,8 @@ class EconomicReducerTests(unittest.TestCase):
         request['fx_refs'] = [fx['row']['event_id']]
         result = self.compute(calculation_input([observation(self.charge(100), 'charge'), fx],
                                                  bindings=[binding(), binding(missing)]), request)
-        self.assertIsNone(self.money(result['groups'][0]['amounts']))
+        group = next(group for group in result['groups'] if group['view'] == 'task_lifetime')
+        self.assertIsNone(self.money(group['amounts']))
         converted = next(row for row in result['fx_totals'] if row['view'] == 'task_lifetime')
         self.assertIsNone(self.money(converted['amounts'], currency='EUR'))
 
@@ -597,3 +611,59 @@ class EconomicReducerTests(unittest.TestCase):
                                      delivered_by='2026-11-01T00:00:00.000001Z')
         result = self.compute(calculation_input([delivered_late]), request)
         self.assertNotIn(delivered_late['row']['event_id'], result['source_refs'])
+
+    def test_unrequested_views_do_not_populate_human_or_lifetime_sections(self):
+        request = query()
+        request['views'] = ['period_spend']
+        data = calculation_input([observation(self.charge(100), 'charge'),
+                                  observation(payloads()['human_decision'], 'decision')])
+        result = self.compute(data, request)
+        self.assertIsNone(result['friction138'])
+        self.assertIsNone(result['ratios'])
+        self.assertEqual(result['totals']['task_lifetime'], [])
+        self.assertTrue(all(task['money'] == [] and task['usage'] == [] for task in result['tasks']))
+        self.assertTrue(all(group.get('view') == 'cohort_period_spend' for group in result['groups']))
+
+    def test_grouping_names_its_lifetime_or_accounting_period(self):
+        result = self.compute(calculation_input([observation(self.charge(100), 'before-accounting'),
+                                                 observation(payloads()['task_disposition'], 'accept')]))
+        self.assertTrue(result['groups'])
+        self.assertTrue(all('view' in group for group in result['groups']), 'group time basis is absent')
+        lifetime = next(group for group in result['groups'] if group['view'] == 'task_lifetime')
+        period = next(group for group in result['groups'] if group['view'] == 'cohort_period_spend')
+        self.assertEqual(self.money(lifetime['amounts']), 1)
+        self.assertEqual(self.money(period['amounts']), 0)
+
+    def test_complete_flag_cannot_override_unknown_amounts_or_denominator(self):
+        value = self.compute(calculation_input([observation(self.charge(100), 'charge')]))
+        value.update(status='ok')
+        value['coverage']['complete'] = True
+        with self.assertRaises(ValueError):
+            metrics.ReportResult(json.dumps(value))
+
+    def test_text_includes_same_cost_denominators_and_reconciliation_as_json(self):
+        result = metrics.compute_economics(calculation_input([observation(self.charge(300), 'charge'),
+            observation(payloads()['task_disposition'], 'accept')]), query())
+        text = metrics.render_report_text(result)
+        self.assertIn('accepted_task_mean', text)
+        self.assertIn('cohort_spend_per_accepted', text)
+        self.assertIn('accepted_tasks=1', text)
+        self.assertIn('Conflicting observations: 0', text)
+
+    def test_maximum_row_count_retains_event_and_proof_refs_within_output_bounds(self):
+        payload = self.charge(100)
+        payload['service_period'] = {'start': '2026-10-20T00:00:00Z', 'end_exclusive': '2026-10-21T00:00:00Z'}
+        rows = [observation(payload, 'maximum-' + str(index)) for index in range(4096)]
+        request = query()
+        request.update(views=['period_spend'], group_by=[], money_bases=['confirmed_billed'])
+        # This isolates structural-reference ceilings. A separate fresh-process
+        # benchmark exercises actual clocks/resources without this unit seam.
+        with patch.object(metrics, '_economic_budget', return_value=None):
+            result = self.compute(calculation_input(rows), request)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(self.money(result['totals']['cohort_period_spend']), 1)
+        self.assertEqual(len(result['totals']['cohort_period_spend'][0]['source_refs']), 4097)
+
+
+if __name__ == '__main__':
+    unittest.main()
