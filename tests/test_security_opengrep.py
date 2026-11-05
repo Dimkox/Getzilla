@@ -128,7 +128,7 @@ class SyntaxProfileTests(unittest.TestCase):
                     self.scanner.syntax_frontend(language)
 
     def test_root_running_and_unqualified_platform_refuse_protected_boundary(self):
-        with mock.patch.object(os, 'geteuid', return_value=0), self.assertRaises(
+        with mock.patch.object(os, 'geteuid', return_value=0, create=True), self.assertRaises(
                 self.scanner.OpenGrepError):
             self.scanner.syntax_frontend('python')
         with mock.patch.object(self.scanner.fsx, 'WINDOWS', True), self.assertRaises(
