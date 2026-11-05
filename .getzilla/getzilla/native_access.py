@@ -22,8 +22,8 @@ _CODES = frozenset({'native_access_unavailable', 'native_access_denied', 'native
 _ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}')
 _SHA = re.compile(r'[0-9a-f]{64}')
 MAX_QUERY_BYTES = 65536
-MAX_SOURCE_BYTES = 1048576
 MAX_CUT_BYTES = 8 * 1048576
+MAX_SOURCE_BYTES = MAX_CUT_BYTES  # One registered journal can consume the whole cut.
 MAX_HANDLES = 8
 REQUEST_SECONDS = 2.0
 
@@ -143,6 +143,8 @@ class NativeAccessHost(ABC):
     """Fixed trusted composition only; never load a class/callback from request data.
 
     Implementations own current identity, source registration and complete lineage.
+    check_current also revalidates previously used source/representation versions
+    and custody; a provider permission revision alone does not validate a cached cut.
     Their final admission must participate in the actual task/source/response cut;
     a successful earlier check is not an admission permit. Every IO inherits deadline.
     """
@@ -308,7 +310,7 @@ class NativeAccessBroker:
         keys, total = set(), 0
         for document in captured.documents:
             _require(type(document) is SourceDocument and type(document.content) is bytes
-                     and len(document.content) <= MAX_SOURCE_BYTES)
+                     and len(document.content) <= min(MAX_SOURCE_BYTES, MAX_CUT_BYTES - total))
             dep = document.dependency
             _require(type(dep) is SourceDependency and type(dep.key) is tuple and len(dep.key) == 5
                      and all(_id(v) for v in dep.key) and _id(dep.version) and _id(dep.transform_version)

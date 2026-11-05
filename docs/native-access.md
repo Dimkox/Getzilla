@@ -18,15 +18,21 @@ parameters. Each fixed host reader validates its own closed request schema and
 resolves registered source scopes. The broker admits at most eight request
 handles, each with one immutable query and a two-second absolute lifetime; lower
 caller or task deadlines win and never reset. Captured cuts contain at most128
-unique source dependencies,1MiB per representation and8MiB total. Backend IO must
+unique source dependencies and8MiB total. One registered journal may use that
+whole budget; each source intersects the remaining aggregate rather than splitting
+its identity. Registered profiles enforce their stricter file/window ceilings.
+Backend IO must
 honor the same deadline; checking elapsed time after return cannot make arbitrary
 filesystem/host IO interruptible. These are admission limits, not a performance
 qualification.
 
 `load_authorized_cut` checks current host and workflow state before and after the
 read. It validates immutable representation hashes and keeps original and
-transformed provenance separate. `OwnedSourceCut` is a process-local reference;
-it is not a permit. Its bytes may be consumed only by the trusted registered
+transformed provenance separate. `OwnedSourceCut` is a process-local reference.
+The host's current check must also revalidate already used source bytes, versions,
+transforms and custody on cached read/preparation reuse; policy revision alone is
+insufficient.
+It is not a permit. Its bytes may be consumed only by the trusted registered
 pipeline. Already read bytes cannot be erased by a later permission change.
 
 `prepare_owned_response` accepts the owned cut, a registered computation and an
@@ -47,6 +53,40 @@ network/model/caller callback runs under the source-permission fence.
 Resume requires a fresh authenticated native request, and child delegation must
 narrow the current parent under the same host. Their default implementation is
 unavailable. No handle/cut/prepared reference is restored from JSON or pickle.
+
+## Optional Factory bridge
+
+`getzilla_factory.native_access.FactoryNativeAccessHost` is imported only by an
+explicit trusted parent that already includes Core and Factory. Ordinary server
+startup does not enable it. `FactoryTaskBinding` carries a real LeaseGrant and
+execution packet reference; it is factual data, not authentication. Only the
+actual current `AccessSession` and existing durable proposal-context check can
+bind a request.
+
+The initial fixed reader and computation are `factory.source-text/v1`. Scope
+locators come from `factory_source_scope(full_source_key)` over the existing
+server-owned LocalSourceAdapter, including every namespace component. Unknown
+scopes/parameters/computations/responses refuse. Report/retrieval transforms are
+not invented or registered by this bridge. Their151/native composition remains
+unavailable until implemented by the selected owners.
+
+The bridge reuses the same source producer. Cached cuts and prepared responses
+recheck the actual registered reader, byte/hash/version and current custody, not
+only the permission revision. Native-prepared entries also repeat source checks
+before release and before the existing dispatcher claim. Those reads occur
+outside SQL/task/SOURCE locks, followed by the existing fresh task/source queue
+cut. This does not make arbitrary filesystem changes atomic with external effects
+or replace159's storage resource. Source, task and transformation changes refuse
+the old cut; no second permission or attempt store is created.
+
+This initial Factory profile has one source-result stage per existing checked
+task/run/attempt/fence/packet. Rebinding keeps that stage's operation identifier,
+payload/target and original deadline. A changed preparation conflicts. Existing
+result-admission idempotency and the unique outbox envelope remain the durable
+replay fences, including after restart; an unknown outcome is not a new intent.
+General Core225 operations and multiple162/200 computation stages still need
+their real parent/operation binding and151 transform. A Factory run UUID is not
+silently relabelled a Core logical task or customer identity.
 
 This interface is an intermediate implementation, not a real Core consumer or
 OS sandbox.162 retrieval,200 report and159 protected read/export must wire their

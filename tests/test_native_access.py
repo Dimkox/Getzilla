@@ -127,6 +127,28 @@ class NativeAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(self.n.NativeAccessError, 'native_access_stale'):
             self.capture()
 
+    def test_single_eight_mib_journal_keeps_identity_and_aggregate_limit(self):
+        content = b' ' * (8 * 1048576)
+        digest = hashlib.sha256(content).hexdigest()
+        dep = self.n.SourceDependency(('public', 'project', 'fixture', 'local', 'journal'),
+                                      'v1', digest, digest, 'identity/v1')
+        document = self.n.SourceDocument(dep, content)
+        with patch.object(self.host, 'load_authorized_cut',
+                          return_value=self.n.CapturedRead((document,), object())):
+            try:
+                cut = self.capture()
+            except self.n.NativeAccessError:
+                self.fail('approved single eight-MiB journal must not be split or truncated')
+        self.assertEqual(len(cut.documents), 1)
+        self.assertIs(cut.documents[0], document)
+        self.assertEqual(len(cut.documents[0].content), 8 * 1048576)
+        extra_digest = hashlib.sha256(b' ').hexdigest()
+        other = self.n.SourceDependency(('public', 'project', 'fixture', 'local', 'extra'),
+                                        'v1', extra_digest, extra_digest, 'identity/v1')
+        overflow = self.n.SourceDocument(other, b' ')
+        with self.assertRaises(self.n.NativeAccessError):
+            self.broker._documents(self.n.CapturedRead((document, overflow), object()))
+
     def test_one_absolute_deadline_is_not_reset_after_source_work(self):
         self.host.after_read = lambda: setattr(self, 'now', 2.0)
         with self.assertRaisesRegex(self.n.NativeAccessError, 'native_access_expired'):

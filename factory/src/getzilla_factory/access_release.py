@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import math
 from pathlib import Path
 import secrets
 import threading
@@ -20,6 +21,17 @@ from .store import PostgresFactoryStore
 
 
 _BOUNDS = dict(connect_timeout=2, lock_timeout='500ms', statement_timeout='1500ms', transaction_timeout='2s')
+
+
+def _remaining_bounds(deadline):
+    remaining = deadline - time.monotonic()
+    if not math.isfinite(remaining) or remaining < .001:
+        raise AccessError('access_expired')
+    milliseconds = max(1, int(remaining * 1000))
+    return dict(connect_timeout=min(2, max(1, math.ceil(remaining))),
+                lock_timeout=f'{min(500, milliseconds)}ms',
+                statement_timeout=f'{min(1500, milliseconds)}ms',
+                transaction_timeout=f'{min(2000, milliseconds)}ms')
 
 
 @dataclass(frozen=True, repr=False)
@@ -87,6 +99,20 @@ class _Prepared:
     binding_wire: str
     binding_digest: str
     deadline: float
+    native_capture: _CapturedSources | None = None
+
+
+@dataclass(frozen=True, repr=False)
+class _CapturedSources:
+    session: object
+    grant: object
+    execution_packet: str
+    context: object
+    attempt: str
+    chunks: tuple
+    lineage: tuple
+    deadline: float
+    profile: tuple
 
 
 @dataclass(repr=False)
@@ -172,32 +198,73 @@ class AccessReleaseService:
         return context, str(cursor.fetchone()[0])
 
     def prepare(self, session, grant, packet, sources, destination):
-        started = time.monotonic()
+        if type(destination) is not str or destination not in self._destinations:
+            raise AccessError('access_denied')
+        captured = self._capture_native_sources(session, grant, packet, sources, time.monotonic() + 2)
+        return self._prepare_native_sources(captured, destination, captured.deadline)
+
+    def _native_profile(self):
+        # Fixed producer code, not a caller-selected sanitizer or plugin.
+        return ('factory.source-text/v1', 'identity/v1', 'access-local-text/v1')
+
+    def _capture_native_sources(self, session, grant, packet, sources, deadline):
+        """The same actual producer, retained for the optional trusted-parent bridge."""
+        _remaining_bounds(deadline)
         actor = self._authority.actor(session)
         if (actor.kind != 'worker' or actor.actor_id != grant.owner or 'task:execute' not in actor.scopes
-                or type(sources) is not list or not 1 <= len(sources) <= 128
-                or type(destination) is not str or destination not in self._destinations):
+                or type(sources) is not list or not 1 <= len(sources) <= 128):
             raise AccessError('access_denied')
         keys = tuple(source_key(item) for item in sources)
         if len(set(keys)) != len(keys):
             raise AccessError('invalid_access_request')
-        with self._store._transaction(**_BOUNDS) as cursor:
+        with self._store._transaction(**_remaining_bounds(deadline)) as cursor:
             context, attempt = self._context(cursor, grant, packet)
         if '*' not in actor.repositories and context.repository_id not in actor.repositories:
             raise AccessError('access_denied')
         chunks, lineage, size = [], [], 0
         for key in keys:
-            if time.monotonic() - started >= 2:
-                raise AccessError('access_expired')
+            _remaining_bounds(deadline)
             raw, dependency = self._sources._read(key, context, self._authority, session,
                                                  min(262144, context.max_output_bytes) - size)
             chunks.append(raw)
             lineage.append(dependency)
             size += len(raw)
-        lineage = tuple(lineage)
+        _remaining_bounds(deadline)
+        return _CapturedSources(session, grant, packet, context, attempt,
+                                tuple(chunks), tuple(lineage), deadline, self._native_profile())
+
+    def _revalidate_native_sources(self, captured, context, attempt, deadline):
+        if (type(captured) is not _CapturedSources or context != captured.context
+                or attempt != captured.attempt or self._native_profile() != captured.profile):
+            raise AccessError('access_denied')
+        size = 0
+        for raw, dependency in zip(captured.chunks, captured.lineage, strict=True):
+            _remaining_bounds(min(deadline, captured.deadline))
+            current, lineage = self._sources._read(dependency[0], context, self._authority,
+                captured.session, min(262144, context.max_output_bytes) - size)
+            if current != raw or lineage != dependency:
+                raise AccessError('source_unavailable')
+            size += len(current)
+        _remaining_bounds(min(deadline, captured.deadline))
+
+    def _prepare_native_sources(self, captured, destination, deadline, *, native_revalidate=False):
+        if (type(captured) is not _CapturedSources or type(destination) is not str
+                or destination not in self._destinations or captured.profile != self._native_profile()):
+            raise AccessError('access_denied')
+        deadline = min(deadline, captured.deadline)
+        _remaining_bounds(deadline)
+        session, grant, packet = captured.session, captured.grant, captured.execution_packet
+        context, attempt = captured.context, captured.attempt
+        chunks, lineage = captured.chunks, captured.lineage
         authority = self._authority.release_binding(session, lineage, destination)
         source_digest = canonical_digest([[list(key), version, digest] for key, version, digest in lineage])
-        identifier = secrets.token_hex(32)
+        # The optional native profile represents one existing result stage of
+        # this actual checked attempt. Rebinding/restart cannot mint a new
+        # source operation to bypass existing result/outbox idempotency.
+        identifier = (canonical_digest({'contract': 'factory-native-source-stage/v1',
+            'task': grant.task_id, 'run': grant.run_id, 'fence': grant.fence,
+            'packet': packet, 'attempt': attempt, 'stage': 'factory.source-text/v1'})
+            if native_revalidate else secrets.token_hex(32))
         identity = dict(repository_id=context.repository_id, task_id=grant.task_id, run_id=grant.run_id,
             fence=grant.fence, packet_digest=grant.packet_digest, attempt_id=attempt,
             source_operation='access:' + identifier, source_digest=source_digest)
@@ -214,15 +281,32 @@ class AccessReleaseService:
             'transform': 'access-local-text/v1', 'payload_digest': envelope.sanitized_payload_digest}
         prepared = _Prepared(identifier, session, grant, packet, context.workspace_handle, attempt,
             destination, lineage, envelope, authority, canonical_json(binding).decode(),
-            canonical_digest(binding), started + 2)
+            canonical_digest(binding), deadline, captured if native_revalidate else None)
         with self._lock:
             now = time.monotonic()
             self._prepared = {key: item for key, item in self._prepared.items() if item.deadline > now}
+            existing = self._prepared.get(identifier)
+            if existing is not None:
+                if (existing.binding_digest != prepared.binding_digest
+                        or existing.envelope.record_digest != prepared.envelope.record_digest
+                        or not (existing.session is session or existing.session == session)):
+                    raise AccessError('access_conflict')
+                return {'prepared_id': identifier}  # Preserve original bytes and deadline.
             if (len(self._prepared) >= 64 or sum(item.authority[3] == authority[3]
                     for item in self._prepared.values()) >= 16):
                 raise AccessError('access_queue_unavailable')
             self._prepared[identifier] = prepared
         return {'prepared_id': identifier}
+
+    def _refresh_native_prepared(self, prepared):
+        if prepared.native_capture is None:
+            return
+        with self._store._transaction(**_remaining_bounds(prepared.deadline)) as cursor:
+            context, attempt = self._context(cursor, prepared.grant, prepared.execution_packet)
+        # Source reads/custody checks occur OUTSIDE task/SQL/SOURCE locks.
+        # The later transaction still rechecks current task and source authority
+        # at its actual native queue cut; this is not an atomic filesystem fence.
+        self._revalidate_native_sources(prepared.native_capture, context, attempt, prepared.deadline)
 
     def release(self, session, identifier):
         if type(identifier) is not str or len(identifier) != 64:
@@ -235,7 +319,9 @@ class AccessReleaseService:
             del self._prepared[identifier]
         entry = None
         try:
-            with self._store._transaction(**_BOUNDS) as cursor:
+            self._refresh_native_prepared(prepared)
+            with self._store._transaction(**(_remaining_bounds(prepared.deadline)
+                    if prepared.native_capture is not None else _BOUNDS)) as cursor:
                 context, attempt = self._context(cursor, prepared.grant, prepared.execution_packet)
                 if context.workspace_handle != prepared.workspace or attempt != prepared.attempt:
                     raise AccessError('access_denied')
@@ -267,7 +353,9 @@ class AccessReleaseService:
             prepared = entry.prepared
             token = secrets.token_hex(32)
             try:
-                with self._store._transaction(**_BOUNDS) as cursor:
+                self._refresh_native_prepared(prepared)
+                with self._store._transaction(**(_remaining_bounds(prepared.deadline)
+                        if prepared.native_capture is not None else _BOUNDS)) as cursor:
                     context, attempt = self._context(cursor, prepared.grant, prepared.execution_packet)
                     if context.workspace_handle != prepared.workspace or attempt != prepared.attempt:
                         raise AccessError('access_denied')
