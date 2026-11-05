@@ -85,6 +85,31 @@ jobs:
           workspace = pathlib.Path(os.environ['RUNNER_TEMP']) / ('platform-' + cell)
           sys.exit(subprocess.call([sys.executable, 'scripts/getzilla_platform_install.py',
               '--cell', cell, '--workspace', str(workspace), '--head', os.environ['GETZILLA_EXPECTED_HEAD']]))
+      - name: Observe canonical public fixture startup on macOS
+        if: ${{ always() && matrix.os == 'macos' }}
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          workspace = pathlib.Path(os.environ['RUNNER_TEMP']) / ('platform-' + os.environ['GETZILLA_PLATFORM_CELL'])
+          workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+          target = 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear'
+          bootstrap = (
+              "import pathlib,sys,unittest\n"
+              "root=pathlib.Path(sys.argv[1]).resolve()\n"
+              "sys.path[:0]=[str(root),str(root/'.getzilla'),str(root/'factory/src')]\n"
+              "suite=unittest.defaultTestLoader.loadTestsFromName(sys.argv[2])\n"
+              "result=unittest.TextTestRunner(verbosity=2).run(suite)\n"
+              "raise SystemExit(0 if result.wasSuccessful() and result.testsRun==1 and not result.skipped else 1)\n"
+          )
+          with (workspace / 'public-fixture-startup.log').open('wb') as log:
+              try:
+                  result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', bootstrap,
+                      str(pathlib.Path.cwd()), target], stdout=log, stderr=subprocess.STDOUT,
+                      env={'TMPDIR': str(workspace)}, timeout=15)
+              except subprocess.TimeoutExpired:
+                  log.write(b'public-fixture-startup timed out\n')
+                  sys.exit(1)
+          sys.exit(result.returncode)
       - name: Retain actual install and upgrade observations
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

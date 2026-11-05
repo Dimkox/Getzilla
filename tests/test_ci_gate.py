@@ -420,6 +420,60 @@ class WorkflowTemplateTests(unittest.TestCase):
 
 
 class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and os.name == 'posix', 'requires YAML and POSIX')
+    def test_own_native_macos_probe_uses_existing_install_artifact_path(self):
+        import yaml
+        document = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        steps = document['jobs']['platform-install']['steps']
+        probes = [s for s in steps if s.get('name') == 'Observe canonical public fixture startup on macOS']
+        self.assertEqual(len(probes), 1)
+        probe = probes[0]
+        self.assertEqual(probe['if'], "${{ always() && matrix.os == 'macos' }}")
+        self.assertGreater(steps.index(probe), next(i for i, s in enumerate(steps) if s['name'].startswith('Exercise the real user installer')))
+        retention = next(s for s in steps if s['name'] == 'Retain actual install and upgrade observations')
+        self.assertGreater(steps.index(retention), steps.index(probe))
+        self.assertEqual(retention['if'], 'always()')
+        self.assertIn('/*.log', retention['with']['path'])
+        target = 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear'
+        self.assertNotIn(target.encode(), ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main'))
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', probe['run']], cwd=ROOT,
+                                    env={'RUNNER_TEMP': tmp, 'GETZILLA_PLATFORM_CELL': 'public-macos'},
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            log = Path(tmp) / 'platform-public-macos/public-fixture-startup.log'
+            rows = [json.loads(line.split('public-fixture-startup ', 1)[1])
+                    for line in log.read_text().splitlines() if 'public-fixture-startup {' in line]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual([r['case'] for r in rows[0]['cases']],
+                             ['exact-direct', 'diagnostic-direct', 'diagnostic-after-startup-clear'])
+            self.assertEqual([r['returncode'] for r in rows[0]['cases']], [0, 0, 0])
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'requires YAML')
+    def test_own_native_macos_probe_preserves_failure_and_timeout(self):
+        import yaml
+        document = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        steps = document['jobs']['platform-install']['steps']
+        probes = [s for s in steps if s.get('name') == 'Observe canonical public fixture startup on macOS']
+        self.assertEqual(len(probes), 1)
+        for failure, expected in [('exit', 9), ('timeout', 1)]:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                def run(command, **kwargs):
+                    self.assertEqual(command[1:5], ['-I', '-S', '-B', '-c'])
+                    self.assertEqual(command[-1], 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear')
+                    self.assertEqual(kwargs['timeout'], 15)
+                    self.assertEqual(set(kwargs['env']), {'TMPDIR'})
+                    self.assertEqual(kwargs['stderr'], subprocess.STDOUT)
+                    kwargs['stdout'].write(b'bounded public child observation\n')
+                    if failure == 'timeout':
+                        raise subprocess.TimeoutExpired(command, 15)
+                    return subprocess.CompletedProcess(command, 9)
+                with mock.patch.dict(os.environ, {'RUNNER_TEMP': tmp, 'GETZILLA_PLATFORM_CELL': 'public-macos'}, clear=True), \
+                        mock.patch.object(subprocess, 'run', side_effect=run), self.assertRaises(SystemExit) as stopped:
+                    exec(compile(probes[0]['run'], '<own-workflow-public-probe>', 'exec'), {})
+                self.assertEqual(stopped.exception.code, expected)
+                self.assertTrue((Path(tmp) / 'platform-public-macos/public-fixture-startup.log').is_file())
+
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_source_and_generated_evidence_require_a_successful_checkout(self) -> None:
         import yaml
