@@ -16,7 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.agent_evals import (  # noqa: E402
-    EvalError, accept_baseline, compare, render_text, replay, required_suites,
+    EvalError, _baseline, accept_baseline, compare, render_text, replay, required_suites,
 )
 
 
@@ -251,7 +251,7 @@ class AgentEvalTests(unittest.TestCase):
         self.write('manifest.json', self.manifest)
         second = self.run_eval()
         accept_baseline(self.baseline, second, reason='new model', scope='offline')
-        stored = json.loads(self.baseline.read_text())
+        stored = _baseline(self.baseline)  # V1 logical history also covers V2 append framing.
         self.assertEqual(len(stored['history']), 2)
         self.assertEqual(stored['history'][0]['result_digest'], first['result_digest'])
         self.assertEqual(stored['history'][1]['previous_digest'], stored['history'][0]['acceptance_digest'])
@@ -337,7 +337,7 @@ class AgentEvalTests(unittest.TestCase):
         from getzilla.agent_evals import digest
         report = self.run_eval()
         accept_baseline(self.baseline, report, reason='first', scope='offline')
-        original = json.loads(self.baseline.read_text())
+        original = _baseline(self.baseline)
         for replacement in ['pass', {}, None]:
             stored = deepcopy(original)
             entry = stored['history'][0]
@@ -357,7 +357,7 @@ class AgentEvalTests(unittest.TestCase):
         with self.assertRaises(EvalError):
             accept_baseline(self.baseline, report, reason='overflow', scope='offline')
         self.assertEqual(self.baseline.read_bytes(), before)
-        stored = json.loads(before)
+        stored = _baseline(self.baseline)
         stored['history'][0]['reason'] = 'tampered'
         self.write('baseline.json', stored)
         self.assertEqual(compare(report, self.baseline)['status'], 'incomparable')
@@ -480,19 +480,19 @@ class AgentEvalTests(unittest.TestCase):
         outside = Path(outside_temp.name)
         (outside / 'nested').mkdir()
         held = self.root / 'held-baselines'
-        original_open = os.open
+        original_lock = agent_evals.fsx.lock_file
         swapped = False
 
-        def racing_open(path, flags, *args, **kwargs):
+        def racing_lock(descriptor, **kwargs):
             nonlocal swapped
-            result = original_open(path, flags, *args, **kwargs)
-            if str(path).endswith('baseline.json.lock') and not swapped:
+            result = original_lock(descriptor, **kwargs)
+            if not swapped:
                 ancestor.rename(held)
                 ancestor.symlink_to(outside, target_is_directory=True)
                 swapped = True
             return result
 
-        with patch.object(agent_evals.os, 'open', side_effect=racing_open):
+        with patch.object(agent_evals.fsx, 'lock_file', side_effect=racing_lock):
             with self.assertRaises(EvalError):
                 accept_baseline(baseline, report, reason='control', scope='offline')
         self.assertTrue(swapped)
@@ -595,7 +595,7 @@ class AgentEvalTests(unittest.TestCase):
         def replace_destination(directory, name, flags, *args, **kwargs):
             nonlocal swapped
             descriptor = original_open(directory, name, flags, *args, **kwargs)
-            if name.startswith('.eval-baseline-') and not swapped:
+            if name == self.baseline.name and flags & os.O_APPEND and not swapped:
                 self.baseline.unlink()
                 self.baseline.write_bytes(before)
                 swapped = True
@@ -667,17 +667,17 @@ class AgentEvalTests(unittest.TestCase):
         outside_baseline = outside / 'nested/baseline.json'
         outside_baseline.write_bytes(before)
         held = self.root / 'held-baselines'
-        real_replace = agent_evals.fsx.replace_at
+        real_write = agent_evals.os.write
         swapped = False
 
-        def replace(source_parent, source, target_parent, target):
+        def write(descriptor, data):
             nonlocal swapped
             ancestor.rename(held)
             ancestor.symlink_to(outside, target_is_directory=True)
             swapped = True
-            return real_replace(source_parent, source, target_parent, target)
+            return real_write(descriptor, data)
 
-        with patch.object(agent_evals.fsx, 'replace_at', side_effect=replace):
+        with patch.object(agent_evals.os, 'write', side_effect=write):
             with self.assertRaises(EvalError):
                 accept_baseline(baseline, report, reason='next', scope='offline')
         self.assertTrue(swapped)
