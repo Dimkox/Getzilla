@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from . import continuity, state
 from . import execution_store as store
 from .execution_output import normalize_output, RESPONSE_BYTES, utf8_tail
-from .package_status import _git_read, read_package_file
+from .package_status import InspectionError, _git_read, read_package_file, validate_public_source_root
 from .spec import _bounded_walk
 from .util import tree_fingerprint
 
@@ -257,6 +257,10 @@ def _owner_current(root, record):
 
 def _source(root, route):
     """Bounded content observation, not an immutable checkout or PASS receipt."""
+    try:
+        validate_public_source_root(root)
+    except (InspectionError, OSError):
+        raise ExecutionError('source_inventory_unavailable') from None
     entries = []
     total = 0
     pending = [root]
@@ -274,11 +278,14 @@ def _source(root, route):
                 if len(entries) + len(pending) >= 4096:
                     raise ExecutionError('source_inventory_unavailable')
                 if entry.is_symlink():
-                    entries.append((relative, 'link', hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()))
+                    raise ExecutionError('source_inventory_unavailable')
                 elif entry.is_dir(follow_symlinks=False):
                     pending.append(path)
                 elif entry.is_file(follow_symlinks=False):
-                    raw = read_package_file(root, relative, limit=2 * 1024 * 1024)
+                    try:
+                        raw = read_package_file(root, relative, limit=2 * 1024 * 1024, public_source=True)
+                    except (InspectionError, OSError):
+                        raise ExecutionError('source_inventory_unavailable') from None
                     total += len(raw)
                     if total > 16 * 1024 * 1024:
                         raise ExecutionError('source_inventory_unavailable')

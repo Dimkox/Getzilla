@@ -347,6 +347,7 @@ class ExecutionTests(unittest.TestCase):
     def test_completion_preserves_original_source_and_real_git_identity_on_changed_bytes(self):
         source = self.root / 'source.txt'
         source.write_text('before')
+        source.chmod(0o644)
         subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.root)], check=True)
         for args in (['config', 'user.email', 'execution@example.test'], ['config', 'user.name', 'Execution fixture'],
                      ['add', 'source.txt'], ['commit', '-qm', 'before attempt']):
@@ -370,7 +371,7 @@ class ExecutionTests(unittest.TestCase):
     def test_nested_non_git_workspace_never_inherits_parent_sha_and_secret_files_are_not_read(self):
         subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.root)], check=True)
         child = self.root / 'nested'
-        child.mkdir()
+        child.mkdir(mode=0o700)
         owned_route(child)
         caller = execution.trusted_caller(child)
         view = execution.submit(child, caller, self.request, backend=CountingBackend())
@@ -387,6 +388,148 @@ class ExecutionTests(unittest.TestCase):
                 execution.submit(child, caller, replace(self.request, intent_key='secret-root'), backend=CountingBackend())
         self.assertEqual(caught.exception.code, 'source_inventory_unavailable')
 
+
+    def assert_private_source_refusal_before_read(self, *, hardlink):
+        target = self.root / 'arbitrary-source-note.txt'
+        target.write_text('synthetic fixture bytes')
+        target.chmod(0o644 if hardlink else 0o600)
+        if hardlink:
+            os.link(target, self.root / 'another-source-name.txt')
+        identity = (target.stat().st_dev, target.stat().st_ino)
+        reads = []
+        original_read = os.read
+        def observed_read(descriptor, maximum):
+            info = os.fstat(descriptor)
+            raw = original_read(descriptor, maximum)
+            if (info.st_dev, info.st_ino) == identity:
+                reads.append(len(raw))
+            return raw
+        backend = CountingBackend()
+        code = None
+        with patch.object(os, 'read', side_effect=observed_read):
+            try:
+                execution.submit(self.root, self.caller, self.request, backend=backend)
+            except execution.ExecutionError as error:
+                code = error.code
+        self.assertEqual(reads, [], 'non-public source bytes entered managed source observation')
+        self.assertEqual(code, 'source_inventory_unavailable')
+        self.assertEqual(backend.calls, 0)
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_private_mode_source_refuses_before_read_or_hash_publication(self):
+        self.assert_private_source_refusal_before_read(hardlink=False)
+
+    def test_multiple_link_source_refuses_before_read_or_hash_publication(self):
+        self.assert_private_source_refusal_before_read(hardlink=True)
+
+    def test_empty_source_root_with_group_write_is_not_a_qualified_snapshot(self):
+        self.root.chmod(0o775)
+        try:
+            with self.assertRaises(execution.ExecutionError) as error:
+                self.submit()
+            self.assertEqual(error.exception.code, 'source_inventory_unavailable')
+        finally:
+            self.root.chmod(0o700)
+
+    def test_private_package_reader_remains_available_without_public_source_opt_in(self):
+        from getzilla.package_status import read_package_file
+        path = self.root / 'private-workflow-note.txt'
+        path.write_bytes(b'synthetic private workflow fixture')
+        path.chmod(0o600)
+        self.assertEqual(read_package_file(self.root, path.name), b'synthetic private workflow fixture')
+
+    def test_source_mode_change_between_chunks_refuses_before_a_second_read(self):
+        path = self.root / 'source-file.txt'
+        path.write_bytes(b'z' * 65537)
+        path.chmod(0o644)
+        identity = (path.stat().st_dev, path.stat().st_ino)
+        calls = []
+        original_read = os.read
+        def change_after_chunk(descriptor, maximum):
+            info = os.fstat(descriptor)
+            result = original_read(descriptor, maximum)
+            if (info.st_dev, info.st_ino) == identity:
+                calls.append(len(result))
+                path.chmod(0o600)
+            return result
+        with patch.object(os, 'read', side_effect=change_after_chunk):
+            with self.assertRaises(execution.ExecutionError) as error:
+                self.submit()
+        self.assertEqual(error.exception.code, 'source_inventory_unavailable')
+        self.assertEqual(calls, [65536])
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_foreign_opened_source_owner_refuses_before_read(self):
+        from types import SimpleNamespace
+        path = self.root / 'public-source.txt'
+        path.write_bytes(b'synthetic public source')
+        path.chmod(0o644)
+        identity = (path.stat().st_dev, path.stat().st_ino)
+        original_stat, original_read = os.fstat, os.read
+        reads = []
+        def foreign_stat(descriptor):
+            info = original_stat(descriptor)
+            if (info.st_dev, info.st_ino) != identity:
+                return info
+            fields = {name: getattr(info, name) for name in ('st_dev', 'st_ino', 'st_mode', 'st_uid',
+                       'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+            return SimpleNamespace(**{**fields, 'st_uid': info.st_uid + 1})
+        def observed_read(descriptor, maximum):
+            info = original_stat(descriptor)
+            if (info.st_dev, info.st_ino) == identity:
+                reads.append(True)
+            return original_read(descriptor, maximum)
+        with patch.object(os, 'fstat', side_effect=foreign_stat), patch.object(os, 'read', side_effect=observed_read):
+            with self.assertRaises(execution.ExecutionError):
+                self.submit()
+        self.assertEqual(reads, [])
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_source_name_replacement_after_open_refuses_before_read(self):
+        from getzilla import fsx
+        target = self.root / 'public-source.txt'
+        target.write_bytes(b'synthetic public source')
+        target.chmod(0o644)
+        private = self.root / '.getzilla/runtime/private-replacement'
+        private.write_bytes(b'synthetic private fixture')
+        private.chmod(0o600)
+        identities = {(target.stat().st_dev, target.stat().st_ino), (private.stat().st_dev, private.stat().st_ino)}
+        original_open, original_read = fsx.open_at, os.read
+        reads = []
+        def replace_after_open(directory, name, flags, *arguments, **keywords):
+            descriptor = original_open(directory, name, flags, *arguments, **keywords)
+            if name == target.name:
+                os.replace(private, target)
+            return descriptor
+        def observed_read(descriptor, maximum):
+            info = os.fstat(descriptor)
+            if (info.st_dev, info.st_ino) in identities:
+                reads.append(True)
+            return original_read(descriptor, maximum)
+        with patch.object(fsx, 'open_at', side_effect=replace_after_open), patch.object(os, 'read', side_effect=observed_read):
+            with self.assertRaises(execution.ExecutionError):
+                self.submit()
+        self.assertEqual(reads, [])
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_public_source_windows_refusal_precedes_any_descriptor_open(self):
+        from getzilla import fsx
+        from getzilla.package_status import InspectionError, read_package_file
+        with patch.object(fsx, 'WINDOWS', True), patch.object(fsx, 'open_dir') as opened:
+            with self.assertRaises(InspectionError) as error:
+                read_package_file(self.root, 'public-source.txt', public_source=True)
+        self.assertEqual(error.exception.code, 'file_unavailable')
+        opened.assert_not_called()
+
+    def test_symlink_source_declaration_does_not_qualify_a_whole_snapshot(self):
+        private = self.root / '.getzilla/runtime/private-fixture'
+        private.write_bytes(b'synthetic private fixture')
+        private.chmod(0o600)
+        (self.root / 'source-link.txt').symlink_to(private)
+        with self.assertRaises(execution.ExecutionError) as error:
+            self.submit()
+        self.assertEqual(error.exception.code, 'source_inventory_unavailable')
+        self.assertEqual(store.load_registry(self.root)['records'], {})
 
     def test_deadline_consumed_by_admission_never_dispatches_after_publication(self):
         clock = FakeClock()

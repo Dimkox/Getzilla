@@ -93,6 +93,24 @@ policy are required and rechecked before release. A source/policy change fences
 release. Public-source audit's limited same-group directory observations do not
 widen executable custody. No permissions of shared parents are changed.
 
+Managed source snapshots use the existing file reader's strict `public_source`
+opt-in; its private workflow reader remains available to existing callers. Before
+reading any source bytes, this mode requires an owner-matching, single-link,
+regular file with public mode0444/0644/0555/0755. Anchored no-follow root and
+directory checks reject writable ancestry, except a root-owned sticky system
+parent. File and named-path identities are rechecked before each chunk and after
+reading. Private, foreign, linked, oversized or changed input rejects the whole
+snapshot. The existing4096-entry,16MiB-total and2MiB-file bounds remain in force.
+
+This POSIX metadata eligibility does not classify arbitrary content as nonsecret
+or authenticate a customer. Known secret names remain refused. Windows public
+source custody is unsupported until an actual ACL-qualified adapter exists.
+Shared0775 path ancestry is also unqualified; later native integration must use
+the reviewed kernel-CWD resource with the same public eligibility, without a
+path waiver or a second anchor authority. A group-writable source root remains
+refused. The audit command's limited directory observation does not widen this
+managed source or executable policy.
+
 After admission consumption, the attempt records `starting`. A fixed launcher
 waits on a parent-owned pipe. The owner spawns outside task locks and records its
 live Linux pidfd/start identity before the release check. The brief release

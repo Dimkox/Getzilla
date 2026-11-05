@@ -234,6 +234,14 @@ class FactoryStopAuthorityTests(unittest.TestCase):
                               idempotency_key='c' * 64, actor=operator, now=self.now)
         capability.check()
 
+    def test_already_enabled_factory_stop_cannot_issue_a_new_capability(self):
+        from getzilla_factory.factory_stop import FactoryStopError
+        self.intake()
+        self.stop_global()
+        with self.assertRaises(FactoryStopError) as error:
+            self.service.landing_stop_capability(self.source, actor=self.actor, landing_store=self.landing_store)
+        self.assertEqual(str(error.exception), 'factory_stop_changed')
+
     def test_direct_probe_uses_a_real_bound_synthetic_source_and_stop_before_keys(self):
         import httpx
         from unittest.mock import Mock

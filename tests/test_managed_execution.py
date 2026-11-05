@@ -31,6 +31,8 @@ class ManagedExecutionTests(unittest.TestCase):
         self.addCleanup(state.bind_session, None)
         config = self.root / '.getzilla/config'
         config.mkdir(parents=True)
+        config.parent.chmod(0o755)
+        config.chmod(0o755)
         (config / 'policy.json').write_text('{}')
         (config / 'policy.json').chmod(0o644)
         owned_route(self.root, session=session)
@@ -73,6 +75,15 @@ class ManagedExecutionTests(unittest.TestCase):
         binary.write_bytes(b'compromised fixture, never executable')
         with self.assertRaises(execution.ExecutionError):
             self.run_tool()
+        self.assertEqual(store.load_registry(self.root)['records'], {})
+
+    def test_valid_elf_replacement_with_a_stale_pin_refuses_before_publication(self):
+        binary = self.configure('/usr/bin/true', [])
+        shutil.copyfile('/usr/bin/false', binary)
+        self.assertEqual(binary.read_bytes()[:4], b'\x7fELF')
+        with self.assertRaises(execution.ExecutionError) as error:
+            self.run_tool()
+        self.assertEqual(error.exception.code, 'managed_executable_unqualified')
         self.assertEqual(store.load_registry(self.root)['records'], {})
 
     def test_child_receives_only_explicit_environment(self):
@@ -337,6 +348,7 @@ class ManagedExecutionTests(unittest.TestCase):
             if not changed and os.fstat(descriptor).st_ino == inode:
                 changed = True
                 (binary.parent / 'unrelated-public-fixture').write_text('fixture')
+                (binary.parent / 'unrelated-public-fixture').chmod(0o644)
             return original(descriptor, size)
         with patch.object(managed_execution.os, 'read', side_effect=harmless_entry):
             result = self.run_tool()
