@@ -9,6 +9,7 @@ from typing import Any
 
 from .diff_risk import ORDER, classify_diff, load_rules, parse_rules
 from .project_ingestion import _git
+from .state import serialized_task
 from .util import git_head, tree_fingerprint, unique_ordered
 
 RULE_PATH = '.getzilla/config/diff-risk-rules.json'
@@ -206,13 +207,16 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                 *([route['write_agent']] if route and route.get('write_agent') else []), *reviewers])}
 
 
+@serialized_task
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
-    from .state import get_active_route, update_route
+    from .state import get_active_route, require_route_owner, update_route
+    from .change import _sync_receipt_obligations
     from .verification import _git_range_selection
     route = get_active_route(root)
     if not route:
         raise ValueError('no active route to reconcile')
+    require_route_owner(root, route)
     from .router import REVIEW_EVIDENCE
     if any(name not in REVIEW_EVIDENCE for name in additional_reviewers):
         raise ValueError('unknown explicit reviewer')
@@ -225,7 +229,17 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
     current = get_active_route(root)
     if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
         raise ValueError('route or source changed during reconciliation')
-    return update_route(root, expected_route=route, **updates)
+    check_package = _sync_receipt_obligations(root, route, updates['required_evidence'])
+    if (get_active_route(root) != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
+            or git_head(root) != updates['risk_assessment']['head']):
+        raise ValueError('route or source changed before reconciliation publication')
+    check_package()
+    published = update_route(root, expected_route=route, **updates)
+    if (get_active_route(root) != published or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
+            or git_head(root) != updates['risk_assessment']['head']):
+        raise ValueError('route or source changed during reconciliation publication')
+    check_package()
+    return published
 
 
 def validate_review_plan(root: Path, route: dict) -> list[str]:

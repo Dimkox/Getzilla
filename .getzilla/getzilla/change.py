@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import secrets
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .package_status import collect_worktree, read_package_file
 from .state import (get_active_route, set_active_change, update_route, serialized_task,
@@ -137,6 +138,77 @@ def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: 
     for name in PACKAGE_MARKDOWN:
         read_package_file(root, (path / name).relative_to(root).as_posix()).decode('utf-8', 'strict')
     return value
+
+
+def _sync_receipt_obligations(root: Path, route: dict[str, Any], required: list[str]) -> Callable[[], None]:
+    """Append unperformed selected work; retained records never supply fresh authority."""
+    from .continuity import validate_package_state
+    from .package_status import MAX_FILES, inspect_package
+    from .receipts import RECEIPT_KINDS
+    from .state import CLOSED_CHANGE_STATUSES, get_active_change, _route_document
+
+    require_route_owner(root, route)
+    if (type(required) is not list or len(required) > len(RECEIPT_KINDS)
+            or any(type(kind) is not str or kind not in RECEIPT_KINDS for kind in required)
+            or len(set(required)) != len(required)):
+        raise ValueError('invalid selected receipt obligations')
+    active = get_active_change(root)
+    if route.get('change_id') is None:
+        if active is not None:
+            raise ValueError('selected package conflicts with reconciliation')
+        return lambda: None
+    if not active or active.get('change_id') != route['change_id']:
+        raise ValueError('selected package changed during reconciliation')
+    package = change_directory(root, route['change_id'], writable=True)
+    if active.get('path') != package.relative_to(root).as_posix():
+        raise ValueError('selected package path conflicts with reconciliation')
+    path = package / 'state.json'
+    original = _route_document(root, path)
+    validate_package_state(original, route, route['change_id'])
+    if original['status'] in CLOSED_CHANGE_STATUSES:
+        raise ValueError('closed package cannot receive selected work')
+    expected = copy.deepcopy(original)
+
+    def assert_current() -> None:
+        if get_active_change(root) != active or _route_document(root, path) != expected:
+            raise ValueError('selected package changed during reconciliation')
+
+    # Absence is the existing explicit legacy warning, not an implicit migration.
+    if 'evidence_accounting' not in original:
+        return assert_current
+    accounting = expected['evidence_accounting']
+    if (type(accounting) is not dict or type(accounting.get('schema_version')) is not int
+            or accounting['schema_version'] != 1 or type(accounting.get('obligations')) is not list
+            or len(accounting['obligations']) > MAX_FILES):
+        raise ValueError('invalid typed receipt accounting')
+    inspected = inspect_package(root, route, active)
+    if any(row['code'] == 'obligation_invalid' or row.get('field') == 'evidence_accounting.obligations'
+           or row['code'] in {'file_unsafe', 'file_unavailable', 'file_too_large', 'inspection_limit'}
+           for row in inspected['findings']):
+        raise ValueError('selected package accounting is unsafe or malformed')
+    rows = accounting['obligations']
+    present = {row['receipt_kind'] for row in rows if row['kind'] == 'receipt'}
+    missing = [kind for kind in required if kind not in present]
+    if len(rows) + len(missing) > MAX_FILES:
+        raise ValueError('selected receipt accounting exceeds its bound')
+    if not missing:
+        assert_current()
+        return assert_current
+    identities = {row['id'] for row in rows}
+    for kind in missing:
+        identity = kind
+        for number in range(MAX_FILES + 1):
+            if identity not in identities:
+                break
+            identity = f'required-{kind}-{number}'
+        identities.add(identity)
+        rows.append({'id': identity, 'kind': 'receipt', 'receipt_kind': kind,
+                     'status': 'not_run', 'reason': 'selected by source-bound reconciliation; not run'})
+    if get_active_change(root) != active or _route_document(root, path) != original:
+        raise ValueError('selected package changed before accounting publication')
+    durable_json(root, path, expected)
+    assert_current()
+    return assert_current
 
 
 def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: str, title: str) -> dict[str, Any]:
