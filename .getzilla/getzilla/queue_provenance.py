@@ -179,6 +179,17 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             literal_arguments(node)
     canonical_roots = {name.split('.')[0] for name in patch_names}
     for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == 'getattr':
+            call = parents.get(node)
+            if not isinstance(call, ast.Call) or call.func is not node:
+                return tree
+            use = parents.get(call)
+            # Admit immediate metadata comparison/value consumption only, not
+            # callable recovery or escape. Helper hidden effects stay unproved.
+            immediate_value = (isinstance(use, (ast.Compare, ast.Expr))
+                               or isinstance(use, ast.Call) and use.func is not call)
+            if not immediate_value:
+                return tree
         bare_literal = isinstance(parents.get(node), ast.Expr) and parents[node].value is node
         unproved_selector = (
             isinstance(node, ast.Attribute) and node.attr == 'patch' and dotted(node) not in patch_names

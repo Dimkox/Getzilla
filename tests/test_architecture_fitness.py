@@ -2278,6 +2278,30 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
                 self.assertIn('new_queue', report.triggers)
 
+    def test_escaping_getter_capabilities_require_proof_without_selector_spelling(self):
+        prefix = ('from queue import Empty\ndef f():\n    raise Empty()\n'
+                  'from tools import instrumentation as facade\nmember="pa"+"tch"\n')
+        escaped = (
+            'mutate=getattr(facade,member)\nmutate("sample.unrelated",None)\n',
+            'read=getattr\nmutate=read(facade,member)\nmutate("sample.unrelated",None)\n',
+            'getattr(facade,member)("sample.unrelated",None)\n',
+            'getattr(facade,member).multiple("sample.unrelated",unrelated=None)\n',
+            'def recover():\n    return getattr(facade,member)\n',
+            'values=[getattr(facade,member)]\n',
+        )
+        immediate = (
+            'if getattr(metadata,field)==0:\n    pass\n',
+            # Immediate helper value consumption does not prove hidden effects.
+            'ordinary(getattr(metadata,field))\n',
+        )
+        for expected, cases in ((True, escaped), (False, immediate)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
