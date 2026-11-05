@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:optional-module-registry:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "core_api",
+    "publishers",
+    "modules"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "core_api": {
+      "const": 1
+    },
+    "publishers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "licenses"
+        ],
+        "properties": {
+          "licenses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 16,
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "modules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publisher",
+          "versions"
+        ],
+        "properties": {
+          "publisher": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "versions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "manifest",
+                "sha256"
+              ],
+              "properties": {
+                "manifest": {
+                  "type": "string",
+                  "pattern": "^\\.getzilla/optional-modules/[a-z][a-z0-9-]{0,63}/[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}/module\\.json$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
