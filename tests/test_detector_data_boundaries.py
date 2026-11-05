@@ -96,6 +96,13 @@ class CompleteSourceProofTests(unittest.TestCase):
             'with': 'with bridge.helper() as jobs:\n    jobs.enqueue(work)',
             'for': 'for jobs in bridge.helper():\n    jobs.enqueue(work)',
             'getter-result': "if (jobs := getattr(bridge, 'helper')()):\n    jobs.put(work())",
+            'attribute-protocol': 'bridge.helper().trigger',
+            'subscript-protocol': "bridge.helper()['trigger']",
+            'operator-protocol': 'bridge.helper() + 1',
+            'comparison-protocol': 'bridge.helper() == 1',
+            'truth-protocol': 'bridge.helper() and 1',
+            'hash-protocol': '{bridge.helper()}',
+            'iteration-protocol': '[*bridge.helper()]',
             'stored-argument': 'saved = []\ndef store(value): saved.append(value)\nstore(bridge.helper())\nsaved[0].enqueue(work)',
             'default-capture': 'jobs = bridge.helper()\ndef select(value=jobs): return value\nselect().enqueue(work)',
             'comprehension-capture': 'jobs = bridge.helper()\n[jobs.put(work()) for jobs in (jobs,)]',
@@ -157,10 +164,12 @@ class CompleteSourceProofTests(unittest.TestCase):
         source = b'import bridge\nbridge.helper()\n'
         changed = b'import bridge\nif (value := bridge.helper()): value.put(work)\n'
         caller = ast.parse(source)
+        caller.proof_payload = {'mutable': ['unchanged']}
         original = ast.dump(caller, include_attributes=True)
         initial = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
         self.assertIn('bridge.helper', initial.identity)
         self.assertEqual(ast.dump(caller, include_attributes=True), original)
+        self.assertEqual(caller.proof_payload, {'mutable': ['unchanged']})
         caller.body[:] = ast.parse(changed).body
         observed = FIT._callable_use_proof(caller, namespace_closed=True, patches={})
         self.assertIn('bridge.helper', observed.returns)
@@ -168,6 +177,16 @@ class CompleteSourceProofTests(unittest.TestCase):
         current = FIT._queue_source_preparation('result-version.py', changed)
         self.assertIn('bridge.helper', first.callable_uses.identity)
         self.assertIn('bridge.helper', current.callable_uses.returns)
+        default = first.callable_uses
+        owned_tree = ast.dump(first.tree, include_attributes=True)
+        for forced in (True, False, True):
+            FIT._inventory_use_proof(first.inventory, returns=forced)
+            self.assertEqual(first.callable_uses, default)
+            self.assertEqual(ast.dump(first.tree, include_attributes=True), owned_tree)
+        with self.assertRaises(TypeError):
+            first.inventory.reads['bridge'] = ()
+        with self.assertRaises(TypeError):
+            first.inventory.scope_counts[(None, 'bridge')] = 0
         chain = 'import bridge\nfirst = bridge.helper()\nsecond = first\nthird = second\n'
         with patch.object(FIT, 'MAX_QUEUE_DEPENDENCY_WORK', 2):
             observed = FIT._callable_use_proof(ast.parse(chain), namespace_closed=True, patches={})
