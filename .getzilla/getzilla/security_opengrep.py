@@ -626,6 +626,19 @@ def legacy_rule_prefix(profile: str, rules_root: Path) -> str:
 _LANGUAGE = {'.py': 'python', '.php': 'php', '.js': 'javascript'}
 
 
+def _expanded_absence(root: Path, deadline) -> bool:
+    # An empty applicable roster needs no installed checker/tool. Release a
+    # nonempty preliminary cut before the existing operative cut/OwnedRun;
+    # internal runtime initialization must not alter its source metadata cut.
+    with SourceCut(root, 'expanded') as source:
+        _timeout(deadline)
+        if source.entries:
+            return False
+        source.assert_current()
+        _timeout(deadline)
+        return True
+
+
 def scan_source(root: Path, *, rules_root: Path, executable: Path, profile: str) -> dict:
     """Real local component. No imported inventory, result or local hash grants trust."""
     deadline = time.monotonic() + 900
@@ -634,6 +647,9 @@ def scan_source(root: Path, *, rules_root: Path, executable: Path, profile: str)
     try:
         if profile not in {'native', 'expanded'}:
             raise OpenGrepError('source_profile_unavailable')
+        if profile == 'expanded' and _expanded_absence(root, deadline):
+            return {'outcome': 'not_applicable', 'summary': 'complete census contains no required source targets',
+                    'coverage': {'expected': [], 'observed': []}, 'findings': [], 'finding_count': 0}
         with ExitStack() as stack:
             run = stack.enter_context(OwnedRun(rules_root))
             if profile == 'native' and _directory_object(root.stat()) != _directory_object(fsx.fstat_dir(run.project)):

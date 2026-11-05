@@ -257,6 +257,32 @@ class AdapterRefusalTests(unittest.TestCase):
         self.assertEqual(result['coverage'], {'expected': [], 'observed': []})
         self.assertFalse((self.root / 'ran').exists())
 
+    def test_proven_empty_expanded_census_needs_no_checker_rule_installation(self):
+        (self.root / 'app.py').unlink()
+        (self.root / 'Cargo.toml').write_text('[package]\nname="first-party"\nversion="0.1.0"\n')
+        result = self.scanner.scan_source(self.root,
+            rules_root=self.root / 'missing-checker/.getzilla/sast/rules',
+            executable=self.root / 'missing-tool', profile='expanded')
+        self.assertEqual(result['outcome'], 'not_applicable', result['summary'])
+        self.assertEqual(result['coverage'], {'expected': [], 'observed': []})
+        self.assertEqual(result['finding_count'], 0)
+        self.assertFalse((self.root / 'missing-checker').exists())
+
+    def test_missing_rules_never_mint_zero_for_nonempty_or_unqualified_census(self):
+        for name, mode in (('app.py', 0o644), ('app.py', 0o600), ('app.go', 0o644)):
+            with self.subTest(name=name, mode=mode):
+                (self.root / 'app.py').unlink(missing_ok=True)
+                target = self.root / name
+                target.write_text('public inert source\n')
+                target.chmod(mode)
+                result = self.scanner.scan_source(self.root,
+                    rules_root=self.root / 'missing-checker/.getzilla/sast/rules',
+                    executable=self.root / 'missing-tool', profile='expanded')
+                self.assertEqual(result['outcome'], 'blocked')
+                self.assertIsNone(result['coverage'])
+                self.assertIsNone(result['finding_count'])
+                target.unlink()
+
 
 class AdapterCapabilityTests(unittest.TestCase):
     def test_missing_native_platform_capability_is_explicit_incomplete_without_effect(self):
