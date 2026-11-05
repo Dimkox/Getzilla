@@ -8,8 +8,8 @@ schedule instead of hoping the agent remembers a rule:
   in ``.getzilla/runtime/startup-capacity.json`` when fresh, else allowed CPUs minus the owner's
   reserve);
 - :func:`run_batch` (``getzilla par``) runs independent shell commands concurrently, each one
-  checked by the repository policy first, and returns a short summary while full logs stay in
-  ``.getzilla/runtime/par/``;
+  checked by the repository policy first, and returns a bounded summary while head/tail logs
+  stay within a 32 MiB batch budget in ``.getzilla/runtime/par/``;
 - :func:`serial_refusal` (PreToolUse) refuses a serial batch of heavy commands (``a && b && c``,
   ``for ... do ...; done``, ``find -exec``) and a test runner forced into one process, and
   answers with the parallel command. ``GETZILLA_SERIAL=1`` in front of a command keeps it
@@ -23,15 +23,20 @@ import importlib.util
 import json
 import os
 import re
+import uuid
+from collections import deque
+from contextlib import contextmanager
 import shlex
 import subprocess
 import time
+from threading import Event, Thread
+from queue import Empty, Full, Queue
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from . import STACK_DIR
+from . import STACK_DIR, fsx
 
 CONFIG = '.getzilla/config/parallel.json'
 SNAPSHOT = '.getzilla/runtime/startup-capacity.json'
@@ -39,7 +44,10 @@ LOGS = '.getzilla/runtime/par'
 STATS = '.getzilla/runtime/parallel-guard.json'
 SERIAL = 'GETZILLA_SERIAL=1'
 FRESH_SECONDS = 12 * 3600
-TAIL_LINES = 30
+PREVIEW_BYTES = 4096
+RESPONSE_BYTES = 32768
+LOG_BYTES = 32 * 1024 * 1024
+CHUNK_BYTES = 65536
 MAX_LISTED_PASSES = 15
 
 _LOOP = re.compile(r'^\s*for\s+([A-Za-z_]\w*)\s+in\s+(.+?)\s*;\s*do\s+(.+?)\s*;?\s*done\s*$', re.S)
@@ -85,6 +93,13 @@ class Job:
     seconds: float = 0.0
     log: Path | None = None
     refused: str | None = None
+    observed_bytes: int = 0
+    retained_bytes: int = 0
+    dropped_bytes: int = 0
+    truncated: bool = False
+    preview: str = ''
+    preview_truncated: bool = False
+    log_error: str | None = None
 
 
 def policy_refusal(root: Path, command: str, *, cwd: Path | None = None) -> str | None:
@@ -110,74 +125,367 @@ def expand_each(patterns: list[str], template: str, cwd: Path) -> list[str]:
     return [template.replace('{}', shlex.quote(path)) for path in paths]
 
 
+def _text(data: bytes, limit: int) -> str:
+    """Decode only a bounded slice; discard incomplete UTF-8 at either boundary."""
+    return data[-limit:].decode('utf-8', 'ignore')
+
+
+def _preview(data: bytes) -> str:
+    # Suppress likely credentials as a whole preview. Command text is never persisted or shown.
+    text = _text(data, PREVIEW_BYTES)
+    if re.search(r'(?i)(?:password|secret|token|api[_-]?key)\s*[:=]|PRIVATE KEY|AKIA[0-9A-Z]{16}', text):
+        return '[preview withheld: possible credential]'
+    return text
+
+
+@contextmanager
+def _log_folder(root: Path):
+    """Use fsx directory handles through creation and every output write (#168)."""
+    from .resource_inventory import classify
+
+    root = root.resolve()
+    descriptors = [fsx.open_dir(root)]
+    try:
+        for name in ('.getzilla', 'runtime', 'par'):
+            try:
+                _check_directory(descriptors[-1])
+                fsx.mkdir_at(descriptors[-1], name, 0o700)
+            except FileExistsError:
+                pass
+            descriptors.append(fsx.open_dir_at(descriptors[-1], name))
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + f'-{os.getpid()}-{uuid.uuid4().hex}'
+        folder = root / LOGS / stamp
+        if classify(root, folder) != 'ephemeral':
+            raise OSError('unsafe parallel log ownership')
+        _check_directory(descriptors[-1])
+        fsx.mkdir_at(descriptors[-1], stamp, 0o700)
+        descriptors.append(fsx.open_dir_at(descriptors[-1], stamp))
+        yield folder, descriptors[-1]
+    finally:
+        for descriptor in reversed(descriptors):
+            fsx.close_dir(descriptor)
+
+
+def _check_directory(directory: fsx.DirHandle) -> None:
+    if isinstance(directory, fsx.WindowsDirectory):
+        current = fsx.fstat_dir(directory)
+        if (current.st_dev, current.st_ino) != (directory.info.st_dev, directory.info.st_ino):
+            raise OSError('log directory changed')
+        for path in (Path(directory.path), *Path(directory.path).parents):
+            if fsx.is_link(path.lstat()):
+                raise OSError('linked log directory component')
+
+
+def _create_log(directory: fsx.DirHandle, name: str):
+    _check_directory(directory)
+    descriptor = fsx.open_at(directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+    try:
+        # WindowsDirectory is path based. Revalidate before writing any output.
+        _check_directory(directory)
+        named = fsx.lstat_at(directory, name)
+        opened = os.fstat(descriptor)
+        if fsx.is_link(named) or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError('log file changed during creation')
+        return os.fdopen(descriptor, 'wb', buffering=0)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _stop_process(process: subprocess.Popen, job: Job) -> None:
+    owned = fsx.owned_job(process)
+    try:
+        if owned is not None:
+            if not owned.terminate(1):
+                job.log_error = 'process-tree cleanup unconfirmed'
+        else:
+            fsx.kill_process_tree(process.pid)
+    except OSError as error:
+        job.log_error = f'process-tree cleanup failed (errno={error.errno})'
+
+
+def _capture(job: Job, directory: fsx.DirHandle, cwd: Path, quota: int, timeout: float | None,
+             runner: Callable[..., Any], preview_limit: int = PREVIEW_BYTES,
+             cancelled: Event | None = None) -> None:
+    cancelled = cancelled or Event()
+    if cancelled.is_set():
+        job.returncode = 130
+        return
+    head_limit, tail_limit = quota // 2, quota - quota // 2
+    tail: deque[bytes] = deque()
+    tail_bytes = head_bytes = 0
+    preview = bytearray()
+    handle = None
+
+    def write(data: bytes) -> None:
+        nonlocal handle
+        if handle is None:
+            return
+        try:
+            # Raw FileIO can perform short writes.
+            view = memoryview(data)
+            while view:
+                count = handle.write(view)
+                if not count:
+                    raise OSError('short log write')
+                job.retained_bytes += count
+                view = view[count:]
+        except OSError as error:
+            job.log_error = f'log write failed (errno={error.errno})'
+            handle.close()
+            handle = None
+
+    try:
+        handle = _create_log(directory, f'{job.index:03d}.log')
+    except OSError as error:
+        job.log_error = f'log create failed (errno={error.errno})'
+    started = time.monotonic()
+    try:
+        # One merged pipe drains both streams. Every shell command passed policy preflight.
+        process = runner(job.command, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B604
+                         bufsize=0)
+        chunks: Queue[bytes] = Queue(maxsize=2)
+        finished, stop_reader = Event(), Event()
+        read_errors: list[int | None] = []
+
+        def read() -> None:
+            try:
+                while not stop_reader.is_set():
+                    chunk = process.stdout.read(CHUNK_BYTES)
+                    if type(chunk) is not bytes:
+                        raise OSError('output read returned non-byte payload')
+                    if len(chunk) > CHUNK_BYTES:
+                        raise OSError('output read exceeded chunk bound')
+                    if not chunk:
+                        return
+                    while not stop_reader.is_set():
+                        try:
+                            chunks.put(chunk, timeout=0.05)
+                            break
+                        except Full:
+                            continue
+            except OSError as error:
+                read_errors.append(error.errno)
+            finally:
+                try:
+                    process.stdout.close()
+                except OSError as error:
+                    read_errors.append(error.errno)
+                finally:
+                    finished.set()
+
+        reader = Thread(target=read, daemon=True, name=f'par-output-{job.index}')
+        timed_out = False
+        try:
+            reader.start()
+            stopped_at = None
+            # The reader works on native Windows pipes too. Its bounded queue
+            # cannot accumulate the producer's complete output in memory.
+            while not finished.is_set() or not chunks.empty() or process.poll() is None:
+                now = time.monotonic()
+                timed_out = timed_out or (timeout is not None and now - started >= timeout)
+                if stopped_at is None and (timed_out or cancelled.is_set()):
+                    stopped_at = now
+                    _stop_process(process, job)
+                if stopped_at is not None and now - stopped_at >= 2:
+                    job.log_error = 'process-tree cleanup or output drain unconfirmed'
+                    break
+                try:
+                    data = chunks.get(timeout=0.05)
+                except Empty:
+                    continue
+                job.observed_bytes += len(data)
+                if preview_limit:
+                    preview.extend(data)
+                    del preview[:-preview_limit]
+                head = data[:max(0, head_limit - head_bytes)]
+                write(head)
+                head_bytes += len(head)
+                rest = data[len(head):]
+                if rest and tail_limit:
+                    tail.append(rest)
+                    tail_bytes += len(rest)
+                    while tail_bytes > tail_limit:
+                        excess = tail_bytes - tail_limit
+                        first = tail.popleft()
+                        if len(first) > excess:
+                            tail.appendleft(first[excess:])
+                            tail_bytes -= excess
+                        else:
+                            tail_bytes -= len(first)
+            job.returncode = 130 if cancelled.is_set() else (124 if timed_out else process.returncode)
+        finally:
+            stop_reader.set()
+            _stop_process(process, job)
+            owned = fsx.owned_job(process)
+            if owned is not None:
+                owned.close()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                job.log_error = 'process-tree cleanup unconfirmed'
+                job.returncode = 124 if timed_out else 130
+            if reader.ident is not None:
+                reader.join(timeout=1)
+            else:
+                process.stdout.close()
+            if reader.is_alive():
+                job.log_error = 'output-reader cleanup unconfirmed'
+            elif read_errors:
+                job.log_error = f'output read failed (errno={read_errors[0]})'
+        for chunk in tail:
+            write(chunk)
+    except (OSError, RuntimeError) as error:
+        job.returncode = 127
+        job.log_error = f'capture failed (errno={getattr(error, "errno", None)})'
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError as error:
+                job.log_error = f'log close failed (errno={error.errno})'
+        job.seconds = time.monotonic() - started
+        job.dropped_bytes = job.observed_bytes - job.retained_bytes
+        job.truncated = job.dropped_bytes > 0
+        job.preview = _preview(bytes(preview))
+        job.preview_truncated = job.observed_bytes > preview_limit
+
+
+def _entry(job: Job) -> dict[str, Any]:
+    return {'index': job.index, 'exit': job.returncode, 'seconds': round(job.seconds, 2),
+            'log': job.log.name if job.log else None, 'observed_bytes': job.observed_bytes,
+            'retained_bytes': job.retained_bytes, 'dropped_bytes': job.dropped_bytes,
+            'truncated': job.truncated, 'complete_output': not (job.truncated or job.log_error),
+            'preview': job.preview, 'preview_truncated': job.preview_truncated, 'log_error': job.log_error}
+
+
 def run_batch(root: Path, commands: list[str], *, workers: int, cwd: Path, timeout: float | None = None,
-              runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> tuple[list[Job], Path]:
-    """Run independent commands concurrently; nothing runs when the policy refuses any of them."""
-    # Freeze one absolute cwd for both authorization and execution; keep policy lookup at root.
+              runner: Callable[..., Any] | None = None,
+              log_quota: int = LOG_BYTES) -> tuple[list[Job], Path]:
+    """Synchronous batch; the combined retained output budget applies to the whole batch.
+
+    Lossy stdout is diagnostic output, never a mandatory full-report evidence artifact.
+    """
+    if not commands or not 0 <= log_quota <= LOG_BYTES:
+        raise ValueError('commands required and log quota must be between zero and 32 MiB')
     cwd = cwd.resolve()
+    runner = runner or fsx.owned_popen
     jobs = [Job(index, command) for index, command in enumerate(commands, 1)]
     for job in jobs:
         job.refused = policy_refusal(root, job.command, cwd=cwd)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + f'-{os.getpid()}'
-    folder = root / LOGS / stamp
-    folder.mkdir(parents=True, exist_ok=True)
-    if any(job.refused for job in jobs):
-        return jobs, folder
+    if fsx.WINDOWS and not any(job.refused for job in jobs):
+        try:
+            supported = fsx.process_jobs_supported()
+        except (OSError, AttributeError, NotImplementedError):
+            supported = False
+        if not supported:
+            for job in jobs:
+                job.returncode = 125
+                job.log_error = 'unsupported: process ownership backend unavailable'
+            return jobs, root / LOGS / 'unsupported'
+    with _log_folder(root) as (folder, directory):
+        if any(job.refused for job in jobs):
+            return jobs, folder
 
-    def one(job: Job) -> Job:
-        job.log = folder / f'{job.index:03d}.log'
-        started = time.monotonic()
-        with job.log.open('wb') as handle:
-            handle.write(f'$ {job.command}\n'.encode('utf-8'))
-            handle.flush()
-            try:
-                proc = runner(job.command, shell=True, cwd=cwd, stdout=handle, stderr=subprocess.STDOUT,  # nosec B604 - the agent's own shell command, checked by the repository policy above
-                              timeout=timeout, check=False)
-                job.returncode = proc.returncode
-            except subprocess.TimeoutExpired:
-                job.returncode = 124
-                handle.write(f'\ngetzilla par: timed out after {timeout} s\n'.encode('utf-8'))
-        job.seconds = time.monotonic() - started
-        return job
+        owned = fsx.fstat_dir(directory)
+        cancellation = Event()
 
-    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(jobs)))) as pool:
-        list(pool.map(one, jobs))
-    summary = [{'index': job.index, 'command': job.command, 'exit': job.returncode, 'seconds': round(job.seconds, 2),
-                'log': job.log.name if job.log else None} for job in jobs]
-    (folder / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8', newline='\n')
+        def one(job: Job) -> None:
+            job.log = folder / f'{job.index:03d}.log'
+            quota = log_quota // len(jobs) + int(job.index <= log_quota % len(jobs))
+            _capture(job, directory, cwd, quota, timeout, runner,
+                     preview_limit=min(PREVIEW_BYTES, RESPONSE_BYTES // len(jobs)),
+                     cancelled=cancellation)
+
+        pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(jobs))))
+        try:
+            for _ in pool.map(one, jobs):
+                pass
+        except BaseException:
+            # Signal running workers before executor shutdown waits for them.
+            cancellation.set()
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
+        from .resource_inventory import classify
+        try:
+            current = folder.lstat()
+            _check_directory(directory)
+            intact = (classify(root, folder) == 'ephemeral'
+                      and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino))
+        except OSError:
+            intact = False
+        if not intact:
+            for job in jobs:
+                job.log_error = 'log namespace changed; artifact unavailable'
+        # Bound the serialized envelope too, including escaped control characters in previews.
+        entries: list[dict[str, Any]] = []
+        size = 2
+        for job in jobs:
+            entry = _entry(job)
+            encoded = json.dumps(entry, ensure_ascii=False).encode('utf-8')
+            if size + len(encoded) + 128 > RESPONSE_BYTES:
+                entries.append({'metadata_truncated': True, 'omitted_jobs': len(jobs) - len(entries)})
+                break
+            entries.append(entry)
+            size += len(encoded) + 2
+        try:
+            with _create_log(directory, 'summary.json') as handle:
+                pending = memoryview((json.dumps(entries, ensure_ascii=False) + '\n').encode('utf-8'))
+                while pending:
+                    count = handle.write(pending)
+                    if not count:
+                        raise OSError('short summary write')
+                    pending = pending[count:]
+        except OSError as error:
+            for job in jobs:
+                job.log_error = f'summary write failed (errno={error.errno})'
     return jobs, folder
 
 
-def _tail(path: Path | None) -> str:
-    if path is None:
-        return ''
-    lines = path.read_bytes().decode('utf-8', 'replace').splitlines()[1:]
-    return '\n'.join('    ' + line for line in lines[-TAIL_LINES:])
-
-
 def report(root: Path, jobs: list[Job], folder: Path, *, workers: int, wall: float, show_all: bool = False) -> str:
-    refused = [job for job in jobs if job.refused]
-    relative = folder.relative_to(root).as_posix() if folder.is_relative_to(root) else str(folder)
-    if refused:
-        lines = [f'getzilla par: nothing ran; {len(refused)} of {len(jobs)} commands were refused:']
-        lines += [f'  {job.command}\n    -> {job.refused}' for job in refused]
-        return '\n'.join(lines)
-    failed = [job for job in jobs if job.returncode != 0]
-    work = sum(job.seconds for job in jobs)
-    lines = [f'getzilla par: {len(jobs)} commands on {min(workers, len(jobs))} workers, {wall:.1f} s wall '
-             f'({work:.1f} s of work); {len(jobs) - len(failed)} passed, {len(failed)} failed; logs: {relative}']
-    for job in failed:
-        lines.append(f'FAIL exit={job.returncode} {job.seconds:.1f}s  {job.command}  ({job.log.name if job.log else "-"})')
-        lines.append(_tail(job.log))
-    passed = [job for job in jobs if job.returncode == 0]
-    if show_all or len(passed) <= MAX_LISTED_PASSES:
-        lines += [f'pass {job.seconds:.1f}s  {job.command}' for job in passed]
-        if show_all:
-            for job in passed:
-                lines.append(_tail(job.log))
-    else:
-        lines.append(f'pass: {len(passed)} commands (each one in summary.json)')
-    return '\n'.join(line for line in lines if line)
+    """Render a bounded response from captured values, without reopening host paths."""
+    refused = sum(bool(job.refused) for job in jobs)
+    failed = sum(job.returncode != 0 for job in jobs)
+
+    def lines():
+        if refused:
+            yield f'getzilla par: nothing ran; {refused} of {len(jobs)} commands were refused:'
+            for job in jobs:
+                if job.refused:
+                    # Policy errors can contain command operands; keep them out of the response.
+                    yield f'  job {job.index}: refused by repository policy'
+            return
+        yield (f'getzilla par: {len(jobs)} commands on {min(workers, len(jobs))} workers, {wall:.1f} s wall '
+               f'({sum(job.seconds for job in jobs):.1f} s of work); {len(jobs) - failed} passed, {failed} failed; '
+               f'logs: {LOGS}/{folder.name}')
+        for job in jobs:
+            if job.returncode != 0 or show_all or len(jobs) - failed <= MAX_LISTED_PASSES:
+                status = f'FAIL exit={job.returncode}' if job.returncode != 0 else 'pass'
+                yield f'{status} {job.seconds:.1f}s  job {job.index}'
+                if job.returncode != 0 or show_all:
+                    yield job.preview
+                    if job.preview_truncated:
+                        yield '[preview truncated]'
+            if job.truncated or job.log_error:
+                yield (f'job {job.index}: observed={job.observed_bytes} retained={job.retained_bytes} '
+                       f'dropped={job.dropped_bytes}; complete_output=false; '
+                       f'{job.log_error or "output truncated"}; full-report evidence required separately')
+        if not show_all and len(jobs) - failed > MAX_LISTED_PASSES:
+            yield f'pass: {len(jobs) - failed} commands (bounded metadata in summary.json)'
+
+    result = bytearray()
+    marker = b'\n[response truncated; metadata/preview omitted]'
+    # Reserve a byte for the CLI print newline as part of the response budget.
+    budget = RESPONSE_BYTES - len(marker) - 1
+    for line in lines():
+        encoded = (line + '\n').encode('utf-8')
+        if len(result) + len(encoded) > budget:
+            result.extend(encoded[:max(0, budget - len(result))])
+            return result.decode('utf-8', 'ignore') + marker.decode()
+        result.extend(encoded)
+    return result.decode('utf-8').rstrip()
 
 
 # -- refusing serial batches ----------------------------------------------------------------------

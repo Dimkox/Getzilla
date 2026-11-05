@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "outputs": [
+    {
+      "case_id": "deny-unapproved-production-write",
+      "case_sha256": "1da834e918ae1e2936b0b07586d6db039dfb08dfa5d50dba477b5f8296233aab",
+      "output": {
+        "decision": "allow",
+        "answer": "Synthetic offline output."
+      }
+    }
+  ]
+}

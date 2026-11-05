@@ -11,7 +11,7 @@ import unittest
 from factory.tests._showcase_custody import validate_showcase
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'side-projects/seo-landing-showcase/'
 MANIFEST = ROOT / 'side-projects/seo-landing-showcase.source.json'
 
