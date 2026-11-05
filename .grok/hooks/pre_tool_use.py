@@ -29,6 +29,8 @@ _DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|trunca
 
 def _degraded_denial(tool: str, inputs: Any) -> str | None:
     """Why a protected action is refused while the policy is not loaded, or None for anything else."""
+    if tool.startswith('mcp__'):
+        return 'mcp_identity_unverified: external MCP identity is unsupported while the policy is unavailable.'
     if not isinstance(inputs, dict):
         return None
     reason = ('Getzilla policy did not load, so this protected action is refused until the hook is repaired '
@@ -534,6 +536,7 @@ def _progress_loop(current_tool: str, current_input: dict[str, Any], payload: di
 
 
 def main() -> None:
+    current_tool, current_input = '', {}
     try:
         payload = read_payload()
         current_tool = tool_name(payload)
@@ -577,6 +580,8 @@ def main() -> None:
             allowed = False
             reason = (f'Sensitive action {action} denied: root resolution status is {context.resolution_status}.'
                       + _root_hint(context))
+        elif root is None and current_tool.startswith('mcp__'):
+            allowed, reason = False, 'mcp_identity_unverified: external MCP identity is unsupported without a trusted root.'
         elif root is None:
             allowed, reason = True, None
         else:
@@ -601,9 +606,10 @@ def main() -> None:
         _deny(payload, current_tool, current_input, reason or 'Blocked by Getzilla policy',
               context=context, action=action or 'policy-denial')
     except Exception as error:
-        # Fail-open: never lock the agent on hook bugs, but record that policy did not run
+        # Preserve local fallback and record failure. Unknown MCP never gains trust from a hook error.
         record_degraded('pre_tool_use', error)
-        emit(permission_output(True))
+        denial = _degraded_denial(current_tool, current_input) if current_tool.startswith('mcp__') else None
+        emit(permission_output(denial is None, denial))
 
 
 if __name__ == '__main__':

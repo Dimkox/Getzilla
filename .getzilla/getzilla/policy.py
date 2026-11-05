@@ -5,6 +5,7 @@ from typing import Any
 
 from . import _policy_legacy as _legacy
 from . import fsx
+from .supply_chain import check_tool_trust
 from ._policy_legacy import *  # noqa: F401,F403
 from ._policy_legacy import (
     DEFAULT_CONTROL_PLANE as _LEGACY_CONTROL_PLANE,
@@ -51,6 +52,8 @@ def sensitive_action(
         return 'protected-path-write'
     if _legacy_mcp_side_effect(tool, root):
         return 'external-write'
+    if not check_tool_trust(root, event)[0]:
+        return 'unverified-mcp'
     if tool != 'Bash':
         return None
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
@@ -119,6 +122,9 @@ def _shell_mutation(
 def evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
+    trusted, reason = check_tool_trust(root, event)
+    if not trusted:
+        return False, reason
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':

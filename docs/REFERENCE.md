@@ -543,6 +543,10 @@ python3 scripts/getzilla_doctor.py --offer-install
 
 Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_sources` block pins the advisory workflow-document parsers). Trust CI uses separately built API, worker and runner images pinned by immutable SHA-256 digest in deployment and server policy.
 
+`getzilla trust audit --json` hashes a closed inventory of existing public source declarations. It reports missing optional sources and returns exit 1 for an incomplete inventory. The command does not inspect credentials, contact endpoints or verify installed components. Source hashes, model lists and aliases do not prove endpoint provenance or pin served model weights.
+
+The canonical policy and shared hook refuse external MCP calls with `mcp_identity_unverified` until a supported host adapter can prove endpoint identity and provenance. Read-shaped names, `mcp_read_tools` exceptions, configured trust labels and exact operation grants do not provide that proof. Local tools retain their existing policy and grant checks. This source guard does not stop an existing external process or provider request and does not establish OS isolation.
+
 ### Workflow sources (dated advisory-parser compatibility pins)
 
 | Component | Pinned | Upstream | Observed latest | Observed |
