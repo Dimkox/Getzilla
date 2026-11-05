@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import replace
@@ -22,6 +23,32 @@ from getzilla.state import bind_session  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 
 
+
+def _unknown_publication(error: BaseException) -> bool:
+    """Read only the known scalar flag through a bounded exception graph.
+
+    A truncated cause/context graph is conservatively inspection-required. Never
+    parse notes or exception text, and never serialize arbitrary error attributes.
+    """
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        if len(seen) >= 8:
+            return True
+        seen.add(id(current))
+        values = BaseException.__getattribute__(current, '__dict__')
+        state = values.get('publication_state')
+        if type(state) is str and state == 'unknown':
+            return True
+        for name in ('__cause__', '__context__'):
+            linked = BaseException.__getattribute__(current, name)
+            if linked is not None:
+                pending.append(linked)
+    return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('assess', 'interview', 'install'))
@@ -31,7 +58,6 @@ def main(argv=None):
     root = args.root.resolve() if args.root else find_root()
     try:
         if args.operation == 'install':
-            import os
             bind_session(os.environ.get('GETZILLA_SESSION_ID') or os.environ.get('CLAUDE_CODE_SESSION_ID'))
             result = install_external(root, args.source)
             code = 0
@@ -60,7 +86,17 @@ def main(argv=None):
                 code = 0 if assessment.verdict == 'allow' else 2
         print(json.dumps(result, sort_keys=True))
         return code
-    except (ValueError, OSError) as exc:
+    except BaseException as exc:
+        if _unknown_publication(exc):
+            print(json.dumps({'schema_version': 1, 'status': 'unknown',
+                              'reason': 'PUBLICATION_CUSTODY_UNKNOWN', 'reasons': [],
+                              'publication_state': 'unknown', 'inspection_required': True, 'retryable': False,
+                              'permissions_granted': False, 'activated': False, 'evidence_valid': False}, sort_keys=True))
+            if not isinstance(exc, (ValueError, OSError)):
+                raise
+            return 2
+        if not isinstance(exc, (ValueError, OSError)):
+            raise
         # No raw source, command, exception text or credentials enter diagnostics.
         prefix, _separator, detail = str(exc).partition(':')
         reason = prefix if re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', prefix) else 'AUTHORITY_OR_INPUT_REFUSED'
@@ -71,5 +107,30 @@ def main(argv=None):
         return 2
 
 
+def _terminal_unknown_exit(error: BaseException) -> int:
+    """Bounded public exit codes; never print a private SystemExit payload."""
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    if isinstance(error, SystemExit):
+        code = error.code
+        if type(code) is int and -(2 ** 31) <= code < 2 ** 31:
+            effective = code & (0xFFFFFFFF if os.name == 'nt' else 0xFF)
+            if effective:
+                return code
+    return 1
+
+
+def _entrypoint():
+    # Direct main() callers retain the original interrupt/exit instance. Only the
+    # terminal boundary converts a recognized unknown into a private-text-free
+    # failing exit; no global exception hook or automatic retry is installed.
+    try:
+        return main()
+    except BaseException as error:
+        if _unknown_publication(error):
+            return _terminal_unknown_exit(error)
+        raise
+
+
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(_entrypoint())

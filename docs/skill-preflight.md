@@ -74,3 +74,18 @@ restoration makes at most two attempts/observations and never overwrites a forei
 verify denial, the original exception carries `publication_state: unknown` (and a fixed note where
 supported); inspect it manually. This is not permission for automatic recovery. An undetectable hard
 termination, power loss or unavailable persistent storage has no rollback/durable-denial qualification.
+
+CLI callers receive unverifiable custody as `status: unknown`, reason `PUBLICATION_CUSTODY_UNKNOWN`,
+`publication_state: unknown`, `inspection_required: true` and `retryable: false`. Value/I/O failures exit2. This differs
+from an ordinary known refusal. It grants no permission and does not activate, retry or repair anything.
+The CLI reads only the known scalar metadata through at most eight cause/context exceptions; truncated
+graphs conservatively require inspection. It never serializes private exception text, notes, paths or
+payloads for this state. Ordinary refusal and inert staged-success responses keep their existing exits.
+Any future adapter must preserve these unknown/inspection semantics rather than infer safe retry.
+
+For unknown KeyboardInterrupt, SystemExit or other BaseException outcomes, `main()` emits the fixed
+unknown JSON and re-raises the same original exception. Only the terminal entrypoint maps recognized
+unknown exceptions to private-text-free failure: KeyboardInterrupt130, valid nonzero signed32-bit
+SystemExit codes with nonzero actual platform exit preserved, and other cases1. Zero/None, private
+string codes, out-of-policy integers and codes that normalize to success become1. There is no global
+exception hook. Ordinary interrupts, help and parser exits without unknown metadata keep their behavior.
