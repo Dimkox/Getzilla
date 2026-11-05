@@ -1423,11 +1423,13 @@ class ArchitectureModelTests(unittest.TestCase):
                 "CONTRACT-FACTORY-LANDING-PROVIDER-OBSERVATION-V1",
                 "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V1",
                 "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V2",
+                "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3",
                 "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
             },
         )
         landing_node = next(
@@ -1441,6 +1443,40 @@ class ArchitectureModelTests(unittest.TestCase):
                 "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
                 "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
+            },
+        )
+        successor_ids = {
+            "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3",
+            "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
+        }
+        self.assertEqual(
+            {
+                record.id: (record.kind, record.role, record.compatibility, record.path, record.version)
+                for record in records if record.id in successor_ids
+            },
+            {
+                "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3": (
+                    "json_schema", "bidirectional", "bidirectional",
+                    "factory/contracts/jsonschema/landing-backend-capability.v3.schema.json", "3",
+                ),
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3": (
+                    "openapi", "bidirectional", "bidirectional",
+                    "factory/contracts/openapi/landing-failover.v3.json", "3",
+                ),
+            },
+        )
+        self.assertEqual(
+            {
+                contract_id: {
+                    node["id"] for node in snapshot.system["nodes"]
+                    if contract_id in node.get("public_contracts", [])
+                }
+                for contract_id in successor_ids
+            },
+            {
+                "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3": {"NODE-FACTORY-LANDING-DOGFOOD"},
+                "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3": {"NODE-FACTORY-LOCAL-API"},
             },
         )
         self.assertTrue(
