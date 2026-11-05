@@ -45,6 +45,21 @@ deadline. Native adapters must additionally enforce their actual authorization,
 queue, cancellation and memory bounds; cooperative algorithm checks are not a
 qualified host isolation mechanism.
 
+The optional public experiment-input audit reconstructs the original fixed
+function identities, file/range hashes, grouped language tasks, partition and
+development-English pins. Its default profile retains the original55/2194 function
+universes and240 variants/80 tasks/40 holdout slots. It rejects missing or reordered
+judgment cells and preserves0 as UNJUDGED. Authored labels and caller review flags
+cannot create an independent review, human attestation or data seal.
+
+Run `python3 scripts/getzilla_retrieval_inputs.py CANDIDATE --public-source-root PUBLIC_CORPUS`
+to check the four draft JSON artifacts through the existing bounded anchored
+reader. The result is `draft_valid` with `unsealed_metadata_only` qualification,
+zero primary-eligible tasks and ranking disabled. `--require-ranking` returns2
+with `independent_seals_required`. This command performs no ranks or model work.
+The public-artifact reader is not a private-source adapter and is never a query
+fallback when native authority is unavailable.
+
 Full issue162 still requires actual current-authority/native-sink integration,
 two-principal/two-project access and revocation tests, derivative deletion, real
 optional dense integration and the independently sealed RU/EN/BGE-M3 experiment.
