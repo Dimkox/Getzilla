@@ -59,4 +59,3 @@ class AgentLifecycleVerificationTests(unittest.TestCase):
                                 'write_agent': 'general_implementer',
                                 'allowed_agents': ['general_implementer', 'repo_explorer']})
         return record_agent_start(root, 'writer-1', 'general_implementer', now=T0)
-
