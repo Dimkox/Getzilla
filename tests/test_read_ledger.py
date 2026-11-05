@@ -30,6 +30,18 @@ def _patch(kind: str, path: str) -> str:
     return f'*** Begin Patch\n*** {kind} File: {path}\n{body}*** End Patch\n'
 
 
+def _lock_refusal(error: OSError, stage: str) -> dict:
+    # Keep only code locations, never the exception message, filename or locals.
+    frames = []
+    trace = error.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        frames.append((Path(code.co_filename).name, code.co_name, trace.tb_lineno))
+        trace = trace.tb_next
+    return {'writer': threading.current_thread().name, 'stage': stage,
+            'error': type(error).__name__, 'errno': error.errno, 'frames': frames[-16:]}
+
+
 class ReadLedgerHookTests(unittest.TestCase):
     def _shell(self, root: Path, command: str, session: str = 'ledger-session') -> None:
         payload = {'cwd': str(root), 'session_id': session, 'hook_event_name': 'PostToolUse',
@@ -140,6 +152,40 @@ class ReadLedgerHookTests(unittest.TestCase):
 
 
 class ReadLedgerUnitTests(unittest.TestCase):
+    def test_acquisition_failure_diagnostic_omits_private_paths_and_message(self) -> None:
+        formatter = globals().get('_lock_refusal')
+        self.assertTrue(callable(formatter), 'lock acquisition needs bounded safe internal frames')
+        namespace = {}
+        exec(compile('def operation():\n    raise FileNotFoundError(2, "PRIVATE-MESSAGE", "/PRIVATE-PATH/ledger")\n',
+                     '/PRIVATE-DIRECTORY/operation.py', 'exec'), namespace)
+        try:
+            namespace['operation']()
+        except OSError as error:
+            diagnostic = formatter(error, 'acquire')
+        self.assertEqual(diagnostic['stage'], 'acquire')
+        self.assertEqual(diagnostic['errno'], 2)
+        self.assertIn(('operation.py', 'operation', 2), diagnostic['frames'])
+        self.assertEqual(set(diagnostic), {'writer', 'stage', 'error', 'errno', 'frames'})
+        for basename, function, line in diagnostic['frames']:
+            self.assertEqual(Path(basename).name, basename)
+            self.assertIsInstance(function, str)
+            self.assertIsInstance(line, int)
+        self.assertNotIn('PRIVATE-', str(diagnostic))
+
+        def nested(depth):
+            if depth:
+                nested(depth - 1)
+            else:
+                namespace['operation']()
+
+        try:
+            nested(30)
+        except OSError as error:
+            diagnostic = formatter(error, 'acquire')
+        self.assertEqual(len(diagnostic['frames']), 16)
+        self.assertIn(('operation.py', 'operation', 2), diagnostic['frames'])
+        self.assertNotIn('PRIVATE-', str(diagnostic))
+
     def test_parallel_writers_keep_every_entry(self) -> None:
         with project_copy(git=True) as root:
             start = threading.Barrier(40)
@@ -156,7 +202,7 @@ class ReadLedgerUnitTests(unittest.TestCase):
                         yield
                         stage = 'release'
                 except OSError as error:
-                    refusals.append((threading.current_thread().name, stage, type(error).__name__, error.errno))
+                    refusals.append(_lock_refusal(error, stage))
                     raise
 
             def writer(index):

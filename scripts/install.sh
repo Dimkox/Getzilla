@@ -508,6 +508,15 @@ install_workflow_baseline() {
   say "Installing the pinned workflow baseline (Superpowers, BMAD, Spec Kit)..."
   (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_update.py --only baseline) \
     || fail "The workflow baseline did not install (FAIL lines above). Fix it and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only baseline)."
+  local tool_bin
+  tool_bin="$(PATH="$home/.venv/bin:$PATH" uv tool dir --bin)" \
+    || fail "uv could not report its executable directory."
+  case "$tool_bin" in
+    *:*|*$'\n'*|*$'\r'*) fail "uv reported an invalid executable directory." ;;
+    /*) [ -d "$tool_bin" ] || fail "uv reported a missing executable directory." ;;
+    *) fail "uv did not report an absolute executable directory." ;;
+  esac
+  export PATH="$tool_bin:$PATH"
 }
 
 setup_python_env() {
