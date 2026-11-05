@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import stat
@@ -76,7 +77,7 @@ _REPORT_KEYS = frozenset({
     "schema_version", "check_id", "status", "binding", "collected", "collected_ids",
     "expected_ids", "required_ids", "tests_run", "started", "executed", "failures",
     "errors", "loader_errors", "skipped", "unqualified_skips", "missing_required",
-    "source_stable", "database_obligations",
+    "source_stable", "database_obligations", "problems",
 })
 
 
@@ -324,10 +325,58 @@ def cases(suite):
 
 
 class RecordedResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, source_root=None, source_paths=(), **kwargs):
         super().__init__(*args, **kwargs)
         self.started = []
         self.executed = []
+        self.problems = []
+        self.source_root = source_root
+        self.source_paths = frozenset(source_paths)
+
+    def _problem(self, test, error, kind):
+        # Never retain exception messages, locals, subtest values or absolute
+        # paths. Only a collected parent case and source-bound frame locations.
+        parent = getattr(test, "test_case", test)
+        identifier, phase = test_id(parent), "case"
+        if identifier not in self.started:
+            fixture = re.fullmatch(r"(setUpClass|tearDownClass|setUpModule|tearDownModule) \(([^()]+)\)", identifier)
+            if fixture:
+                phase, identifier = fixture.groups()
+            else:
+                identifier, phase = "unqualified_fixture", "unqualified_fixture"
+        frames = []
+        traceback = error[2] if error else None
+        while traceback is not None:
+            filename = Path(traceback.tb_frame.f_code.co_filename)
+            if self.source_root is not None and filename.is_relative_to(self.source_root):
+                relative = filename.relative_to(self.source_root).as_posix()
+                if relative in self.source_paths:
+                    frames.append({"path": relative, "line": traceback.tb_lineno})
+            traceback = traceback.tb_next
+        exception = error[0].__name__ if error else "UnexpectedSuccess"
+        self.problems.append({"id": identifier, "phase": phase, "kind": kind,
+                              "exception": exception, "frames": frames[-32:]})
+
+    def addFailure(self, test, error):
+        self._problem(test, error, "failure")
+        super().addFailure(test, error)
+
+    def addError(self, test, error):
+        self._problem(test, error, "error")
+        super().addError(test, error)
+
+    def addSubTest(self, test, subtest, error):
+        if error is not None:
+            self._problem(test, error, "failure" if issubclass(error[0], test.failureException) else "error")
+        super().addSubTest(test, subtest, error)
+
+    def addExpectedFailure(self, test, error):
+        self._problem(test, error, "expected_failure")
+        super().addExpectedFailure(test, error)
+
+    def addUnexpectedSuccess(self, test):
+        self._problem(test, None, "unexpected_success")
+        super().addUnexpectedSuccess(test)
 
     def startTest(self, test):
         self.started.append(test_id(test))
@@ -359,7 +408,7 @@ def decode_document(content: str) -> dict:
 
 def validate_report(document: dict, expected_binding: dict) -> None:
     if (not isinstance(document, dict) or set(document) != _REPORT_KEYS
-            or type(document["schema_version"]) is not int or document["schema_version"] != 2
+            or type(document["schema_version"]) is not int or document["schema_version"] != 3
             or document["check_id"] != "factory-unit" or document["status"] not in {"pass", "fail"}
             or document["binding"] != expected_binding
             or document["database_obligations"] != "not_run_in_unit_mode"
@@ -371,6 +420,35 @@ def validate_report(document: dict, expected_binding: dict) -> None:
     for key in ("collected", "tests_run", "failures", "errors", "loader_errors"):
         if type(document[key]) is not int or not 0 <= document[key] <= 10000:
             raise ValueError("Factory report has invalid counts")
+    problems = document["problems"]
+    if not isinstance(problems, list) or len(problems) > 10000:
+        raise ValueError("Factory problem inventory exceeds bound")
+    for row in problems:
+        if (not isinstance(row, dict) or set(row) != {"id", "phase", "kind", "exception", "frames"}
+                or not isinstance(row["id"], str) or not 1 <= len(row["id"]) <= 2048
+                or not isinstance(row["phase"], str)
+                or row["phase"] not in {"case", "setUpClass", "tearDownClass", "setUpModule", "tearDownModule", "unqualified_fixture"}
+                or not isinstance(row["kind"], str) or row["kind"] not in {"error", "failure", "expected_failure", "unexpected_success"}
+                or not isinstance(row["exception"], str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", row["exception"])
+                or not isinstance(row["frames"], list) or len(row["frames"]) > 32):
+            raise ValueError("Factory problem record is invalid")
+        if row["phase"] == "case":
+            related = row["id"] in document["executed"]
+        elif row["phase"] == "unqualified_fixture":
+            related = row["id"] == "unqualified_fixture" and row["kind"] == "error"
+        else:
+            related = (row["kind"] == "error"
+                       and any(identifier.startswith(row["id"] + ".") for identifier in document["collected_ids"]))
+        if not related:
+            raise ValueError("Factory problem is not bound to its case or fixture")
+        for frame in row["frames"]:
+            if (not isinstance(frame, dict) or set(frame) != {"path", "line"}
+                    or not isinstance(frame["path"], str) or frame["path"] not in expected_binding["source_inventory"]
+                    or type(frame["line"]) is not int or not 1 <= frame["line"] <= 1000000):
+                raise ValueError("Factory problem frame is invalid")
+    errors = sum(row["kind"] == "error" for row in problems)
+    if errors != document["errors"] or len(problems) - errors != document["failures"]:
+        raise ValueError("Factory problem inventory does not match counts")
     if (document["collected"] != len(document["collected_ids"])
             or document["tests_run"] != len(document["started"])
             or not set(document["started"]) <= set(document["collected_ids"])
@@ -422,7 +500,9 @@ def run(root: Path, *, report: Path | None = None, request: dict | None = None) 
     suite = loader.discover(str(root / "factory/tests"), pattern="test_*.py", top_level_dir=str(root))
     collected = [test_id(test) for test in cases(suite)]
     expected = binding["declared_ids"]
-    result = unittest.TextTestRunner(verbosity=2, resultclass=RecordedResult).run(suite)
+    def recorded(*args, **kwargs):
+        return RecordedResult(*args, source_root=root, source_paths=binding["source_inventory"], **kwargs)
+    result = unittest.TextTestRunner(verbosity=2, resultclass=recorded).run(suite)
     skipped = []
     for test, reason in result.skipped:
         identifier = test_id(test)
@@ -431,7 +511,7 @@ def run(root: Path, *, report: Path | None = None, request: dict | None = None) 
         skipped.append({"id": identifier, "reason": reason, "applicability": rule})
     required = sorted(identifier for identifier in expected if skip_allowance(identifier, binding["context"]) is None)
     document = {
-        "schema_version": 2, "check_id": "factory-unit", "status": "fail", "binding": binding,
+        "schema_version": 3, "check_id": "factory-unit", "status": "fail", "binding": binding,
         "collected": len(collected), "collected_ids": collected, "expected_ids": expected, "required_ids": required,
         "tests_run": result.testsRun, "started": result.started, "executed": result.executed,
         "failures": len(result.failures) + len(result.expectedFailures) + len(result.unexpectedSuccesses),
@@ -440,6 +520,7 @@ def run(root: Path, *, report: Path | None = None, request: dict | None = None) 
         "missing_required": sorted(set(required) - set(result.executed)),
         "source_stable": source_matches(root, binding),
         "database_obligations": "not_run_in_unit_mode",
+        "problems": result.problems,
     }
     passed = (bool(result.executed) and result.wasSuccessful() and not result.expectedFailures
               and not loader.errors and set(collected) == set(expected)

@@ -20,6 +20,22 @@ require every supported pair for each PR, main push and release-tag push.
 Per-scenario and per-cell durations are retained for later risk-based scheduling;
 no unqualified path selector silently removes a required cell.
 
+The complete installed Factory unit catalog is separate from native service
+support. Its filesystem tests use an inert service adapter and explicit host
+resource fixtures. A separate control exercises actual host admission; the
+Factory setup manager still refuses unsupported hosts before activation. An
+inert test passing on macOS does not qualify the Linux Factory service there.
+
+Factory unit evidence version 3 retains the complete problem inventory within
+the existing 4 MiB report bound. Each failed parent case or class/module fixture has its outcome,
+exception type and source-bound frame locations. It excludes exception messages,
+locals, subtest values and absolute paths. Counts must match these records;
+missing cases, unknown fields, incomplete reports and unqualified skips still
+fail. The archived-engine inventory control prints this list instead of a short
+raw stderr tail. Historical version 2 evidence keeps its original source grade;
+it cannot qualify the new invocation. This internal report is not a Factory API
+or a native-platform acceptance receipt.
+
 `getzilla_platform_install.py` calls the actual candidate `install.sh` or
 `install.ps1`, non-interactively and without installing a coding agent. Each cell
 also installs the exact previous stable release, creates and commits user files

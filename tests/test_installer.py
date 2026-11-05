@@ -161,7 +161,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                          'Factory publication controls require POSIX and Python >=3.11')
     def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
         code = """
-import json, pathlib, sys
+import hashlib, json, pathlib, sys
 root = pathlib.Path.cwd()
 sys.path.insert(0, str(root / '.getzilla'))
 from getzilla import verification
@@ -169,9 +169,13 @@ assert 'getzilla.zip' in verification.__file__, verification.__file__
 result = verification._factory_unit(root)[0]
 evidence = result.details[0] if result.details else {}
 print(json.dumps({'status': result.status, 'summary': result.summary,
-                  'stderr': result.stderr[-3000:],
+                  'problems': evidence.get('problems'),
                   'collected': evidence.get('collected'),
                   'executed': len(evidence.get('executed', [])),
+                  'qualified_skips': len(evidence.get('skipped', [])),
+                  'required': len(evidence.get('required_ids', [])),
+                  'collected_ids_digest': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
+                  'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
                   'unqualified_skips': evidence.get('unqualified_skips')}))
 """
         with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
@@ -189,6 +193,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertGreater(evidence['collected'], 0)
             self.assertGreater(evidence['executed'], 0)
             self.assertEqual(evidence['unqualified_skips'], [])
+            print('installed-factory-unit ' + json.dumps(evidence, sort_keys=True))
 
     @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
     def test_archived_engine_verifier_rejects_consumer_package_shadowing(self):

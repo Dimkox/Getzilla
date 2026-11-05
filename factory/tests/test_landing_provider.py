@@ -2,6 +2,9 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
 import shutil
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -88,6 +91,52 @@ def clock():
 
 
 class LandingProviderTests(unittest.TestCase):
+    def _fixture_environment(self, environment, mode="normal"):
+        # Exercise actual fixture bytes with a controlled child-only environment.
+        # This is a protocol fixture contrast, never native Mac qualification.
+        actual_popen = subprocess.Popen
+        bootstrap = (
+            "import json,os,runpy,sys; os.environ.clear(); "
+            "os.environ.update(json.loads(sys.argv[1])); sys.argv=sys.argv[2:]; "
+            "runpy.run_path(sys.argv[0],run_name='__main__')"
+        )
+        def spawn(command, **kwargs):
+            return actual_popen([sys.executable, "-I", "-c", bootstrap,
+                                 json.dumps(environment), *command], **kwargs)
+        with patch("getzilla_factory.landing_provider.subprocess.Popen", side_effect=spawn):
+            configured = profile(mode, timeout_seconds=1)
+            return FixedCommandLandingProvider(configured, clock=clock()).normalize(
+                LandingNormalizationRequest(landing_input(), configured.profile_digest),
+                lambda: b"same semantic request",
+            )
+
+    def test_fixture_accepts_only_documented_python_locale_coercion(self):
+        for locale in (None, "C.UTF-8", "C.utf8", "UTF-8"):
+            environment = {} if locale is None else {"LC_CTYPE": locale}
+            with self.subTest(locale=locale):
+                try:
+                    outcome = self._fixture_environment(environment)
+                except LandingProviderError as error:
+                    self.fail("documented Python locale refused: " + str(error))
+                self.assertEqual(outcome.evidence.disposition, "fixture_ready")
+
+    def test_fixture_still_refuses_unregistered_environment_and_locale(self):
+        for environment in ({"EXTRA": "public-fixture"}, {"LC_CTYPE": "en_US.UTF-8"},
+                            {"LC_CTYPE": "UTF-8", "PATH": "/public-fixture"}):
+            with self.subTest(environment=environment), self.assertRaisesRegex(LandingProviderError, "^provider_exit$"):
+                self._fixture_environment(environment)
+
+    def test_utf8_fixture_preserves_original_jsonl_and_resource_failures(self):
+        cases = {"duplicate": "duplicate_json_key", "nonfinite": "nonfinite_json",
+                 "invalid-utf8": "invalid_json", "missing-terminal": "missing_terminal",
+                 "after-terminal": "after_terminal", "hostile": "unsafe_content",
+                 "stdout-overflow": "provider_stdout_limit", "stderr-overflow": "provider_stderr_limit",
+                 "sleep": "provider_timeout"}
+        for mode, code in cases.items():
+            with self.subTest(mode=mode), self.assertRaises(LandingProviderError) as raised:
+                self._fixture_environment({"LC_CTYPE": "UTF-8"}, mode)
+            self.assertEqual(str(raised.exception).partition(":")[0], code)
+
     def test_outcome_state_spec_and_evidence_disposition_are_closed(self):
         payload = b"bounded"
         source = landing_input(payload)
