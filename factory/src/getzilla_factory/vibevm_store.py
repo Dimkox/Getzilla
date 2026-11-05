@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import sys
 import tempfile
 import unicodedata
 import xml.parsers.expat
@@ -26,6 +27,30 @@ class VibeVMStoreError(ValueError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def procfs_descriptor_reopen() -> bool:
+    """Measure the existing Linux descriptor-path capability, without writes."""
+    if not sys.platform.startswith("linux"):
+        return False
+    descriptors = []
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        descriptors.append(os.open("/", flags | os.O_NOFOLLOW))
+        descriptors.append(os.open(f"/proc/self/fd/{descriptors[0]}", flags))
+        before, reopened = (os.fstat(descriptor) for descriptor in descriptors)
+        return (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) == (
+            reopened.st_dev, reopened.st_ino, stat.S_IFMT(reopened.st_mode))
+    except (OSError, AttributeError):
+        return False
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _require_procfs() -> None:
+    if procfs_descriptor_reopen() is not True:
+        raise VibeVMStoreError("procfs_unavailable")
 
 
 def _canonical(value) -> bytes:
@@ -320,6 +345,7 @@ class VibeVMStore:
 
     def admit(self, item, payload: bytes) -> Path:
         self._check_paths()
+        _require_procfs()
         authoritative = self._authority(item)
         coordinate = self._coordinate(authoritative)
         if authoritative["revoked"]:
@@ -544,6 +570,7 @@ class VibeVMStore:
 
     def materialize(self, lock, owner_text: str, managed_text: str, *, crash_before_switch=False) -> str:
         self._check_paths()
+        _require_procfs()
         self.active_generation()
         boot, payloads = reconcile_boot_block(owner_text, managed_text), self.replay(lock)
         identity = _digest(_canonical({"lock": lock, "boot": boot}))
@@ -629,6 +656,7 @@ class VibeVMStore:
 
     def reconcile(self) -> int:
         self._check_paths()
+        _require_procfs()
         removed = 0
         with self._locked_root() as update_lock:
             fcntl.flock(update_lock, fcntl.LOCK_EX)
