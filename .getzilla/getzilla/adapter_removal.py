@@ -276,7 +276,8 @@ def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction
 
 
 def _publish_changes(project: Path, transaction: ComponentTransaction, changes: list, observations: dict,
-                     expected_head: str, branch: str, message: str, check_current) -> str:
+                     expected_head: str, branch: str, message: str, check_current, *,
+                     retained_ignored: frozenset[str] = frozenset()) -> str:
     """Shared guarded Git publication; no direct deletion or new recovery ledger."""
     _git_out(project, 'check-ref-format', '--branch', branch)
     if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
@@ -313,6 +314,8 @@ def _publish_changes(project: Path, transaction: ComponentTransaction, changes: 
                                for path, content, mode in changes})
         for path, (content, mode) in expected_files.items():
             snapshot = transaction.read(path)
+            if path in retained_ignored and snapshot != observations[path]:
+                raise UpdateError(f'retained ignored file changed after checkout: {path}')
             if ((content is None and snapshot is not None)
                     or (content is not None and (snapshot is None or snapshot.content != content
                                                 or not mode_matches(snapshot.mode, mode)))):

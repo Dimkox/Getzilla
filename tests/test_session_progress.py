@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import io
+import errno
 import os
 import runpy
 import shutil
@@ -25,6 +26,167 @@ from tests._support import project_copy, run_hook
 
 SOURCE = 'a' * 64
 T0 = 1_800_000_000
+
+
+class GuardCreateTests(unittest.TestCase):
+    def fixture(self):
+        temporary = tempfile.TemporaryDirectory(prefix='progress-guard-public-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / '.getzilla/runtime').mkdir(parents=True)
+        return root
+
+    def test_darwin_transient_guard_creation_uses_same_open_and_enters_once(self):
+        for failures in (1, 2):
+            with self.subTest(failures=failures):
+                root = self.fixture()
+                original = progress.fsx.open_at
+                calls, entered, failure = [], [], None
+
+                def transient(parent, name, flags, mode=0o777):
+                    if name == Path(progress.LOCK).name:
+                        calls.append((parent, name, flags, mode))
+                        if len(calls) <= failures:
+                            raise FileNotFoundError(errno.ENOENT, 'public guard-open fixture', name)
+                    return original(parent, name, flags, mode)
+
+                with patch.object(sys, 'platform', 'darwin'), patch.object(progress.fsx, 'open_at', transient):
+                    try:
+                        with progress._store(root) as state:
+                            entered.append(state['version'])
+                    except OSError as error:
+                        failure = (type(error).__name__, error.errno)
+                self.assertIsNone(failure, 'transient fixed-guard open must be bounded and retried')
+                self.assertEqual(entered, [1], 'retry must not replay the caller body')
+                self.assertEqual(len(calls), failures + 1)
+                self.assertEqual(len(set(calls)), 1, 'retry changed pinned parent or open arguments')
+                self.assertEqual(calls[0][3], 0o600)
+                self.assertEqual(calls[0][2], os.O_RDWR | os.O_CREAT | progress.fsx.O_NOFOLLOW
+                                 | progress.fsx.O_NONBLOCK | progress.fsx.O_CLOEXEC)
+                self.assertEqual((root / progress.LOCK).stat().st_mode & 0o777, 0o600)
+                with self.assertRaises(OSError):
+                    os.fstat(calls[0][0])
+
+    def test_persistent_platform_and_errno_limits_leave_previous_state_unchanged(self):
+        cases = (('darwin', errno.ENOENT, 3), ('linux', errno.ENOENT, 1),
+                 ('win32', errno.ENOENT, 1), ('darwin', errno.EACCES, 1),
+                 ('darwin', errno.ELOOP, 1), ('darwin', errno.EIO, 1),
+                 ('darwin', errno.ENOTDIR, 1))
+        for platform, number, attempts in cases:
+            with self.subTest(platform=platform, errno=number):
+                root = self.fixture()
+                before = b'{"version":1,"records":{}}\n'
+                (root / progress.STATE).write_bytes(before)
+                original, calls = progress.fsx.open_at, []
+
+                def refused(parent, name, flags, mode=0o777):
+                    if name == Path(progress.LOCK).name:
+                        calls.append((parent, name, flags, mode))
+                        raise OSError(number, 'public guard-open refusal', name)
+                    return original(parent, name, flags, mode)
+
+                with patch.object(sys, 'platform', platform), patch.object(progress.fsx, 'open_at', refused):
+                    with self.assertRaises(OSError) as caught:
+                        with progress._store(root):
+                            self.fail('failed acquisition entered caller body')
+                self.assertEqual(caught.exception.errno, number)
+                self.assertEqual(len(calls), attempts)
+                self.assertEqual(len(set(calls)), 1)
+                self.assertEqual((root / progress.STATE).read_bytes(), before)
+                with self.assertRaises(OSError):
+                    os.fstat(calls[0][0])
+
+    def test_other_leaves_and_noncreate_flags_do_not_get_guard_retry(self):
+        cases = ((Path(progress.STATE).name, os.O_RDONLY, progress.MAX_BYTES),
+                 ('.session-progress-public.tmp', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0),
+                 ('other.guard', os.O_RDWR | os.O_CREAT, 1),
+                 (Path(progress.LOCK).name, os.O_RDONLY, 1),
+                 (Path(progress.LOCK).name, os.O_RDWR | os.O_CREAT | os.O_EXCL, 1),
+                 (Path(progress.LOCK).name, os.O_RDWR | os.O_CREAT, 2))
+        for name, flags, limit in cases:
+            with self.subTest(name=name, flags=flags, limit=limit):
+                root, calls = self.fixture(), []
+                parent = progress.fsx.open_dir(root / '.getzilla/runtime')
+                def refused(*args):
+                    calls.append(args)
+                    raise FileNotFoundError(errno.ENOENT, 'public non-guard fixture')
+                try:
+                    with patch.object(sys, 'platform', 'darwin'), patch.object(progress.fsx, 'open_at', refused):
+                        with self.assertRaises(FileNotFoundError):
+                            progress._regular(parent, name, flags, limit)
+                    self.assertEqual(len(calls), 1)
+                finally:
+                    progress.fsx.close_dir(parent)
+
+    def test_post_open_identity_or_stat_failure_is_not_retried_and_fds_close(self):
+        from types import SimpleNamespace
+        for kind in ('identity', 'lstat'):
+            with self.subTest(kind=kind):
+                root = self.fixture()
+                original_open, original_stat = progress.fsx.open_at, progress.fsx.lstat_at
+                calls, descriptors = [], []
+                def transient(parent, name, flags, mode=0o777):
+                    if name == Path(progress.LOCK).name:
+                        calls.append((parent, name, flags, mode))
+                        if len(calls) == 1:
+                            raise FileNotFoundError(errno.ENOENT, 'public leaf-open fixture')
+                    descriptor = original_open(parent, name, flags, mode)
+                    descriptors.append(descriptor)
+                    return descriptor
+                def changed(parent, name):
+                    info = original_stat(parent, name)
+                    if name != Path(progress.LOCK).name:
+                        return info
+                    if kind == 'lstat':
+                        raise FileNotFoundError(errno.ENOENT, 'public post-open fixture')
+                    return SimpleNamespace(st_mode=info.st_mode, st_dev=info.st_dev, st_ino=info.st_ino + 1)
+                with patch.object(sys, 'platform', 'darwin'), \
+                        patch.object(progress.fsx, 'open_at', transient), \
+                        patch.object(progress.fsx, 'lstat_at', changed):
+                    with self.assertRaises((ValueError, OSError)):
+                        with progress._store(root):
+                            self.fail('changed guard admitted caller')
+                self.assertEqual(len(calls), 2, 'post-open refusal must not retry the leaf open')
+                self.assertEqual(len(set(calls)), 1)
+                self.assertEqual(len(descriptors), 1)
+                for descriptor in [calls[0][0], *descriptors]:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX public link/mode fixture')
+    def test_retry_preserves_foreign_guard_link_and_mode_refusals(self):
+        for kind in ('symlink', 'hardlink', 'executable'):
+            with self.subTest(kind=kind):
+                root = self.fixture()
+                foreign, guard = root / 'public-foreign', root / progress.LOCK
+                foreign.write_bytes(b'x')
+                if kind == 'symlink':
+                    guard.symlink_to(foreign)
+                elif kind == 'hardlink':
+                    os.link(foreign, guard)
+                else:
+                    guard.write_bytes(b'')
+                    guard.chmod(0o700)
+                original, calls, descriptors = progress.fsx.open_at, [], []
+                def transient(parent, name, flags, mode=0o777):
+                    if name == Path(progress.LOCK).name:
+                        calls.append((parent, name, flags, mode))
+                        if len(calls) == 1:
+                            raise FileNotFoundError(errno.ENOENT, 'public guard-open fixture')
+                    descriptor = original(parent, name, flags, mode)
+                    descriptors.append(descriptor)
+                    return descriptor
+                with patch.object(sys, 'platform', 'darwin'), patch.object(progress.fsx, 'open_at', transient):
+                    with self.assertRaises((ValueError, OSError)):
+                        with progress._store(root):
+                            self.fail('unsafe existing guard admitted caller')
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(set(calls)), 1)
+                self.assertEqual(foreign.read_bytes(), b'x')
+                self.assertTrue(guard.exists() or guard.is_symlink())
+                for descriptor in [calls[0][0], *descriptors]:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
 
 
 class RuntimeFixtureTests(unittest.TestCase):
