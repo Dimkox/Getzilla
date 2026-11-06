@@ -93,11 +93,17 @@ def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) ->
 def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | None = None) -> dict:
     """Classify both baseline and candidate policy; an edited policy cannot lower itself."""
     from .router import REVIEW_EVIDENCE
-    bases = sorted({item.comparison_base_sha for item in selection.bases})
+    head = git_head(root)
+    entries = selection.bases
+    # An accepted target can descend from this frozen HEAD. Its empty comparison
+    # repeats candidate policy already read with every other base. Route anchors
+    # and all non-HEAD comparisons remain exact, including equal-tree commits.
+    if not selection.findings and any(item.comparison_base_sha != head for item in entries):
+        entries = [item for item in entries if item.kind != 'pr-target' or item.comparison_base_sha != head]
+    bases = sorted({item.comparison_base_sha for item in entries})
     gaps = [str(item.get('code', 'untrusted_base')) for item in selection.findings]
     reasons, policies, risks, audit_categories = [], [], [], set()
     floor_reviewers: list[str] = []
-    head = git_head(root)
     fingerprint = fingerprint or tree_fingerprint(root)
     tree = None
     try:

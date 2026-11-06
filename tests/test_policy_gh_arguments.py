@@ -21,6 +21,42 @@ from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
 
 
+def _literal_hook_flags(code, result):
+    """Closed diagnostic categories; never return hook values or exceptions."""
+    mapping = isinstance(result, dict)
+    value = result.get('decision') if mapping else None
+    decision = value if value in ('allow', 'deny') else 'unknown'
+    reason = result.get('reason') if mapping else None
+    if not isinstance(reason, str) or not reason:
+        category = 'unknown'
+    elif reason.startswith('Policy resource budget exhausted:'):
+        category = 'budget'
+    elif reason.startswith(('No active approval', 'Missing approval', 'Approval')):
+        category = 'grant'
+    elif reason.startswith(('Blocked secret', 'Secret read', 'Blocked a secret')):
+        category = 'secret'
+    else:
+        category = 'other'
+    return {'exit_ok': type(code) is int and code == 0, 'mapping': mapping,
+            'decision': decision, 'reason_category': category}
+
+
+class LiteralTitleDiagnosticTests(unittest.TestCase):
+    def test_closed_categories_never_export_values(self):
+        for code, result, expected in (
+            (0, {'decision': 'allow'}, ('allow', 'unknown')),
+            (0, {'decision': 'deny', 'reason': 'Policy resource budget exhausted: CANARY'}, ('deny', 'budget')),
+            (0, {'decision': 'deny', 'reason': 'No active approval CANARY'}, ('deny', 'grant')),
+            (0, {'decision': 'deny', 'reason': 'Blocked secret CANARY'}, ('deny', 'secret')),
+            (0, {'decision': 'CANARY', 'reason': 'CANARY'}, ('unknown', 'other')),
+            (2, [], ('unknown', 'unknown')),
+        ):
+            flags = _literal_hook_flags(code, result)
+            self.assertEqual((flags['decision'], flags['reason_category']), expected)
+            self.assertNotIn('CANARY', str(flags))
+            self.assertEqual(flags['exit_ok'], code == 0)
+
+
 class GhArgumentPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -340,19 +376,60 @@ class GhArgumentPolicyTests(unittest.TestCase):
                     self.assertTrue(analyze_command_authority(command).ambiguous)
 
     def test_hook_preserves_quoted_and_escaped_title_literals(self) -> None:
-        for group in ('pr', 'issue'):
+        for group_index, group in enumerate(('pr', 'issue')):
             self.setUp()
             resource = f'gh:dimkox/getzilla {group} create'
             self.grant(resource)
-            for value in ("'{Fixture,--body-file=.env}'", '"{Fixture,--body-file=.env}"',
+            for case_index, value in enumerate(("'{Fixture,--body-file=.env}'", '"{Fixture,--body-file=.env}"',
                           r'\{Fixture,--body-file=.env\}', '"--*/*"', r'--\*/\*',
                           "'$TITLE'", r'\$TITLE', r'"\$TITLE"', "'`literal`'", r'\`literal\`',
                           "'<(literal)'", r'\<\(literal\)', "'~'", "'[ab]'", r'\[ab\]',
-                          '"--repo=Other/Project"', '.env', 'Fixture'):
+                          '"--repo=Other/Project"', '.env', 'Fixture')):
                 command = f'gh {group} create --repo Dimkox/Getzilla --title {value} --body public'
-                with self.subTest(command=command):
-                    result = self.hook_verdict(command)
-                    self.assertEqual(result.get('decision'), 'allow', result)
+                with self.subTest(group_index=group_index, case_index=case_index):
+                    code, result, _ = run_hook(self.root, 'pre_tool_use.py', {
+                        'cwd': str(self.root), 'session_id': 'gh-arguments', 'tool_name': 'Bash',
+                        'tool_input': {'command': command},
+                    })
+                    flags = _literal_hook_flags(code, result)
+                    with self.subTest(diagnostic='exit'):
+                        self.assertTrue(flags['exit_ok'])
+                    with self.subTest(diagnostic='shape'):
+                        self.assertTrue(flags['mapping'])
+                    if flags['decision'] != 'allow' or not flags['exit_ok'] or not flags['mapping']:
+                        with self.subTest(diagnostic='reason'):
+                            if flags['reason_category'] == 'budget':
+                                self.fail('literal-title reason=budget')
+                            if flags['reason_category'] == 'grant':
+                                self.fail('literal-title reason=grant')
+                            if flags['reason_category'] == 'secret':
+                                self.fail('literal-title reason=secret')
+                            if flags['reason_category'] == 'other':
+                                self.fail('literal-title reason=other')
+                            self.fail('literal-title reason=unknown')
+                        with self.subTest(diagnostic='group'):
+                            if group_index == 0:
+                                self.fail('literal-title group=pr')
+                            self.fail('literal-title group=issue')
+                        with self.subTest(diagnostic='form'):
+                            if case_index <= 2:
+                                self.fail('literal-title form=brace')
+                            if case_index <= 4:
+                                self.fail('literal-title form=glob')
+                            if case_index <= 7:
+                                self.fail('literal-title form=dollar')
+                            if case_index <= 9:
+                                self.fail('literal-title form=backtick')
+                            if case_index <= 11:
+                                self.fail('literal-title form=process')
+                            if case_index == 12:
+                                self.fail('literal-title form=home')
+                            if case_index <= 14:
+                                self.fail('literal-title form=bracket')
+                            if case_index == 15:
+                                self.fail('literal-title form=option')
+                            self.fail('literal-title form=plain-path')
+                    self.assertEqual(flags['decision'], 'allow')
                     self.assertEqual(_http_write_resource(command, self.root), resource)
 
     def test_hook_title_literals_cannot_use_a_wrong_resource_grant(self) -> None:

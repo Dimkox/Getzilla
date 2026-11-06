@@ -7,6 +7,7 @@ import errno
 import re
 import secrets
 import stat
+import sys
 import time
 import urllib.parse
 import contextvars
@@ -150,9 +151,18 @@ def _open_lock_guard(guard: Path) -> int:
     parent = fsx.open_dir(guard.parent)
     descriptor: int | None = None
     try:
-        descriptor = fsx.open_at(parent, guard.name,
-                                 os.O_CREAT | os.O_RDWR | fsx.O_BINARY | fsx.O_NOINHERIT
-                                 | fsx.O_NOFOLLOW | fsx.O_NONBLOCK, 0o600)
+        # Concurrent first creation can return ENOENT from Darwin openat(O_CREAT).
+        # Retry only that leaf syscall, with the same parent and admission flags.
+        attempts = 3 if sys.platform == 'darwin' else 1
+        for attempt in range(attempts):
+            try:
+                descriptor = fsx.open_at(parent, guard.name,
+                                         os.O_CREAT | os.O_RDWR | fsx.O_BINARY | fsx.O_NOINHERIT
+                                         | fsx.O_NOFOLLOW | fsx.O_NONBLOCK, 0o600)
+                break
+            except FileNotFoundError:
+                if attempt + 1 == attempts:
+                    raise
         opened = os.fstat(descriptor)
         named = fsx.lstat_at(parent, guard.name)
         if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or fsx.is_link(named)

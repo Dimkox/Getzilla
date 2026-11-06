@@ -130,7 +130,7 @@ class UnixDeadlineTests(unittest.TestCase):
             committed = threading.Event()
             allow_observation = threading.Event()
             def respond(handler, method, target, headers):
-                if target == "/v3/landing-backend":
+                if target == "/v4/landing-backend":
                     json_reply(handler, primary.capability())
                 elif method == "POST":
                     payload = handler.rfile.read(int(headers["content-length"]))
