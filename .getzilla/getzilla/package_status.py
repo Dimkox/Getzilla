@@ -1,6 +1,7 @@
 """Bounded local observations, separate from receipt and merge authority."""
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import os
@@ -14,7 +15,8 @@ from . import fsx
 from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
 from .receipts import RECEIPT_KINDS
 from .spec import MAX_SPEC_BYTES, SpecError, _bounded_walk, _parse_canonical_json, parse_yaml_subset, validate_spec
-from .state import CLOSED_CHANGE_STATUSES
+from .state import (CLOSED_CHANGE_STATUSES, serialized_task, require_route_owner,
+                    get_active_route, durable_json)
 from .util import now_utc
 
 MAX_FILE_BYTES = 262_144
@@ -635,6 +637,12 @@ def collect_worktree(root: Path, route: dict[str, Any] | None, initial_checkpoin
         result['findings'].append(_finding(code, '', message, 'warning'))
 
     try:
+        # An empty prefix inside a work tree identifies its actual root without
+        # decoding an absolute path (which may contain non-UTF8 bytes/newlines).
+        code, location = _git_read(root, ['rev-parse', '--show-prefix', '--is-inside-work-tree'])
+        if code or location != b'\ntrue\n':
+            warn('git_root_unknown', 'selected directory is not a Git working-tree root')
+            return result
         code, output = _git_read(root, ['rev-parse', '--verify', 'HEAD^{commit}'])
         head = output.decode('ascii', 'strict').strip()
         if code or not _SHA.fullmatch(head):
@@ -697,3 +705,77 @@ def receipt_inputs_unavailable(package: dict[str, Any]) -> bool:
         'file_unsafe', 'file_unavailable', 'file_changed', 'file_too_large',
         'inspection_limit', 'state_invalid', 'spec_invalid', 'package_identity_mismatch',
     } for item in package['findings'])
+
+
+@serialized_task
+def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str]) -> None:
+    """Append unrun obligations before the route exposes its expanded plan.
+
+    A subsequent route CAS failure may leave extra not_run rows. They confer no
+    receipt authority and are retained for an idempotent retry, never rolled back.
+    """
+    from .continuity import validate_package_state
+    from .receipts import RECEIPT_KINDS
+    from .spec import MAX_SPEC_BYTES, _parse_canonical_json
+    from .state import get_active_change, CLOSED_CHANGE_STATUSES
+    from .workflow_storage import valid_package_path
+    require_route_owner(root, route)
+    if get_active_route(root) != route:
+        raise ValueError('route changed before accounting synchronization')
+    if (not isinstance(required, list) or len(required) > len(RECEIPT_KINDS)
+            or any(not isinstance(kind, str) or kind not in RECEIPT_KINDS for kind in required)
+            or len(set(required)) != len(required)):
+        raise ValueError('invalid selected evidence accounting')
+    active = get_active_change(root)
+    if active is None and route.get('change_id') is None:
+        return
+    if (not isinstance(active, dict) or set(active) != {'change_id', 'path'}
+            or active['change_id'] != route.get('change_id')
+            or not valid_package_path(active['path'], active['change_id'])):
+        raise ValueError('selected accounting package does not match task')
+    relative = active['path'] + '/state.json'
+    def refuse(code, _path, message):
+        raise InspectionError(code, message)
+    inputs = _PackageReadClosure(root, active['path'], refuse)
+    def read_input(name, limit=MAX_FILE_BYTES):
+        return inputs.read(name, min(limit, inputs.remaining_bytes))
+    raw = read_input('state.json')
+    document = _parse_canonical_json(raw, root / relative)
+    validate_package_state(document, route, active['change_id'])
+    if document['status'] in CLOSED_CHANGE_STATUSES:
+        raise ValueError('closed package accounting cannot be changed')
+    rows = accounting_rows(document.get('evidence_accounting'))
+    ids: set[str] = set()
+    kinds: set[str] = set()
+    references = set()
+    read_input('change-spec.yaml', MAX_SPEC_BYTES)
+    for row in rows:
+        reference = obligation_reference(row, ids, kinds)
+        if reference is not None and reference not in references:
+            report = read_input(reference)
+            if not report.strip():
+                raise ValueError('accounting report unavailable')
+            report.decode('utf-8', 'strict')
+            references.add(reference)
+    for name in PACKAGE_MARKDOWN:
+        read_input(name).decode('utf-8', 'strict')
+    missing = sorted(set(required) - kinds)
+    if not missing:
+        return
+    changed = copy.deepcopy(document)
+    for kind in missing:
+        if kind in ids:
+            raise ValueError('new accounting obligation identity conflicts')
+        changed['evidence_accounting']['obligations'].append({
+            'id': kind, 'kind': 'receipt', 'receipt_kind': kind, 'status': 'not_run',
+            'reason': 'Selected by reconciled review plan; evidence not yet recorded.',
+        })
+    accounting_rows(changed['evidence_accounting'])
+    encoded = (json.dumps(changed, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
+    if len(encoded) > MAX_FILE_BYTES:
+        raise ValueError('accounting state exceeds consumer byte bound')
+    inputs.validate_state_replacement(encoded)
+    if (get_active_route(root) != route or get_active_change(root) != active
+            or read_package_file(root, relative, MAX_FILE_BYTES) != raw):
+        raise ValueError('package or route changed before accounting publication')
+    durable_json(root, root / relative, changed)

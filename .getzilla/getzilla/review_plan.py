@@ -209,7 +209,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
     from .state import get_active_route, update_route, task_transition
-    from .change import synchronize_accounting
+    from .package_status import synchronize_accounting
     from .verification import _git_range_selection
     route = get_active_route(root)
     if not route:
