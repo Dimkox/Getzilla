@@ -50,6 +50,11 @@ def install_backend_api(app, service, authenticator):
                       x_repository_id: str | None = Header(None)):
         return capability_response(authorization, x_correlation_id, x_repository_id, 2)
 
+    @app.get("/v4/landing-backend", tags=["landing"], operation_id="getLandingBackendCapabilityV3")
+    def capability_v3(authorization: str | None = Header(None), x_correlation_id: str | None = Header(None),
+                      x_repository_id: str | None = Header(None)):
+        return capability_response(authorization, x_correlation_id, x_repository_id, 3)
+
     @app.get("/v2/landing-jobs/{job_id}/attempt", tags=["landing"], operation_id="getLandingProviderAttempt")
     def attempt(job_id: str, authorization: str | None = Header(None), x_correlation_id: str | None = Header(None),
                 x_repository_id: str | None = Header(None)):

@@ -18,11 +18,16 @@ request = json.loads(raw_request.decode("utf-8"))
 canonical_request = json.dumps(
     request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
 ).encode("utf-8")
-runtime_environment = dict(os.environ)
+runtime_environment_names = set(os.environ)
+allowed_environment_names = {"LC_CTYPE"}
+if sys.platform == "darwin":
+    allowed_environment_names.add("__CF_USER_TEXT_ENCODING")
+locale_admitted = os.environ.get("LC_CTYPE") in {None, "C.UTF-8", "C.utf8", "UTF-8"}
 if (
     raw_request != canonical_request
-    or set(runtime_environment) - {"LC_CTYPE"}
-    or runtime_environment.get("LC_CTYPE") not in {None, "C.UTF-8"}
+    or runtime_environment_names - allowed_environment_names
+    # CPython's closed coercion targets; UTF-8 applies when C.UTF-8 is absent.
+    or not locale_admitted
 ):
     raise SystemExit(32)
 profile = request["profile"]

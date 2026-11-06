@@ -25,6 +25,22 @@ from tests._support import synchronize_fixture_scope
 
 
 class ReconcileAccountingTests(unittest.TestCase):
+    def test_consumer_uses_canonical_owner_with_identical_creation_compatibility(self):
+        canonical = getattr(package_status, 'synchronize_accounting', None)
+        self.assertIsNotNone(canonical, 'the bounded accounting consumer must own synchronization')
+        self.assertIs(change.synchronize_accounting, canonical)
+        self.assertEqual(introspect.unwrap(canonical).__module__, 'getzilla.package_status')
+        self.expanded_source()
+        with patch.object(change, 'synchronize_accounting',
+                          side_effect=AssertionError('consumer must not import the creation facade')) as facade:
+            route = reconcile_route(self.root)
+        facade.assert_not_called()
+        self.assertEqual(len(route['required_evidence']), 5)
+        inspected, _ = self.inspect_bytes()
+        self.assertEqual(inspected['findings'], [])
+        self.assertEqual(len(json.loads((self.package / 'state.json').read_text())
+                             ['evidence_accounting']['obligations']), 5)
+
     def setUp(self):
         self.fixture = fixtures.ReviewPlanTests('test_exact_diff_plan_is_invariant_under_prompt_language_and_risk_words')
         self.fixture.setUp()
@@ -246,7 +262,7 @@ class ReconcileAccountingTests(unittest.TestCase):
         path = self.package / 'state.json'
         before = path.read_bytes()
         route = state.get_active_route(self.root)
-        with patch.object(change, 'durable_json', side_effect=OSError('ordinary fixture publication failure')):
+        with patch.object(package_status, 'durable_json', side_effect=OSError('ordinary fixture publication failure')):
             with self.assertRaises(OSError):
                 reconcile_route(self.root)
         self.assertEqual(path.read_bytes(), before)
@@ -272,11 +288,11 @@ class ReconcileAccountingTests(unittest.TestCase):
     def test_source_change_after_accounting_publication_refuses_expanded_route(self):
         self.expanded_source()
         route = state.get_active_route(self.root)
-        publish = change.durable_json
+        publish = package_status.durable_json
         def changed_source(root, path, value):
             publish(root, path, value)
             (root / 'app.py').write_text('ordinary concurrent fixture edit\n')
-        with patch.object(change, 'durable_json', changed_source):
+        with patch.object(package_status, 'durable_json', changed_source):
             with self.assertRaisesRegex(ValueError, 'source changed'):
                 reconcile_route(self.root)
         self.assertEqual(state.get_active_route(self.root), route)
@@ -288,8 +304,14 @@ class ReconcileAccountingTests(unittest.TestCase):
         before = path.read_bytes()
         active_path = state.active_change_path(self.root)
         active_bytes = active_path.read_bytes()
-        state.durable_json(self.root, active_path, dict(self.active, path='ordinary-outside/state.json'))
-        with patch.object(change, 'read_package_file', side_effect=AssertionError('unsafe target must not be opened')):
+        unsafe_path = 'ordinary-outside/state.json'
+        state.durable_json(self.root, active_path, dict(self.active, path=unsafe_path))
+        read_package_file = package_status.read_package_file
+        def guarded_read(root, relative, *args, **kwargs):
+            if relative in {self.active['path'] + '/state.json', unsafe_path}:
+                raise AssertionError('unsafe target must not be opened')
+            return read_package_file(root, relative, *args, **kwargs)
+        with patch.object(package_status, 'read_package_file', side_effect=guarded_read):
             with self.assertRaises(ValueError):
                 reconcile_route(self.root)
         state.durable_bytes(self.root, active_path, active_bytes)

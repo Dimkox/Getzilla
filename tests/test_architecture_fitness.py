@@ -2031,6 +2031,645 @@ class ArchitectureFitnessTests(unittest.TestCase):
             after,
         )
 
+    def test_stdlib_queue_exception_imports_are_not_background_jobs(self):
+        cases = (
+            'from queue import Empty\n',
+            'from queue import Full\nraise Full("public")\n',
+            'from queue import Empty, Full\ntry:\n    pass\nexcept (Empty, Full):\n    pass\n',
+            'from queue import Empty as Missing\ntry:\n    pass\nexcept Missing:\n    pass\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                tree = ast.parse(source)
+                before = ast.dump(tree)
+                observed = FIT.analyze_queue_tree(tree)
+                self.assertEqual(observed.signals, ())
+                self.assertEqual(observed.export_paths, frozenset())
+                self.assertFalse(observed.uncertain)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_exception_import_projection_keeps_real_and_unknown_queues_governed(self):
+        sources = (
+            'import queue\njobs = queue.Queue()\n',
+            *(f'from queue import {name}\njobs = {name}()\n'
+              for name in ('Queue', 'SimpleQueue', 'LifoQueue', 'PriorityQueue')),
+            'from queue import Empty, Queue\njobs = Queue()\n',
+            'from queue import Unknown\njobs = Unknown()\n',
+            'import queue\nqueue.unknown()\n',
+            'from queue import *\n',
+            'from .queue import Empty\n',
+            'from queue import Empty\nopaque(Empty)\n',
+            'from queue import Empty\nEmpty.enqueue(job)\n',
+            'from queue import Empty, Queue\nEmpty = Queue\nEmpty()\n',
+            'from queue import Empty as Missing\nMissing = unknown()\n',
+            'from queue import Empty\nEmpty.__call__ = unknown\n',
+            'from queue import Empty\nglobals()["Empty"] = unknown\n',
+            'from unittest.mock import patch\nfrom queue import Empty\nwith patch("example.Empty", new=unknown):\n    pass\n',
+            'import unittest\nfrom queue import Empty\nwith unittest.mock.patch("example.Empty", new=unknown):\n    pass\n',
+            'from unittest.mock import patch\nfrom queue import Empty\nmodify = patch\nmodify("example.Empty", new=unknown)\n',
+            'from unittest.mock import patch\nfrom queue import Empty\npatch.dict("example.__dict__", {"Empty": unknown})\n',
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                self.assertTrue(FIT.analyze_queue_tree(ast.parse(source)).signals)
+        for name in ('Queue', 'SimpleQueue', 'LifoQueue', 'PriorityQueue'):
+            source = f'from queue import Empty, {name}\njobs = {name}()\n'
+            with self.subTest(constructor=name):
+                self.assertIn(f'call:queue.{name}', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        # The repository resolver's existing local-shadow refusal must survive.
+        self.assertTrue(FIT.analyze_queue_tree(ast.parse('from queue import Empty\n'),
+                                               allow_local_ipc=False).signals)
+
+    def test_exception_only_queue_imports_do_not_trigger_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['type'] = 'worker'
+        system['nodes'][0]['repository_paths'] = ['src']
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        repo.write_text('src/consumer.py', 'from queue import Empty, Full\ntry:\n    pass\nexcept (Empty, Full):\n    pass\n')
+        head = repo.commit('exception-only dependency')
+        report = self._evaluate(repo, base, head)
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+        self.assertNotIn('new_queue', report.triggers)
+        self.assertEqual(report.status, 'pass')
+        repo.write_text('src/consumer.py', 'import queue\n')
+        imported = repo.commit('existing module import')
+        repo.write_text('src/consumer.py', 'import queue\njobs = queue.SimpleQueue()\n')
+        constructed = repo.commit('new actual queue construction')
+        report = self._evaluate(repo, imported, constructed)
+        self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+        self.assertIn('new_queue', report.triggers)
+        repo.write_text('src/consumer.py', 'from queue import Empty\n')
+        repo.write_text('src/queue.py', 'class Empty:\n    pass\n')
+        shadowed = repo.commit('local queue module is not stdlib')
+        report = self._evaluate(repo, base, shadowed)
+        self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+
+    def test_self_module_exception_patch_stays_governed(self):
+        prefix = ('import sample as own\nfrom queue import Empty\n'
+                  'from unittest.mock import patch\ndef f():\n    raise Empty()\n')
+        for member in ('"Empty"', 'unknown_member'):
+            with self.subTest(member=member):
+                tree = ast.parse(prefix + f'with patch.object(own, {member}, unknown_queue_constructor):\n    f()\n')
+                self.assertTrue(QUEUE_PROVENANCE.namespace_is_closed(tree, allow_instrumentation=True))
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(tree).signals)
+        unrelated = ast.parse(prefix + 'with patch.object(own, "unrelated", None):\n    f()\n')
+        self.assertEqual(FIT.analyze_queue_tree(unrelated).signals, ())
+
+    def test_expanded_and_getter_derived_mock_replacements_stay_governed(self):
+        prefix = 'from queue import Empty\nfrom unittest.mock import patch\ndef f():\n    raise Empty()\n'
+        for statement in (
+            'patch.multiple("sample", **{"Empty": unknown})',
+            'patch.multiple("sample", **members)',
+            'patch.multiple("sample", **{unknown_member: unknown})',
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(prefix + statement + '\n')).signals)
+        capabilities = (
+            'modify=getattr(mock,"patch")\nmodify("sample.Empty",unknown)\n',
+            'modify=getattr(mock,member)\nmodify("sample.Empty",unknown)\n',
+            'modify=mock\nopaque(modify)\n',
+            'opaque(mock)\n',
+        )
+        for use in capabilities:
+            with self.subTest(use=use):
+                source = 'from queue import Empty\nfrom unittest import mock\n' + use
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        for use in ('m=getattr(unit,"mock")\nmodify=getattr(m,"patch")\nmodify("sample.Empty",unknown)\n',
+                    'opaque(unit)\n'):
+            with self.subTest(root_namespace=use):
+                source = 'from queue import Empty\nimport unittest as unit\n' + use
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(ast.parse(source)).signals)
+        self.assertEqual(FIT.analyze_queue_tree(ast.parse(prefix + 'patch.multiple("sample", **{"unrelated": None})\n')).signals, ())
+
+    def test_expanded_mock_members_fail_real_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['type'] = 'worker'
+        system['nodes'][0]['repository_paths'] = ['src']
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        prefix = 'from queue import Empty\nfrom unittest.mock import patch\ndef f():\n    raise Empty()\n'
+        for members in ('**{"Empty":unknown}', '**members'):
+            with self.subTest(members=members):
+                repo.write_text('src/sample.py', prefix + f'with patch.multiple("sample",{members}):\n    f()\n')
+                head = repo.commit('unproved expanded replacement')
+                report = self._evaluate(repo, base, head)
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
+    def test_unproved_direct_instrumentation_imports_keep_exception_provenance(self):
+        for capability in ('_patch_multiple', '_patch_object', 'future_capability', 'Mock'):
+            source = ('from queue import Empty\n'
+                      f'from unittest.mock import {capability} as modify\n'
+                      'def f():\n    raise Empty()\n'
+                      'def apply(replacement):\n    modify("sample", Empty=replacement)\n')
+            with self.subTest(capability=capability):
+                tree = ast.parse(source)
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+        relative = ast.parse('from queue import Empty\nfrom .unittest.mock import patch\n'
+                             'def f():\n    raise Empty()\npatch("sample.Empty", unknown)\n')
+        self.assertIn('import:queue.Empty', FIT.analyze_queue_tree(relative).signals)
+
+    def test_unproved_direct_instrumentation_imports_fail_real_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary baseline')
+        for capability in ('_patch_multiple', '_patch_object', 'future_capability'):
+            with self.subTest(capability=capability):
+                repo.write_text('src/sample.py', 'from queue import Empty\n'
+                    f'from unittest.mock import {capability} as modify\n'
+                    'def f():\n    raise Empty()\n'
+                    'def apply(replacement):\n    modify("sample", Empty=replacement)\n')
+                report = self._evaluate(repo, base, repo.commit('unproved instrumentation capability'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
+    def test_visible_capability_uses_require_canonical_proof_before_exception_projection(self):
+        prefix = 'from queue import Empty\ndef f():\n    raise Empty()\n'
+        governed = (
+            'from .unittest import mock as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from pkg.unittest import mock as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from tools import instrumentation as change\nchange.patch("pkg.sample.Empty", unknown)\n',
+            'from pkg.tools import instrumentation as tools\ntools.patch("sample.Empty",unknown)\n',
+            'from tools import instrumentation as change\nmodify=change.patch\nmodify("sample.Empty",unknown)\n',
+            'import pkg.tools as tools\nmodify=getattr(tools,"patch")\nmodify("sample.Empty",unknown)\n',
+            'from tools import instrumentation as change\nmodify=getattr(change,"patch")\nmodify("sample.Empty",unknown)\n',
+            'from pkg.tools import patch as modify\nmodify("sample.Empty",unknown)\n',
+            'from tools import mutate as renamed\nmodify=renamed\nmodify("sample.Empty",unknown)\n',
+            'from tools import mutate as renamed\naddress="sample.Empty"\nrenamed(address,unknown)\n',
+            'from tools import mutate\naddress=__name__+".Empty"\nmutate(address,unknown)\n',
+            'from tools import mutate\nmutate(Empty=unknown)\n',
+            'from tools import mutate\nmutate(**{"Empty":unknown})\n',
+            'from tools import instrumentation as change\nchange.patch("sample.unrelated",None)\n',
+            'from tools import instrumentation as change\nmember="patch"\nmodify=getattr(change,member)\n',
+            'from tools import patch as modify\nmodify("sample.unrelated",None)\n',
+            'from .unittest.mock import patch\npatch("sample.Empty",unknown)\n',
+            'from unittest.mock import *\nunknown()\n',
+            'globals()["Empty"]=unknown\n',
+            *(f'from unittest.mock import {capability} as modify\nmodify("sample",Empty=unknown)\n'
+              for capability in ('_patch_multiple', '_patch_object', 'future_capability', 'Mock')),
+            *(f'from unittest.mock import {capability}\n'
+              for capability in ('_patch_multiple', 'future_capability')),
+            'from unittest.mock import patch\npatch("sample.Empty",unknown)\n',
+            'from unittest import mock\nmock.patch("sample.Empty",unknown)\n',
+        )
+        clear = (
+            '',
+            'from unittest import mock as change\nchange.patch("sample.unrelated",None)\n',
+            'import unittest.mock as change\nchange.patch("sample.unrelated",None)\n',
+            'import unittest as unit\nunit.mock.patch("sample.unrelated",None)\n',
+            'from unittest.mock import patch as change\nchange.object(own,"unrelated",None)\n',
+            'from unittest.mock import patch\npatch("sample.unrelated",None)\n',
+            # This shortcut does not prove hidden effects of ordinary helpers.
+            'from helpers import ordinary\nordinary()\n',
+            'raise Empty("Empty")\n',
+            'raise Empty("patch")\n',
+            '"Empty"\n',
+        )
+        for expected, cases in ((True, governed), (False, clear)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+
+    def test_visible_facade_and_canonical_matching_mutations_fail_public_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        repo.write_text('src/pkg/__init__.py', '')
+        repo.write_text('src/pkg/unittest.py', 'from unittest import mock\n')
+        base = repo.commit('ordinary package facade baseline')
+        for origin in ('unittest', '.unittest'):
+            with self.subTest(origin=origin):
+                repo.write_text('src/pkg/sample.py', 'from queue import Empty\n'
+                    f'from {origin} import mock as modify\n'
+                    'def f():\n    raise Empty()\ndef apply(replacement):\n'
+                    '    with modify.patch("pkg.sample.Empty",replacement):\n        f()\n')
+                report = self._evaluate(repo, base, repo.commit('visible member replacement'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
+    def test_escaping_getter_capabilities_require_proof_without_selector_spelling(self):
+        prefix = ('from queue import Empty\ndef f():\n    raise Empty()\n'
+                  'from tools import instrumentation as facade\nmember="pa"+"tch"\n')
+        escaped = (
+            'mutate=getattr(facade,member)\nmutate("sample.unrelated",None)\n',
+            'read=getattr\nmutate=read(facade,member)\nmutate("sample.unrelated",None)\n',
+            'getattr(facade,member)("sample.unrelated",None)\n',
+            'getattr(facade,member).multiple("sample.unrelated",unrelated=None)\n',
+            'def recover():\n    return getattr(facade,member)\n',
+            'values=[getattr(facade,member)]\n',
+            'ordinary(getattr(metadata,field))\n',
+            'ordinary(value=getattr(metadata,field))\n',
+        )
+        immediate = (
+            'if getattr(metadata,field)==0:\n    pass\n',
+            'getattr(metadata,field)\n',
+        )
+        for expected, cases in ((True, escaped), (False, immediate)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+
+    def test_selected_addresses_require_nontransferring_operand_roles(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        governed = (
+            'factory(address="sample.Full")\n',
+            'patch("sample.unrelated",new_callable=factory,address="sample.Full")\n',
+            'patch.object(own,"unrelated",new_callable=factory,address="sample.Full")\n',
+            'patch("sample.unrelated",new_callable=factory,payload="sample.Full.any_member")\n',
+            'patch.object(own,"unrelated","sample.Full.any_member")\n',
+            'patch.multiple("sample",unrelated="sample.Full.any_member")\n',
+            'patch.object(own,"unrelated",new_callable=factory,Full=unknown)\n',
+            'patch.object(own,"unrelated",**members)\n',
+            'factory("sample.Full.__new__")\n',
+            'factory("sample.Full.__init__")\n',
+            'factory("sample.Full.arbitrary.nested_member")\n',
+            'patch("sample.Full.any_member",None)\n',
+            'patch(__name__+".Full.any_member",None)\n',
+            'patch.object(own,"Full.any_member",None)\n',
+            'patch.object(own.Full,"any_member",None)\n',
+            'patch.multiple("sample.Full.any_member",unrelated=None)\n',
+            'patch.multiple("sample",**{"Full.any_member":None})\n',
+        )
+        clear = (
+            'raise Full("sample.Full.__new__")\n',
+            'raise Full("Full")\n',
+            'patch("sample.unrelated",None)\n',
+            'patch.object(own,"unrelated",None)\n',
+            'patch.multiple("sample",unrelated=None)\n',
+            'patch.multiple("sample",**{"patch":None})\n',
+            'patch.object(own,"patch",None)\n',
+            'patch("sample.Fullish.member",None)\n',
+            # Unknown hidden callback effects are not proved by this shortcut.
+            'patch("sample.unrelated",new_callable=factory,address="sample.Other.member")\n',
+        )
+        for expected, cases in ((True, governed), (False, clear)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree, complete_module=True).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+        alias = prefix.replace('import Full\n', 'import Full as Limit\n').replace('raise Full()', 'raise Limit()')
+        for source in ('factory("queue.Full.any_member")\n', 'patch("queue.Full.any_member",None)\n',
+                       'factory("sample.Limit.any_member")\n'):
+            with self.subTest(selected_alias=source):
+                tree = ast.parse(alias + source)
+                before = ast.dump(tree)
+                self.assertTrue(FIT.analyze_queue_tree(tree, complete_module=True).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_callback_address_operands_stay_governed_in_public_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary callback baseline')
+        for statement in ('factory(address="sample.Empty")',
+                          'patch("sample.unrelated",new_callable=factory,address="sample.Empty")',
+                          'patch.object(own,"unrelated",new_callable=factory,address="sample.Empty")'):
+            with self.subTest(statement=statement):
+                repo.write_text('src/sample.py', 'from queue import Empty\nfrom unittest.mock import patch\n'
+                    'from tools import factory\ndef f():\n    raise Empty()\n' + statement + '\n')
+                report = self._evaluate(repo, base, repo.commit('visible selected address operand'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
+    def test_canonical_address_grammar_keeps_selected_colon_carriers_governed(self):
+        prefix = ('from queue import Full as Limit\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Limit()\n')
+        governed = (
+            'patch("sample:Full.any_member",None)',
+            'patch("sample:Limit.arbitrary.tail",None)',
+            'patch("sample:.Full",None)',
+            'patch.multiple("sample:Full",unrelated=None)',
+            'patch.multiple("sample:Full.any_member",unrelated=None)',
+            'patch.object(own,"sample:Full.any_member",None)',
+            'patch.multiple("sample",**{"sample:Full.any_member":None})',
+            'patch(__name__+":Full.any_member",None)',
+            'patch.multiple(__name__+":Full",unrelated=None)',
+            'factory("sample:Full.any_member")',
+            'factory(address="sample:Limit.any_member")',
+            'patch("sample.unrelated",new_callable=factory,address="sample:Full.any_member")',
+            'patch.object(own,"unrelated",new_callable=factory,payload="sample:Full.any_member")',
+            'patch.multiple("sample",unrelated="sample:Full.any_member")',
+            # _get_target splits the final member before resolve_name; its
+            # container accepts the resolver's terminal-newline grammar too.
+            'patch("sample:Full\\n.any_member",None)',
+            'factory("sample:Full\\n.any_member")',
+            'factory(__name__+":Full\\n.any_member")',
+            'factory("sample:Full.unclassified:member")',
+        )
+        for statement in governed:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Full', FIT.analyze_queue_tree(tree, complete_module=True).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_unclassified_canonical_address_operands_keep_original_policy(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        unknown = ('sample::member', 'sample[0].member', 'sample..member',
+                   'sample.member trailing', '.unrelated', 'sample:',
+                   '.'.join(['part'] * (QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH + 1)))
+        statements = []
+        for address in unknown:
+            statements.extend((f'patch({address!r},None)',
+                               f'patch.object(own,{address!r},None)'))
+            if address not in {'.unrelated', 'sample:'}:
+                statements.append(f'patch("sample.unrelated",new_callable=factory,address={address!r})')
+        # A resolver target may name just a module or use a trailing colon;
+        # ambiguous syntax still cannot be equated with a proved unrelated one.
+        statements.extend(f'patch.multiple({address!r},unrelated=None)'
+                          for address in unknown if address != 'sample:')
+        statements.extend(('patch(__name__+"unrelated",None)',
+                           'patch.multiple("sample",**{"bad::member":None})'))
+        for statement in statements:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Full', FIT.analyze_queue_tree(tree, complete_module=True).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_closed_address_grammar_preserves_proved_nontransferring_positives(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        clear = (
+            'patch("sample.unrelated",None)',
+            'patch("sample:Other.unrelated",None)',
+            'patch("sample:.unrelated",None)',
+            'patch.multiple("sample:Other",unrelated=None)',
+            'patch.multiple("sample:",unrelated=None)',
+            'patch("sample:Όνομα.unrelated",None)',
+            'patch.object(own,"unrelated",None)',
+            'patch(__name__+".unrelated",None)',
+            'patch(__name__+":Other.unrelated",None)',
+            'patch.multiple(__name__+":",unrelated=None)',
+            'patch("sample.unrelated",new_callable=factory,address="sample:Other.member")',
+            'raise Full("sample:Full.any_member")',
+            'raise Full("sample::Full")',
+            'raise Full("patch")',
+            'if getattr(metadata,field)==0:\n    pass',
+            'getattr(metadata,field)',
+            # Ordinary free-form helper text is outside the address grammar;
+            # this projection makes no claim about hidden helper effects.
+            'factory("human prose mentioning Full and another word")',
+            'patch(' + repr('.'.join(['part'] * QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH)) + ',None)',
+        )
+        for statement in clear:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertFalse(FIT.analyze_queue_tree(tree, complete_module=True).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_colon_and_unknown_addresses_fail_same_public_git_policy_as_dotted(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary closed-address baseline')
+        statements = ('patch("sample.Full.any_member",None)',
+                      'patch("sample:Full.any_member",None)',
+                      'patch.multiple("sample:Full",unrelated=None)',
+                      'patch("sample.unrelated",new_callable=factory,address="sample:Full.any_member")',
+                      'factory("sample:Full.any_member")',
+                      'patch("sample::unclassified",None)')
+        for statement in statements:
+            with self.subTest(statement=statement):
+                repo.write_text('src/sample.py', 'from queue import Full\nfrom unittest.mock import patch\n'
+                                'from tools import factory\ndef f():\n    raise Full()\n' + statement + '\n')
+                report = self._evaluate(repo, base, repo.commit('visible closed-address carrier'))
+                self.assertEqual(report.status, 'fail')
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+        repo.write_text('src/sample.py', 'from queue import Full\nfrom unittest.mock import patch\n'
+                        'def f():\n    raise Full("sample:Full.any_member")\n'
+                        'patch("sample:Other.unrelated",None)\n')
+        report = self._evaluate(repo, base, repo.commit('proved unrelated closed-address control'))
+        self.assertEqual(report.status, 'pass')
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+
+    def _complete_queue_source(self, source):
+        tree = ast.parse(source)
+        before = ast.dump(tree, include_attributes=True)
+        result = FIT.analyze_queue_tree(tree, complete_module=True)
+        self.assertEqual(ast.dump(tree, include_attributes=True), before)
+        return result
+
+    def test_special_prefix_requires_module_origin_in_actual_lookup_scope(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'def apply(__name__,replacement):\n    with patch(__name__+".__new__",replacement):\n        f()\n',
+            'def apply(origin,replacement):\n    with patch(origin+".__new__",replacement):\n        f()\n',
+            'def apply(origin,replacement):\n    global __name__\n    __name__=origin\n    patch(__name__+".__new__",replacement)\n',
+            'def mutate(origin):\n    global __name__\n    __name__=origin\npatch(__name__+".__new__",replacement)\n',
+            '__name__=origin\npatch(__name__+".__new__",replacement)\n',
+            'def outer(__name__):\n    def apply():\n        patch(__name__+".__new__",replacement)\n',
+            'class Body:\n    patch(__name__+".__new__",replacement)\n',
+            'def apply(value=patch(__name__+".__new__",replacement)):\n    pass\n',
+            '@patch(__name__+".__new__",replacement)\ndef apply():\n    pass\n',
+            '[patch(__name__+".__new__",replacement) for item in items]\n',
+            'def apply(__name__):\n    def nested():\n        nonlocal __name__\n        patch(__name__+".__new__",replacement)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertIn('import:queue.Full', self._complete_queue_source(prefix + source).signals)
+
+    def test_special_prefix_waits_for_complete_visible_mutation_inventory(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        mutations = (
+            'patch(__name__+".__name__",origin)',
+            'patch("sample.__name__",origin)',
+            'patch("sample:Owner.__name__",origin)',
+            'patch.object(own,"__name__",origin)',
+            'patch.multiple("sample",__name__=origin)',
+            'patch.multiple(__name__+":",**{"__name__":origin})',
+            'own.__name__=origin',
+            'del own.__name__',
+            'factory("sample:Owner.__name__",origin)',
+        )
+        use = 'patch(__name__+".__new__",replacement)\n'
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                # Whole inventory proof cannot depend on ast.walk/source order.
+                source = prefix + use + mutation + '\n'
+                self.assertIn('import:queue.Full', self._complete_queue_source(source).signals)
+
+    def test_special_prefix_module_identity_cannot_escape_closed_uses(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n'
+                  'patch(__name__+".unrelated",None)\n')
+        for source in ('identity=__name__\n', 'factory(__name__)\n',
+                       'factory(identity=__name__)\n', 'identities=[__name__]\n',
+                       'def leak():\n    return __name__\n',
+                       'patch("sample.unrelated",new_callable=factory,identity=__name__)\n'):
+            with self.subTest(source=source):
+                self.assertIn('import:queue.Full', self._complete_queue_source(prefix + source).signals)
+
+    def test_special_prefix_preserves_proved_module_and_method_uses(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'patch(__name__+".unrelated",None)\n',
+            'def apply():\n    patch(__name__+":Other.unrelated",None)\n',
+            'def outer():\n    def apply():\n        patch(__name__+".unrelated",None)\n',
+            'class Example:\n    __name__=origin\n    def apply(self):\n        patch(__name__+".unrelated",None)\n',
+            'class Example:\n    def apply(self):\n        patch(__name__+"._controlled_race",replacement)\n',
+            'patch(__name__+".unrelated",None)\nif __name__=="__main__":\n    pass\n__name__\n',
+            'patch(__name__+".unrelated",None)\nraise Full(__name__)\n',
+            'patch(__name__+".unrelated",None)\nraise Full("sample.__name__")\n',
+            # A same-spelled local in an unrelated scope is not a module write.
+            'def ordinary(__name__):\n    return __name__\npatch(__name__+".unrelated",None)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertFalse(self._complete_queue_source(prefix + source).signals)
+
+    def test_special_prefix_comparison_requires_closed_literal_operands(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+                  'patch(__name__+".unrelated",None)\n')
+        comparisons = ('__name__ == opaque', 'opaque != __name__',
+                       '__name__ in container', '__name__ not in container',
+                       '__name__ == "__main__" == opaque',
+                       'lower < __name__ < upper',
+                       '__name__ == factory()', '__name__ == __name__',
+                       '__name__ is "__main__"')
+        for comparison in comparisons:
+            with self.subTest(comparison=comparison):
+                result = self._complete_queue_source(prefix + f'if {comparison}:\n    pass\n')
+                self.assertIn('import:queue.Full', result.signals)
+
+    def test_special_prefix_closed_literal_comparison_preserves_main_guard(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+                  'patch(__name__+".unrelated",None)\n')
+        for comparison in ('__name__ == "__main__"', '"__main__" == __name__',
+                           '__name__ != "sample"', '"sample" != __name__'):
+            with self.subTest(comparison=comparison):
+                self.assertFalse(self._complete_queue_source(prefix + f'if {comparison}:\n    pass\n').signals)
+
+    def test_header_binding_events_cannot_invent_module_origin(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'def setter(arg=(__name__ := "foreign")):\n    pass\npatch(__name__+".unrelated",None)\n',
+            '@(__name__ := decorator)\ndef setter():\n    pass\npatch(__name__+".unrelated",None)\n',
+            'class Setter((__name__ := base)):\n    pass\npatch(__name__+".unrelated",None)\n',
+            'def outer():\n    def setter(arg=(__name__ := "local")):\n        pass\n'
+            '    patch(__name__+".unrelated",None)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertIn('import:queue.Full', self._complete_queue_source(prefix + source).signals)
+
+    def test_header_event_refusal_preserves_proved_body_and_class_locals(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'def ordinary():\n    __name__="local"\npatch(__name__+".unrelated",None)\n',
+            'def ordinary(__name__):\n    return __name__\npatch(__name__+".unrelated",None)\n',
+            'class Ordinary:\n    __name__="local"\n    def apply(self):\n'
+            '        patch(__name__+".unrelated",None)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertFalse(self._complete_queue_source(prefix + source).signals)
+
+    @unittest.skipUnless(hasattr(ast, 'TypeVar'), 'type parameter syntax requires Python 3.12')
+    def test_captured_class_type_parameter_is_not_implicit_module_origin(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            (False, 'class Example:\n    __name__="class-local"\n    def apply(self):\n'
+             '        patch(__name__+".unrelated",None)\n'),
+            (True, 'def apply[__name__]():\n    patch(__name__+".unrelated",None)\n'),
+            (True, 'class Example[__name__]:\n    def apply(self):\n'
+             '        patch(__name__+".unrelated",None)\n'),
+        )
+        for governed, source in cases:
+            with self.subTest(source=source):
+                # Compile validates the declared scope; the code is never run.
+                compile(ast.parse(prefix + source), '<public-typeparam-fixture>', 'exec')
+                self.assertEqual(bool(self._complete_queue_source(prefix + source).signals), governed)
+
+    def test_partial_queue_ast_cannot_invent_implicit_module_origin(self):
+        tree = ast.parse('from queue import Full\nfrom unittest.mock import patch\n'
+                         'def f():\n    raise Full()\n'
+                         'def apply(__name__,replacement):\n'
+                         '    patch(__name__+".__new__",replacement)\n')
+        fragment = ast.Module(body=[*tree.body[:3], *tree.body[3].body], type_ignores=[])
+        before = ast.dump(fragment, include_attributes=True)
+        self.assertIn('import:queue.Full', FIT.analyze_queue_tree(fragment).signals)
+        self.assertEqual(ast.dump(fragment, include_attributes=True), before)
+
+    def test_special_prefix_parameter_alpha_rename_keeps_same_public_git_policy(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary special-prefix baseline')
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        for name in ('__name__', 'origin'):
+            with self.subTest(parameter=name):
+                repo.write_text('src/sample.py', prefix + f'def apply({name},replacement):\n'
+                                f'    with patch({name}+".__new__",replacement):\n        f()\n')
+                report = self._evaluate(repo, base, repo.commit('same dynamic parameter different spelling'))
+                self.assertEqual(report.status, 'fail')
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+        repo.write_text('src/sample.py', prefix + 'class Example:\n    def apply(self):\n'
+                        '        patch(__name__+"._controlled_race",replacement)\n')
+        report = self._evaluate(repo, base, repo.commit('proved ordinary method module prefix'))
+        self.assertEqual(report.status, 'pass')
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
@@ -3660,6 +4299,67 @@ class ArchitectureFitnessTests(unittest.TestCase):
                             self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
                             self.assertNotIn('new_queue', report.triggers)
 
+    def test_fixed64_module_policy_inspects_queue_tail_and_refuses65_with_cache_replay(self) -> None:
+        for total, reexport, reverse in ((total, reexport, reverse) for total in (64, 65)
+                                        for reexport in (False, True) for reverse in (False, True)):
+            with self.subTest(total=total, reexport=reexport, reverse=reverse):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                leaves = total - 1 - int(reexport)
+                sources = {}
+                for index in range(leaves):
+                    sources[f'src/part{index:02d}.py'] = (
+                        'from rq import Queue\nvalue = Queue()\n' if index == leaves - 1 else 'value = 1\n')
+                if reexport:
+                    sources['src/bridge.py'] = 'from part00 import value\n'
+                for path, value in sources.items():
+                    repo.write_text(path, value)
+                def consumer(indices):
+                    return ''.join(
+                        f'from {"bridge" if reexport and index == 0 else f"part{index:02d}"} import value as v{index}\n'
+                        for index in indices) + ''.join(f'v{index}.enqueue(job)\n' for index in indices)
+                repo.write_text('src/use.py', '')
+                base = repo.commit('fixed unique module boundary baseline')
+                source = consumer(list(reversed(range(leaves))) if reverse else range(leaves))
+                repo.write_text('src/use.py', source)
+                head = repo.commit('queue tail beyond the previous module budget')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                roots = FIT._queue_source_roots(ARCHITECTURE.load_architecture(repo.root))
+                def run(cache, text=source, path='src/use.py'):
+                    budget = FIT._QueueBudget('head')
+                    try:
+                        result = FIT._queue_signals(repo.root, diff, ast.parse(text), 'head', cache, '', roots,
+                            source_path=path, source=text.encode(), budget=budget)
+                        if result.state == 'resolved':
+                            self.assertTrue(result.signals, result)
+                        return result.state, budget
+                    except ARCHITECTURE.ArchitectureError as error:
+                        return f'error:{error.code}:{error}', budget
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                cold, cold_budget = run(cache)
+                replay, replay_budget = run(cache)
+                separate_warm = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                prefix = consumer(range(leaves // 2))
+                self.assertEqual(run(separate_warm, prefix, 'src/warm.py')[0], 'not_queue')
+                warm, warm_budget = run(separate_warm)
+                if total == 65:
+                    for state in (cold, replay, warm):
+                        self.assertIn('error:limit:', state)
+                    continue
+                for state, budget in ((cold, cold_budget), (replay, replay_budget), (warm, warm_budget)):
+                    self.assertEqual(state, 'resolved', state)
+                    self.assertEqual({item.path for item in budget.sources.values()}, {'src/use.py', *sources})
+                    self.assertEqual(len(budget.sources), 64)
+                    self.assertEqual(budget.source_bytes, len(source.encode()) + sum(len(v.encode()) for v in sources.values()))
+                self.assertEqual((cold_budget.ast_nodes, cold_budget.logical_work),
+                                 (replay_budget.ast_nodes, replay_budget.logical_work))
+                self.assertEqual((cold_budget.ast_nodes, cold_budget.logical_work),
+                                 (warm_budget.ast_nodes, warm_budget.logical_work))
+                cold_paths = [item.path for item in cold_budget.sources.values()]
+                self.assertGreater(cold_paths.index(f'src/part{leaves - 1:02d}.py') + 1, 48)
+
     def test_queue_budget_deduplicates_overlap_and_preserves_importer_order(self) -> None:
         repo = GitArchitectureRepo(self)
         system = _system()
@@ -3695,6 +4395,48 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     self.assertEqual(result.state, 'not_queue')
                     self.assertEqual((budget.source_bytes, budget.ast_nodes, budget.logical_work),
                                      (expected_bytes, expected_nodes, 4))
+
+    def test_fixed64_policy_preserves_independent_real_byte_and_ast_refusals(self) -> None:
+        cases = (
+            ('source bytes', 63, '#' + 'x' * 34000 + '\nvalue = 1\n', 'aggregate source byte'),
+            ('aggregate nodes', 63, 'value = 1\npadding = [' + '0,' * 7000 + ']\n', 'aggregate AST node'),
+            ('individual nodes', 1, 'value = 1\npadding = [' + '0,' * 200000 + ']\n', 'AST node limit'),
+        )
+        for label, count, body, reason in cases:
+            with self.subTest(limit=label):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                for index in range(count):
+                    repo.write_text(f'src/part{index:02d}.py', body)
+                repo.write_text('src/use.py', '')
+                base = repo.commit('independent resource baseline')
+                source = ''.join(f'from part{i:02d} import value as v{i}\n' for i in range(count))
+                source += ''.join(f'v{i}.enqueue(job)\n' for i in range(count))
+                repo.write_text('src/use.py', source)
+                head = repo.commit('resource demand within64 modules')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                roots = FIT._queue_source_roots(ARCHITECTURE.load_architecture(repo.root))
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                for _ in range(2):
+                    with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, reason) as caught:
+                        FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
+                            source_path='src/use.py', source=source.encode())
+                    self.assertEqual(caught.exception.code, 'limit')
+
+    def test_fixed64_policy_keeps_all_other_constants_and_actual_work_boundary(self) -> None:
+        self.assertEqual((FIT.MAX_QUEUE_ANALYSIS_BYTES, FIT.MAX_QUEUE_ANALYSIS_AST_NODES,
+                          FIT.MAX_QUEUE_ANALYSIS_WORK, FIT.MAX_ANALYZED_AST_NODES,
+                          FIT.MAX_QUEUE_ADAPTER_DEPTH, FIT.MAX_QUEUE_SOURCE_ROOTS),
+                         (2097152, 400000, 4096, 200000, 8, 64))
+        budget = FIT._QueueBudget('head')
+        for _ in range(4096):
+            budget.step()
+        self.assertEqual((budget.logical_work, budget.actual_work), (4096, 4096))
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'aggregate work limit') as caught:
+            budget.step()
+        self.assertEqual(caught.exception.code, 'limit')
 
     def test_queue_cached_summary_cannot_omit_its_resource_footprint(self) -> None:
         repo = GitArchitectureRepo(self)
@@ -7009,11 +7751,13 @@ class ArchitectureFitnessTests(unittest.TestCase):
             "CONTRACT-FACTORY-LANDING-PROVIDER-OBSERVATION-V1",
             "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V1",
             "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V2",
+            "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3",
             "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
             "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
             "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
             "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
             "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+            "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
         })
         system = _system()
         rules = _rules()
