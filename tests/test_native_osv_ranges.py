@@ -25,6 +25,81 @@ def affected(events,*,kind='SEMVER',ecosystem='npm',versions=None):
 
 class NativeOsvRangeTests(unittest.TestCase):
     @staticmethod
+    def _literal_manifest(ecosystem, version):
+        if ecosystem == 'Maven':
+            return 'public.synthetic:literal', {'gradle.lockfile':
+                f'public.synthetic:literal:{version}=testRuntimeClasspath\n'}
+        if ecosystem == 'npm':
+            return 'synthetic-package', {'package-lock.json': json.dumps({
+                'lockfileVersion': 3, 'packages': {
+                    'node_modules/synthetic-package': {'version': version}}})}
+        return 'example.invalid/literal', {'go.mod':
+            f'module example.invalid/fixture\nrequire example.invalid/literal v{version}\n'}
+
+    def test_complete_non_pypi_literal_lists_need_no_ordering_for_misses(self):
+        for ecosystem, listed, absent in [('Maven', 'vendor-release.a', 'vendor-release.b'),
+                                          ('npm', '1.0.0+build.a', '1.0.0+build.b'),
+                                          ('Go', '1.0.0+build.a', '1.0.0+build.b')]:
+            with self.subTest(ecosystem=ecosystem):
+                scope = {'package': {'ecosystem': ecosystem}, 'versions': [listed]}
+                self.assertTrue(KV._in_ranges(listed, scope))
+                try:
+                    missing = KV._in_ranges(absent, scope)
+                except KV.VulnerabilityError:
+                    self.fail('complete literal-list miss was refused')
+                self.assertFalse(missing)
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('vendor-release.b', {'package': {'ecosystem': 'Maven'}})
+
+    def test_actual_native_non_pypi_literal_hit_and_miss(self):
+        for ecosystem, listed, absent in [('Maven', 'vendor-release.a', 'vendor-release.b'),
+                                          ('npm', '1.0.0+build.a', '1.0.0+build.b'),
+                                          ('Go', '1.0.0+build.a', '1.0.0+build.b')]:
+            with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+                name, _ = self._literal_manifest(ecosystem, listed)
+                record = {'id': 'OSV-SYNTHETIC-LITERAL', 'aliases': [], 'affected': [
+                    {'package': {'ecosystem': ecosystem, 'name': name}, 'versions': [listed]}]}
+                fixtures._mirror(Path(directory), ecosystem, [record])
+                for version, expected in [(listed, True), (absent, False)]:
+                    with self.subTest(ecosystem=ecosystem, version=version):
+                        _, files = self._literal_manifest(ecosystem, version)
+                        context, root = fixtures._repo(files)
+                        with context:
+                            try:
+                                report = KV.scan(root, environ={'GETZILLA_OSV_DB': directory})
+                            except KV.VulnerabilityError:
+                                self.fail('native complete literal-list miss was refused')
+                        self.assertEqual(report['status'], 'fail' if expected else 'pass')
+                        self.assertEqual([row['id'] for row in report['findings']],
+                                         ['OSV-SYNTHETIC-LITERAL'] if expected else [])
+
+    def test_actual_cli_non_pypi_literal_hit_and_miss(self):
+        for ecosystem, listed, absent in [('Maven', 'vendor-release.a', 'vendor-release.b'),
+                                          ('npm', '1.0.0+build.a', '1.0.0+build.b'),
+                                          ('Go', '1.0.0+build.a', '1.0.0+build.b')]:
+            with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+                name, _ = self._literal_manifest(ecosystem, listed)
+                record = {'id': 'OSV-SYNTHETIC-LITERAL', 'aliases': [], 'affected': [
+                    {'package': {'ecosystem': ecosystem, 'name': name}, 'versions': [listed]}]}
+                fixtures._mirror(Path(directory), ecosystem, [record])
+                for version, expected in [(listed, True), (absent, False)]:
+                    with self.subTest(ecosystem=ecosystem, version=version):
+                        _, files = self._literal_manifest(ecosystem, version)
+                        context, root = fixtures._repo(files)
+                        with context:
+                            (root/'.getzilla').mkdir()
+                            result = subprocess.run(
+                                [sys.executable, str(fixtures.ROOT/'scripts/getzilla_vulns.py'),
+                                 '--json', '--db', directory], cwd=root,
+                                env={**os.environ, 'GETZILLA_OSV_ONLINE': '0'},
+                                capture_output=True, text=True, timeout=10)
+                        self.assertEqual(result.returncode, 1 if expected else 0, result.stderr)
+                        report = json.loads(result.stdout)
+                        self.assertEqual(report['status'], 'fail' if expected else 'pass')
+                        self.assertEqual([row['id'] for row in report['findings']],
+                                         ['OSV-SYNTHETIC-LITERAL'] if expected else [])
+
+    @staticmethod
     def _enumeration_record():
         return {'id': 'OSV-SYNTHETIC-ENUMERATION', 'aliases': [], 'affected': [
             affected([{'introduced': '2.0.0'}, {'fixed': '3.0.0'}],
@@ -50,8 +125,7 @@ class NativeOsvRangeTests(unittest.TestCase):
                                      ['OSV-SYNTHETIC-ENUMERATION'] if expected else [])
         literal = {'package': {'ecosystem': 'Maven'}, 'versions': ['vendor-release.a']}
         self.assertTrue(KV._in_ranges('vendor-release.a', literal))
-        with self.assertRaises(KV.VulnerabilityError):
-            KV._in_ranges('vendor-release.b', literal)
+        self.assertFalse(KV._in_ranges('vendor-release.b', literal))
 
     def test_actual_cli_keeps_semver_enumeration_literal_and_range_boundaries(self):
         cases = [('1.0.0+build.a', True), ('1.0.0+build.b', False),
