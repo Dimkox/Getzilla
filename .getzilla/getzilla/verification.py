@@ -40,7 +40,7 @@ from .state import get_active_change, get_active_route, update_route
 from .python_test_runner import (
     DEFAULT_CORE_CPU_RESERVE, DEFAULT_CORE_WORKER_CAP, TIMEOUT as CORE_TEST_TIMEOUT,
     OUTPUT_LIMIT, ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
-    execute, run_core_tests, run_named_tests,
+    cleanup_details, execute, run_core_tests, run_named_tests,
 )
 from .util import (
     find_tool,
@@ -2108,18 +2108,25 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
             process = completed.tests
             exc.checks.append(CheckResult('python-unittest', 'pass' if process.returncode == 0 else 'fail',
                                           f'exit={process.returncode}', command=process.command,
-                                          stdout=process.stdout[-12000:], stderr=process.stderr[-12000:]))
+                                          stdout=process.stdout[-12000:], stderr=process.stderr[-12000:],
+                                          details=[{'cleanup': cleanup_details(process, origin='tests')}]))
             process = exc.result
             exc.checks.append(CheckResult('coverage', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
-                                          stderr=process.stderr[-12000:] if process else ''))
+                                          stderr=process.stderr[-12000:] if process else '',
+                                          details=[{'cleanup': cleanup_details(process if process is not None else exc,
+                                              origin=('coverage_export' if process is not None and
+                                                      process is getattr(completed, 'coverage_export', None)
+                                                      else 'coverage_report' if process is not None else 'process'))}]))
         if not exc.checks or all(item.status in {'pass', 'skip'} for item in exc.checks):
             process = exc.result
             exc.checks.append(CheckResult('python-unittest', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
-                                          stderr=process.stderr[-12000:] if process else ''))
+                                          stderr=process.stderr[-12000:] if process else '',
+                                          details=[{'cleanup': cleanup_details(
+                                              process if process is not None else exc, origin='tests')}]))
         raise
 
 
@@ -2512,7 +2519,13 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
             workers = selection.workers
             core = run_core_tests(root, mode, workers) if workers is not None else None
         except RunnerError as exc:
-            results.append(CheckResult('python-unittest', 'fail', str(exc)))
+            try:
+                cleanup_attached = hasattr(exc, '_getzilla_cleanup_metadata')
+            except BaseException:
+                cleanup_attached = True
+            message = 'Core runner unavailable; private cleanup details omitted' if cleanup_attached else str(exc)
+            results.append(CheckResult('python-unittest', 'fail', message,
+                                       details=[{'cleanup': cleanup_details(exc, origin='tests')}]))
             if mode in {'pr', 'release'}:
                 results.append(CheckResult('coverage', 'fail', 'required Core run unavailable'))
             core, workers = None, -1
@@ -2521,11 +2534,14 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
             for name, process in [('python-unittest', core.tests), ('coverage', core.coverage)]:
                 if process is not None:
                     backend = core.versions.get('engine', 'pytest-xdist' if workers else 'unittest')
+                    exported = getattr(core, 'coverage_export', None) if name == 'coverage' else None
+                    cleanup_failed = bool(process.cleanup_error or
+                                          isinstance(exported, ProcessResult) and exported.cleanup_error)
                     diagnostic = process.stderr
                     # Capture cleanup can fail while preserving a successful exit.
                     # The failed check must still cross the pytest privacy cut.
                     pytest_failure = (name == 'python-unittest' and backend == 'pytest-xdist'
-                                      and (process.returncode != 0 or bool(process.cleanup_error)))
+                                      and (process.returncode != 0 or cleanup_failed))
                     failed_output = process.returncode != 0 or pytest_failure
                     trusted = (_trusted_pytest_metadata(root, process.stdout + '\n' + process.stderr)
                                if name == 'python-unittest' and failed_output else None)
@@ -2545,13 +2561,13 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                 if index < len(reported_command):
                                     reported_command[index] = '<private-progress-value>'
                     results.append(CheckResult(
-                        name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
+                        name, 'pass' if process.returncode == 0 and not cleanup_failed else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
                         f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
                         command=reported_command, stdout=_core_output_excerpt(
                             process.stdout, failed=failed_output,
                             trusted=trusted, pytest_output=pytest_failure),
-                        stderr=(diagnostic + ('\ncleanup failed: details omitted' if process.cleanup_error else ''))[-12000:],
+                        stderr=(diagnostic + ('\ncleanup failed: details omitted' if cleanup_failed else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
                                   'requested_workers': str(requested_workers),
@@ -2563,6 +2579,9 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  'cleanup': cleanup_details(process,
+                                      origin='tests' if name == 'python-unittest' else 'coverage_report',
+                                      extra=exported),
                                   **({'progress': _core_progress_details(root, getattr(core, 'progress', None))}
                                      if name == 'python-unittest' else {}),
                                   'versions': json.dumps(core.versions, sort_keys=True),
