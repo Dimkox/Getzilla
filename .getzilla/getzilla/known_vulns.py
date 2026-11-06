@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import io
 import os
 import re
 import subprocess
@@ -480,7 +481,21 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     return any(matches)
 
 
+def _aliases(record: dict[str, Any]) -> list[str]:
+    """Validate decision-relevant identifiers without coercion or mutation."""
+    if not isinstance(record, dict):
+        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+    aliases = record.get('aliases')
+    if aliases is None:
+        return []
+    if not isinstance(aliases, list) or not all(
+            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases):
+        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+    return list(aliases)
+
+
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
+    aliases = _aliases(record)
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
@@ -505,7 +520,7 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(str(alias) for alias in record.get('aliases') or []),
+        aliases=sorted(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -553,6 +568,7 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
                 details[vuln_id] = json.loads(fetch(f'{OSV_API}/vulns/{vuln_id}', None))
             except (OSError, urllib.error.URLError, ValueError) as exc:
                 raise VulnerabilityError(f'OSV record {vuln_id} unavailable: {exc}') from exc
+            _aliases(details[vuln_id])
         findings.append(_describe(details.get(vuln_id, {'id': vuln_id}), dependency))
     return findings
 
@@ -571,6 +587,7 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                 if not member.endswith('.json'):
                     continue
                 record = json.loads(bundle.read(member))
+                _aliases(record)
                 if record.get('withdrawn'):
                     continue
                 for affected in record.get('affected') or []:
@@ -591,13 +608,17 @@ def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS,
         if ecosystem not in ECOSYSTEMS:
             raise VulnerabilityError(f'unsupported ecosystem: {ecosystem}')
         data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip', None)
+        # Admit every consumed JSON member before touching the prior cache.
+        with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+            if bundle.testzip() is not None:
+                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
+            for member in bundle.namelist():
+                if member.endswith('.json'):
+                    _aliases(json.loads(bundle.read(member)))
         target = destination / ecosystem / 'all.zip'
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix('.zip.partial')
         temporary.write_bytes(data)
-        with zipfile.ZipFile(temporary) as bundle:
-            if bundle.testzip() is not None:
-                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
         os.replace(temporary, target)
         written.append(str(target))
     return written
