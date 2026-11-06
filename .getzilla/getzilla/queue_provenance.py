@@ -171,6 +171,9 @@ def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False)
                     return False
                 function_body = True
             elif isinstance(owner, ast.ClassDef):
+                if any(getattr(parameter, 'name', None) == module_name
+                       for parameter in getattr(owner, 'type_params', ())):
+                    return None  # Methods can capture this sibling annotation-scope binding.
                 if not function_body or current not in owner.body:
                     return None
             elif isinstance(owner, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, *type_scopes)):
