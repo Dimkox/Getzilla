@@ -184,10 +184,9 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             if not isinstance(call, ast.Call) or call.func is not node:
                 return tree
             use = parents.get(call)
-            # Admit immediate metadata comparison/value consumption only, not
-            # callable recovery or escape. Helper hidden effects stay unproved.
-            immediate_value = (isinstance(use, (ast.Compare, ast.Expr))
-                               or isinstance(use, ast.Call) and use.func is not call)
+            # Comparison/discard does not transfer the result. Arguments,
+            # callable recovery and other escapes need stronger proof.
+            immediate_value = isinstance(use, (ast.Compare, ast.Expr))
             if not immediate_value:
                 return tree
         bare_literal = isinstance(parents.get(node), ast.Expr) and parents[node].value is node

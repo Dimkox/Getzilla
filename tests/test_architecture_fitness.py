@@ -2288,11 +2288,12 @@ class ArchitectureFitnessTests(unittest.TestCase):
             'getattr(facade,member).multiple("sample.unrelated",unrelated=None)\n',
             'def recover():\n    return getattr(facade,member)\n',
             'values=[getattr(facade,member)]\n',
+            'ordinary(getattr(metadata,field))\n',
+            'ordinary(value=getattr(metadata,field))\n',
         )
         immediate = (
             'if getattr(metadata,field)==0:\n    pass\n',
-            # Immediate helper value consumption does not prove hidden effects.
-            'ordinary(getattr(metadata,field))\n',
+            'getattr(metadata,field)\n',
         )
         for expected, cases in ((True, escaped), (False, immediate)):
             for source in cases:

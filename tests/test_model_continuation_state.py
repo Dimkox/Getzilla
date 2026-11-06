@@ -112,13 +112,14 @@ class ContinuationBindingValidationTest(unittest.TestCase):
 
         cycle = []
         cycle.append(cycle)
-        binding = journal.Binding('chain1', 'task1', 'owner1', 'route1', 'session1',
-                                  'a' * 64, 'b' * 64, 'c' * 64)
+        valid_values = ('chain1', 'task1', 'owner1', 'route1', 'session1',
+                        'a' * 64, 'b' * 64, 'c' * 64)
+        binding = journal.Binding(*valid_values)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for field in binding.__dataclass_fields__:
+            for field, valid_value in zip(binding.__dataclass_fields__, valid_values, strict=True):
                 for case, value in (('cycle', cycle), ('copy', CopyTrap()),
-                                    ('string_subclass', StringCopyTrap(getattr(binding, field)))):
+                                    ('string_subclass', StringCopyTrap(valid_value))):
                     with self.subTest(field=field, case=case):
                         copied.clear()
                         with self.assertRaisesRegex(journal.JournalError, '^invalid_binding$'):
