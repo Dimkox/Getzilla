@@ -473,12 +473,12 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
     if versions:
         if ecosystem == 'PyPI':
             key = _pypi_key
-        elif ranges and all(item['type'] == 'SEMVER' for item in ranges):
-            key = _semver_key
-        else:
+            target = key(version)
+            matches.extend(target == key(value) for value in versions)
+        elif not ranges or not all(item['type'] == 'SEMVER' for item in ranges):
             raise VulnerabilityError('unsupported enumerated-version normalization')
-        target = key(version)
-        matches.extend(target == key(value) for value in versions)
+        # SemVer range precedence ignores builds; a literal-list miss must not
+        # broaden explicit version identity through that precedence key.
     return any(matches)
 
 

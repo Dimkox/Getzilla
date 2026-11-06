@@ -1,5 +1,6 @@
 """Public synthetic OSV data exercises the native offline consumer, never online services."""
 import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,85 @@ def affected(events,*,kind='SEMVER',ecosystem='npm',versions=None):
 
 
 class NativeOsvRangeTests(unittest.TestCase):
+    @staticmethod
+    def _enumeration_record():
+        return {'id': 'OSV-SYNTHETIC-ENUMERATION', 'aliases': [], 'affected': [
+            affected([{'introduced': '2.0.0'}, {'fixed': '3.0.0'}],
+                     versions=['1.0.0+build.a'])]}
+
+    def test_native_scan_keeps_semver_enumeration_literal_and_range_precedence_distinct(self):
+        scope = affected([{'introduced': '1.0.0+build.a'}, {'fixed': '2.0.0'}])
+        self.assertTrue(KV._in_ranges('1.0.0+build.a', scope))
+        self.assertTrue(KV._in_ranges('1.0.0+build.b', scope))
+        cases = [('1.0.0+build.a', True), ('1.0.0+build.b', False),
+                 ('2.5.0', True), ('3.0.0', False)]
+        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            fixtures._mirror(Path(directory), 'npm', [self._enumeration_record()])
+            for version, expected in cases:
+                with self.subTest(version=version):
+                    lock = {'lockfileVersion': 3, 'packages': {
+                        'node_modules/synthetic-package': {'version': version}}}
+                    context, root = fixtures._repo({'package-lock.json': json.dumps(lock)})
+                    with context:
+                        report = KV.scan(root, environ={'GETZILLA_OSV_DB': directory})
+                    self.assertEqual(report['status'], 'fail' if expected else 'pass')
+                    self.assertEqual([row['id'] for row in report['findings']],
+                                     ['OSV-SYNTHETIC-ENUMERATION'] if expected else [])
+        literal = {'package': {'ecosystem': 'Maven'}, 'versions': ['vendor-release.a']}
+        self.assertTrue(KV._in_ranges('vendor-release.a', literal))
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('vendor-release.b', literal)
+
+    def test_actual_cli_keeps_semver_enumeration_literal_and_range_boundaries(self):
+        cases = [('1.0.0+build.a', True), ('1.0.0+build.b', False),
+                 ('2.5.0', True), ('3.0.0', False)]
+        with tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+            fixtures._mirror(Path(directory), 'npm', [self._enumeration_record()])
+            for version, expected in cases:
+                with self.subTest(version=version):
+                    lock = {'lockfileVersion': 3, 'packages': {
+                        'node_modules/synthetic-package': {'version': version}}}
+                    context, root = fixtures._repo({'package-lock.json': json.dumps(lock)})
+                    with context:
+                        (root/'.getzilla').mkdir()
+                        result = subprocess.run(
+                            [sys.executable, str(fixtures.ROOT/'scripts/getzilla_vulns.py'),
+                             '--json', '--db', directory], cwd=root,
+                            env={**os.environ, 'GETZILLA_OSV_ONLINE': '0'},
+                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 1 if expected else 0, result.stderr)
+                    report = json.loads(result.stdout)
+                    self.assertEqual(report['status'], 'fail' if expected else 'pass')
+                    self.assertEqual([row['id'] for row in report['findings']],
+                                     ['OSV-SYNTHETIC-ENUMERATION'] if expected else [])
+
+    def test_exact_enumeration_and_dated_exception_do_not_hide_invalid_coverage(self):
+        version = '1.0.0+build.a'
+        for coverage in ([{'type': 'GIT', 'events': [{'introduced': '0'}]}], 'malformed'):
+            with self.subTest(coverage_type=type(coverage).__name__):
+                record = self._enumeration_record()
+                record['affected'][0]['ranges'] = coverage
+                lock = {'lockfileVersion': 3, 'packages': {
+                    'node_modules/synthetic-package': {'version': version}}}
+                context, root = fixtures._repo({'package-lock.json': json.dumps(lock)})
+                with context, tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
+                    fixtures._mirror(Path(directory), 'npm', [record])
+                    config = root/KV.CONFIG_PATH
+                    config.parent.mkdir(parents=True)
+                    config.write_text(json.dumps({'accept': [{
+                        'id': record['id'], 'reason': 'Synthetic dated fixture only',
+                        'expires': '2026-12-31'}]}))
+                    with self.assertRaises(KV.VulnerabilityError):
+                        KV.scan(root, environ={'GETZILLA_OSV_DB': directory},
+                                today=date(2026, 11, 6))
+                    result = subprocess.run(
+                        [sys.executable, str(fixtures.ROOT/'scripts/getzilla_vulns.py'),
+                         '--json', '--db', directory], cwd=root,
+                        env={**os.environ, 'GETZILLA_OSV_ONLINE': '0'},
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, '')
+
     def test_pypi_c_is_rc_without_rewriting_local_labels_or_other_phases(self):
         def qualified(version):
             try:
