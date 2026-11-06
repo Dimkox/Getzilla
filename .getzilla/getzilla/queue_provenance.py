@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
@@ -114,13 +115,60 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
                 address_names.setdefault(alias.name, set()).add(local)
     approved_literals = set()
 
-    def addressed_bindings(address):
-        parts = set(address.lstrip('.').split('.'))
-        if not all(part.isidentifier() for part in parts):
-            return set()
-        return set().union(*(address_names.get(part, ()) for part in parts))
+    # Match pkgutil.resolve_name's positive grammar, without resolving anything.
+    # Its '$' also permits a terminal newline in the container passed by patch.
+    word = r'(?!\d)\w+'
+    path = rf'{word}(?:\.{word})*'
+    resolver_pattern = re.compile(rf'^(?P<pkg>{path})(?P<colon>:(?P<obj>{path})?)?$')
+
+    def address_proof(address):
+        """Return known operand forms/bindings, or explicit UNKNOWN (None).
+
+        A failed parse is never proof that an address is unrelated. Keep any
+        proved container bindings even when its final member is unclassified.
+        """
+        if address.count('.') + address.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH:
+            return None, set()
+
+        def resolver(value):
+            match = resolver_pattern.match(value)
+            if match is None:
+                return None
+            parts = match['pkg'].split('.') + (match['obj'] or '').split('.')
+            return set().union(*(address_names.get(part, ()) for part in parts))
+
+        def absolute(value):
+            forms, bindings = set(), set()
+            if value.count('.') + value.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH:
+                return forms, bindings
+            resolved = resolver(value)
+            if resolved is not None:
+                forms.add('resolver')
+                bindings.update(resolved)
+                if ':' not in value and resolver_pattern.fullmatch(value):
+                    forms.add('member')
+            if '.' in value:
+                container, member = value.rsplit('.', 1)
+                owner = resolver(container)
+                if owner is not None:
+                    bindings.update(owner)
+                    if member.isidentifier():
+                        forms.add('target')
+                        bindings.update(address_names.get(member, ()))
+            return forms, bindings
+
+        forms, bindings = absolute(address)
+        # Literal suffixes can carry __name__ addresses through opaque helpers;
+        # they are not absolute canonical targets or member names themselves.
+        if address.startswith(('.', ':')):
+            suffix_forms, suffix_bindings = absolute('__getzilla_current_module__' + address)
+            if suffix_forms:
+                forms.add('suffix')
+            bindings.update(suffix_bindings)
+        return frozenset(forms) if forms else None, bindings
 
     replaced = set()
+    canonical_calls = set()
     for node in nodes:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in instrumentation_roots:
             owner = parents.get(node)
@@ -150,26 +198,41 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             member = node.args[1] if len(node.args) > 1 else None
             if not isinstance(member, ast.Constant) or type(member.value) is not str:
                 return tree
+            forms, bindings = address_proof(member.value)
+            if forms is None or 'member' not in forms:
+                return tree
             replaced.add(member.value)
-            replaced.update(addressed_bindings(member.value))
+            replaced.update(bindings)
             approved_literals.add(id(member))
         elif function in patch_calls:
             target = node.args[0] if node.args else None
+            prefix = ''
             if (isinstance(target, ast.BinOp) and isinstance(target.op, ast.Add)
                     and isinstance(target.left, ast.Name) and target.left.id == '__name__'):
                 target = target.right
+                prefix = '__getzilla_current_module__'
             if not isinstance(target, ast.Constant) or type(target.value) is not str:
                 return tree
+            if prefix and not target.value.startswith(('.', ':')):
+                return tree
+            forms, bindings = address_proof(prefix + target.value)
+            required = 'resolver' if function in multiple_patches else 'target'
+            if forms is None or required not in forms:
+                return tree
             replaced.add(target.value.rsplit('.', 1)[-1])
-            replaced.update(addressed_bindings(target.value))
+            replaced.update(bindings)
             approved_literals.add(id(target))
         else:
             continue
+        canonical_calls.add(id(node))
         for keyword in node.keywords:
             if keyword.arg is not None:
                 if function in multiple_patches:
+                    forms, bindings = address_proof(keyword.arg)
+                    if forms is None or 'member' not in forms:
+                        return tree
                     replaced.add(keyword.arg)
-                    replaced.update(addressed_bindings(keyword.arg))
+                    replaced.update(bindings)
                 continue
             mapping = keyword.value
             if not isinstance(mapping, ast.Dict):
@@ -178,9 +241,21 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
                 if not isinstance(key, ast.Constant) or type(key.value) is not str:
                     return tree
                 if function in multiple_patches:
+                    forms, bindings = address_proof(key.value)
+                    if forms is None or 'member' not in forms:
+                        return tree
                     replaced.add(key.value)
-                    replaced.update(addressed_bindings(key.value))
+                    replaced.update(bindings)
                     approved_literals.add(id(key))
+
+    canonical_operands = set()
+    pending = [(tree, False)]
+    while pending:
+        node, inside = pending.pop()
+        inside = inside or id(node) in canonical_calls
+        if inside:
+            canonical_operands.add(id(node))
+        pending.extend((child, inside) for child in ast.iter_child_nodes(node))
 
     for node in nodes:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -214,12 +289,18 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             return tree
         if isinstance(node, ast.Attribute):
             path = dotted(node)
-            if path and addressed_bindings(path):
+            if path is None:
                 return tree
+            if path:
+                forms, bindings = address_proof(path)
+                if forms is None or bindings:
+                    return tree
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            binding_address = bool(addressed_bindings(node.value))
-            if binding_address and id(node) not in approved_literals and not bare_literal:
-                return tree
+            if id(node) not in approved_literals and not bare_literal:
+                forms, bindings = address_proof(node.value)
+                over_limit = node.value.count('.') + node.value.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH
+                if bindings or (forms is None and (id(node) in canonical_operands or over_limit)):
+                    return tree
         if isinstance(node, ast.keyword) and node.arg in address_names:
             return tree
 

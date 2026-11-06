@@ -2374,6 +2374,127 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
                 self.assertIn('new_queue', report.triggers)
 
+    def test_canonical_address_grammar_keeps_selected_colon_carriers_governed(self):
+        prefix = ('from queue import Full as Limit\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Limit()\n')
+        governed = (
+            'patch("sample:Full.any_member",None)',
+            'patch("sample:Limit.arbitrary.tail",None)',
+            'patch("sample:.Full",None)',
+            'patch.multiple("sample:Full",unrelated=None)',
+            'patch.multiple("sample:Full.any_member",unrelated=None)',
+            'patch.object(own,"sample:Full.any_member",None)',
+            'patch.multiple("sample",**{"sample:Full.any_member":None})',
+            'patch(__name__+":Full.any_member",None)',
+            'patch.multiple(__name__+":Full",unrelated=None)',
+            'factory("sample:Full.any_member")',
+            'factory(address="sample:Limit.any_member")',
+            'patch("sample.unrelated",new_callable=factory,address="sample:Full.any_member")',
+            'patch.object(own,"unrelated",new_callable=factory,payload="sample:Full.any_member")',
+            'patch.multiple("sample",unrelated="sample:Full.any_member")',
+            # _get_target splits the final member before resolve_name; its
+            # container accepts the resolver's terminal-newline grammar too.
+            'patch("sample:Full\\n.any_member",None)',
+            'factory("sample:Full\\n.any_member")',
+            'factory(__name__+":Full\\n.any_member")',
+            'factory("sample:Full.unclassified:member")',
+        )
+        for statement in governed:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Full', FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_unclassified_canonical_address_operands_keep_original_policy(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        unknown = ('sample::member', 'sample[0].member', 'sample..member',
+                   'sample.member trailing', '.unrelated', 'sample:',
+                   '.'.join(['part'] * (QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH + 1)))
+        statements = []
+        for address in unknown:
+            statements.extend((f'patch({address!r},None)',
+                               f'patch.object(own,{address!r},None)'))
+            if address not in {'.unrelated', 'sample:'}:
+                statements.append(f'patch("sample.unrelated",new_callable=factory,address={address!r})')
+        # A resolver target may name just a module or use a trailing colon;
+        # ambiguous syntax still cannot be equated with a proved unrelated one.
+        statements.extend(f'patch.multiple({address!r},unrelated=None)'
+                          for address in unknown if address != 'sample:')
+        statements.extend(('patch(__name__+"unrelated",None)',
+                           'patch.multiple("sample",**{"bad::member":None})'))
+        for statement in statements:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertIn('import:queue.Full', FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_closed_address_grammar_preserves_proved_nontransferring_positives(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        clear = (
+            'patch("sample.unrelated",None)',
+            'patch("sample:Other.unrelated",None)',
+            'patch("sample:.unrelated",None)',
+            'patch.multiple("sample:Other",unrelated=None)',
+            'patch.multiple("sample:",unrelated=None)',
+            'patch("sample:Όνομα.unrelated",None)',
+            'patch.object(own,"unrelated",None)',
+            'patch(__name__+".unrelated",None)',
+            'patch(__name__+":Other.unrelated",None)',
+            'patch.multiple(__name__+":",unrelated=None)',
+            'patch("sample.unrelated",new_callable=factory,address="sample:Other.member")',
+            'raise Full("sample:Full.any_member")',
+            'raise Full("sample::Full")',
+            'raise Full("patch")',
+            'if getattr(metadata,field)==0:\n    pass',
+            'getattr(metadata,field)',
+            # Ordinary free-form helper text is outside the address grammar;
+            # this projection makes no claim about hidden helper effects.
+            'factory("human prose mentioning Full and another word")',
+            'patch(' + repr('.'.join(['part'] * QUEUE_PROVENANCE.MAX_DOTTED_IMPORT_DEPTH)) + ',None)',
+        )
+        for statement in clear:
+            with self.subTest(statement=statement):
+                tree = ast.parse(prefix + statement + '\n')
+                before = ast.dump(tree)
+                self.assertFalse(FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_colon_and_unknown_addresses_fail_same_public_git_policy_as_dotted(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary closed-address baseline')
+        statements = ('patch("sample.Full.any_member",None)',
+                      'patch("sample:Full.any_member",None)',
+                      'patch.multiple("sample:Full",unrelated=None)',
+                      'patch("sample.unrelated",new_callable=factory,address="sample:Full.any_member")',
+                      'factory("sample:Full.any_member")',
+                      'patch("sample::unclassified",None)')
+        for statement in statements:
+            with self.subTest(statement=statement):
+                repo.write_text('src/sample.py', 'from queue import Full\nfrom unittest.mock import patch\n'
+                                'from tools import factory\ndef f():\n    raise Full()\n' + statement + '\n')
+                report = self._evaluate(repo, base, repo.commit('visible closed-address carrier'))
+                self.assertEqual(report.status, 'fail')
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+        repo.write_text('src/sample.py', 'from queue import Full\nfrom unittest.mock import patch\n'
+                        'def f():\n    raise Full("sample:Full.any_member")\n'
+                        'patch("sample:Other.unrelated",None)\n')
+        report = self._evaluate(repo, base, repo.commit('proved unrelated closed-address control'))
+        self.assertEqual(report.status, 'pass')
+        self.assertEqual(self._results(report)['background_job'].status, 'not_applicable')
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside
