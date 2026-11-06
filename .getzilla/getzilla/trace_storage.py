@@ -22,6 +22,7 @@ class LocalRead:
     def __init__(self, root):
         self.root = os.path.abspath(os.fspath(root))
         self.pid, self.thread = os.getpid(), threading.get_ident()
+        self.owner_thread = threading.current_thread()
         self.uid = os.geteuid() if hasattr(os, 'geteuid') else None
         self.handles = []
         self.closed = False
@@ -46,7 +47,8 @@ class LocalRead:
             raise ReadUnavailable()
 
     def check(self):
-        if self.closed or os.getpid() != self.pid or threading.get_ident() != self.thread:
+        if (self.closed or os.getpid() != self.pid or threading.get_ident() != self.thread
+                or threading.current_thread() is not self.owner_thread):
             raise ReadUnavailable()
         try:
             if os.geteuid() != self.uid or os.getuid() != self.uid:

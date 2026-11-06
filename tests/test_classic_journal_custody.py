@@ -167,6 +167,29 @@ class ClassicJournalCustodyTests(unittest.TestCase):
         with self.assertRaises(ReadUnavailable):
             reader.read(journal.PATH, journal.MAX_BYTES)
 
+    def test_reused_numeric_thread_id_does_not_extend_reader_lifetime(self):
+        from getzilla import trace_storage
+        with trace_storage.LocalRead(self.root) as reader:
+            owner_ident = threading.get_ident()
+            result = []
+
+            def use():
+                actual_thread = threading.current_thread()
+                with patch.object(trace_storage.threading, 'get_ident', return_value=owner_ident), \
+                     patch.object(trace_storage.threading, 'current_thread', return_value=actual_thread):
+                    try:
+                        reader.read(journal.PATH, journal.MAX_BYTES)
+                    except trace_storage.ReadUnavailable:
+                        result.append('unavailable')
+                    else:
+                        result.append('admitted')
+
+            worker = threading.Thread(target=use)
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(result, ['unavailable'])
+
     def test_reader_cannot_be_relabelled_as_another_project(self):
         from getzilla.trace_storage import LocalRead
         other = self.root / 'other'
