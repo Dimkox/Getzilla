@@ -298,6 +298,7 @@ def _execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: f
     import shlex
     import signal
     import subprocess
+    from contextlib import ExitStack
 
     from .parallel import policy_refusal
     from .trace_observation import committed_claim, capture_phase, publish_observations
@@ -337,8 +338,19 @@ def _execute_local(root: Path, operation_id: str, argv: list[str], *, timeout: f
             if anchor is not None:
                 anchor.check_cwd()
             # Cleanup is armed before Popen and every observer call after spawn.
-            proc = subprocess.Popen(argv, cwd='.' if anchor is not None else root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, start_new_session=True)  # nosec B603 - policy-checked argv, no shell
+            with ExitStack() as launch:
+                cwd, inherited = root, {}
+                if anchor is not None:
+                    from .git_binding_guard import NativeGitGraph
+                    # Reuse only the existing held-root FD transport, not Git
+                    # metadata. Keep it alive through the actual child launch.
+                    graph = NativeGitGraph(anchor)
+                    launch.callback(graph.close)
+                    cwd = graph.address(root)
+                    inherited['pass_fds'] = graph.pass_fds()
+                proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, start_new_session=True,
+                                        **inherited)  # nosec B603 - policy-checked argv, no shell
             if anchor is not None:
                 anchor.check_cwd()
             started_observation = _observe(capture_phase, observation, 'operation_started')

@@ -5,6 +5,7 @@ import subprocess
 import signal
 import select
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -46,6 +47,106 @@ class TraceObservationTests(unittest.TestCase):
                   'tokens': None, 'cpu_ms': None, 'cost_micros': None, 'elapsed_ms': 10000}
         task_budget.initialize(root, limits, 0, route['state_revision'], task_id=route['logical_task_id'])
         return state.get_active_route(root)
+
+    def _assert_native_child_root_at_launch(self, mode):
+        with project_copy(git=True, minimal_runtime=True) as root:
+            self.setup_native(root)
+            with tempfile.TemporaryDirectory(prefix='public-spawn-b-', dir=root.parent) as directory:
+                other = Path(directory)
+                displaced = root.with_name(root.name+'-displaced')
+                self.assertFalse(displaced.exists())
+                expected = [root.stat().st_dev, root.stat().st_ino]
+                target = [sys.executable, '-c',
+                    'import json, os; from pathlib import Path; s=os.stat("."); '
+                    'Path("cwd-proof.json").write_text(json.dumps([s.st_dev,s.st_ino]))']
+                real_popen = subprocess.Popen
+                processes = []
+                def switched(argv, *args, **kwargs):
+                    if list(argv) != target:
+                        return real_popen(argv, *args, **kwargs)
+                    saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        if mode == 'cwd':
+                            os.chdir(other)
+                        else:
+                            root.rename(displaced)
+                            other.rename(root)
+                        process = real_popen(argv, *args, **kwargs)
+                        processes.append(process)
+                        return process
+                    finally:
+                        os.fchdir(saved)
+                        os.close(saved)
+                        if mode == 'name':
+                            root.rename(other)
+                            displaced.rename(root)
+                with patch.object(subprocess, 'Popen', side_effect=switched):
+                    result = task_budget.execute_local(root, 'native-cwd-proof', target, timeout=2)
+                self.assertEqual(result['outcome'], 'succeeded')
+                observed = next((json.loads(path.read_bytes()) for path in
+                    (root/'cwd-proof.json', other/'cwd-proof.json') if path.exists()), None)
+                self.assertEqual(observed, expected, 'actual owned child dot must remain original A')
+                self.assertTrue((root/'cwd-proof.json').exists())
+                self.assertFalse((other/'cwd-proof.json').exists())
+                self.assertEqual(task_budget.inspect(root)['calls'], 1)
+                self.assertEqual(len(processes), 1)
+                self.assertIsNotNone(processes[0].returncode)
+
+    def test_enrolled_child_keeps_original_root_during_launch_cwd_switch(self):
+        self._assert_native_child_root_at_launch('cwd')
+
+    def test_enrolled_child_keeps_original_root_during_launch_name_replacement(self):
+        self._assert_native_child_root_at_launch('name')
+
+    def test_unavailable_native_launch_transport_refuses_without_ambient_fallback(self):
+        from getzilla.git_binding_guard import GuardUnavailable
+        with project_copy(git=True, minimal_runtime=True) as root:
+            self.setup_native(root)
+            target = [sys.executable, '-c', 'open("unexpected-effect","w").close()']
+            with patch('getzilla.git_binding_guard.NativeGitGraph',
+                       side_effect=GuardUnavailable('synthetic unavailable transport')):
+                with self.assertRaises(GuardUnavailable):
+                    task_budget.execute_local(root, 'native-transport-refusal', target, timeout=1)
+            self.assertFalse((root/'unexpected-effect').exists())
+            self.assertEqual(task_budget.inspect(root)['calls'], 1)
+            with self.assertRaisesRegex(ValueError, 'budget-effect-already-claimed-or-stale'):
+                task_budget.execute_local(root, 'native-transport-refusal', target, timeout=1)
+            self.assertEqual(task_budget.inspect(root)['calls'], 1)
+
+    def test_native_launch_root_descriptor_closes_after_spawn_and_spawn_error(self):
+        from getzilla.git_binding_guard import NativeGitGraph
+        for fails in (False, True):
+            with self.subTest(spawn_error=fails), project_copy(git=True, minimal_runtime=True) as root:
+                self.setup_native(root)
+                target = [sys.executable, '--version']
+                closed = []
+                def transport(anchor):
+                    graph = NativeGitGraph(anchor)
+                    descriptors = graph.pass_fds()
+                    original_close = graph.close
+                    def close():
+                        original_close()
+                        for descriptor in descriptors:
+                            with self.assertRaises(OSError):
+                                os.fstat(descriptor)
+                        closed.append(True)
+                    graph.close = close
+                    return graph
+                original_popen = subprocess.Popen
+                def spawn(argv, *args, **kwargs):
+                    if fails and list(argv) == target:
+                        raise OSError('synthetic spawn error')
+                    return original_popen(argv, *args, **kwargs)
+                with patch('getzilla.git_binding_guard.NativeGitGraph', side_effect=transport), \
+                        patch.object(subprocess, 'Popen', side_effect=spawn):
+                    if fails:
+                        with self.assertRaisesRegex(OSError, 'synthetic spawn error'):
+                            task_budget.execute_local(root, 'native-fd-close', target, timeout=1)
+                    else:
+                        self.assertEqual(task_budget.execute_local(
+                            root, 'native-fd-close', target, timeout=1)['outcome'], 'succeeded')
+                self.assertEqual(closed, [True])
+                self.assertEqual(task_budget.inspect(root)['calls'], 1)
 
     def test_real_spawn_result_and_replay_have_no_raw_payload_or_invented_usage(self):
         with project_copy(git=True, minimal_runtime=True) as root:
