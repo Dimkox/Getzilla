@@ -190,12 +190,41 @@ class ReadLedgerHookTests(unittest.TestCase):
 
 
 class ReadLedgerUnitTests(unittest.TestCase):
+    def test_declined_publication_reports_acquire_before_final_equality(self) -> None:
+        @contextmanager
+        def decline(*args, **kwargs):
+            raise TimeoutError('public fixture acquisition declined')
+            yield
+
+        case = ReadLedgerUnitTests('test_public_two_writer_phase_observer_preserves_updates')
+        with mock.patch.object(state, 'runtime_lock', decline), \
+                mock.patch.object(case, 'assertFalse', wraps=case.assertFalse) as observed:
+            with self.assertRaises(AssertionError):
+                case.test_public_two_writer_phase_observer_preserves_updates()
+        self.assertEqual([call.args[0] for call in observed.call_args_list], [False, True])
+
+    def test_complete_publication_keeps_release_refusal_diagnostic_only(self) -> None:
+        real_lock = state.runtime_lock
+
+        @contextmanager
+        def release_refusal(*args, **kwargs):
+            with real_lock(*args, **kwargs):
+                yield
+            raise OSError(errno.EIO, 'public fixture release declined')
+
+        case = ReadLedgerUnitTests('test_public_two_writer_phase_observer_preserves_updates')
+        with mock.patch.object(state, 'runtime_lock', release_refusal), \
+                mock.patch.object(case, 'assertFalse', wraps=case.assertFalse) as observed:
+            case.test_public_two_writer_phase_observer_preserves_updates()
+        self.assertEqual([call.args[0] for call in observed.call_args_list], [False])
+
     def test_public_two_writer_phase_observer_preserves_updates(self) -> None:
         factory = globals().get('_WriterPhaseObserver')
         self.assertTrue(callable(factory), 'fixed worker phases are required')
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            observer = factory(state.runtime_lock, [])
+            refusals = []
+            observer = factory(state.runtime_lock, refusals)
             errors = []
             start = threading.Barrier(2)
             threads = [threading.Thread(target=observer.writer, args=(root, start, index, errors))
@@ -209,6 +238,11 @@ class ReadLedgerUnitTests(unittest.TestCase):
             self.assertFalse(any(thread.is_alive() for thread in threads))
             self.assertTrue(all(not values for values in observer.failures.values()))
             self.assertEqual(len(errors), 0)
+            if seen(root, 's') != {'f0.py', 'f1.py'}:
+                self.assertFalse(any(row['stage'] == 'acquire' for row in refusals))
+                self.assertFalse(any(row['stage'] == 'update' for row in refusals))
+                self.assertFalse(any(row['stage'] == 'release' for row in refusals))
+                self.assertFalse(any(row['stage'] not in {'acquire', 'update', 'release'} for row in refusals))
             self.assertEqual(seen(root, 's'), {'f0.py', 'f1.py'})
 
     def test_advisory_update_and_release_refusals_are_not_escaped_failures(self) -> None:

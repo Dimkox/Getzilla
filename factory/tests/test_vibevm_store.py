@@ -20,6 +20,8 @@ from getzilla_factory.vibevm_store import (
     VibeVMStoreError,
     reconcile_boot_block,
 )
+from getzilla_factory import vibevm_store
+_PROCFS_AVAILABLE = vibevm_store.procfs_descriptor_reopen()
 
 
 def archive(entries):
@@ -89,6 +91,49 @@ class VibeVMStoreTests(unittest.TestCase):
         self.assertEqual(self.store.capability, "factory_package_store_v1")
         self.assertFalse(hasattr(self.store, "execute_adapter"))
 
+    def test_missing_procfs_refuses_before_registry_callback_or_data_writes(self):
+        payload = archive([("readme.md", "public fixture")])
+        item = self.trust(package("public", "1", payload))
+        lock = self.store.resolve([item])
+        before = sorted(path.relative_to(self.base).as_posix() for path in self.base.rglob("*"))
+        self.registry.callback = lambda: self.fail("registry callback reached before capability refusal")
+        operations = (
+            lambda: self.store.admit(item, payload),
+            lambda: self.store.materialize(lock, "owner\n", "managed"), self.store.reconcile,
+        )
+        with mock.patch.object(vibevm_store, "procfs_descriptor_reopen", return_value=False, create=True):
+            for operation in operations:
+                with self.subTest(operation=operation), self.assertRaisesRegex(VibeVMStoreError, "^procfs_unavailable$"):
+                    operation()
+                self.assertEqual(sorted(path.relative_to(self.base).as_posix() for path in self.base.rglob("*")), before)
+
+    def test_procfs_probe_closes_owned_descriptors_and_refuses_wrong_identity(self):
+        probe = getattr(vibevm_store, "procfs_descriptor_reopen", None)
+        self.assertTrue(callable(probe), "a measured descriptor-reopen predicate is required")
+        opened, actual_open = [], os.open
+        def track(*args, **kwargs):
+            descriptor = actual_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with mock.patch.object(vibevm_store.os, "open", side_effect=track):
+            supported = probe()
+        self.assertIs(type(supported), bool)
+        for descriptor in set(opened):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        with mock.patch.object(vibevm_store.os, "open", side_effect=FileNotFoundError):
+            self.assertFalse(probe())
+        opened.clear()
+        def wrong_reopen(path, *args, **kwargs):
+            descriptor = actual_open(self.base if str(path).startswith("/proc/self/fd/") else path, *args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with mock.patch.object(vibevm_store.os, "open", side_effect=wrong_reopen):
+            self.assertFalse(probe())
+        for descriptor in set(opened):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
     def test_resolve_rechecks_authoritative_graph(self):
         a = self.trust(package("a", "1", archive([("a", "A")]), dependencies={"b": "1"}))
         b = self.trust(package("b", "1", archive([("b", "B")])))
@@ -104,6 +149,7 @@ class VibeVMStoreTests(unittest.TestCase):
         self.registry.register(cycled)
         self.assert_code("dependency_cycle:a->b->a", lambda: self.store.resolve([a, cycled]))
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_replay_rechecks_digest_origin_and_lifecycle_authority(self):
         payload = archive([("rules/a.md", "canonical")])
         item = package("rules", "1", payload)
@@ -147,6 +193,7 @@ class VibeVMStoreTests(unittest.TestCase):
         ):
             self.assert_code(code, lambda o=owner_text, m=managed: reconcile_boot_block(o, m))
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_hostile_zip_matrix_preserves_old_active(self):
         good = archive([("rule.md", "ok")])
         good_item = package("good", "1", good)
@@ -195,6 +242,7 @@ class VibeVMStoreTests(unittest.TestCase):
                 self.assert_code("noncanonical_member", lambda: self.store.materialize(lock, "owner\n", "bad"))
                 self.assertEqual(self.store.active_generation(), old)
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_crc_and_encrypted_members_fail_closed(self):
         good = archive([("good", "ok")])
         good_item = package("good", "1", good)
@@ -217,6 +265,7 @@ class VibeVMStoreTests(unittest.TestCase):
         self.assert_code("encrypted_member:a", lambda: self.store.materialize(lock, "owner\n", "x"))
         self.assertEqual(self.store.active_generation(), old)
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_manifest_tamper_and_generation_symlink_are_rejected(self):
         payload = archive([("rule.md", "ok")])
         item = package("rules", "1", payload)
@@ -234,6 +283,7 @@ class VibeVMStoreTests(unittest.TestCase):
         self.store.active_path.write_text("f" * 64 + "\n")
         self.assert_code("active_generation_corrupt", self.store.active_generation)
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_external_hardlinks_in_object_generation_manifest_and_active_fail_closed(self):
         payload = archive([("rule.md", "ok")])
         item = package("rules", "1", payload)
@@ -257,6 +307,7 @@ class VibeVMStoreTests(unittest.TestCase):
         os.link(self.store.active_path, external)
         self.assert_code("active_generation_corrupt", self.store.active_generation)
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_registry_callback_cannot_redirect_object_writes_or_reads(self):
         payload = archive([("rule.md", "ok")])
         item = package("rules", "1", payload)
@@ -274,6 +325,7 @@ class VibeVMStoreTests(unittest.TestCase):
         self.assert_code("store_path_changed", lambda: self.store.replay(lock))
         self.assertEqual(list(outside.iterdir()), [])
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded(self):
         def descriptor_count():
             return len(list(Path("/proc/self/fd").iterdir()))
@@ -329,6 +381,7 @@ class VibeVMStoreTests(unittest.TestCase):
             self.assert_code("object_authority_mismatch:leak@1", lambda: self.store.replay(lock))
         self.assertEqual(descriptor_count(), before_replays)
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_restart_and_tenant_repository_symlink_isolation(self):
         payload = archive([("rule.md", "ok")])
         item = package("rules", "1", payload)
@@ -364,6 +417,7 @@ class VibeVMStoreTests(unittest.TestCase):
             lambda: VibeVMStore(alias / "root", tenant_id="tenant", repository_id="repo", registry=self.registry),
         )
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_exact_archive_bounds_are_admitted(self):
         bounded = VibeVMStore(self.base, tenant_id="bounded", repository_id="repo", registry=self.registry,
                               max_files=1, max_bytes=8, max_depth=3)
@@ -375,6 +429,7 @@ class VibeVMStoreTests(unittest.TestCase):
         self.assertEqual(bounded.active_generation(), None)
         self.assertEqual(bounded.materialize(lock, "owner\n", "managed"), bounded.active_generation())
 
+    @unittest.skipUnless(_PROCFS_AVAILABLE, "requires Linux procfs descriptor reopening")
     def test_thread_and_process_competitors_converge_and_reconcile(self):
         payload = archive([("rule.md", "ok")])
         item = package("rules", "1", payload)
