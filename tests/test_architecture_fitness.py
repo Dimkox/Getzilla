@@ -4299,6 +4299,67 @@ class ArchitectureFitnessTests(unittest.TestCase):
                             self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
                             self.assertNotIn('new_queue', report.triggers)
 
+    def test_fixed64_module_policy_inspects_queue_tail_and_refuses65_with_cache_replay(self) -> None:
+        for total, reexport, reverse in ((total, reexport, reverse) for total in (64, 65)
+                                        for reexport in (False, True) for reverse in (False, True)):
+            with self.subTest(total=total, reexport=reexport, reverse=reverse):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                leaves = total - 1 - int(reexport)
+                sources = {}
+                for index in range(leaves):
+                    sources[f'src/part{index:02d}.py'] = (
+                        'from rq import Queue\nvalue = Queue()\n' if index == leaves - 1 else 'value = 1\n')
+                if reexport:
+                    sources['src/bridge.py'] = 'from part00 import value\n'
+                for path, value in sources.items():
+                    repo.write_text(path, value)
+                def consumer(indices):
+                    return ''.join(
+                        f'from {"bridge" if reexport and index == 0 else f"part{index:02d}"} import value as v{index}\n'
+                        for index in indices) + ''.join(f'v{index}.enqueue(job)\n' for index in indices)
+                repo.write_text('src/use.py', '')
+                base = repo.commit('fixed unique module boundary baseline')
+                source = consumer(list(reversed(range(leaves))) if reverse else range(leaves))
+                repo.write_text('src/use.py', source)
+                head = repo.commit('queue tail beyond the previous module budget')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                roots = FIT._queue_source_roots(ARCHITECTURE.load_architecture(repo.root))
+                def run(cache, text=source, path='src/use.py'):
+                    budget = FIT._QueueBudget('head')
+                    try:
+                        result = FIT._queue_signals(repo.root, diff, ast.parse(text), 'head', cache, '', roots,
+                            source_path=path, source=text.encode(), budget=budget)
+                        if result.state == 'resolved':
+                            self.assertTrue(result.signals, result)
+                        return result.state, budget
+                    except ARCHITECTURE.ArchitectureError as error:
+                        return f'error:{error.code}:{error}', budget
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                cold, cold_budget = run(cache)
+                replay, replay_budget = run(cache)
+                separate_warm = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                prefix = consumer(range(leaves // 2))
+                self.assertEqual(run(separate_warm, prefix, 'src/warm.py')[0], 'not_queue')
+                warm, warm_budget = run(separate_warm)
+                if total == 65:
+                    for state in (cold, replay, warm):
+                        self.assertIn('error:limit:', state)
+                    continue
+                for state, budget in ((cold, cold_budget), (replay, replay_budget), (warm, warm_budget)):
+                    self.assertEqual(state, 'resolved', state)
+                    self.assertEqual({item.path for item in budget.sources.values()}, {'src/use.py', *sources})
+                    self.assertEqual(len(budget.sources), 64)
+                    self.assertEqual(budget.source_bytes, len(source.encode()) + sum(len(v.encode()) for v in sources.values()))
+                self.assertEqual((cold_budget.ast_nodes, cold_budget.logical_work),
+                                 (replay_budget.ast_nodes, replay_budget.logical_work))
+                self.assertEqual((cold_budget.ast_nodes, cold_budget.logical_work),
+                                 (warm_budget.ast_nodes, warm_budget.logical_work))
+                cold_paths = [item.path for item in cold_budget.sources.values()]
+                self.assertGreater(cold_paths.index(f'src/part{leaves - 1:02d}.py') + 1, 48)
+
     def test_queue_budget_deduplicates_overlap_and_preserves_importer_order(self) -> None:
         repo = GitArchitectureRepo(self)
         system = _system()
@@ -4334,6 +4395,48 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     self.assertEqual(result.state, 'not_queue')
                     self.assertEqual((budget.source_bytes, budget.ast_nodes, budget.logical_work),
                                      (expected_bytes, expected_nodes, 4))
+
+    def test_fixed64_policy_preserves_independent_real_byte_and_ast_refusals(self) -> None:
+        cases = (
+            ('source bytes', 63, '#' + 'x' * 34000 + '\nvalue = 1\n', 'aggregate source byte'),
+            ('aggregate nodes', 63, 'value = 1\npadding = [' + '0,' * 7000 + ']\n', 'aggregate AST node'),
+            ('individual nodes', 1, 'value = 1\npadding = [' + '0,' * 200000 + ']\n', 'AST node limit'),
+        )
+        for label, count, body, reason in cases:
+            with self.subTest(limit=label):
+                repo = GitArchitectureRepo(self)
+                system = _system()
+                system['nodes'][0]['repository_paths'] = ['src']
+                repo.model(system, _rules())
+                for index in range(count):
+                    repo.write_text(f'src/part{index:02d}.py', body)
+                repo.write_text('src/use.py', '')
+                base = repo.commit('independent resource baseline')
+                source = ''.join(f'from part{i:02d} import value as v{i}\n' for i in range(count))
+                source += ''.join(f'v{i}.enqueue(job)\n' for i in range(count))
+                repo.write_text('src/use.py', source)
+                head = repo.commit('resource demand within64 modules')
+                diff = DIFF.diff_architecture(repo.root, base_sha=base, head_sha=head)
+                roots = FIT._queue_source_roots(ARCHITECTURE.load_architecture(repo.root))
+                cache = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
+                for _ in range(2):
+                    with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, reason) as caught:
+                        FIT._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
+                            source_path='src/use.py', source=source.encode())
+                    self.assertEqual(caught.exception.code, 'limit')
+
+    def test_fixed64_policy_keeps_all_other_constants_and_actual_work_boundary(self) -> None:
+        self.assertEqual((FIT.MAX_QUEUE_ANALYSIS_BYTES, FIT.MAX_QUEUE_ANALYSIS_AST_NODES,
+                          FIT.MAX_QUEUE_ANALYSIS_WORK, FIT.MAX_ANALYZED_AST_NODES,
+                          FIT.MAX_QUEUE_ADAPTER_DEPTH, FIT.MAX_QUEUE_SOURCE_ROOTS),
+                         (2097152, 400000, 4096, 200000, 8, 64))
+        budget = FIT._QueueBudget('head')
+        for _ in range(4096):
+            budget.step()
+        self.assertEqual((budget.logical_work, budget.actual_work), (4096, 4096))
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, 'aggregate work limit') as caught:
+            budget.step()
+        self.assertEqual(caught.exception.code, 'limit')
 
     def test_queue_cached_summary_cannot_omit_its_resource_footprint(self) -> None:
         repo = GitArchitectureRepo(self)
