@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timezone
@@ -402,9 +403,21 @@ class BatchTests(unittest.TestCase):
         # No scheduler or policy-preflight time participates in this oracle.
         now = [0.0]
         events = []
+        eof = threading.Event()
+        readers = []
+        clock_calls = [0]
+
+        class ClosedOutput(io.BytesIO):
+            def read(self, size=-1):
+                readers.append(threading.current_thread())
+                return super().read(size)
+
+            def close(self):
+                super().close()
+                eof.set()
 
         class Process:
-            stdout = io.BytesIO(b'')
+            stdout = ClosedOutput(b'')
             returncode = None
 
             def poll(self):
@@ -416,29 +429,19 @@ class BatchTests(unittest.TestCase):
                     raise AssertionError('fallback wait reached a live process')
                 return self.returncode
 
-        class Reader:
-            def __init__(self, *, target, **kwargs):
-                self.target = target
-                self.ident = None
-
-            def start(self):
-                self.target()  # Synchronous EOF, before the deadline loop.
-
-            def is_alive(self):
-                return False
-
-        class EmptyQueue:
-            def __init__(self, **kwargs):
-                pass
-
-            def empty(self):
-                return True
-
-            def get(self, timeout):
-                now[0] += timeout
-                if now[0] > 0.2:
-                    raise AssertionError('deadline did not stop the live producer')
-                raise parallel.Empty
+        def capture_clock():
+            clock_calls[0] += 1
+            if clock_calls[0] == 1:
+                return 0.0  # Capture begins before the actual reader starts.
+            self.assertTrue(eof.wait(1), 'closed reader must reach EOF')
+            readers[0].join(1)
+            self.assertFalse(readers[0].is_alive(), 'real reader must finish')
+            # First loop stays before deadline; after EOF a second iteration
+            # requires the producer-alive predicate, independently of scheduling.
+            now[0] = 0.0 if clock_calls[0] == 2 else 0.1
+            if clock_calls[0] > 5:
+                raise AssertionError('capture deadline did not stop producer')
+            return now[0]
 
         process = Process()
 
@@ -453,9 +456,7 @@ class BatchTests(unittest.TestCase):
         directory = fsx.open_dir(self.root)
         try:
             job = parallel.Job(0, 'inert-public-producer')
-            with mock.patch.object(parallel, 'Thread', Reader), \
-                 mock.patch.object(parallel, 'Queue', EmptyQueue), \
-                 mock.patch.object(parallel.time, 'monotonic', side_effect=lambda: now[0]), \
+            with mock.patch.object(parallel.time, 'monotonic', side_effect=capture_clock), \
                  mock.patch.object(parallel, '_stop_process', side_effect=stop), \
                  mock.patch.object(fsx, 'owned_job', return_value=None):
                 parallel._capture(job, directory, self.root, 64, 0.1, lambda *args, **kwargs: process)
