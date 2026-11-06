@@ -2593,6 +2593,47 @@ class ArchitectureFitnessTests(unittest.TestCase):
             with self.subTest(comparison=comparison):
                 self.assertFalse(self._complete_queue_source(prefix + f'if {comparison}:\n    pass\n').signals)
 
+    def test_header_binding_events_cannot_invent_module_origin(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'def setter(arg=(__name__ := "foreign")):\n    pass\npatch(__name__+".unrelated",None)\n',
+            '@(__name__ := decorator)\ndef setter():\n    pass\npatch(__name__+".unrelated",None)\n',
+            'class Setter((__name__ := base)):\n    pass\npatch(__name__+".unrelated",None)\n',
+            'def outer():\n    def setter(arg=(__name__ := "local")):\n        pass\n'
+            '    patch(__name__+".unrelated",None)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertIn('import:queue.Full', self._complete_queue_source(prefix + source).signals)
+
+    def test_header_event_refusal_preserves_proved_body_and_class_locals(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            'def ordinary():\n    __name__="local"\npatch(__name__+".unrelated",None)\n',
+            'def ordinary(__name__):\n    return __name__\npatch(__name__+".unrelated",None)\n',
+            'class Ordinary:\n    __name__="local"\n    def apply(self):\n'
+            '        patch(__name__+".unrelated",None)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertFalse(self._complete_queue_source(prefix + source).signals)
+
+    @unittest.skipUnless(hasattr(ast, 'TypeVar'), 'type parameter syntax requires Python 3.12')
+    def test_captured_class_type_parameter_is_not_implicit_module_origin(self):
+        prefix = 'from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+        cases = (
+            (False, 'class Example:\n    __name__="class-local"\n    def apply(self):\n'
+             '        patch(__name__+".unrelated",None)\n'),
+            (True, 'def apply[__name__]():\n    patch(__name__+".unrelated",None)\n'),
+            (True, 'class Example[__name__]:\n    def apply(self):\n'
+             '        patch(__name__+".unrelated",None)\n'),
+        )
+        for governed, source in cases:
+            with self.subTest(source=source):
+                # Compile validates the declared scope; the code is never run.
+                compile(ast.parse(prefix + source), '<public-typeparam-fixture>', 'exec')
+                self.assertEqual(bool(self._complete_queue_source(prefix + source).signals), governed)
+
     def test_partial_queue_ast_cannot_invent_implicit_module_origin(self):
         tree = ast.parse('from queue import Full\nfrom unittest.mock import patch\n'
                          'def f():\n    raise Full()\n'

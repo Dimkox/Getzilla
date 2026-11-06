@@ -119,6 +119,26 @@ def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False)
     if prefix_loads and (not complete_module or not isinstance(tree, ast.Module)):
         # A flattened body/export slice cannot supply its lost scope provenance.
         return tree
+    if prefix_loads:
+        for event in bindings:
+            if (event.name != module_name or not isinstance(event.node, ast.Name)
+                    or not isinstance(event.node.ctx, (ast.Store, ast.Del))):
+                continue
+            child = event.node
+            for _ in range(MAX_DOTTED_IMPORT_DEPTH):
+                owner = parents.get(child)
+                if owner is None:
+                    break
+                if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                    body_write = child is owner.body if isinstance(owner, ast.Lambda) else child in owner.body
+                    if not body_write:
+                        # Definition headers execute outside the new lexical
+                        # owner. Unknown event ownership cannot grant trust.
+                        return tree
+                    break
+                child = owner
+            else:
+                return tree
     owners = {id(event.node): binding_owner(event.node, parents) for event in bindings} if prefix_loads else {}
     local_bindings = {owners[id(event.node)] for event in bindings if event.name == module_name} if prefix_loads else set()
     declarations = {binding_owner(node, parents) for node in nodes
@@ -151,6 +171,9 @@ def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False)
                     return False
                 function_body = True
             elif isinstance(owner, ast.ClassDef):
+                if any(getattr(parameter, 'name', None) == module_name
+                       for parameter in getattr(owner, 'type_params', ())):
+                    return None  # Methods can capture this sibling annotation-scope binding.
                 if not function_body or current not in owner.body:
                     return None
             elif isinstance(owner, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, *type_scopes)):
