@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
@@ -48,6 +49,402 @@ _CONTAINER_MUTATORS = {
     "update",
 }
 MAX_DOTTED_IMPORT_DEPTH = 256
+
+
+def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False) -> ast.AST:
+    """Classify only stable stdlib Empty/Full exception uses as non-queue.
+
+    Repository callers must first rule out a local queue module. Escapes,
+    rebinding, reflection and unknown mock replacement keep ordinary policy.
+    Visible selectors/addresses need canonical-use proof; this does not prove
+    hidden effects of ordinary helpers.
+    Special module-prefix proof requires complete source syntax; synthetic
+    consumers leave complete_module false and retain ordinary governance.
+    This projection never executes imports or modifies the caller's AST.
+    """
+    nodes = list(ast.walk(tree))
+    imports = [node for node in nodes if isinstance(node, ast.ImportFrom)
+               and not node.level and node.module == 'queue'
+               and any(alias.name in {'Empty', 'Full'} for alias in node.names)]
+    if not imports or not namespace_is_closed(tree, allow_instrumentation=True):
+        return tree
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    bindings = binding_events(tree)
+    counts = Counter(event.name for event in bindings)
+    loads = {}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loads.setdefault(node.id, []).append(node)
+    patch_names = set()
+    instrumentation_roots = set()
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module == 'unittest.mock':
+            # Only this absolute capability has the member-mutation proof below.
+            # Other instrumentation imports can expose the same mutation power.
+            if node.level or any(alias.name != 'patch' for alias in node.names):
+                return tree
+            patch_names.update(alias.asname or alias.name for alias in node.names if alias.name == 'patch')
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest' and not node.level:
+            patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'mock')
+        elif isinstance(node, ast.Import):
+            patch_names.update((alias.asname or alias.name) + '.patch' for alias in node.names if alias.name == 'unittest.mock')
+            patch_names.update((alias.asname or alias.name) + '.mock.patch' for alias in node.names if alias.name == 'unittest')
+            instrumentation_roots.update(alias.asname or alias.name.split('.')[0] for alias in node.names
+                                         if alias.name in {'unittest', 'unittest.mock'})
+    if any(counts[name.split('.')[0]] != 1 for name in patch_names):
+        return tree
+
+    def dotted(node):
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+            if len(parts) > MAX_DOTTED_IMPORT_DEPTH:
+                return None
+        return '.'.join((node.id, *reversed(parts))) if isinstance(node, ast.Name) else ''
+
+    multiple_patches = {p + '.multiple' for p in patch_names}
+    patch_calls = patch_names | multiple_patches
+    object_patches = {p + '.object' for p in patch_names}
+    mock_namespaces = {p.rsplit('.', 1)[0] for p in patch_names if '.' in p}
+    exception_names = {alias.asname or alias.name for node in imports for alias in node.names
+                       if alias.name in {'Empty', 'Full'}}
+    module_name = '__name__'
+    prefix_loads = {
+        id(node.args[0].left)
+        for node in nodes if isinstance(node, ast.Call) and dotted(node.func) in patch_calls
+        and node.args and isinstance(node.args[0], ast.BinOp) and isinstance(node.args[0].op, ast.Add)
+        and isinstance(node.args[0].left, ast.Name) and node.args[0].left.id == module_name
+    }
+    if prefix_loads and (not complete_module or not isinstance(tree, ast.Module)):
+        # A flattened body/export slice cannot supply its lost scope provenance.
+        return tree
+    if prefix_loads:
+        for event in bindings:
+            if (event.name != module_name or not isinstance(event.node, ast.Name)
+                    or not isinstance(event.node.ctx, (ast.Store, ast.Del))):
+                continue
+            child = event.node
+            for _ in range(MAX_DOTTED_IMPORT_DEPTH):
+                owner = parents.get(child)
+                if owner is None:
+                    break
+                if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                    body_write = child is owner.body if isinstance(owner, ast.Lambda) else child in owner.body
+                    if not body_write:
+                        # Definition headers execute outside the new lexical
+                        # owner. Unknown event ownership cannot grant trust.
+                        return tree
+                    break
+                child = owner
+            else:
+                return tree
+    owners = {id(event.node): binding_owner(event.node, parents) for event in bindings} if prefix_loads else {}
+    local_bindings = {owners[id(event.node)] for event in bindings if event.name == module_name} if prefix_loads else set()
+    declarations = {binding_owner(node, parents) for node in nodes
+                    if isinstance(node, (ast.Global, ast.Nonlocal)) and module_name in node.names} if prefix_loads else set()
+    global_writes = {binding_owner(node, parents) for node in nodes
+                     if isinstance(node, ast.Global) and module_name in node.names} if prefix_loads else set()
+    if prefix_loads and any(event.name == module_name and
+                            (owners[id(event.node)] is None or owners[id(event.node)] in global_writes)
+                            for event in bindings):
+        return tree
+
+    def module_origin(reference):
+        """True for implicit module lookup, False for local, None if unresolved.
+
+        binding_owner indexes declarations; it does not resolve runtime loads.
+        Function bodies skip class namespaces, but their headers do not.
+        """
+        current, function_body = reference, False
+        type_scopes = tuple(getattr(ast, name) for name in ('TypeAlias', 'TypeVar', 'ParamSpec', 'TypeVarTuple')
+                            if hasattr(ast, name))
+        for _ in range(MAX_DOTTED_IMPORT_DEPTH):
+            owner = parents.get(current)
+            if owner is None:
+                return None
+            if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                in_body = current is owner.body if isinstance(owner, ast.Lambda) else current in owner.body
+                if not in_body or owner in declarations:
+                    return None
+                if owner in local_bindings:
+                    return False
+                function_body = True
+            elif isinstance(owner, ast.ClassDef):
+                if any(getattr(parameter, 'name', None) == module_name
+                       for parameter in getattr(owner, 'type_params', ())):
+                    return None  # Methods can capture this sibling annotation-scope binding.
+                if not function_body or current not in owner.body:
+                    return None
+            elif isinstance(owner, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, *type_scopes)):
+                return None
+            elif owner is tree:
+                return True
+            current = owner
+        return None
+
+    if prefix_loads and any(module_origin(node) is not True for node in nodes if id(node) in prefix_loads):
+        return tree
+    address_names = {}
+    for node in imports:
+        for alias in node.names:
+            if alias.name in {'Empty', 'Full'}:
+                local = alias.asname or alias.name
+                address_names.setdefault(local, set()).add(local)
+                address_names.setdefault(alias.name, set()).add(local)
+    if prefix_loads:
+        # This is a dependency of prefix normalization, not a name blacklist.
+        # The same address and mutation proof must also protect that binding.
+        address_names[module_name] = {module_name}
+    approved_literals = set()
+
+    # Match pkgutil.resolve_name's positive grammar, without resolving anything.
+    # Its '$' also permits a terminal newline in the container passed by patch.
+    word = r'(?!\d)\w+'
+    path = rf'{word}(?:\.{word})*'
+    resolver_pattern = re.compile(rf'^(?P<pkg>{path})(?P<colon>:(?P<obj>{path})?)?$')
+
+    def address_proof(address):
+        """Return known operand forms/bindings, or explicit UNKNOWN (None).
+
+        A failed parse is never proof that an address is unrelated. Keep any
+        proved container bindings even when its final member is unclassified.
+        """
+        if address.count('.') + address.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH:
+            return None, set()
+
+        def resolver(value):
+            match = resolver_pattern.match(value)
+            if match is None:
+                return None
+            parts = match['pkg'].split('.') + (match['obj'] or '').split('.')
+            return set().union(*(address_names.get(part, ()) for part in parts))
+
+        def absolute(value):
+            forms, bindings = set(), set()
+            if value.count('.') + value.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH:
+                return forms, bindings
+            resolved = resolver(value)
+            if resolved is not None:
+                forms.add('resolver')
+                bindings.update(resolved)
+                if ':' not in value and resolver_pattern.fullmatch(value):
+                    forms.add('member')
+            if '.' in value:
+                container, member = value.rsplit('.', 1)
+                owner = resolver(container)
+                if owner is not None:
+                    bindings.update(owner)
+                    if member.isidentifier():
+                        forms.add('target')
+                        bindings.update(address_names.get(member, ()))
+            return forms, bindings
+
+        forms, bindings = absolute(address)
+        # Literal suffixes can carry __name__ addresses through opaque helpers;
+        # they are not absolute canonical targets or member names themselves.
+        if address.startswith(('.', ':')):
+            suffix_forms, suffix_bindings = absolute('__getzilla_current_module__' + address)
+            if suffix_forms:
+                forms.add('suffix')
+            bindings.update(suffix_bindings)
+        return frozenset(forms) if forms else None, bindings
+
+    replaced = set()
+    canonical_calls = set()
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in instrumentation_roots:
+            owner = parents.get(node)
+            if not isinstance(owner, ast.Attribute) or owner.value is not node:
+                return tree
+        if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in mock_namespaces:
+            owner = parents.get(node)
+            if not isinstance(owner, ast.Attribute) or owner.value is not node or owner.attr != 'patch':
+                # A getter, alias or opaque consumer may recover mock.patch.
+                return tree
+        if isinstance(node, (ast.Name, ast.Attribute)) and dotted(node) in patch_names:
+            owner = parents.get(node)
+            if isinstance(owner, ast.Call) and owner.func is node:
+                pass
+            elif (isinstance(owner, ast.Attribute) and owner.value is node
+                  and owner.attr in {'object', 'multiple'}
+                  and isinstance(parents.get(owner), ast.Call) and parents[owner].func is owner):
+                pass
+            else:
+                return tree
+        if not isinstance(node, ast.Call):
+            continue
+        function = dotted(node.func)
+        if function is None:
+            return tree
+        if function in object_patches:
+            member = node.args[1] if len(node.args) > 1 else None
+            if not isinstance(member, ast.Constant) or type(member.value) is not str:
+                return tree
+            forms, bindings = address_proof(member.value)
+            if forms is None or 'member' not in forms:
+                return tree
+            replaced.add(member.value)
+            replaced.update(bindings)
+            approved_literals.add(id(member))
+        elif function in patch_calls:
+            target = node.args[0] if node.args else None
+            prefix = ''
+            if (isinstance(target, ast.BinOp) and isinstance(target.op, ast.Add)
+                    and isinstance(target.left, ast.Name) and target.left.id == '__name__'):
+                target = target.right
+                prefix = '__getzilla_current_module__'
+            if not isinstance(target, ast.Constant) or type(target.value) is not str:
+                return tree
+            if prefix and not target.value.startswith(('.', ':')):
+                return tree
+            forms, bindings = address_proof(prefix + target.value)
+            required = 'resolver' if function in multiple_patches else 'target'
+            if forms is None or required not in forms:
+                return tree
+            replaced.add(target.value.rsplit('.', 1)[-1])
+            replaced.update(bindings)
+            approved_literals.add(id(target))
+        else:
+            continue
+        canonical_calls.add(id(node))
+        for keyword in node.keywords:
+            if keyword.arg is not None:
+                if function in multiple_patches:
+                    forms, bindings = address_proof(keyword.arg)
+                    if forms is None or 'member' not in forms:
+                        return tree
+                    replaced.add(keyword.arg)
+                    replaced.update(bindings)
+                continue
+            mapping = keyword.value
+            if not isinstance(mapping, ast.Dict):
+                return tree
+            for key in mapping.keys:
+                if not isinstance(key, ast.Constant) or type(key.value) is not str:
+                    return tree
+                if function in multiple_patches:
+                    forms, bindings = address_proof(key.value)
+                    if forms is None or 'member' not in forms:
+                        return tree
+                    replaced.add(key.value)
+                    replaced.update(bindings)
+                    approved_literals.add(id(key))
+
+    canonical_operands = set()
+    pending = [(tree, False)]
+    while pending:
+        node, inside = pending.pop()
+        inside = inside or id(node) in canonical_calls
+        if inside:
+            canonical_operands.add(id(node))
+        pending.extend((child, inside) for child in ast.iter_child_nodes(node))
+
+    if prefix_loads:
+        if module_name in replaced or any(isinstance(node, ast.Attribute) and node.attr == module_name
+                                         and isinstance(node.ctx, (ast.Store, ast.Del)) for node in nodes):
+            return tree
+        for reference in loads.get(module_name, ()):
+            if id(reference) in prefix_loads:
+                continue
+            origin = module_origin(reference)
+            if origin is False:
+                # An unrelated local gets no special-binding trust here.
+                continue
+            owner = parents.get(reference)
+            literal_compare = False
+            if (isinstance(owner, ast.Compare) and len(owner.ops) == len(owner.comparators) == 1
+                    and isinstance(owner.ops[0], (ast.Eq, ast.NotEq))):
+                other = owner.comparators[0] if owner.left is reference else owner.left
+                literal_compare = ((owner.left is reference or owner.comparators[0] is reference)
+                                   and isinstance(other, ast.Constant) and type(other.value) is str)
+            passive = isinstance(owner, ast.Expr) or literal_compare
+            message = (isinstance(owner, ast.Call) and reference in owner.args
+                       and isinstance(owner.func, ast.Name) and owner.func.id in exception_names
+                       and isinstance(parents.get(owner), ast.Raise) and parents[owner].exc is owner)
+            if origin is not True or not (passive or message):
+                return tree
+
+    for node in nodes:
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in exception_names
+                and isinstance(parents.get(node), ast.Raise) and parents[node].exc is node):
+            # Literal positional messages stay data, not callback operands.
+            approved_literals.update(id(value) for value in node.args if isinstance(value, ast.Constant))
+    canonical_roots = {name.split('.')[0] for name in patch_names}
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == 'getattr':
+            call = parents.get(node)
+            if not isinstance(call, ast.Call) or call.func is not node:
+                return tree
+            use = parents.get(call)
+            # Comparison/discard does not transfer the result. Arguments,
+            # callable recovery and other escapes need stronger proof.
+            immediate_value = isinstance(use, (ast.Compare, ast.Expr))
+            if not immediate_value:
+                return tree
+        bare_literal = isinstance(parents.get(node), ast.Expr) and parents[node].value is node
+        unproved_selector = (
+            isinstance(node, ast.Attribute) and node.attr == 'patch' and dotted(node) not in patch_names
+            or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == 'patch'
+            and node.id not in canonical_roots | exception_names
+            or isinstance(node, ast.ImportFrom) and any(alias.name == 'patch' for alias in node.names)
+            and (node.level or node.module != 'unittest.mock')
+            or isinstance(node, ast.Constant) and node.value == 'patch'
+            and id(node) not in approved_literals and not bare_literal
+        )
+        if unproved_selector:
+            return tree
+        if isinstance(node, ast.Attribute):
+            path = dotted(node)
+            if path is None:
+                return tree
+            if path:
+                forms, bindings = address_proof(path)
+                if forms is None or bindings:
+                    return tree
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in approved_literals and not bare_literal:
+                forms, bindings = address_proof(node.value)
+                over_limit = node.value.count('.') + node.value.count(':') + 1 > MAX_DOTTED_IMPORT_DEPTH
+                if bindings or (forms is None and (id(node) in canonical_operands or over_limit)):
+                    return tree
+        if isinstance(node, ast.keyword) and node.arg in address_names:
+            return tree
+
+    selected = set()
+    for node in imports:
+        for alias in node.names:
+            name = alias.asname or alias.name
+            if alias.name not in {'Empty', 'Full'} or counts[name] != 1 or name in replaced:
+                continue
+            for reference in loads.get(name, ()):
+                use = reference
+                while isinstance(parents.get(use), ast.Tuple):
+                    use = parents[use]
+                owner = parents.get(use)
+                if isinstance(owner, ast.ExceptHandler) and owner.type is use:
+                    continue
+                if isinstance(owner, ast.Raise) and owner.exc is use:
+                    continue
+                if (isinstance(owner, ast.Call) and owner.func is reference
+                        and isinstance(parents.get(owner), ast.Raise) and parents[owner].exc is owner):
+                    continue
+                break
+            else:
+                selected.add(id(alias))
+    if not selected:
+        return tree
+    memo = {}
+    projected = copy.deepcopy(tree, memo)
+    selected = {id(memo[identity]) for identity in selected}
+
+    class Project(ast.NodeTransformer):
+        def visit_ImportFrom(self, node):
+            node.names = [alias for alias in node.names if id(alias) not in selected]
+            return node if node.names else ast.copy_location(ast.Pass(), node)
+
+    return Project().visit(projected)
 
 
 def local_byte_channel_projection(tree: ast.AST) -> ast.AST:
@@ -1504,7 +1901,10 @@ def analyze_queue_tree(
     value_limit: int = 4096,
     loop_limit: int = 8,
     allow_local_ipc: bool = True,
+    complete_module: bool = False,
 ) -> QueueTreeAnalysis:
+    """Analyze values; only full-source callers may opt into module provenance."""
     if allow_local_ipc:
+        tree = stdlib_exception_projection(tree, complete_module=complete_module)
         tree = local_byte_channel_projection(tree)
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
