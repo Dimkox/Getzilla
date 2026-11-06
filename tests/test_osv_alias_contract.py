@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from getzilla import expanded_security, security_data
 from getzilla import security_osv_snapshot as known_vulns
@@ -107,10 +109,27 @@ class SnapshotAliasTests(unittest.TestCase):
         self.assertEqual(security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], archive([CVE]))
 
     def test_ordinary_exception_does_not_hide_kev_or_turn_malformed_source_into_no_match(self):
+        wrong_osv = self.root / 'invalid-osv-store'
+        wrong_security = self.root / 'invalid-security-store'
+        wrong_osv.mkdir(mode=0o700)
+        wrong_security.mkdir(mode=0o700)
+        for label, osv, security in (('absent', None, None), ('empty', '', ''),
+                                     ('owned-osv', str(wrong_osv), ''),
+                                     ('owned-security', '', str(wrong_security))):
+            with self.subTest(selector=label), mock.patch.dict(
+                    os.environ, {'GETZILLA_OSV_DB': '', 'GETZILLA_SECURITY_DB': ''}):
+                for key, value in (('GETZILLA_OSV_DB', osv), ('GETZILLA_SECURITY_DB', security)):
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                self.check_ordinary_exception_and_kev(self.root / label)
+
+    def check_ordinary_exception_and_kev(self, parent):
         for name, aliases in (('valid', [CVE]), ('malformed', CVE)):
             with self.subTest(case=name):
-                root = self.root / name
-                root.mkdir()
+                root = parent / name
+                root.mkdir(parents=True)
                 (root / 'requirements.txt').write_text('sample==1.0.0\n', encoding='utf-8', newline='\n')
                 config = root / '.getzilla/config'
                 config.mkdir(parents=True)
@@ -118,12 +137,12 @@ class SnapshotAliasTests(unittest.TestCase):
                     'id': ADVISORY, 'reason': 'synthetic ordinary exception', 'expires': '2026-12-01',
                 }]}), encoding='utf-8', newline='\n')
                 refresh(root / '.getzilla/runtime/security-data', aliases)
-                checks = {item['name']: item for item in expanded_security.run_checks(root, now=NOW)}
+                checks = {item['name']: item for item in expanded_security.run_checks(root, environ={}, now=NOW)}
                 kev = checks['security-kev']
                 epss = checks['security-epss']
                 self.assertEqual(kev['status'], 'fail')
                 if name == 'valid':
-                    ordinary = expanded_security.known_vulnerability_report(root, now=NOW)
+                    ordinary = expanded_security.known_vulnerability_report(root, environ={}, now=NOW)
                     self.assertEqual(ordinary['status'], 'pass')
                     self.assertEqual(len(ordinary['accepted']), 1)
                     self.assertEqual(len(kev['details'][0]['findings']), 1)
