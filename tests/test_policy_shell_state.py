@@ -21,6 +21,147 @@ from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
 
 
+def _format_flags(code, result):
+    """Closed diagnostic projections only; never return a hook value."""
+    mapping = isinstance(result, dict)
+    value = result.get('decision') if mapping else None
+    decision = value if value in ('allow', 'deny') else 'unknown'
+    reason = result.get('reason') if mapping else None
+    if not isinstance(reason, str) or not reason:
+        category = 'unknown'
+    elif reason.startswith('Policy resource budget exhausted:'):
+        category = 'budget'
+    elif reason.startswith(('No active approval', 'Missing approval', 'Approval', 'Direct external write requires')):
+        category = 'grant'
+    elif reason.startswith(('Blocked secret', 'Secret read', 'Blocked a secret')):
+        category = 'secret'
+    elif reason.startswith('Sensitive action ') and ': root resolution status is ' in reason:
+        category = 'root'
+    elif reason.startswith('Getzilla policy did not load,') or (
+            reason.startswith('Sensitive action ') and reason.endswith('policy evaluation failed closed.')):
+        category = 'degraded'
+    else:
+        category = 'other'
+    return {'exit_ok': type(code) is int and code == 0, 'mapping': mapping,
+            'decision': decision, 'reason_category': category}
+
+
+def _assert_format_diagnostics(case, allowed, reason, code, result, expected, expected_hook, family, form):
+    flags = _format_flags(code, result)
+    stage = 'ok'
+    category = flags['reason_category']
+    if allowed != expected:
+        stage = 'policy-verdict'
+        category = _format_flags(0, {'reason': reason})['reason_category']
+    elif not flags['exit_ok']:
+        stage = 'hook-exit'
+    elif not flags['mapping']:
+        stage = 'hook-shape'
+    elif flags['decision'] != ('allow' if expected_hook else 'deny'):
+        stage = 'hook-verdict'
+    if stage == 'ok':
+        return
+    with case.subTest(diagnostic='stage'):
+        if stage == 'policy-verdict':
+            case.fail('format stage=policy-verdict')
+        if stage == 'hook-exit':
+            case.fail('format stage=hook-exit')
+        if stage == 'hook-shape':
+            case.fail('format stage=hook-shape')
+        case.fail('format stage=hook-verdict')
+    with case.subTest(diagnostic='reason'):
+        if category == 'budget':
+            case.fail('format reason=budget')
+        if category == 'grant':
+            case.fail('format reason=grant')
+        if category == 'secret':
+            case.fail('format reason=secret')
+        if category == 'root':
+            case.fail('format reason=root')
+        if category == 'degraded':
+            case.fail('format reason=degraded')
+        if category == 'other':
+            case.fail('format reason=other')
+        case.fail('format reason=unknown')
+    with case.subTest(diagnostic='family'):
+        if family == 'log':
+            case.fail('format family=log')
+        if family == 'show':
+            case.fail('format family=show')
+        case.fail('format family=unknown')
+    with case.subTest(diagnostic='form'):
+        if form == 0:
+            case.fail('format form=bare-pretty')
+        if form == 1:
+            case.fail('format form=pretty-head')
+        if form == 2:
+            case.fail('format form=pretty-oneline')
+        if form == 3:
+            case.fail('format form=format-hash')
+        if form == 4:
+            case.fail('format form=pretty-output-text')
+        if form == 5:
+            case.fail('format form=format-semicolon-text')
+        if form == 6:
+            case.fail('format form=separate-value')
+        case.fail('format form=unknown')
+
+
+class FormatDiagnosticTests(unittest.TestCase):
+    def test_closed_refusal_categories_and_negative_guards(self):
+        for reason, expected in (
+                (None, 'unknown'), ('', 'unknown'),
+                ('Policy resource budget exhausted: PRIVATE_CANARY', 'budget'),
+                ('No active approval PRIVATE_CANARY', 'grant'),
+                ('Blocked secret PRIVATE_CANARY', 'secret'),
+                ('Sensitive action public denied: root resolution status is unknown.', 'root'),
+                ('Getzilla policy did not load, PRIVATE_CANARY', 'degraded'),
+                ('Sensitive action public denied: policy evaluation failed closed.', 'degraded'),
+                ('PRIVATE_CANARY', 'other')):
+            flags = _format_flags(0, {'decision': 'deny', 'reason': reason})
+            self.assertEqual(flags['reason_category'], expected)
+            self.assertNotIn('PRIVATE_CANARY', str(flags))
+        for allowed, code, body, expected, stage in (
+                (False, 0, {'decision': 'allow'}, True, 'policy-verdict'),
+                (True, 7, {'decision': 'allow'}, True, 'hook-exit'),
+                (True, 0, [], True, 'hook-shape'),
+                (True, 0, {'decision': 'PRIVATE_CANARY'}, True, 'hook-verdict'),
+                (False, 0, {'decision': 'deny'}, False, None),
+                (True, 0, {'decision': 'allow'}, True, None)):
+            case = unittest.FunctionTestCase(lambda: _assert_format_diagnostics(
+                case, allowed, None, code, body, expected, expected, 'show', 6))
+            result = unittest.TestResult()
+            case.run(result)
+            self.assertFalse(result.errors)
+            if stage is None:
+                self.assertFalse(result.failures)
+            else:
+                self.assertEqual(len(result.failures), 4)
+                rendered = ''.join(detail for _, detail in result.failures)
+                self.assertNotIn('PRIVATE_CANARY', rendered)
+                self.assertIn('format stage=' + stage, rendered)
+                self.assertIn('format reason=unknown', rendered)
+                self.assertIn('case.fail(', rendered)
+
+    def test_format_failure_diagnostics_omit_hook_values(self):
+        case = ShellStatePolicyTests('test_git_attached_format_values_remain_data')
+        case.root = Path('inert-public-fixture')
+        result = unittest.TestResult()
+        with mock.patch.object(ShellStatePolicyTests, 'setUp', return_value=None), \
+                mock.patch(__name__ + '.evaluate_pre_tool', return_value=(True, None)), \
+                mock.patch(__name__ + '.run_hook', return_value=(
+                    0, {'decision': 'deny', 'reason': 'PRIVATE_HOOK_CANARY'}, 'PRIVATE_HOOK_CANARY')):
+            case.run(result)
+        self.assertTrue(result.failures)
+        self.assertFalse(result.errors)
+        rendered = ''.join(detail for _, detail in result.failures)
+        self.assertNotIn('PRIVATE_HOOK_CANARY', rendered)
+        self.assertIn('format stage=hook-verdict', rendered)
+        self.assertIn('format stage=policy-verdict', rendered)
+        self.assertIn('format family=log', rendered)
+        self.assertIn('format form=separate-value', rendered)
+
+
 class ShellStatePolicyTests(unittest.TestCase):
     ISSUE = 'gh issue create --title Fixture --body public'
     ISSUE_RESOURCE = 'gh:dimkox/getzilla issue create'
@@ -53,17 +194,22 @@ class ShellStatePolicyTests(unittest.TestCase):
         add_approval(self.root, 'external-write', 'offline exact context fixture', 5,
                      actions=['external-write'], resources=[resource])
 
-    def check(self, command: str, expected: bool, *, hook_expected: bool | None = None) -> None:
+    def check(self, command: str, expected: bool, *, hook_expected: bool | None = None,
+              diagnostic: tuple[str, int] | None = None) -> None:
         event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
         allowed, reason = evaluate_pre_tool(self.root, event)
-        with self.subTest(layer='policy', command=command):
-            self.assertEqual(allowed, expected, (command, reason))
+        if diagnostic is None:
+            with self.subTest(layer='policy', command=command):
+                self.assertEqual(allowed, expected, (command, reason))
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
             **event, 'cwd': str(self.root), 'session_id': 'shell-state',
         })
+        expected_hook = expected if hook_expected is None else hook_expected
+        if diagnostic is not None:
+            _assert_format_diagnostics(self, allowed, reason, code, result, expected, expected_hook, *diagnostic)
+            return
         with self.subTest(layer='hook', command=command):
             self.assertEqual(code, 0, error)
-            expected_hook = expected if hook_expected is None else hook_expected
             self.assertEqual(result.get('decision'), 'allow' if expected_hook else 'deny', (command, result))
 
     def test_review_inherited_repository_cases(self) -> None:
@@ -235,13 +381,13 @@ class ShellStatePolicyTests(unittest.TestCase):
 
     def test_git_attached_format_values_remain_data(self) -> None:
         for family in ('log', 'show'):
-            for arguments in (
+            for form, arguments in enumerate((
                 '--pretty', '--pretty --no-patch HEAD', '--pretty=oneline --no-patch HEAD',
                 '--format=%H --no-patch HEAD', "--pretty='tformat:--output=public.txt' --no-patch HEAD",
                 "--format='tformat:literal; --output=public.txt' --no-patch HEAD",
-            ):
-                self.check(f'git {family} {arguments}; ' + self.ISSUE, True)
-            self.check(f'git {family} --format %H --no-patch HEAD; ' + self.ISSUE, False)
+            )):
+                self.check(f'git {family} {arguments}; ' + self.ISSUE, True, diagnostic=(family, form))
+            self.check(f'git {family} --format %H --no-patch HEAD; ' + self.ISSUE, False, diagnostic=(family, 6))
 
     def test_git_required_option_values_keep_the_next_word_as_data(self) -> None:
         # These current Git options really consume a following word, including
