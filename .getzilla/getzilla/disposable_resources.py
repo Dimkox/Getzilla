@@ -60,11 +60,38 @@ def _verify_oci_export(reference, manifest_digest, configuration_digest):
                 raise ValueError("Public image metadata export exceeds byte bound")
             return data
 
+    class CountedTarInfo(tarfile.TarInfo):
+        # CPython dispatches each raw header here, including recursive
+        # PAX/GNU extension reads hidden from TarFile iteration. Count before
+        # the parser consumes their bodies; a yielded-member census is not raw.
+        raw_headers = 0
+
+        def _proc_member(self, archive):
+            type(self).raw_headers += 1
+            if type(self).raw_headers > _EXPORT_MEMBERS:
+                raise ValueError("Public image archive exceeds raw header bound")
+            if self.type == tarfile.GNUTYPE_SPARSE:
+                raise ValueError("Public image sparse archive format is unsupported")
+            if self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                             tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
+                if self.size > _METADATA_BYTES:
+                    raise ValueError("Public image extension metadata exceeds byte bound")
+            return super()._proc_member(archive)
+
+        def _unsupported_sparse(self, *args, **kwargs):
+            raise ValueError("Public image sparse archive format is unsupported")
+
+        # PAX sparse maps have separate continuation/body rules. Refuse before
+        # those processors consume blocks that are not counted tar headers.
+        _proc_gnusparse_00 = _unsupported_sparse
+        _proc_gnusparse_01 = _unsupported_sparse
+        _proc_gnusparse_10 = _unsupported_sparse
+
     wanted = {"blobs/sha256/" + digest.split(":")[1]: digest
               for digest in (manifest_digest, configuration_digest)}
     metadata = {}
     try:
-        with tarfile.open(fileobj=Reader(), mode="r|") as archive:
+        with tarfile.open(fileobj=Reader(), mode="r|", tarinfo=CountedTarInfo) as archive:
             for count, member in enumerate(archive, 1):
                 parts = PurePosixPath(member.name).parts
                 if (count > _EXPORT_MEMBERS or not parts or member.name.startswith("/")

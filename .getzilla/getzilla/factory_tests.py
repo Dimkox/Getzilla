@@ -259,6 +259,13 @@ def declared_ids(root: Path, *, contents: dict[str, bytes] | None = None) -> lis
     return sorted(set(identifiers))
 
 
+def source_census(root: Path) -> dict:
+    """Pure Factory IDs and hashes from one bounded, checked source snapshot."""
+    contents, identities = _source_snapshot(root)
+    return {"source_inventory": {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()},
+            "source_bindings": identities, "declared_ids": declared_ids(root, contents=contents)}
+
+
 def _procfs_descriptor_reopen() -> bool:
     # Measure independently of the optional Factory implementation. A caller's
     # skip reason, host label or a changed report cannot supply this fact.

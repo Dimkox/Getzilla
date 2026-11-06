@@ -27,11 +27,20 @@ class ComponentAdmissionTests(unittest.TestCase):
         return importlib.import_module("getzilla.live_acceptance")
 
     def factory(self, root):
-        ids = [
-            "factory.tests.test_postgres_integration.FreshClusterArtifactAttestorMigrationTests.test_fresh",
-            "factory.tests.test_postgres_integration.ApiTests.test_runtime",
-        ]
-        suite = {"status": "pass", "tests_run": 2, "executed": ids, "failures": 0, "errors": 0, "skipped": []}
+        from getzilla.factory_tests import source_census
+        tests = root / "factory/tests"
+        tests.mkdir(parents=True)
+        (tests / "test_postgres_integration.py").write_text(
+            "class FreshClusterArtifactAttestorMigrationTests:\n def test_fresh(self): pass\n"
+            "class ApiTests:\n def test_runtime(self): pass\n")
+        (tests / "test_other.py").write_text("class PublicOther:\n def test_other(self): pass\n")
+        (tests / "test_landing_pdf_worker.py").write_text(
+            "class PdfWorkerWithoutParser:\n def test_worker_executes_and_reports_parser_unavailable(self): pass\n")
+        census = source_census(root)
+        ids = census["declared_ids"]
+        suite = {"schema_version": 2, "check_id": "factory-postgres-exit", "status": "pass", "census": census,
+                 "collected_ids": ids, "started": ids, "tests_run": len(ids), "executed": ids,
+                 "failures": 0, "errors": 0, "skipped": [], "loader_errors": 0, "source_stable": True}
         restart = {
             "status": "pass",
             "restarts": [
@@ -48,7 +57,7 @@ class ComponentAdmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             suite, restart = self.factory(root)
-            self.assertTrue(module.validate_components(root, "factory"))
+            self.assertTrue(module.validate_components(root, "factory", source_root=root))
             for change in ("missing", "skip", "zero", "partial", "duplicate", "restart"):
                 with self.subTest(change=change):
                     s = json.loads(json.dumps(suite))
@@ -61,14 +70,14 @@ class ComponentAdmissionTests(unittest.TestCase):
                     elif change == "zero":
                         s["tests_run"] = 0
                     elif change == "partial":
-                        s["tests_run"] = 3
+                        s["tests_run"] = len(suite["executed"]) + 1
                     elif change == "duplicate":
                         s["executed"][1] = s["executed"][0]
                     else:
                         r["restarts"][1]["after"] = r["restarts"][1]["before"]
                     (root / "factory-suite.json").write_text(json.dumps(s))
                     (root / "factory-restart.json").write_text(json.dumps(r))
-                    self.assertFalse(module.validate_components(root, "factory"))
+                    self.assertFalse(module.validate_components(root, "factory", source_root=root))
 
     def test_factory_conditional_skip_keeps_a_complete_disjoint_census(self):
         module = self.module()
@@ -79,27 +88,27 @@ class ComponentAdmissionTests(unittest.TestCase):
                 "id": "factory.tests.test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable",
                 "reason": "pypdf present; unavailable branch cannot run",
             }
-            suite["tests_run"] = 3
+            suite["executed"] = [name for name in suite["executed"] if name != skipped["id"]]
             suite["skipped"] = [skipped]
             (root / "factory-suite.json").write_text(json.dumps(suite))
-            self.assertTrue(module.validate_components(root, "factory"))
+            self.assertTrue(module.validate_components(root, "factory", source_root=root))
             for change in ("duplicate", "overlap", "partial", "required", "unknown"):
                 changed = json.loads(json.dumps(suite))
                 if change == "duplicate":
                     changed["skipped"].append(skipped)
-                    changed["tests_run"] = 4
+                    changed["tests_run"] = suite["tests_run"] + 1
                 elif change == "overlap":
                     changed["executed"].append(skipped["id"])
-                    changed["tests_run"] = 4
+                    changed["tests_run"] = suite["tests_run"] + 1
                 elif change == "partial":
-                    changed["tests_run"] = 4
+                    changed["tests_run"] = suite["tests_run"] + 1
                 elif change == "required":
                     changed["skipped"][0]["id"] = "factory.tests.test_postgres_integration.Required.test_database"
                 else:
                     changed["skipped"][0]["id"] = "factory.tests.public_unknown.test_skipped"
                 with self.subTest(change=change):
                     (root / "factory-suite.json").write_text(json.dumps(changed))
-                    self.assertFalse(module.validate_components(root, "factory"))
+                    self.assertFalse(module.validate_components(root, "factory", source_root=root))
 
     def test_trust_ci_requires_complete_ten_and_restart_identity(self):
         module = self.module()
@@ -364,3 +373,164 @@ class AcceptedPrefixBridgeControls(unittest.TestCase):
         self.assertEqual(result.executed, [expected[0], expected[2]])
         self.assertEqual((len(result.failures), len(result.errors), len(result.skipped)), (1, 0, 1))
         self.assertFalse(result.wasSuccessful())
+
+class SourceCensusControls(unittest.TestCase):
+    def fixture(self):
+        from getzilla import factory_tests
+        self.assertTrue(hasattr(factory_tests, 'source_census'), 'pure checked-source census must exist')
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        tests = root / 'factory/tests'
+        tests.mkdir(parents=True)
+        (tests / 'test_postgres_integration.py').write_text(
+            'class FreshClusterArtifactAttestorMigrationTests:\n def test_public_fresh(self): pass\n'
+            'class PublicApi:\n def test_public_api(self): pass\n')
+        (tests / 'test_other.py').write_text('class PublicOther:\n def test_one(self): pass\n def test_two(self): pass\n')
+        return root, factory_tests.source_census(root)
+
+    def report(self, census):
+        ids = census['declared_ids']
+        return {'schema_version': 2, 'check_id': 'factory-postgres-exit', 'status': 'pass',
+                'census': census, 'collected_ids': list(ids), 'started': list(ids), 'executed': list(ids),
+                'skipped': [], 'tests_run': len(ids), 'failures': 0, 'errors': 0,
+                'loader_errors': 0, 'source_stable': True}
+
+    def test_census_is_pure_checked_and_consumer_derives_its_own_expected_set(self):
+        from getzilla import factory_tests, live_acceptance
+        root, census = self.fixture()
+        with patch.object(factory_tests, 'observed_context', side_effect=AssertionError('no runtime probes')):
+            self.assertEqual(factory_tests.source_census(root), census)
+        self.assertEqual(set(census), {'source_inventory', 'source_bindings', 'declared_ids'})
+        output = root / 'output'
+        output.mkdir()
+        (output / 'factory-restart.json').write_text(json.dumps({'status': 'pass', 'restarts': [
+            {'before': 1, 'after': 2}, {'before': 2, 'after': 3}]}))
+        full = self.report(census)
+        suite = output / 'factory-suite.json'
+        suite.write_text(json.dumps(full))
+        self.assertTrue(live_acceptance.validate_components(output, 'factory', source_root=root))
+        partial = json.loads(json.dumps(full))
+        selected = [x for x in census['declared_ids'] if 'test_postgres_integration.' in x]
+        partial.update(collected_ids=selected, started=selected, executed=selected, tests_run=len(selected))
+        partial['census']['declared_ids'] = selected
+        suite.write_text(json.dumps(partial))
+        self.assertFalse(live_acceptance.validate_components(output, 'factory', source_root=root))
+        self.assertFalse(live_acceptance.validate_components(output, 'factory'))
+
+    def test_closed_sets_types_skips_and_changed_source_refuse(self):
+        from getzilla import live_acceptance
+        root, census = self.fixture()
+        valid = self.report(census)
+        for change in ('missing', 'extra', 'duplicate', 'boolean', 'loader', 'unstable', 'skip', 'unknown'):
+            candidate = json.loads(json.dumps(valid))
+            if change == 'missing':
+                candidate['executed'].pop()
+                candidate['started'].pop()
+                candidate['collected_ids'].pop()
+                candidate['tests_run'] -= 1
+            elif change == 'extra':
+                candidate['executed'].append('public.extra')
+            elif change == 'duplicate':
+                candidate['started'].append(candidate['started'][0])
+            elif change == 'boolean':
+                candidate['errors'] = False
+            elif change == 'loader':
+                candidate['loader_errors'] = 1
+            elif change == 'unstable':
+                candidate['source_stable'] = False
+            elif change == 'skip':
+                name = candidate['executed'].pop()
+                candidate['skipped'] = [{'id': name, 'reason': 'not available'}]
+            else:
+                candidate['extra'] = 'unknown'
+            with self.subTest(change=change):
+                self.assertEqual(live_acceptance.factory_suite_status(candidate, census), 'fail')
+        original = root / 'factory/tests/test_other.py'
+        original.write_text(original.read_text() + '\n# current source changed\n')
+        from getzilla import factory_tests
+        self.assertFalse(factory_tests.source_matches(root, census))
+
+    def test_producer_refuses_incomplete_collection_without_running_cases(self):
+        from getzilla import live_acceptance
+        root, census = self.fixture()
+        spec = importlib.util.spec_from_file_location('public_live_producer', ROOT / 'factory/tests/run_live_suite.py')
+        producer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(producer)
+        output = root / 'output'
+        output.mkdir()
+        with patch.object(producer, 'ROOT', root), \
+                patch.dict('os.environ', {'FACTORY_TEST_DATABASE_URL': 'public-fixture-not-a-DSN',
+                                         'FACTORY_FRESH_CLUSTER_DATABASE_URL': 'public-fixture-not-a-DSN',
+                                         'GETZILLA_LIVE_ARTIFACTS': str(output)}), \
+                patch.object(producer.unittest.TestLoader, 'discover', return_value=unittest.TestSuite()), \
+                patch.object(producer.unittest.TextTestRunner, 'run', side_effect=AssertionError('partial suite must not run')):
+            self.assertNotEqual(producer.main(), 0)
+        result = json.loads((output / 'factory-suite.json').read_text())
+        self.assertEqual(live_acceptance.factory_suite_status(result, census), 'fail')
+
+
+
+    def test_closed_scalar_and_list_types_and_duplicate_json_refuse(self):
+        from getzilla import live_acceptance
+        root, census = self.fixture()
+        valid = self.report(census)
+        for field, value in (("schema_version", True), ("tests_run", True), ("tests_run", -1),
+                             ("executed", [None]), ("started", [["public"]]), ("skipped", [None]),
+                             ("census", None), ("status", "unknown"), ("source_stable", 1)):
+            candidate = json.loads(json.dumps(valid))
+            candidate[field] = value
+            with self.subTest(field=field, kind=type(value).__name__):
+                self.assertEqual(live_acceptance.factory_suite_status(candidate, census), "fail")
+        output = root / "output"
+        output.mkdir()
+        for raw in ('{"status":"fail","status":"pass"}', "[]", "null"):
+            (output / "factory-suite.json").write_text(raw)
+            self.assertFalse(live_acceptance.validate_components(output, "factory", source_root=root))
+
+    def test_producer_complete_inert_result_and_discovery_rejections(self):
+        from getzilla import factory_tests, live_acceptance
+        from types import SimpleNamespace
+        for change in ("complete", "missing", "extra", "duplicate", "loader", "changed", "failed", "expected_failure"):
+            with self.subTest(change=change):
+                root, census = self.fixture()
+                spec = importlib.util.spec_from_file_location("public_live_producer", ROOT / "factory/tests/run_live_suite.py")
+                producer = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(producer)
+                ids = list(census["declared_ids"])
+                if change == "missing":
+                    ids.pop()
+                elif change == "extra":
+                    ids.append("public.extra")
+                elif change == "duplicate":
+                    ids.append(ids[0])
+                suite = [SimpleNamespace(id=lambda name=name: name) for name in ids]
+                loader = SimpleNamespace(discover=lambda *args, **kwargs: suite,
+                                         errors=["public loader failure"] if change == "loader" else [])
+                if change == "changed":
+                    original = root / "factory/tests/test_other.py"
+                    before = original.read_bytes()
+                    def changed(*args, **kwargs):
+                        original.write_bytes(before + b"\n# changed\n")
+                        original.write_bytes(before)
+                        return suite
+                    loader.discover = changed
+                result = SimpleNamespace(testsRun=len(ids), started=ids, executed=ids, skipped=[],
+                    failures=[None] if change == "failed" else [], errors=[], unexpectedSuccesses=[],
+                    expectedFailures=[None] if change == "expected_failure" else [])
+                output = root / "output"
+                output.mkdir()
+                with patch.object(producer, "ROOT", root), \
+                        patch.dict("os.environ", {"FACTORY_TEST_DATABASE_URL": "public-fixture-not-a-DSN",
+                            "FACTORY_FRESH_CLUSTER_DATABASE_URL": "public-fixture-not-a-DSN",
+                            "GETZILLA_LIVE_ARTIFACTS": str(output)}), \
+                        patch.object(producer.unittest, "TestLoader", return_value=loader), \
+                        patch.object(producer.unittest.TextTestRunner, "run", return_value=result) as run:
+                    status = producer.main()
+                should_run = change in ("complete", "failed", "expected_failure")
+                self.assertEqual(run.call_count, int(should_run))
+                self.assertEqual(status == 0, change == "complete")
+                document = json.loads((output / "factory-suite.json").read_text())
+                self.assertEqual(live_acceptance.factory_suite_status(document, census),
+                                 "pass" if change == "complete" else "fail")
+                self.assertEqual(factory_tests.source_census(root)["declared_ids"], census["declared_ids"])

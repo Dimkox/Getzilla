@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 
+from .factory_tests import decode_document, source_census, source_matches
 from .disposable_resources import CleanupUnconfirmed, OwnedDocker, image_pins, ensure_images, verified_image_id, process_error_detail
 
 CELLS = {"factory": ("factory-postgres-exit",), "trust-ci": ("trust-ci-postgres", "trust-ci-postgres-restart")}
@@ -27,33 +28,79 @@ def evidence_name(name):
     return name in _EVIDENCE_NAMES or re.fullmatch(r"gz-[a-z0-9-]+-(resources|sample|ack)\.json", name) is not None
 
 
-def validate_components(output, cell):
+_FACTORY_SUITE_KEYS = frozenset(("schema_version", "check_id", "status", "census", "collected_ids",
+    "started", "executed", "skipped", "tests_run", "failures", "errors", "loader_errors", "source_stable"))
+_FACTORY_CONDITIONAL_SKIP = {
+    "id": "factory.tests.test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable",
+    "reason": "pypdf present; unavailable branch cannot run",
+}
+
+
+def _live_ids(value):
+    return (type(value) is list and len(value) <= 10000
+            and all(type(item) is str and 0 < len(item) <= 2048 for item in value)
+            and len(set(value)) == len(value))
+
+
+def factory_suite_status(document, expected_census):
+    """Reconcile live-only observations against independently checked source."""
+    try:
+        if (type(document) is not dict or set(document) != _FACTORY_SUITE_KEYS
+                or type(expected_census) is not dict
+                or set(expected_census) != {"source_inventory", "source_bindings", "declared_ids"}
+                or type(document["schema_version"]) is not int or document["schema_version"] != 2
+                or document["check_id"] != "factory-postgres-exit"
+                or document["status"] not in ("pass", "fail")
+                or document["source_stable"] is not True
+                # JSON comparison preserves scalar types (bool is not an int)
+                # throughout the closed checked-source projection.
+                or json.dumps(document["census"], sort_keys=True) != json.dumps(expected_census, sort_keys=True)):
+            return "fail"
+        expected = expected_census["declared_ids"]
+        if not _live_ids(expected) or not expected:
+            return "fail"
+        for key in ("collected_ids", "started", "executed"):
+            if not _live_ids(document[key]):
+                return "fail"
+        for key in ("tests_run", "failures", "errors", "loader_errors"):
+            if type(document[key]) is not int or not 0 <= document[key] <= 10000:
+                return "fail"
+        skipped_rows = document["skipped"]
+        if (type(skipped_rows) is not list or len(skipped_rows) > 1
+                or any(type(row) is not dict or row != _FACTORY_CONDITIONAL_SKIP for row in skipped_rows)):
+            return "fail"
+        skipped = {row["id"] for row in skipped_rows}
+        executed = set(document["executed"])
+        complete = set(expected)
+        if (set(document["collected_ids"]) != complete or set(document["started"]) != complete
+                or executed & skipped or executed | skipped != complete
+                or document["tests_run"] != len(complete)
+                or any(document[key] for key in ("failures", "errors", "loader_errors"))
+                or not any("FreshClusterArtifactAttestorMigrationTests." in name for name in executed)
+                or not any("test_postgres_integration." in name for name in executed)):
+            return "fail"
+        return "pass"
+    except (ValueError, TypeError, KeyError, RecursionError):
+        return "fail"
+
+
+def validate_components(output, cell, *, source_root=None):
     def read(name):
         path = output / name
         if path.is_symlink() or path.stat().st_size > OUTPUT_LIMIT:
             raise ValueError("Unsafe live component report")
-        return json.loads(path.read_text(encoding="utf-8"))
+        document = decode_document(path.read_text(encoding="utf-8"))
+        if type(document) is not dict:
+            raise ValueError("Invalid live component report shape")
+        return document
     try:
         if cell == "factory":
+            if source_root is None:
+                return False
+            expected = source_census(source_root)
             suite, restart = read("factory-suite.json"), read("factory-restart.json")
-            skip_rows = suite.get("skipped", [])
-            skipped = {row["id"] for row in skip_rows}
-            executed = suite.get("executed", [])
-            conditional_skip = {
-                "id": "factory.tests.test_landing_pdf_worker.PdfWorkerWithoutParser.test_worker_executes_and_reports_parser_unavailable",
-                "reason": "pypdf present; unavailable branch cannot run",
-            }
-            return (suite.get("status") == "pass" and suite.get("tests_run", 0) > 0
-                    and len(executed) == len(set(executed)) and len(skip_rows) == len(skipped)
-                    and not skipped.intersection(executed)
-                    and suite.get("tests_run") == len(executed) + len(skipped)
-                    and all(row == conditional_skip for row in skip_rows)
-                    and suite.get("failures") == 0 and suite.get("errors") == 0
-                    and any("FreshClusterArtifactAttestorMigrationTests." in item and item not in skipped for item in executed)
-                    and any("test_postgres_integration." in item and item not in skipped for item in executed)
-                    and not any("DATABASE_URL" in row["reason"] or "test_postgres_integration." in row["id"]
-                                or "FreshClusterArtifactAttestorMigrationTests." in row["id"]
-                                for row in suite.get("skipped", []))
+            return (suite.get("status") == factory_suite_status(suite, expected) == "pass"
+                    and source_matches(source_root, expected)
                     and restart.get("status") == "pass" and len(restart.get("restarts", [])) == 2
                     and all(row["before"] < row["after"] for row in restart["restarts"]))
         if cell == "trust-ci":
@@ -62,7 +109,7 @@ def validate_components(output, cell):
                         and suite.get("tests_run") == len(suite.get("executed", [])) == len(set(suite.get("executed", []))) and not suite.get("skipped")
                         and suite.get("failures") == 0 and suite.get("errors") == 0
                         and restart.get("status") == "pass" and restart["postmaster_before"] != restart["postmaster_after"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, SyntaxError, RecursionError):
         return False
     return False
 
@@ -310,6 +357,7 @@ def main(argv=None):
         raise ValueError("Insufficient main-phase time remains before reserved cleanup/evidence budget")
     if budget > 1800:
         raise ValueError("Live acceptance main budget exceeds its bound")
+    factory_baseline = source_census(root) if args.cell == "factory" else None
     ensure_images(root, ("postgres",) if args.cell == "factory" else ("postgres", "python"))
     if os.environ.get("GETZILLA_LIVE_DEADLINE"):
         budget = min(budget, int(os.environ["GETZILLA_LIVE_DEADLINE"]) - int(time.time()))
@@ -322,7 +370,8 @@ def main(argv=None):
                 "--output", str(output), "--worker"])
     result = observe(command, root=root, environment=environment, output=output, namespace=namespace,
                      timeout=budget, require_resources=True)
-    if not validate_components(output, args.cell):
+    factory_stable = factory_baseline is None or source_matches(root, factory_baseline)
+    if not factory_stable or not validate_components(output, args.cell, source_root=root):
         result["status"] = "fail"
         result["component_evidence"] = "missing_or_failed"
     if _git(root, "rev-parse", "HEAD") != head or _git(root, "status", "--porcelain"):

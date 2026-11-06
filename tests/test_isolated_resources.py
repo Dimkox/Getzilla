@@ -429,3 +429,102 @@ class DockerDouble:
     def assert_bounded(kwargs):
         if not 0 < kwargs.get("timeout", 0) <= 60:
             raise AssertionError("Docker operation must have a bounded timeout")
+
+class RawArchiveCensusTests(unittest.TestCase):
+    def module(self):
+        return importlib.import_module('getzilla.disposable_resources')
+
+    def record(self, name, content=b'', kind=tarfile.REGTYPE):
+        item = tarfile.TarInfo(name)
+        item.type, item.size = kind, len(content)
+        return item.tobuf(format=tarfile.USTAR_FORMAT) + content + b'\0' * (-len(content) % 512)
+
+    def archive(self, raw_count=4, kind=tarfile.XHDTYPE):
+        config = json.dumps({'os': 'linux', 'architecture': 'amd64'}).encode()
+        config_id = 'sha256:' + hashlib.sha256(config).hexdigest()
+        manifest = json.dumps({'config': {'digest': config_id, 'size': len(config)}}).encode()
+        manifest_id = 'sha256:' + hashlib.sha256(manifest).hexdigest()
+        body = 'comment=public\n'
+        length = len(body) + 2
+        while length != len(str(length)) + 1 + len(body):
+            length = len(str(length)) + 1 + len(body)
+        pax = (str(length) + ' ' + body).encode()
+        extension = self.record('PaxHeaders/public', pax, kind)
+        if kind == tarfile.GNUTYPE_LONGNAME:
+            extension = self.record('././@LongLink', b'public-name\0', kind)
+        groups = min(100, max(1, (raw_count - 2) // 2))
+        extra, remainder = divmod(raw_count - 2 - groups, groups)
+        content = b''.join(extension * (extra + (index < remainder)) + self.record('public-' + str(index))
+                           for index in range(groups))
+        content += self.record('blobs/sha256/' + manifest_id[7:], manifest)
+        content += self.record('blobs/sha256/' + config_id[7:], config)
+        return content + b'\0' * 1024, manifest_id, config_id
+
+    def verify(self, archive):
+        module = self.module()
+        data, manifest, config = archive
+        source = io.BytesIO(data)
+        class Output(io.BytesIO):
+            def fileno(self):
+                return 73
+        class Child:
+            pid = 123
+            stdout = Output()
+            def poll(self):
+                return 0
+            def wait(self, timeout=None):
+                return 0
+        class Selector:
+            def register(self, *args):
+                pass
+            def select(self, timeout):
+                return [(None, None)]
+            def close(self):
+                pass
+        child = Child()
+        try:
+            with patch.object(module.subprocess, 'Popen', return_value=child), \
+                    patch.object(module.selectors, 'DefaultSelector', return_value=Selector()), \
+                    patch.object(module.os, 'read', side_effect=lambda _fd, size: source.read(size)):
+                module._verify_oci_export('public@' + manifest, manifest, config)
+        finally:
+            self.last_stream_read = source.tell()
+            self.assertTrue(child.stdout.closed)
+        return source.tell()
+
+    def test_raw_pax_boundary_and_normal_pax_positive(self):
+        self.verify(self.archive(4))
+        self.verify(self.archive(4096))
+        with self.assertRaises(ValueError):
+            self.verify(self.archive(4097))
+        with self.assertRaises(ValueError):
+            self.verify(self.archive(5102))
+
+    def test_5102_raw_headers_cannot_hide_behind_102_members(self):
+        with self.assertRaises(ValueError):
+            self.verify(self.archive(5102))
+
+    def test_hidden_global_pax_and_gnu_longname_are_counted(self):
+        for kind in (tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME):
+            with self.subTest(kind=kind):
+                self.verify(self.archive(4, kind))
+                with self.assertRaises(ValueError):
+                    self.verify(self.archive(4097, kind))
+
+    def test_extension_body_limit_and_sparse_refuse_before_delegation(self):
+        good, manifest, config = self.archive(4)
+        for kind in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME):
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError):
+                    self.verify((self.record('extension', b'\0' * (1024 * 1024 + 1), kind) + good, manifest, config))
+                self.assertLessEqual(self.last_stream_read, 10240)
+        with self.assertRaises(ValueError):
+            self.verify((self.record('public-sparse', kind=tarfile.GNUTYPE_SPARSE) + good, manifest, config))
+        for fields in ({"GNU.sparse.map": "0,0"}, {"GNU.sparse.size": "0"},
+                       {"GNU.sparse.major": "1", "GNU.sparse.minor": "0"}):
+            header = tarfile.TarInfo("public-sparse")
+            header.pax_headers = fields
+            archive = header.tobuf(format=tarfile.PAX_FORMAT) + good
+            with self.subTest(format=tuple(fields)), self.assertRaisesRegex(ValueError, "sparse archive format"):
+                self.verify((archive, manifest, config))
+            self.assertLessEqual(self.last_stream_read, 10240)
