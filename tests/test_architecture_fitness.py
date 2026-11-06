@@ -2303,6 +2303,77 @@ class ArchitectureFitnessTests(unittest.TestCase):
                     self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
                     self.assertEqual(ast.dump(tree), before)
 
+    def test_selected_addresses_require_nontransferring_operand_roles(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\n'
+                  'from tools import factory\ndef f():\n    raise Full()\n')
+        governed = (
+            'factory(address="sample.Full")\n',
+            'patch("sample.unrelated",new_callable=factory,address="sample.Full")\n',
+            'patch.object(own,"unrelated",new_callable=factory,address="sample.Full")\n',
+            'patch("sample.unrelated",new_callable=factory,payload="sample.Full.any_member")\n',
+            'patch.object(own,"unrelated","sample.Full.any_member")\n',
+            'patch.multiple("sample",unrelated="sample.Full.any_member")\n',
+            'patch.object(own,"unrelated",new_callable=factory,Full=unknown)\n',
+            'patch.object(own,"unrelated",**members)\n',
+            'factory("sample.Full.__new__")\n',
+            'factory("sample.Full.__init__")\n',
+            'factory("sample.Full.arbitrary.nested_member")\n',
+            'patch("sample.Full.any_member",None)\n',
+            'patch(__name__+".Full.any_member",None)\n',
+            'patch.object(own,"Full.any_member",None)\n',
+            'patch.object(own.Full,"any_member",None)\n',
+            'patch.multiple("sample.Full.any_member",unrelated=None)\n',
+            'patch.multiple("sample",**{"Full.any_member":None})\n',
+        )
+        clear = (
+            'raise Full("sample.Full.__new__")\n',
+            'raise Full("Full")\n',
+            'patch("sample.unrelated",None)\n',
+            'patch.object(own,"unrelated",None)\n',
+            'patch.multiple("sample",unrelated=None)\n',
+            'patch.multiple("sample",**{"patch":None})\n',
+            'patch.object(own,"patch",None)\n',
+            'patch("sample.Fullish.member",None)\n',
+            # Unknown hidden callback effects are not proved by this shortcut.
+            'patch("sample.unrelated",new_callable=factory,address="sample.Other.member")\n',
+        )
+        for expected, cases in ((True, governed), (False, clear)):
+            for source in cases:
+                with self.subTest(governed=expected, source=source):
+                    tree = ast.parse(prefix + source)
+                    before = ast.dump(tree)
+                    self.assertEqual(bool(FIT.analyze_queue_tree(tree).signals), expected)
+                    self.assertEqual(ast.dump(tree), before)
+        alias = prefix.replace('import Full\n', 'import Full as Limit\n').replace('raise Full()', 'raise Limit()')
+        for source in ('factory("queue.Full.any_member")\n', 'patch("queue.Full.any_member",None)\n',
+                       'factory("sample.Limit.any_member")\n'):
+            with self.subTest(selected_alias=source):
+                tree = ast.parse(alias + source)
+                before = ast.dump(tree)
+                self.assertTrue(FIT.analyze_queue_tree(tree).signals)
+                self.assertEqual(ast.dump(tree), before)
+
+    def test_callback_address_operands_stay_governed_in_public_git_fitness(self):
+        repo = GitArchitectureRepo(self)
+        system, rules = _system(), _rules()
+        system['nodes'][0].update(type='worker', repository_paths=['src'])
+        rules['background_job_policies'] = [{
+            'id': 'FIT-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+            'require_idempotency': True, 'require_correlation_id': True,
+            'terminal_actions': ['dead_letter'], 'severity': 'error',
+        }]
+        repo.model(system, rules)
+        base = repo.commit('ordinary callback baseline')
+        for statement in ('factory(address="sample.Empty")',
+                          'patch("sample.unrelated",new_callable=factory,address="sample.Empty")',
+                          'patch.object(own,"unrelated",new_callable=factory,address="sample.Empty")'):
+            with self.subTest(statement=statement):
+                repo.write_text('src/sample.py', 'from queue import Empty\nfrom unittest.mock import patch\n'
+                    'from tools import factory\ndef f():\n    raise Empty()\n' + statement + '\n')
+                report = self._evaluate(repo, base, repo.commit('visible selected address operand'))
+                self.assertEqual(self._results(report)['background_job'].status, 'unsupported')
+                self.assertIn('new_queue', report.triggers)
+
     def test_sequence_widening_keeps_pre_loop_queue_in_its_summary(self) -> None:
         # Widening must join the existing entries into the unbounded summary. A queue that
         # entered before the loop and is used after it, with only ordinary appends inside

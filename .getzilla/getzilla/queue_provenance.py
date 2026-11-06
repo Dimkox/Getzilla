@@ -99,17 +99,26 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
                 return None
         return '.'.join((node.id, *reversed(parts))) if isinstance(node, ast.Name) else ''
 
-    patch_calls = patch_names | {p + '.multiple' for p in patch_names}
+    multiple_patches = {p + '.multiple' for p in patch_names}
+    patch_calls = patch_names | multiple_patches
     object_patches = {p + '.object' for p in patch_names}
     mock_namespaces = {p.rsplit('.', 1)[0] for p in patch_names if '.' in p}
     exception_names = {alias.asname or alias.name for node in imports for alias in node.names
                        if alias.name in {'Empty', 'Full'}}
-    canonical_calls = set()
+    address_names = {}
+    for node in imports:
+        for alias in node.names:
+            if alias.name in {'Empty', 'Full'}:
+                local = alias.asname or alias.name
+                address_names.setdefault(local, set()).add(local)
+                address_names.setdefault(alias.name, set()).add(local)
     approved_literals = set()
 
-    def literal_arguments(call):
-        approved_literals.update(id(value) for value in
-            (*call.args, *(keyword.value for keyword in call.keywords)) if isinstance(value, ast.Constant))
+    def addressed_bindings(address):
+        parts = set(address.lstrip('.').split('.'))
+        if not all(part.isidentifier() for part in parts):
+            return set()
+        return set().union(*(address_names.get(part, ()) for part in parts))
 
     replaced = set()
     for node in nodes:
@@ -142,22 +151,25 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             if not isinstance(member, ast.Constant) or type(member.value) is not str:
                 return tree
             replaced.add(member.value)
-            canonical_calls.add(id(node))
-            literal_arguments(node)
+            replaced.update(addressed_bindings(member.value))
+            approved_literals.add(id(member))
+        elif function in patch_calls:
+            target = node.args[0] if node.args else None
+            if (isinstance(target, ast.BinOp) and isinstance(target.op, ast.Add)
+                    and isinstance(target.left, ast.Name) and target.left.id == '__name__'):
+                target = target.right
+            if not isinstance(target, ast.Constant) or type(target.value) is not str:
+                return tree
+            replaced.add(target.value.rsplit('.', 1)[-1])
+            replaced.update(addressed_bindings(target.value))
+            approved_literals.add(id(target))
+        else:
             continue
-        if function not in patch_calls:
-            continue
-        target = node.args[0] if node.args else None
-        if (isinstance(target, ast.BinOp) and isinstance(target.op, ast.Add)
-                and isinstance(target.left, ast.Name) and target.left.id == '__name__'):
-            target = target.right
-        if not isinstance(target, ast.Constant) or type(target.value) is not str:
-            return tree
-        replaced.add(target.value.rsplit('.', 1)[-1])
-        approved_literals.add(id(target))
         for keyword in node.keywords:
             if keyword.arg is not None:
-                replaced.add(keyword.arg)
+                if function in multiple_patches:
+                    replaced.add(keyword.arg)
+                    replaced.update(addressed_bindings(keyword.arg))
                 continue
             mapping = keyword.value
             if not isinstance(mapping, ast.Dict):
@@ -165,18 +177,17 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
             for key in mapping.keys:
                 if not isinstance(key, ast.Constant) or type(key.value) is not str:
                     return tree
-                replaced.add(key.value)
-                approved_literals.add(id(key))
-        canonical_calls.add(id(node))
-        literal_arguments(node)
+                if function in multiple_patches:
+                    replaced.add(key.value)
+                    replaced.update(addressed_bindings(key.value))
+                    approved_literals.add(id(key))
 
-    exception_calls = set()
     for node in nodes:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id in exception_names
                 and isinstance(parents.get(node), ast.Raise) and parents[node].exc is node):
-            exception_calls.add(id(node))
-            literal_arguments(node)
+            # Literal positional messages stay data, not callback operands.
+            approved_literals.update(id(value) for value in node.args if isinstance(value, ast.Constant))
     canonical_roots = {name.split('.')[0] for name in patch_names}
     for node in nodes:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == 'getattr':
@@ -201,13 +212,15 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         )
         if unproved_selector:
             return tree
+        if isinstance(node, ast.Attribute):
+            path = dotted(node)
+            if path and addressed_bindings(path):
+                return tree
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            parts = node.value.lstrip('.').split('.')
-            binding_address = parts[-1] in exception_names and all(part.isidentifier() for part in parts)
+            binding_address = bool(addressed_bindings(node.value))
             if binding_address and id(node) not in approved_literals and not bare_literal:
                 return tree
-        if (isinstance(node, ast.keyword) and node.arg in exception_names
-                and id(parents.get(node)) not in canonical_calls | exception_calls):
+        if isinstance(node, ast.keyword) and node.arg in address_names:
             return tree
 
     selected = set()
