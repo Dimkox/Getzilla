@@ -2314,8 +2314,10 @@ def _failure_progress_details(rows, identities, workers):
     if not rows:
         return output
     known = len(rows) == workers
-    for name in ('overflow', 'dropped', 'partial_tail'):
-        output[name] = True if any(row[name] for row in rows) else False if known else None
+    proven = {name: any(row[name] for row in rows) for name in ('overflow', 'dropped', 'partial_tail')}
+    # Positive facts survive uncertainty; absence is not yet a negative proof.
+    for name, value in proven.items():
+        output[name] = True if value else None
     unknown = False
     for row in rows:
         for event in row['events']:
@@ -2324,15 +2326,19 @@ def _failure_progress_details(rows, identities, workers):
             candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
                          'phase': event['phase'], 'identity': identity}
             proposed = {**output, 'events': output['events'] + [candidate]}
-            if len(json.dumps(proposed).encode('utf-8')) > 8192:
+            # Reserve the longest final flag spelling without publishing a
+            # provisional FALSE. Finalizing certainty must not exceed the cap.
+            budgeted = {**proposed, **{name: True if value else False for name, value in proven.items()}}
+            if len(json.dumps(budgeted).encode('utf-8')) > 8192:
                 output['render_truncated'] = True
                 break
             output['events'].append(candidate)
         if output['render_truncated']:
             break
-    output['status'] = ('observed' if known and not unknown and not output['render_truncated']
-                        and not any(row[name] for row in rows for name in ('overflow', 'dropped', 'partial_tail'))
-                        else 'partial')
+    uncertain = not known or unknown or output['render_truncated'] or any(proven.values())
+    for name, value in proven.items():
+        output[name] = True if value else None if uncertain else False
+    output['status'] = 'partial' if uncertain else 'observed'
     return output
 
 

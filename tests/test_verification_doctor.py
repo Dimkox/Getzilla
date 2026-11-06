@@ -3021,3 +3021,81 @@ class Low336FailureRenderTests(unittest.TestCase):
         self.assertLessEqual(len(json.dumps(result['failure_events']).encode()), 8192)
         self.assertTrue(result['failure_events']['render_truncated'])
         self.assertLess(len(result['failure_events']['events']), 256)
+
+    def _actual_failure_prefix(self, *, workers=1, torn=False, facts=False):
+        from types import SimpleNamespace
+        from getzilla import pytest_progress
+        temporary = tempfile.TemporaryDirectory(prefix='public-certainty-')
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name) / 'progress'
+        directory.mkdir(mode=0o700)
+        nodes = set()
+        nonce = 'c' * 32
+        for worker in range(workers):
+            writer = pytest_progress._WorkerProgress(directory, nonce, worker)
+            self.addCleanup(writer.pytest_unconfigure, None)
+            if facts and worker == 0:
+                writer.pytest_runtest_logreport(SimpleNamespace(failed=True, when='call', nodeid='/unmapped-public'))
+            count = 4 if workers > 1 or torn or facts else 1
+            for ordinal in range(count):
+                node = 'C' + str(worker) + 'X' * 100 + '::test_' + str(ordinal) + '_' + 'y' * 100
+                nodes.add(node)
+                report = SimpleNamespace(failed=True, when='call', nodeid='tests/test_public.py::' + node)
+                writer.pytest_runtest_logreport(report)
+            if torn and worker == 0:
+                original = os.write
+                with patch.object(pytest_progress.os, 'write', side_effect=lambda fd, content: original(fd, content[:12])):
+                    writer.pytest_runtest_logreport(report)
+            elif facts and worker == 0:
+                writer.pytest_runtest_logreport(report)
+        return pytest_progress.read_progress(directory, nonce, workers), {'tests/test_public.py': (500, nodes)}
+
+    def _render_failure_prefix(self, progress, trusted):
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        return result['failure_events']
+
+    def test_actual_torn_overflow_fact_keeps_unproved_losses_unknown(self):
+        progress, trusted = self._actual_failure_prefix(torn=True)
+        row = progress['failure_events']['workers'][0]
+        self.assertEqual(len(row['events']), 4)
+        self.assertTrue(row['partial_tail'])
+        public = self._render_failure_prefix(progress, trusted)
+        self.assertEqual(public['status'], 'partial')
+        self.assertEqual(len(public['events']), 4)
+        self.assertTrue(public['partial_tail'])
+        self.assertIsNone(public['overflow'])
+        self.assertIsNone(public['dropped'])
+
+    def test_actual_prefix_without_source_proof_keeps_all_negative_losses_unknown(self):
+        progress, _trusted = self._actual_failure_prefix()
+        public = self._render_failure_prefix(progress, {})
+        self.assertEqual(public['status'], 'partial')
+        self.assertIsNone(public['events'][0]['identity'])
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            with self.subTest(flag=name):
+                self.assertIsNone(public[name])
+
+    def test_actual_source_bound_prefix_render_cap_invalidates_negative_losses(self):
+        progress, trusted = self._actual_failure_prefix(workers=16)
+        self.assertEqual(progress['failure_events']['status'], 'observed')
+        public = self._render_failure_prefix(progress, trusted)
+        self.assertTrue(public['render_truncated'])
+        self.assertEqual(public['status'], 'partial')
+        self.assertLessEqual(len(json.dumps(public).encode()), 8192)
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            with self.subTest(flag=name):
+                self.assertIsNone(public[name])
+
+    def test_complete_negatives_and_proven_true_facts_remain_distinct(self):
+        complete, trusted = self._actual_failure_prefix()
+        public = self._render_failure_prefix(complete, trusted)
+        self.assertEqual(public['status'], 'observed')
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            self.assertIs(public[name], False)
+        lossy, _trusted = self._actual_failure_prefix(facts=True)
+        public = self._render_failure_prefix(lossy, {})
+        self.assertIs(public['overflow'], True)
+        self.assertIs(public['dropped'], True)
+        self.assertIsNone(public['partial_tail'])
+        self.assertEqual(public['status'], 'partial')
