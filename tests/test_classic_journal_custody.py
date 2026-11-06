@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -172,22 +173,45 @@ class ClassicJournalCustodyTests(unittest.TestCase):
         with trace_storage.LocalRead(self.root) as reader:
             owner_ident = threading.get_ident()
             result = []
+            ready, release, finished = threading.Event(), threading.Event(), threading.Event()
 
             def use():
                 actual_thread = threading.current_thread()
-                with patch.object(trace_storage.threading, 'get_ident', return_value=owner_ident), \
-                     patch.object(trace_storage.threading, 'current_thread', return_value=actual_thread):
-                    try:
-                        reader.read(journal.PATH, journal.MAX_BYTES)
-                    except trace_storage.ReadUnavailable:
-                        result.append('unavailable')
-                    else:
-                        result.append('admitted')
+                proxy = SimpleNamespace(get_ident=lambda: owner_ident, current_thread=lambda: actual_thread)
+                try:
+                    with patch.object(trace_storage, 'threading', proxy):
+                        ready.set()
+                        if not release.wait(2):
+                            result.append('scheduler-timeout')
+                            return
+                        try:
+                            reader.read(journal.PATH, journal.MAX_BYTES)
+                        except trace_storage.ReadUnavailable:
+                            result.append('unavailable')
+                        else:
+                            result.append('admitted')
+                finally:
+                    finished.set()
 
             worker = threading.Thread(target=use)
             worker.start()
-            worker.join(2)
+            ready_seen = ready.wait(2)
+            join_error = None
+            try:
+                if ready_seen:
+                    try:
+                        worker.join(0.05)  # Exercise main join while the worker's patch is active.
+                    except RuntimeError:
+                        join_error = 'RuntimeError'
+            finally:
+                release.set()
+                finished_seen = finished.wait(2)
+                if finished_seen:
+                    worker.join(2)
+            self.assertTrue(ready_seen)
+            self.assertTrue(finished_seen)
             self.assertFalse(worker.is_alive())
+            self.assertIsNone(join_error)
             self.assertEqual(result, ['unavailable'])
 
     def test_reader_cannot_be_relabelled_as_another_project(self):
