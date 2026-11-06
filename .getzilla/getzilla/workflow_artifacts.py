@@ -20,12 +20,30 @@ try:
 except ImportError:  # loaded standalone by file path: bind the sibling platform layer the same way
     import importlib.util as _importlib_util
 
-    _FSX_SPEC = _importlib_util.spec_from_file_location(
-        "_getzilla_workflow_artifacts_fsx", Path(__file__).with_name("fsx.py")
-    )
-    assert _FSX_SPEC is not None and _FSX_SPEC.loader is not None
-    fsx = _importlib_util.module_from_spec(_FSX_SPEC)
-    _FSX_SPEC.loader.exec_module(fsx)
+    import sys as _sys
+
+    def _load_standalone_fsx():
+        spec = _importlib_util.spec_from_file_location(
+            "_getzilla_workflow_artifacts_fsx", Path(__file__).with_name("fsx.py")
+        )
+        assert spec is not None and spec.loader is not None
+        module = _importlib_util.module_from_spec(spec)
+        missing = object()
+        previous = _sys.modules.get(spec.name, missing)
+        # Deferred dataclass annotations resolve through the real module registry.
+        _sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            if _sys.modules.get(spec.name) is module:
+                if previous is missing:
+                    del _sys.modules[spec.name]
+                else:
+                    _sys.modules[spec.name] = previous
+            raise
+        return module
+
+    fsx = _load_standalone_fsx()
     _STORAGE_SPEC = _importlib_util.spec_from_file_location(
         "_getzilla_workflow_storage", Path(__file__).with_name("workflow_storage.py"))
     assert _STORAGE_SPEC is not None and _STORAGE_SPEC.loader is not None
