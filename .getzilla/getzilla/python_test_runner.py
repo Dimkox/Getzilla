@@ -371,20 +371,32 @@ def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
             '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
 
 
-def _application_coverage_config(config: Path, directory: Path) -> Path:
-    """Keep consumer settings; exclude only our absolute external entrypoint."""
+def _application_coverage_config(config: Path, directory: Path, *, root: Path) -> Path:
+    """Preserve application coverage; omit exact external instrumentation only."""
+    from . import pytest_progress
+
     harness = str((STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
     # Coverage's omit values are comma/newline-separated glob patterns with
     # environment expansion. Never broaden an exact infrastructure exclusion.
     if any(character in harness for character in '[]*?,\n\r$'):
         raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
+    omissions = [harness]  # Retain the existing bootstrap-only exception.
+    consumer = root.resolve()
+    for origin in (fsx.__file__, pytest_progress.__file__):
+        path = Path(origin).resolve()
+        if path.is_relative_to(consumer):
+            continue
+        exact = str(path)
+        if any(character in exact for character in '[]*?,\n\r$'):
+            raise RunnerError('managed instrumentation path cannot be represented as an exact coverage omission')
+        omissions.append(exact)
     settings = configparser.RawConfigParser()
     try:
         settings.read_string(config.read_text(encoding='utf-8'))
         if not settings.has_section('run'):
             settings.add_section('run')
         original = settings.get('run', 'omit', fallback='')
-        settings.set('run', 'omit', original + '\n' + harness)
+        settings.set('run', 'omit', original + '\n' + '\n'.join(omissions))
         overlay = directory / 'application.coveragerc'
         with overlay.open('x', encoding='utf-8') as output:
             settings.write(output)
@@ -656,7 +668,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         coverage_root = Path(directory) / 'coverage'
         coverage_root.mkdir(mode=0o700)
         if measured:
-            config = _application_coverage_config(config, coverage_root)
+            config = _application_coverage_config(config, coverage_root, root=root)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
         result_file = coverage_root / 'unittest-result.json'
