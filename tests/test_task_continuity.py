@@ -1144,3 +1144,27 @@ class ContinuityTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336WriterAmendmentTests(unittest.TestCase):
+    def test_derived_writer_fills_only_missing_owner_and_preserves_obligations(self):
+        from types import SimpleNamespace
+        from getzilla import continuity, router
+        from pathlib import Path
+        assessed = {'risk': 'low', 'delivery_lane': 'full', 'write_agent': 'integration_implementer',
+                    'allowed_agents': ['repo_explorer', 'integration_implementer'],
+                    'review_agents': ['code_reviewer'], 'required_evidence': ['verification', 'code_review']}
+        for old, derived, expected in ((None, 'integration_implementer', 'integration_implementer'),
+                                       ('data_implementer', 'integration_implementer', 'data_implementer'),
+                                       (None, None, None)):
+            route = {'session_id': 'public-session', 'route_id': 'public-route', 'logical_task_id': 'task:public',
+                     'authority_epoch': 7, 'risk': 'low', 'write_agent': old, 'allowed_agents': ['repo_explorer'],
+                     'review_agents': ['security_reviewer'], 'required_evidence': ['security_review']}
+            value = dict(assessed, write_agent=derived)
+            with self.subTest(old=old, derived=derived), patch.object(router, 'build_route',
+                    return_value=SimpleNamespace(to_dict=lambda: value)):
+                continuity._union_assessment(Path('/public-inert-root'), route, 'authorized implementation amendment')
+            self.assertEqual(route['write_agent'], expected)
+            self.assertIn('security_review', route['required_evidence'])
+            self.assertIn('code_review', route['required_evidence'])
+            self.assertEqual((route['route_id'], route['logical_task_id'], route['authority_epoch']),
+                             ('public-route', 'task:public', 7))

@@ -600,3 +600,26 @@ class FactoryDiscoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class Low336FixtureOwnerTests(unittest.TestCase):
+    def report(self, owner, phase):
+        ids = ['factory.tests.test_public.Probe.test_one', 'factory.tests.test_public.Probe.test_two']
+        binding = {'declared_ids': ids, 'context': {}, 'source_inventory': {'factory/tests/test_public.py': 'a' * 64}}
+        return {'schema_version': 3, 'check_id': 'factory-unit', 'status': 'fail', 'binding': binding,
+            'collected': 2, 'collected_ids': ids, 'expected_ids': ids, 'required_ids': ids,
+            'tests_run': 0, 'started': [], 'executed': [], 'failures': 0, 'errors': 1, 'loader_errors': 0,
+            'skipped': [], 'unqualified_skips': [], 'missing_required': ids, 'source_stable': True,
+            'database_obligations': 'not_run_in_unit_mode',
+            'problems': [{'id': owner, 'phase': phase, 'kind': 'error', 'exception': 'RuntimeError', 'frames': []}]}
+
+    def test_failed_report_binds_exact_class_and_module_not_package_prefix(self):
+        for phase in ('setUpClass', 'tearDownClass', 'setUpModule', 'tearDownModule'):
+            good = 'factory.tests.test_public' + ('.Probe' if phase.endswith('Class') else '')
+            report = self.report(good, phase)
+            factory_tests.validate_report(report, report['binding'])
+            for bad in ('factory', 'factory.tests', good + '.extra',
+                        'factory.tests.test_public' if phase.endswith('Class') else 'factory.tests.test_public.Probe'):
+                with self.subTest(phase=phase, owner=bad):
+                    value = self.report(bad, phase)
+                    with self.assertRaises(ValueError):
+                        factory_tests.validate_report(value, value['binding'])

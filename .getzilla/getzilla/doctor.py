@@ -46,7 +46,7 @@ def _engine_archive_item(archive: Path) -> DoctorItem:
     if header[:4] != importlib.util.MAGIC_NUMBER:
         return DoctorItem('warn', 'engine-archive', 'legacy bytecode targets another Python; imports compile '
                           'the validated source for the current interpreter')
-    return DoctorItem('pass', 'engine-archive', 'legacy engine archive with a current-Python bytecode header')
+    return DoctorItem('warn', 'engine-archive', 'legacy current-Python bytecode header-only check; importability unverified')
 
 
 def run_doctor(root: Path) -> list[DoctorItem]:

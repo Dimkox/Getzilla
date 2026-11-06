@@ -99,6 +99,7 @@ MANAGED_FILES = (
     ".coveragerc",
     "schemas/optional-module-v1.schema.json",
     "schemas/optional-module-registry-v1.schema.json",
+    "schemas/module-runtime-v1.schema.json",
     "docs/optional-modules.md",
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",

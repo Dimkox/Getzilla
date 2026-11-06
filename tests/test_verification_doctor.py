@@ -2960,3 +2960,64 @@ class WorkflowArtifactsVerificationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336FailureRenderTests(unittest.TestCase):
+    def progress(self):
+        import hashlib
+        name = 'tests/test_public.py::Probe::test_one'
+        return {'status': 'unavailable', 'selected_workers': 1, 'observed_workers': 0, 'omitted_workers': 1, 'slots': [],
+                'failure_events': {'version': 1, 'status': 'observed', 'workers': [
+                    {'worker': 0, 'sequence': 1, 'overflow': False, 'dropped': False, 'partial_tail': False,
+                     'events': [{'ordinal': 1, 'phase': 'call', 'path': 'tests/test_public.py',
+                                 'key': hashlib.sha256(name.encode()).hexdigest()}]}]}}
+
+    def test_render_rederives_source_identity_and_preserves_unknown_partial_semantics(self):
+        progress = self.progress()
+        trusted = {'tests/test_public.py': (200, {'Probe::test_one'})}
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted) as metadata:
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIn('failure_events', result)
+        events = result['failure_events']
+        self.assertEqual(events['events'][0]['identity'], 'tests/test_public.py::Probe::test_one')
+        self.assertTrue(events['prefix_only'])
+        self.assertEqual(metadata.call_count, 1)
+        self.assertNotIn('failed_tests', events)
+        self.assertNotIn('completed_tests', events)
+        progress['failure_events']['workers'][0]['events'][0]['path'] = 'tests/UNTRACKED_CANARY.py'
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIsNone(result['failure_events']['events'][0]['identity'])
+        self.assertNotIn('UNTRACKED_CANARY', json.dumps(result))
+        self.assertEqual(result['failure_events']['status'], 'partial')
+
+    def test_closed_render_shape_and_shared_byte_bound_never_echo_values(self):
+        import copy
+        progress = self.progress()
+        progress['failure_events']['workers'][0]['payload'] = 'PAYLOAD_CANARY'
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIn('failure_events', result)
+        self.assertNotIn('PAYLOAD_CANARY', json.dumps(result))
+        self.assertEqual(result['failure_events']['status'], 'unavailable')
+        progress = self.progress()
+        progress['selected_workers'] = 64
+        progress['failure_events']['workers'] = []
+        nodes = set()
+        for worker in range(64):
+            item = copy.deepcopy(self.progress()['failure_events']['workers'][0])
+            item['worker'] = worker
+            item['sequence'] = 4
+            item['events'] = []
+            for ordinal in range(1, 5):
+                node = 'Class' + str(worker) + '::test_' + str(ordinal) + '_' + 'x' * 110
+                nodes.add(node)
+                identity = 'tests/test_public.py::' + node
+                item['events'].append({'ordinal': ordinal, 'phase': 'call', 'path': 'tests/test_public.py',
+                    'key': hashlib.sha256(identity.encode()).hexdigest()})
+            progress['failure_events']['workers'].append(item)
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={'tests/test_public.py': (200, nodes)}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertLessEqual(len(json.dumps(result).encode()), 16000)
+        self.assertLessEqual(len(json.dumps(result['failure_events']).encode()), 8192)
+        self.assertTrue(result['failure_events']['render_truncated'])
+        self.assertLess(len(result['failure_events']['events']), 256)
