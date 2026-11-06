@@ -30,6 +30,10 @@ def git(project: Path, *args: str) -> str:
 
 
 class ProjectSyncTests(unittest.TestCase):
+    def test_checkout_preserves_modes_in_isolated_callers(self) -> None:
+        from tests.test_adapter_removal import _assert_publication_modes
+        _assert_publication_modes(self, 'update')
+
     def setUp(self) -> None:
         patcher = mock.patch.dict(os.environ, {**GIT_ENV, 'GETZILLA_AGENT': 'claude'})
         patcher.start()

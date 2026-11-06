@@ -20,6 +20,172 @@ from getzilla import adapter_removal as publication  # noqa: E402
 from getzilla.component_state import MANIFEST, V2, BoundRoot, encode_manifest, record_owned  # noqa: E402
 
 
+def _assert_publication_modes(case: unittest.TestCase, operation: str) -> None:
+    """The setup child owns022; only its separate operation child owns the tested mask."""
+    program = r'''
+import hashlib,json,os,stat,subprocess,sys
+from pathlib import Path
+root=Path(sys.argv[1]); mask=int(sys.argv[2]); operation=sys.argv[3]
+index_kind=sys.argv[4]; linked=sys.argv[5]=='linked'
+sys.path[:0]=[str(root),str(root/'scripts'),str(root/'.getzilla')]
+from getzilla import adapter_removal as publication
+from getzilla.component_state import MANIFEST,STACK_SYNC_RECORD,encode_manifest,mode_matches,record_owned
+from tests.test_adapter_removal import RemovalGitTests
+from tests.test_getzilla_upgrade import ProjectSyncTests
+fixture=(RemovalGitTests('test_git_removal_idempotence_selection_and_rollback') if operation=='remove'
+         else ProjectSyncTests('test_owned_old_file_upgrades_with_its_proof_in_the_same_commit'))
+fixture.setUp()
+try:
+    project=fixture.project
+    runtime=project/'.getzilla/runtime'; runtime.mkdir(exist_ok=True)
+    (runtime/'.gitignore').write_bytes((root/'.getzilla/runtime/.gitignore').read_bytes())
+    retained={}
+    for mode in (0o600,0o640,0o440):
+        name=f'public-retained-{mode:o}.txt'; path=project/name
+        path.write_bytes(b'public retained bytes'); path.chmod(mode)
+    keep='public-retained-440.txt'
+    (project/STACK_SYNC_RECORD).write_text(json.dumps({'schema_version':1,'kept_local':[keep],
+        'kept_local_sha256':{keep:hashlib.sha256((project/keep).read_bytes()).hexdigest()}}))
+    if operation=='update':
+        manifest=fixture.select(())
+        executable='scripts/getzilla_components.py'; path=project/executable
+        path.parent.mkdir(); path.write_bytes(b'# public previous executable\n'); path.chmod(0o755)
+        record_owned(manifest,executable,path.read_bytes(),0o755)
+        (project/MANIFEST).write_bytes(encode_manifest(manifest))
+        fixture.commit('public managed-mode fixture')
+    else:
+        fixture.git('add','-A'); fixture.git('commit','--quiet','-m','public retained modes')
+    def git(*args):
+        return subprocess.run(['git','-C',str(project),*args],check=True,capture_output=True,text=True,
+                              env={**os.environ,'GIT_OPTIONAL_LOCKS':'0'}).stdout.strip()
+    if linked:
+        destination=project.parent/'linked-consumer'
+        git('worktree','add','--quiet','-b','public-linked',str(destination))
+        project=fixture.project=destination
+    for mode in (0o600,0o640,0o440):
+        name=f'public-retained-{mode:o}.txt'; path=project/name; path.chmod(mode)
+        retained[name]=(path.read_bytes(),stat.S_IMODE(path.stat().st_mode),path.stat().st_ino)
+    original=git('rev-parse','HEAD')
+    original_branch=git('branch','--show-current'); original_refs=git('show-ref','--heads')
+    admin={}; admin_paths={}
+    for name in ('index','config'):
+        path=Path(git('rev-parse','--git-path',name))
+        path=path if path.is_absolute() else project/path
+        admin_paths[name]=path
+        path.chmod(0o644 if name=='index' else 0o600)
+    index=admin_paths['index']; canary=None
+    if index_kind=='absent': index.unlink()
+    elif index_kind=='symlink':
+        canary=project.parent/'public-index-canary'; canary.write_bytes(index.read_bytes())
+        canary.chmod(0o600); index.unlink(); index.symlink_to(canary)
+    elif os.name=='posix': index.chmod(int(index_kind,8))
+    def snapshot(path):
+        if not path.exists() and not path.is_symlink(): return None
+        info=path.lstat()
+        return (info.st_dev,info.st_ino,stat.S_IMODE(info.st_mode),
+                hashlib.sha256(path.read_bytes()).hexdigest())
+    admin={n:snapshot(p) for n,p in admin_paths.items()}
+    canary_before=snapshot(canary) if canary else None
+    original_status=git('status','--porcelain')
+    caller=r"""
+import json,os,stat,sys
+from pathlib import Path
+from unittest import mock
+root,project,operation=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
+sys.path[:0]=[str(root/'scripts'),str(root/'.getzilla')]
+from getzilla import adapter_removal
+import getzilla_upgrade
+before=project.parent/'caller-before'; after=project.parent/'caller-after'
+before.write_bytes(b'public mask sentinel'); cwd=Path.cwd(); session=os.environ.get('GETZILLA_SESSION_ID')
+result={'operation_succeeded':False,'error_type':None,'unsupported_checkout_reason':False}
+try:
+    with mock.patch.object(os,'umask',side_effect=AssertionError('process-global mask change')), \
+         mock.patch.object(adapter_removal,'commit_changes',wraps=adapter_removal.commit_changes) as committed:
+        if operation=='remove': adapter_removal.remove_adapters(root,project)
+        else: getzilla_upgrade.sync_project(root,project)
+    result['operation_succeeded']=True
+except (adapter_removal.UpdateError,OSError,AssertionError) as error:
+    result['error_type']=type(error).__name__
+    result['unsupported_checkout_reason']='mode-preserving checkout' in str(error)
+after.write_bytes(b'public mask sentinel')
+result.update(caller_mode_before=stat.S_IMODE(before.stat().st_mode),
+              caller_mode_after=stat.S_IMODE(after.stat().st_mode),
+              commit_calls=committed.call_count,
+              caller_state_unchanged=Path.cwd()==cwd and os.environ.get('GETZILLA_SESSION_ID')==session)
+print(json.dumps(result))
+"""
+    options={'umask':mask} if os.name=='posix' else {}
+    done=subprocess.run([sys.executable,'-B','-c',caller,str(root),str(project),operation],
+                        capture_output=True,text=True,timeout=60,**options)
+    if done.returncode: raise AssertionError('isolated operation caller did not report')
+    result=json.loads(done.stdout)
+    admin_after={n:snapshot(p) for n,p in admin_paths.items()}
+    current=git('rev-parse','HEAD'); branch=git('branch','--show-current')
+    changed=git('diff','--name-only',original,current).splitlines()
+    modes_ok=True; present=0
+    for name in changed:
+        path=project/name
+        if not path.exists(): continue
+        mode=git('ls-tree',current,'--',name).split()[0]
+        expected=0o755 if mode=='100755' else 0o644
+        modes_ok=modes_ok and mode_matches(path.stat().st_mode,expected)
+        present+=1
+    result.update(head_moved=current!=original,
+        parent_is_original=git('rev-parse','HEAD^')==original if current!=original else False,
+        expected_branch=branch.startswith('getzilla-remove-' if operation=='remove' else 'getzilla-update-'),
+        working_tree_clean=not git('status','--porcelain'),planned_modes_preserved=modes_ok,
+        changed_present_count=present,
+        manifest_mode=stat.S_IMODE((project/MANIFEST).stat().st_mode),
+        retained_preserved=all((project/n).read_bytes()==v[0] and
+            stat.S_IMODE((project/n).stat().st_mode)==v[1] and (project/n).stat().st_ino==v[2]
+            for n,v in retained.items()),
+        admin_modes_before=admin,
+        admin_modes_after=admin_after)
+    # Successful checkout may replace index identity/bytes; its declared mode stays exact.
+    result['admin_modes_preserved']=all(v is not None and admin_after[n] is not None and
+        v[2]==admin_after[n][2] for n,v in admin.items())
+    result['refusal_admin_exact']=admin==admin_after
+    result['refusal_state_exact']=(current==original and branch==original_branch and
+        git('show-ref','--heads')==original_refs and git('status','--porcelain')==original_status)
+    result['canary_exact']=snapshot(canary)==canary_before if canary else True
+    result['caller_mask_preserved']=(result['caller_mode_before']==result['caller_mode_after'] and
+        (os.name!='posix' or result['caller_mode_after']==0o666 & ~mask))
+    if operation=='update':
+        result['executable_mode_preserved']=mode_matches((project/executable).stat().st_mode,0o755)
+    print(json.dumps(result))
+finally:
+    fixture.doCleanups()
+'''
+    scenarios = ([(mask, '644', 'ordinary', True) for mask in (0o022, 0o002, 0o077)]
+                 + [(0o022, mode, 'ordinary', False) for mode in ('600', '640', '664', 'absent', 'symlink')]
+                 + [(0o002, '644', 'linked', True), (0o022, '600', 'linked', False)]
+                 if os.name == 'posix' else [(-1, '644', 'ordinary', True)])
+    for mask, index_kind, layout, success in scenarios:
+        with case.subTest(operation=operation, caller_mask=mask, index=index_kind, layout=layout):
+            options = {'umask': 0o022} if os.name == 'posix' else {}
+            completed = subprocess.run([sys.executable, '-B', '-c', program, str(ROOT), str(mask), operation,
+                                        index_kind, layout],
+                                       capture_output=True, text=True, timeout=90, **options)
+            case.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            for name in ('retained_preserved', 'caller_mask_preserved', 'caller_state_unchanged', 'canary_exact'):
+                case.assertTrue(result[name], json.dumps({'failed_contract': name, **result}, sort_keys=True))
+            if success:
+                for name in ('operation_succeeded', 'head_moved', 'parent_is_original', 'expected_branch',
+                             'working_tree_clean', 'planned_modes_preserved', 'admin_modes_preserved'):
+                    case.assertTrue(result[name], json.dumps({'failed_contract': name, **result}, sort_keys=True))
+                case.assertEqual(result['commit_calls'], 1)
+                case.assertGreater(result['changed_present_count'], 0)
+                if operation == 'update':
+                    case.assertTrue(result['executable_mode_preserved'])
+            else:
+                case.assertFalse(result['operation_succeeded'], json.dumps(result, sort_keys=True))
+                case.assertTrue(result['unsupported_checkout_reason'], json.dumps(result, sort_keys=True))
+                case.assertEqual(result['commit_calls'], 0)
+                case.assertTrue(result['refusal_admin_exact'], json.dumps(result, sort_keys=True))
+                case.assertTrue(result['refusal_state_exact'], json.dumps(result, sort_keys=True))
+
+
 class RemovalPlanTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -230,6 +396,9 @@ class RemovalGitTests(unittest.TestCase):
     def remove(self, agents=None):
         import getzilla_upgrade
         return getzilla_upgrade.remove_adapters(ROOT, self.project, agents)
+
+    def test_checkout_preserves_modes_in_isolated_callers(self) -> None:
+        _assert_publication_modes(self, 'remove')
 
     def test_git_removal_idempotence_selection_and_rollback(self) -> None:
         from getzilla.component_state import read_state

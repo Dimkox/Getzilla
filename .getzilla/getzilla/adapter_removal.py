@@ -10,6 +10,7 @@ import copy
 import json
 import math
 import os
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -193,11 +194,16 @@ class UpdateError(RuntimeError):
 
 
 def git(cwd: Path, *args: str, data: bytes | None = None,
-        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        env: dict[str, str] | None = None, umask: int = -1) -> subprocess.CompletedProcess:
     """Run git in cwd; output stays bytes when data is given, else text."""
+    environment = dict(os.environ if env is None else env)
+    # Read-only observations must not refresh a custom-permission index before preflight.
+    environment['GIT_OPTIONAL_LOCKS'] = '0'
+    options = {'umask': umask} if os.name == 'posix' and umask >= 0 else {}
     return subprocess.run(['git', '-C', str(cwd), *args], input=data, capture_output=True,
                           text=data is None, encoding='utf-8' if data is None else None,
-                          errors='replace' if data is None else None, env=env, check=False)
+                          errors='replace' if data is None else None, env=environment, check=False,
+                          **options)
 
 
 
@@ -249,10 +255,41 @@ def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], 
 
 
 
+def _require_checkout_index(project: Path) -> None:
+    """Refuse before publication when Git cannot preserve both index and managed modes."""
+    if os.name != 'posix':
+        return
+    index = Path(_git_out(project, 'rev-parse', '--git-path', 'index'))
+    index = index if index.is_absolute() else project / index
+    try:
+        with fsx.ReadOnlyBoundRoot(index.parent) as binding:
+            with binding.parent(index.name) as (parent, name, check):
+                descriptor = fsx.open_at(parent, name, os.O_RDONLY | fsx.O_NOFOLLOW
+                                         | fsx.O_NONBLOCK | fsx.O_CLOEXEC)
+                try:
+                    opened = os.fstat(descriptor)
+                    named = fsx.lstat_at(parent, name)
+                    if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or fsx.is_link(named)
+                            or fsx._file_identity(opened) != fsx._file_identity(named)):
+                        raise UpdateError('mode-preserving checkout requires a stable regular single-link Git index')
+                    if stat.S_IMODE(opened.st_mode) != 0o644:
+                        raise UpdateError('mode-preserving checkout cannot preserve existing Git index '
+                                          f'permissions {stat.S_IMODE(opened.st_mode):04o}')
+                    check()
+                    if (fsx._file_identity(os.fstat(descriptor)) != fsx._file_identity(opened)
+                            or fsx._file_identity(fsx.lstat_at(parent, name)) != fsx._file_identity(opened)):
+                        raise UpdateError('Git index changed during mode-preserving checkout preflight')
+                finally:
+                    os.close(descriptor)
+    except (ComponentStateError, OSError) as exc:
+        raise UpdateError('mode-preserving checkout requires an existing safely bound Git index') from exc
+
+
 def _require_clean_project(project: Path) -> None:
     top = git(project, 'rev-parse', '--show-toplevel')
     if top.returncode != 0 or os.path.normcase(fsx.system_canonical(top.stdout.strip())) != os.path.normcase(str(project)):
         raise UpdateError(f'{project} is not the root of a Git repository')
+    _require_checkout_index(project)
     status = _git_out(project, 'status', '--porcelain', '--untracked-files=all',
                       env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
     # The persistent administrative guard is not product content. Every other
@@ -298,7 +335,8 @@ def _publish_changes(project: Path, transaction: ComponentTransaction, changes: 
         check_current()
     except (UpdateError, ValueError, OSError) as exc:
         raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}') from exc
-    switched = git(project, 'switch', '--quiet', branch)
+    checkout_options = {'umask': 0o022} if os.name == 'posix' else {}
+    switched = git(project, 'switch', '--quiet', branch, **checkout_options)
     if switched.returncode != 0:
         raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
                           f'{switched.stderr.strip()}; run `git switch {branch}`')
