@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
-from getzilla.route_metrics import counters, load, summarize, import_observations  # noqa: E402
+from getzilla.route_metrics import COUNTERS, counters, load, summarize, import_observations  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
 from getzilla.trace_storage import LocalRead  # noqa: E402
 from getzilla.metrics_journal import Observations  # noqa: E402
@@ -61,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = summarize(load(root, since, reader=reader), root, reader=reader)
         if summary['routes'] is not None:
             summary['counters'] = counters(root, reader=reader)
+            missing = [name for name in COUNTERS if name not in summary['counters']]
+            summary['counter_observations'] = {'complete': not missing,
+                'gaps': ['counter observation unavailable: ' + name for name in missing]}
         reader.check()
     except (OSError, ValueError):
         summary = summarize(Observations(available=False))
@@ -100,12 +103,15 @@ def _emit(summary, args):
             print(f'  ... {len(gapped) - MAX_GAP_ROUTES} more; use --json for all.')
     hints = summary['counters'].get('path_hints', {})
     guard = summary['counters'].get('parallel_guard', {})
-    if hints or guard:
-        serial = ', '.join(f'{key} {value}' for key, value in sorted(guard.items()) if key != 'since') or '0'
-        print(f'Path misses answered with real paths: {hints.get("refused", 0)} refused, {hints.get("hinted", 0)} hinted.')
-        print(f'Tasks given the real paths of the files they name: {hints.get("named", 0)}; '
-              f'patches refused because the file was not read first: {hints.get("edit_unread_refused", 0)}.')
+    if hints:
+        print(f'Path misses answered with real paths: {_cell(hints.get("refused"))} refused, {_cell(hints.get("hinted"))} hinted.')
+        print(f'Tasks given the real paths of the files they name: {_cell(hints.get("named"))}; '
+              f'patches refused because the file was not read first: {_cell(hints.get("edit_unread_refused"))}.')
+    if guard:
+        serial = ', '.join(f'{key} {value}' for key, value in sorted(guard.items()) if key != 'since') or 'unknown'
         print(f'Serial batches sent to the parallel runner: {serial}.')
+    if summary['counter_observations']['gaps']:
+        print('Counter counts unknown: ' + '; '.join(summary['counter_observations']['gaps']))
     return 0
 
 

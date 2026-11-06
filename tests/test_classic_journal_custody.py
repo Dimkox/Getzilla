@@ -272,3 +272,15 @@ class ClassicJournalCustodyTests(unittest.TestCase):
         unknown = json.loads(raw)
         self.assertIsNone(unknown['routes'])
         self.assertIsNone(unknown['counters'])
+
+    def test_missing_counter_cannot_be_printed_as_zero(self):
+        counter = self.path.with_name('parallel-guard.json')
+        counter.write_text('{"chain":2}')
+        counter.chmod(0o600)
+        cli = ROOT / 'scripts/getzilla_report.py'
+        text = subprocess.check_output([sys.executable, str(cli), '--since', 'all'], cwd=self.root).decode()
+        self.assertNotIn('0 refused', text)
+        data = json.loads(subprocess.check_output([sys.executable, str(cli), '--since', 'all', '--json'], cwd=self.root))
+        self.assertIsNotNone(data.get('counter_observations'))
+        self.assertFalse(data['counter_observations']['complete'])
+        self.assertEqual(data['counter_observations']['gaps'], ['counter observation unavailable: path_hints'])
