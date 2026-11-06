@@ -161,7 +161,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                          'Factory publication controls require POSIX and Python >=3.11')
     def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
         code = """
-import json, pathlib, sys
+import hashlib, json, pathlib, sys
 root = pathlib.Path.cwd()
 sys.path.insert(0, str(root / '.getzilla'))
 from getzilla import verification
@@ -169,9 +169,13 @@ assert 'getzilla.zip' in verification.__file__, verification.__file__
 result = verification._factory_unit(root)[0]
 evidence = result.details[0] if result.details else {}
 print(json.dumps({'status': result.status, 'summary': result.summary,
-                  'stderr': result.stderr[-3000:],
+                  'problems': evidence.get('problems'),
                   'collected': evidence.get('collected'),
                   'executed': len(evidence.get('executed', [])),
+                  'qualified_skips': len(evidence.get('skipped', [])),
+                  'required': len(evidence.get('required_ids', [])),
+                  'collected_ids_digest': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
+                  'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
                   'unqualified_skips': evidence.get('unqualified_skips')}))
 """
         with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
@@ -189,6 +193,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertGreater(evidence['collected'], 0)
             self.assertGreater(evidence['executed'], 0)
             self.assertEqual(evidence['unqualified_skips'], [])
+            print('installed-factory-unit ' + json.dumps(evidence, sort_keys=True))
 
     @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
     def test_archived_engine_verifier_rejects_consumer_package_shadowing(self):
@@ -233,6 +238,74 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                     if '__pycache__' not in path.parts}
         self.assertTrue(expected <= set(names), sorted(expected - set(names)))
         self.assertEqual(len(names), len(set(names)), 'a managed file must be published only once')
+
+    def test_factory_procfs_applicability_names_only_the_ten_existing_dependent_cases(self):
+        from getzilla.factory_tests import skip_allowance
+        dependent = (
+            'test_crc_and_encrypted_members_fail_closed',
+            'test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded',
+            'test_exact_archive_bounds_are_admitted',
+            'test_external_hardlinks_in_object_generation_manifest_and_active_fail_closed',
+            'test_hostile_zip_matrix_preserves_old_active',
+            'test_manifest_tamper_and_generation_symlink_are_rejected',
+            'test_registry_callback_cannot_redirect_object_writes_or_reads',
+            'test_replay_rechecks_digest_origin_and_lifecycle_authority',
+            'test_restart_and_tenant_repository_symlink_isolation',
+            'test_thread_and_process_competitors_converge_and_reconcile',
+        )
+        prefix = 'factory.tests.test_vibevm_store.VibeVMStoreTests.'
+        reason = ('unsupported-procfs-store', 'requires Linux procfs descriptor reopening')
+        for method in dependent:
+            with self.subTest(method=method):
+                self.assertEqual(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}), reason)
+                for fact in (True, None, 0, 'false'):
+                    self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': fact}))
+                self.assertIsNone(skip_allowance(prefix + method, {}))
+        portable = ('test_provenance_is_exact_and_data_only', 'test_resolve_rechecks_authoritative_graph',
+                    'test_boot_marker_injection_and_corruption_fail',
+                    'test_root_must_be_owner_pinned_and_not_writable_by_others',
+                    'test_missing_procfs_refuses_before_registry_callback_or_data_writes',
+                    'test_procfs_probe_closes_owned_descriptors_and_refuses_wrong_identity', 'test_future_unlisted')
+        for method in portable:
+            self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}))
+
+    def test_factory_procfs_fact_is_measured_and_closes_its_owned_descriptors(self):
+        from getzilla import factory_tests
+        probe = getattr(factory_tests, '_procfs_descriptor_reopen', None)
+        self.assertTrue(callable(probe), 'report applicability requires an independent native fact')
+        opened, actual_open = [], os.open
+        def track(*args, **kwargs):
+            descriptor = actual_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with patch.object(factory_tests.os, 'open', side_effect=track):
+            self.assertIs(type(probe()), bool)
+        for descriptor in set(opened):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        with patch.object(factory_tests.os, 'open', side_effect=FileNotFoundError):
+            self.assertFalse(probe())
+        # Controlled descriptor backends prove both outcomes even on a host
+        # without procfs. This is not a native Linux qualification claim.
+        with tempfile.TemporaryDirectory(prefix='public-procfs-identity-') as temporary:
+            for same in (True, False):
+                opened.clear()
+                def controlled_open(path, flags):
+                    if not opened:
+                        self.assertEqual(path, '/')
+                        descriptor = actual_open(temporary, flags)
+                    else:
+                        self.assertEqual(path, f'/proc/self/fd/{opened[0]}')
+                        descriptor = os.dup(opened[0]) if same else actual_open('/', flags)
+                    opened.append(descriptor)
+                    return descriptor
+                with patch.object(factory_tests.sys, 'platform', 'linux'), \
+                        patch.object(factory_tests.os, 'open', side_effect=controlled_open):
+                    self.assertIs(probe(), same)
+                self.assertEqual(len(opened), 2)
+                for descriptor in set(opened):
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
 
     def test_factory_payload_contains_every_bound_regular_input(self):
         from getzilla.factory_tests import source_inventory
