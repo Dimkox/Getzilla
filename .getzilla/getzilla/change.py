@@ -7,7 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .package_status import collect_worktree, read_package_file
+from .package_status import (collect_worktree, read_package_file,
+                             synchronize_accounting as synchronize_accounting)
 from .state import (get_active_route, set_active_change, update_route, serialized_task,
                     require_route_owner, durable_json, durable_bytes, _safe_parents)
 from .spec import dump_canonical_spec, generate_spec

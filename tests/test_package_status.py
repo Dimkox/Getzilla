@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -673,6 +674,182 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIsNone(result['head'])
             self.assertIsNone(result['commits_ahead'])
 
+    def test_ignored_nested_selection_cannot_borrow_parent_git_identity(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
+            selected = Path(directory) / 'selected'
+            selected.mkdir()
+            (selected / 'requirements.txt').write_text('public-example==1.0\n', encoding='utf-8', newline='\n')
+            self.assertEqual(Path(self.git(selected, 'rev-parse', '--show-toplevel')).resolve(), ROOT.resolve())
+            result = self.module().collect_worktree(selected, {'base_commit': self.git(ROOT, 'rev-parse', 'HEAD')})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['branch'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_non_git_selection_has_structured_root_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.module().collect_worktree(Path(directory), {})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_standalone_unicode_and_object_free_roots_keep_real_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('standalone', 'проект-雪'):
+                with self.subTest(name=name):
+                    root = Path(directory) / name
+                    root.mkdir()
+                    self.git(root, 'init', '-q')
+                    self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                             '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+                    head = self.git(root, 'rev-parse', 'HEAD')
+                    result = self.module().collect_worktree(root, {'base_commit': head})
+                    self.assertTrue(result['git_available'])
+                    self.assertEqual(result['head'], head)
+                    self.assertEqual(result['dirty_product_state'], 'clean')
+                    self.assertEqual(result['dirty_product_paths'], [])
+                    self.assertEqual(result['commits_ahead'], 0)
+                    self.assertFalse(result['uncommitted_product_zero_ahead'])
+                    self.assertNotIn('git_root_unknown', self.codes(result))
+
+    def test_linked_worktree_root_keeps_its_own_head_and_dirty_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, linked = Path(directory) / 'main', Path(directory) / 'linked-проект'
+            root.mkdir()
+            self.git(root, 'init', '-q')
+            self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                     '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+            self.git(root, 'worktree', 'add', '--detach', str(linked), 'HEAD')
+            try:
+                (linked / 'public.py').write_text('public = True\n', encoding='utf-8', newline='\n')
+                head = self.git(linked, 'rev-parse', 'HEAD')
+                result = self.module().collect_worktree(linked, {'base_commit': head})
+                self.assertTrue(result['git_available'])
+                self.assertEqual(result['head'], head)
+                self.assertTrue(result['detached'])
+                self.assertEqual(result['dirty_product_paths'], ['public.py'])
+                self.assertEqual(result['dirty_product_state'], 'dirty')
+                self.assertTrue(result['uncommitted_product_zero_ahead'])
+            finally:
+                self.git(root, 'worktree', 'remove', '--force', str(linked))
+
+    def test_incomplete_or_nonroot_git_location_never_qualifies_metadata(self):
+        module = self.module()
+        original = module._git_read
+        cases = ((0, b'true\n'), (0, b'\ntrue'), (0, b'\nfalse\n'),
+                 (0, b'child/\ntrue\n'), (0, b'\ntrue\nextra\n'), (1, b'\ntrue\n'))
+        for code, output in cases:
+            with self.subTest(code=code, output=output):
+                def location(repository, arguments):
+                    if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree']:
+                        return code, output
+                    return original(repository, arguments)
+
+                with patch.object(module, '_git_read', side_effect=location):
+                    result = module.collect_worktree(ROOT, {})
+                self.assertFalse(result['git_available'])
+                self.assertIsNone(result['head'])
+                self.assertEqual(result['dirty_product_state'], 'unknown')
+                self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            (root / 'feature.py').write_text('first\n', encoding='utf-8')
+            self.git(root, 'add', 'feature.py')
+            self.git(root, 'commit', '-qm', 'first task commit')
+            (root / 'feature.py').write_text('second\n', encoding='utf-8')
+            result = self.module().collect_worktree(root, route)
+            self.assertEqual(result['commits_ahead'], 1)
+            self.assertEqual(result['dirty_product_state'], 'dirty')
+            self.assertFalse(result['uncommitted_product_zero_ahead'])
+
+    def test_git_failure_truncation_and_path_limit_are_unknown_observations(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            module = self.module()
+            with patch.object(module, '_run_capped', side_effect=module.ArchitectureError('timeout', code='timeout')):
+                result = module.collect_worktree(root, route)
+            self.assertIsNone(result['commits_ahead'])
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            original_git = module._git_read
+
+            def truncated_status(repository, arguments):
+                if arguments[0] == 'status':
+                    return 0, b' M truncated.py'
+                return original_git(repository, arguments)
+
+            with patch.object(module, '_git_read', side_effect=truncated_status):
+                result = module.collect_worktree(root, route)
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            for number in range(260):
+                (root / f'product-{number}.py').touch()
+            result = module.collect_worktree(root, route)
+            self.assertIn('git_status_limit', self.codes(result))
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+
+    def test_stop_warns_on_incomplete_package_even_without_receipt_obligations(self):
+        with project_copy(git=True) as root:
+            route, _, _, package = self.prepare(root)
+            route['required_evidence'] = []
+            activate_owned_route(root, route)
+            self.update_state(package, status='implementing')
+            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root)})
+            self.assertEqual(code, 0, error)
+            self.assertNotEqual(result.get('decision'), 'block')
+            self.assertIn('objective_unresolved', result.get('systemMessage', ''))
+            self.assertNotEqual(get_active_route(root)['status'], 'completed')
+
+    def test_stop_does_not_hide_incomplete_package_behind_old_receipts(self):
+        with project_copy(git=True) as root:
+            route, _, _, package = self.prepare(root)
+            self.update_state(package, status='implementing')
+            review = prepare_review_source(root)
+            for kind in route['required_evidence']:
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
+            # Modern PASS first requires valid synchronized typed scope. An
+            # unsafe later edit cannot hide behind those same-source receipts.
+            spec_path = package / 'change-spec.yaml'
+            spec = json.loads(spec_path.read_text())
+            spec['acceptance_criteria'] = []
+            spec_path.write_text(json.dumps(spec))
+            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'session_id': route['session_id']})
+            self.assertEqual(code, 0, error)
+            self.assertNotEqual(result.get('decision'), 'block')
+            self.assertIn('acceptance_criteria_missing', result.get('systemMessage', ''))
+            self.assertNotEqual(get_active_route(root)['status'], 'completed')
+
+    def test_review_preflight_refuses_pass_before_receipt_write_but_preserves_failed_review(self):
+        with project_copy(git=True) as root:
+            self.install_cli(root)
+            route, _, _, package = self.prepare(root, complete=True)
+            self.update_state(package, status='reviewing')
+            report = package / 'evidence/code-review.md'
+            report.write_text('Concrete review findings.\n', encoding='utf-8')
+            review = prepare_review_source(root)
+            args = ('code_review', '--report', report.relative_to(root).as_posix(),
+                    '--reviewed-commit', review['reviewed_commit'], '--reviewed-context', review['reviewed_context'])
+            passed = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'
+            before = receipt.read_bytes()
+            (package / 'requirements.md').write_text('- [ ] Given ..., when ..., then ...\n', encoding='utf-8')
+            refused = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('template_unexpanded', refused.stderr)
+            self.assertEqual(receipt.read_bytes(), before)
+            failed = self.cli(root, 'getzilla_review.py', *args, '--status', 'fail')
+            self.assertEqual(failed.returncode, 0, failed.stderr)
+            self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
+
+
     def test_nested_non_git_selection_never_borrows_parent_metadata(self):
         with project_copy(git=True) as root:
             route, _, _, _ = self.prepare(root)
@@ -824,98 +1001,6 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIn('exit=128',diagnostic)
             self.assertIn('fatal:',diagnostic)
             self.assertLess(len(diagnostic),20000)
-
-    def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
-        with project_copy(git=True) as root:
-            route, _, _, _ = self.prepare(root)
-            (root / 'feature.py').write_text('first\n', encoding='utf-8')
-            self.git(root, 'add', 'feature.py')
-            self.git(root, 'commit', '-qm', 'first task commit')
-            (root / 'feature.py').write_text('second\n', encoding='utf-8')
-            result = self.module().collect_worktree(root, route)
-            self.assertEqual(result['commits_ahead'], 1)
-            self.assertEqual(result['dirty_product_state'], 'dirty')
-            self.assertFalse(result['uncommitted_product_zero_ahead'])
-
-    def test_git_failure_truncation_and_path_limit_are_unknown_observations(self):
-        with project_copy(git=True) as root:
-            route, _, _, _ = self.prepare(root)
-            module = self.module()
-            with patch.object(module, '_run_capped', side_effect=module.ArchitectureError('timeout', code='timeout')):
-                result = module.collect_worktree(root, route)
-            self.assertIsNone(result['commits_ahead'])
-            self.assertIsNone(result['uncommitted_product_zero_ahead'])
-            original_git = module._git_read
-
-            def truncated_status(repository, arguments):
-                if arguments[0] == 'status':
-                    return 0, b' M truncated.py'
-                return original_git(repository, arguments)
-
-            with patch.object(module, '_git_read', side_effect=truncated_status):
-                result = module.collect_worktree(root, route)
-            self.assertEqual(result['dirty_product_state'], 'unknown')
-            self.assertIsNone(result['uncommitted_product_zero_ahead'])
-            for number in range(260):
-                (root / f'product-{number}.py').touch()
-            result = module.collect_worktree(root, route)
-            self.assertIn('git_status_limit', self.codes(result))
-            self.assertEqual(result['dirty_product_state'], 'unknown')
-            self.assertIsNone(result['uncommitted_product_zero_ahead'])
-
-    def test_stop_warns_on_incomplete_package_even_without_receipt_obligations(self):
-        with project_copy(git=True) as root:
-            route, _, _, package = self.prepare(root)
-            route['required_evidence'] = []
-            activate_owned_route(root, route)
-            self.update_state(package, status='implementing')
-            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root)})
-            self.assertEqual(code, 0, error)
-            self.assertNotEqual(result.get('decision'), 'block')
-            self.assertIn('objective_unresolved', result.get('systemMessage', ''))
-            self.assertNotEqual(get_active_route(root)['status'], 'completed')
-
-    def test_stop_does_not_hide_incomplete_package_behind_old_receipts(self):
-        with project_copy(git=True) as root:
-            route, _, _, package = self.prepare(root)
-            self.update_state(package, status='implementing')
-            review = prepare_review_source(root)
-            for kind in route['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
-            # Modern PASS first requires valid synchronized typed scope. An
-            # unsafe later edit cannot hide behind those same-source receipts.
-            spec_path = package / 'change-spec.yaml'
-            spec = json.loads(spec_path.read_text())
-            spec['acceptance_criteria'] = []
-            spec_path.write_text(json.dumps(spec))
-            code, result, error = run_hook(root, 'stop_gate.py', {'cwd': str(root), 'session_id': route['session_id']})
-            self.assertEqual(code, 0, error)
-            self.assertNotEqual(result.get('decision'), 'block')
-            self.assertIn('acceptance_criteria_missing', result.get('systemMessage', ''))
-            self.assertNotEqual(get_active_route(root)['status'], 'completed')
-
-    def test_review_preflight_refuses_pass_before_receipt_write_but_preserves_failed_review(self):
-        with project_copy(git=True) as root:
-            self.install_cli(root)
-            route, _, _, package = self.prepare(root, complete=True)
-            self.update_state(package, status='reviewing')
-            report = package / 'evidence/code-review.md'
-            report.write_text('Concrete review findings.\n', encoding='utf-8')
-            review = prepare_review_source(root)
-            args = ('code_review', '--report', report.relative_to(root).as_posix(),
-                    '--reviewed-commit', review['reviewed_commit'], '--reviewed-context', review['reviewed_context'])
-            passed = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
-            self.assertEqual(passed.returncode, 0, passed.stderr)
-            receipt = root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json'
-            before = receipt.read_bytes()
-            (package / 'requirements.md').write_text('- [ ] Given ..., when ..., then ...\n', encoding='utf-8')
-            refused = self.cli(root, 'getzilla_review.py', *args, '--status', 'pass')
-            self.assertNotEqual(refused.returncode, 0)
-            self.assertIn('template_unexpanded', refused.stderr)
-            self.assertEqual(receipt.read_bytes(), before)
-            failed = self.cli(root, 'getzilla_review.py', *args, '--status', 'fail')
-            self.assertEqual(failed.returncode, 0, failed.stderr)
-            self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
 
 
 if __name__ == '__main__':

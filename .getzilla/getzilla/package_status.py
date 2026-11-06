@@ -1,6 +1,7 @@
 """Bounded local observations, separate from receipt and merge authority."""
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import os
@@ -14,12 +15,15 @@ from . import fsx
 from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
 from .receipts import RECEIPT_KINDS
 from .spec import MAX_SPEC_BYTES, SpecError, _bounded_walk, _parse_canonical_json, parse_yaml_subset, validate_spec
-from .state import CLOSED_CHANGE_STATUSES
+from .state import (CLOSED_CHANGE_STATUSES, serialized_task, require_route_owner,
+                    get_active_route, durable_json)
 from .util import now_utc
 
 MAX_FILE_BYTES = 262_144
 MAX_TOTAL_BYTES = 1_048_576
 MAX_FILES = 64
+# Rows can share report files or remain unrun; their finite limit is independent.
+MAX_ACCOUNTING_ROWS = 128
 MAX_FINDINGS = 100
 MAX_PENDING_TASKS = 20
 MAX_DIRTY_PATHS = 256
@@ -256,6 +260,108 @@ def _timestamp(value: Any) -> bool:
         return False
 
 
+def accounting_rows(accounting: Any) -> list[dict[str, Any]]:
+    """The existing bounded accounting format, shared by inspection and synchronization."""
+    if (not isinstance(accounting, dict) or accounting.get('schema_version') != 1
+            or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_ACCOUNTING_ROWS):
+        raise InspectionError('obligation_invalid', 'evidence accounting must be a bounded version 1 obligation list')
+    return accounting['obligations']
+
+
+def obligation_reference(row: Any, ids: set[str], receipt_kinds: set[str], *, observe=None) -> str | None:
+    """Validate one existing row; observation preserves diagnostic display ordering."""
+    if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not _ID.fullmatch(row['id']):
+        raise InspectionError('obligation_invalid', 'obligation identity is invalid')
+    if row['id'] in ids or not isinstance(row.get('kind'), str) or row['kind'] not in {'receipt', 'run'}:
+        raise InspectionError('obligation_invalid', 'obligation kind or uniqueness is invalid')
+    ids.add(row['id'])
+    if row['kind'] == 'receipt':
+        kind = row.get('receipt_kind')
+        if not isinstance(kind, str) or kind not in RECEIPT_KINDS or kind in receipt_kinds:
+            raise InspectionError('obligation_invalid', 'receipt obligation kind is invalid or duplicated')
+        receipt_kinds.add(kind)
+    if observe is not None:
+        observe(row)
+    if row.get('status') == 'not_run':
+        if not isinstance(row.get('reason'), str) or not row['reason'].strip() or len(row['reason']) > 4096:
+            raise InspectionError('obligation_invalid', 'not_run requires a nonempty bounded reason')
+        return None
+    if row.get('status') != 'recorded':
+        raise InspectionError('obligation_invalid', 'obligation status must be not_run or recorded')
+    if not isinstance(row.get('outcome'), str) or row['outcome'] not in {'pass', 'fail'} or not _timestamp(row.get('recorded_at')):
+        raise InspectionError('obligation_invalid', 'recorded evidence requires an outcome and observation time')
+    command = row.get('command')
+    if row['kind'] == 'run' and (not isinstance(command, list) or not 1 <= len(command) <= 32
+            or any(not isinstance(arg, str) or not arg or len(arg) > 512 for arg in command)):
+        raise InspectionError('obligation_invalid', 'a recorded run requires bounded command arguments')
+    reference = row.get('reference')
+    ref_parts = _relative(reference)
+    if (not 2 <= len(ref_parts) <= 5 or ref_parts[0] != 'evidence'
+            or Path(reference).suffix not in {'.md', '.json'}
+            or any(part.startswith('.') or re.search(r'(^|[-_.])(secrets?|credentials?|private[-_]?keys?|dumps?)([-_.]|$)', part, re.I) for part in ref_parts)):
+        raise InspectionError('file_unsafe', 'evidence reference must name an allowed current package report')
+    return reference
+
+
+class _PackageReadClosure:
+    """The inspector's bounded unique-file read set, reused for prospective state."""
+
+    def __init__(self, root: Path, relative: str, finding):
+        self.root, self.relative, self.finding = root, relative, finding
+        self.cache: dict[str, bytes | None] = {}
+        self.limits: dict[str, int] = {}
+        self.total_bytes = 0
+
+    @staticmethod
+    def _capacity(count: int, total: int) -> None:
+        if count >= MAX_FILES or total >= MAX_TOTAL_BYTES:
+            raise InspectionError('inspection_limit', 'package file or aggregate byte limit exceeded')
+
+    @staticmethod
+    def _aggregate(total: int) -> None:
+        if total > MAX_TOTAL_BYTES:
+            raise InspectionError('inspection_limit', 'package aggregate byte limit exceeded')
+
+    @property
+    def remaining_bytes(self) -> int:
+        return max(0, MAX_TOTAL_BYTES - self.total_bytes)
+
+    def read(self, name: str, limit: int = MAX_FILE_BYTES) -> bytes | None:
+        if name in self.cache:
+            return self.cache[name]
+        try:
+            self._capacity(len(self.cache), self.total_bytes)
+        except InspectionError as exc:
+            self.finding(exc.code, self.relative, str(exc))
+            return None
+        self.cache[name] = None
+        self.limits[name] = limit
+        try:
+            raw = read_package_file(self.root, f'{self.relative}/{name}', limit)
+            self.total_bytes += len(raw)
+            self._aggregate(self.total_bytes)
+            self.cache[name] = raw
+            return raw
+        except InspectionError as exc:
+            self.finding(exc.code, f'{self.relative}/{name}', str(exc))
+            return None
+
+    def validate_state_replacement(self, encoded: bytes) -> None:
+        """Admit the proposed bytes in the same read order, without another read."""
+        if self.cache.get('state.json') is None:
+            raise InspectionError('file_unavailable', 'package state is unavailable')
+        if len(encoded) > self.limits['state.json']:
+            raise InspectionError('file_too_large', 'proposed state exceeds its caller byte bound')
+        count, total = 0, 0
+        for name, observed in self.cache.items():
+            self._capacity(count, total)
+            if observed is None:
+                raise InspectionError('file_unavailable', 'package input is unavailable')
+            total += len(encoded if name == 'state.json' else observed)
+            self._aggregate(total)
+            count += 1
+
+
 def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, Any] | None) -> dict[str, Any]:
     """Inspect only the selected package and explicitly referenced current records."""
     result: dict[str, Any] = {
@@ -288,27 +394,7 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
         return result
     relative = '/'.join(parts)
     result.update(change_id=change_id, path=relative)
-    cache: dict[str, bytes | None] = {}
-    total_bytes = 0
-
-    def read(name: str, limit: int = MAX_FILE_BYTES) -> bytes | None:
-        nonlocal total_bytes
-        if name in cache:
-            return cache[name]
-        if len(cache) >= MAX_FILES or total_bytes >= MAX_TOTAL_BYTES:
-            add('inspection_limit', relative, 'package file or aggregate byte limit exceeded')
-            return None
-        cache[name] = None
-        try:
-            raw = read_package_file(root, f'{relative}/{name}', limit)
-            total_bytes += len(raw)
-            if total_bytes > MAX_TOTAL_BYTES:
-                raise InspectionError('inspection_limit', 'package aggregate byte limit exceeded')
-            cache[name] = raw
-            return raw
-        except InspectionError as exc:
-            add(exc.code, f'{relative}/{name}', str(exc))
-            return None
+    read = _PackageReadClosure(root, relative, add).read
 
     state: dict[str, Any] = {}
     raw = read('state.json')
@@ -402,57 +488,28 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
     accounting = state.get('evidence_accounting')
     if accounting is None:
         add('legacy_evidence_accounting', f'{relative}/state.json', 'this package has no typed evidence accounting; no migration was performed', 'warning')
-    elif (
-        not isinstance(accounting, dict) or accounting.get('schema_version') != 1
-        or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_FILES
-    ):
-        add('obligation_invalid', f'{relative}/state.json', 'evidence accounting must be a bounded version 1 obligation list')
     else:
+        try:
+            rows = accounting_rows(accounting)
+        except InspectionError as exc:
+            add(exc.code, f'{relative}/state.json', str(exc))
+            rows = None
         ids: set[str] = set()
         receipt_kinds: set[str] = set()
-        for row in accounting['obligations']:
+        def observe(row):
+            result['obligations'].append({
+                key: row.get(key)
+                for key in ('id', 'kind', 'receipt_kind', 'status', 'reason', 'outcome', 'recorded_at', 'reference')
+            })
+        for row in rows or []:
             try:
-                if not isinstance(row, dict) or not isinstance(row.get('id'), str) or not _ID.fullmatch(row['id']):
-                    raise InspectionError('obligation_invalid', 'obligation identity is invalid')
-                if row['id'] in ids or not isinstance(row.get('kind'), str) or row['kind'] not in {'receipt', 'run'}:
-                    raise InspectionError('obligation_invalid', 'obligation kind or uniqueness is invalid')
-                ids.add(row['id'])
-                if row['kind'] == 'receipt':
-                    kind = row.get('receipt_kind')
-                    if not isinstance(kind, str) or kind not in RECEIPT_KINDS or kind in receipt_kinds:
-                        raise InspectionError('obligation_invalid', 'receipt obligation kind is invalid or duplicated')
-                    receipt_kinds.add(kind)
-                result['obligations'].append({
-                    key: row.get(key)
-                    for key in ('id', 'kind', 'receipt_kind', 'status', 'reason', 'outcome', 'recorded_at', 'reference')
-                })
-                if row.get('status') == 'not_run':
-                    if not isinstance(row.get('reason'), str) or not row['reason'].strip() or len(row['reason']) > 4096:
-                        raise InspectionError('obligation_invalid', 'not_run requires a nonempty bounded reason')
-                elif row.get('status') == 'recorded':
-                    if not isinstance(row.get('outcome'), str) or row['outcome'] not in {'pass', 'fail'} or not _timestamp(row.get('recorded_at')):
-                        raise InspectionError('obligation_invalid', 'recorded evidence requires an outcome and observation time')
-                    command = row.get('command')
-                    if row['kind'] == 'run' and (
-                        not isinstance(command, list) or not 1 <= len(command) <= 32
-                        or any(not isinstance(arg, str) or not arg or len(arg) > 512 for arg in command)
-                    ):
-                        raise InspectionError('obligation_invalid', 'a recorded run requires bounded command arguments')
-                    reference = row.get('reference')
-                    ref_parts = _relative(reference)
-                    if (
-                        not 2 <= len(ref_parts) <= 5 or ref_parts[0] != 'evidence'
-                        or Path(reference).suffix not in {'.md', '.json'}
-                        or any(part.startswith('.') or re.search(r'(^|[-_.])(secrets?|credentials?|private[-_]?keys?|dumps?)([-_.]|$)', part, re.I) for part in ref_parts)
-                    ):
-                        raise InspectionError('file_unsafe', 'evidence reference must name an allowed current package report')
+                reference = obligation_reference(row, ids, receipt_kinds, observe=observe)
+                if reference is not None:
                     report = read(reference)
                     if report is not None and not report.strip():
                         add('evidence_reference_empty', f'{relative}/{reference}', 'recorded evidence reference is empty')
                     if reference not in text_files:
                         text_files.append(reference)
-                else:
-                    raise InspectionError('obligation_invalid', 'obligation status must be not_run or recorded')
             except InspectionError as exc:
                 add(exc.code, f'{relative}/state.json', str(exc), field='evidence_accounting.obligations')
         required = (route or {}).get('required_evidence', [])
@@ -463,7 +520,7 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
         ):
             add('obligation_invalid', f'{relative}/state.json', 'route receipt obligation list is invalid')
         else:
-            for kind in sorted(set(required) - receipt_kinds):
+            for kind in sorted(set(required) - receipt_kinds) if rows is not None else []:
                 add('obligation_missing', f'{relative}/state.json', f'required receipt kind has no accounting: {kind}', severity)
 
     for name in text_files:
@@ -650,3 +707,77 @@ def receipt_inputs_unavailable(package: dict[str, Any]) -> bool:
         'file_unsafe', 'file_unavailable', 'file_changed', 'file_too_large',
         'inspection_limit', 'state_invalid', 'spec_invalid', 'package_identity_mismatch',
     } for item in package['findings'])
+
+
+@serialized_task
+def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str]) -> None:
+    """Append unrun obligations before the route exposes its expanded plan.
+
+    A subsequent route CAS failure may leave extra not_run rows. They confer no
+    receipt authority and are retained for an idempotent retry, never rolled back.
+    """
+    from .continuity import validate_package_state
+    from .receipts import RECEIPT_KINDS
+    from .spec import MAX_SPEC_BYTES, _parse_canonical_json
+    from .state import get_active_change, CLOSED_CHANGE_STATUSES
+    from .workflow_storage import valid_package_path
+    require_route_owner(root, route)
+    if get_active_route(root) != route:
+        raise ValueError('route changed before accounting synchronization')
+    if (not isinstance(required, list) or len(required) > len(RECEIPT_KINDS)
+            or any(not isinstance(kind, str) or kind not in RECEIPT_KINDS for kind in required)
+            or len(set(required)) != len(required)):
+        raise ValueError('invalid selected evidence accounting')
+    active = get_active_change(root)
+    if active is None and route.get('change_id') is None:
+        return
+    if (not isinstance(active, dict) or set(active) != {'change_id', 'path'}
+            or active['change_id'] != route.get('change_id')
+            or not valid_package_path(active['path'], active['change_id'])):
+        raise ValueError('selected accounting package does not match task')
+    relative = active['path'] + '/state.json'
+    def refuse(code, _path, message):
+        raise InspectionError(code, message)
+    inputs = _PackageReadClosure(root, active['path'], refuse)
+    def read_input(name, limit=MAX_FILE_BYTES):
+        return inputs.read(name, min(limit, inputs.remaining_bytes))
+    raw = read_input('state.json')
+    document = _parse_canonical_json(raw, root / relative)
+    validate_package_state(document, route, active['change_id'])
+    if document['status'] in CLOSED_CHANGE_STATUSES:
+        raise ValueError('closed package accounting cannot be changed')
+    rows = accounting_rows(document.get('evidence_accounting'))
+    ids: set[str] = set()
+    kinds: set[str] = set()
+    references = set()
+    read_input('change-spec.yaml', MAX_SPEC_BYTES)
+    for row in rows:
+        reference = obligation_reference(row, ids, kinds)
+        if reference is not None and reference not in references:
+            report = read_input(reference)
+            if not report.strip():
+                raise ValueError('accounting report unavailable')
+            report.decode('utf-8', 'strict')
+            references.add(reference)
+    for name in PACKAGE_MARKDOWN:
+        read_input(name).decode('utf-8', 'strict')
+    missing = sorted(set(required) - kinds)
+    if not missing:
+        return
+    changed = copy.deepcopy(document)
+    for kind in missing:
+        if kind in ids:
+            raise ValueError('new accounting obligation identity conflicts')
+        changed['evidence_accounting']['obligations'].append({
+            'id': kind, 'kind': 'receipt', 'receipt_kind': kind, 'status': 'not_run',
+            'reason': 'Selected by reconciled review plan; evidence not yet recorded.',
+        })
+    accounting_rows(changed['evidence_accounting'])
+    encoded = (json.dumps(changed, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
+    if len(encoded) > MAX_FILE_BYTES:
+        raise ValueError('accounting state exceeds consumer byte bound')
+    inputs.validate_state_replacement(encoded)
+    if (get_active_route(root) != route or get_active_change(root) != active
+            or read_package_file(root, relative, MAX_FILE_BYTES) != raw):
+        raise ValueError('package or route changed before accounting publication')
+    durable_json(root, root / relative, changed)
