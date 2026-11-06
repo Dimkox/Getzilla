@@ -8,6 +8,7 @@ import re
 import signal
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -2179,6 +2180,19 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
     return results
 
 
+def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
+    module = ast.parse(source)
+    nodes: set[str] = set()
+    for item in module.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
+            nodes.add(item.name)
+        elif isinstance(item, ast.ClassDef):
+            nodes.update(item.name + '::' + child.name for child in item.body
+                         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and child.name.startswith('test'))
+    return source.count('\n') + 1, nodes
+
+
 def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
     """Bind at most 50 reported paths and test identifiers to committed source."""
     candidates = []
@@ -2205,19 +2219,123 @@ def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, se
         if source.returncode:
             continue
         try:
-            module = ast.parse(source.stdout)
+            result[path] = _pytest_source_metadata(source.stdout)
         except (SyntaxError, ValueError, RecursionError):
             continue
-        nodes: set[str] = set()
-        for item in module.body:
-            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
-                nodes.add(item.name)
-            elif isinstance(item, ast.ClassDef):
-                nodes.update(item.name + '::' + child.name for child in item.body
-                             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                             and child.name.startswith('test'))
-        result[path] = (source.stdout.count('\n') + 1, nodes)
     return result
+
+
+def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float | None = None) -> dict[str, tuple[int, set[str]]]:
+    """Progress-only limits; leave terminal-output validation's contract intact."""
+    if deadline is None:
+        deadline = time.monotonic() + 2.0
+
+    def bounded_git(arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        result = run(['git', *arguments], cwd=root, timeout=remaining)
+        if result.returncode or time.monotonic() >= deadline:
+            raise TimeoutError
+        return result.stdout
+
+    result: dict[str, tuple[int, set[str]]] = {}
+    try:
+        head = bounded_git(['rev-parse', 'HEAD']).strip()
+        if not re.fullmatch('[0-9a-f]{40,64}', head):
+            return {}
+        names = set(bounded_git(['ls-files', '-z', '--', *paths[:50]]).split('\0'))
+        total = 0
+        for path in paths[:50]:
+            if path not in names:
+                continue
+            size = bounded_git(['cat-file', '-s', head + ':' + path]).strip()
+            if not size.isdecimal() or int(size) > 1_000_000:
+                continue
+            total += int(size)
+            if total > 8 * 1024 * 1024:
+                break
+            source = bounded_git(['show', head + ':' + path])
+            if len(source.encode('utf-8')) > 1_000_000:
+                continue
+            try:
+                result[path] = _pytest_source_metadata(source)
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+        if bounded_git(['rev-parse', 'HEAD']).strip() != head:
+            return {}
+    except (OSError, TimeoutError, UnicodeError, ValueError):
+        return {}  # Deadline/currentness uncertainty cannot identify a source.
+    return result
+
+
+def _core_progress_details(root: Path, progress: dict[str, object] | None) -> dict[str, object]:
+    """Source-bound last reports, not a claim about running or failed tests."""
+    output: dict[str, object] = {'observation': 'LAST_REPORTED_BEFORE_STOP', 'best_effort': True,
+                                 'status': 'not_supported', 'selected_workers': 0,
+                                 'observed_workers': 0, 'omitted_workers': 0, 'slots': []}
+    if not isinstance(progress, dict):
+        return output
+    workers = progress.get('selected_workers')
+    if type(workers) is not int or workers < 0:
+        return output
+    output.update(selected_workers=workers, omitted_workers=workers)
+    if workers > 64 or progress.get('status') == 'not_supported':
+        return output
+    output['status'] = 'unavailable'
+    raw = progress.get('slots')
+    if not isinstance(raw, list) or len(raw) > 64:
+        return output
+    slots, seen, paths = [], set(), []
+    for slot in raw:
+        if not isinstance(slot, dict):
+            continue
+        worker, state, path, key = (slot.get(name) for name in ('worker', 'state', 'path', 'key'))
+        if (type(worker) is not int or not 0 <= worker < workers or worker in seen
+                or not isinstance(state, str) or state not in {'active', 'idle'}):
+            continue
+        seen.add(worker)
+        if (not isinstance(path, str) or len(path) > 256
+                or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', path)
+                or any(part in {'', '.', '..'} for part in path.split('/'))
+                or not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}', key)):
+            path, key = None, None
+        if path is not None and path not in paths:
+            paths.append(path)
+        slots.append((worker, state, path, key))
+    deadline = time.monotonic() + 2.0
+    trusted = _trusted_progress_metadata(root, paths, deadline=deadline) if paths else {}
+    requested = {(path, key) for _, _, path, key in slots if path is not None}
+    identities = {}
+    expired = False
+    for path, (_, nodes) in trusted.items():
+        for node in nodes:
+            if time.monotonic() >= deadline:
+                expired = True
+                break
+            canonical = path + '::' + node
+            if (len(canonical) <= 512 and re.fullmatch(
+                    r'[A-Za-z_][A-Za-z0-9_]{0,127}(?:::[A-Za-z_][A-Za-z0-9_]{0,127})?', node)):
+                pair = (path, hashlib.sha256(canonical.encode('utf-8')).hexdigest())
+                if pair in requested:
+                    identities[pair] = canonical
+        if expired:
+            break
+    if expired:
+        identities = {}
+    rendered = []
+    unknown = False
+    for worker, state, path, key in sorted(slots):
+        identity = identities.get((path, key))
+        unknown |= identity is None
+        candidate = {'worker': worker, 'state': state, 'identity': identity}
+        if len(json.dumps({**output, 'slots': rendered + [candidate]}).encode('utf-8')) > 16000:
+            break
+        rendered.append(candidate)
+    output.update(status=('observed' if len(rendered) == workers and not unknown else
+                          'partial' if rendered else 'unavailable'),
+                  observed_workers=len(slots), omitted_workers=workers - len(rendered), slots=rendered)
+    return output
 
 
 def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
@@ -2419,11 +2537,18 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                             'GETZILLA_TEST_WORKERS=N python3 scripts/getzilla_verify.py --mode pr '
                             '(N must fit the available task allocation). This failed run is not reusable evidence.'
                         )
+                    reported_command = list(process.command)
+                    if name == 'python-unittest' and backend == 'pytest-xdist':
+                        for option in ('--getzilla-progress-dir', '--getzilla-progress-nonce'):
+                            if option in reported_command:
+                                index = reported_command.index(option) + 1
+                                if index < len(reported_command):
+                                    reported_command[index] = '<private-progress-value>'
                     results.append(CheckResult(
                         name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
                         f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
-                        command=process.command, stdout=_core_output_excerpt(
+                        command=reported_command, stdout=_core_output_excerpt(
                             process.stdout, failed=failed_output,
                             trusted=trusted, pytest_output=pytest_failure),
                         stderr=(diagnostic + ('\ncleanup failed: details omitted' if process.cleanup_error else ''))[-12000:],
@@ -2438,6 +2563,8 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  **({'progress': _core_progress_details(root, getattr(core, 'progress', None))}
+                                     if name == 'python-unittest' else {}),
                                   'versions': json.dumps(core.versions, sort_keys=True),
                                   'coverage': json.dumps(core.coverage_metadata, sort_keys=True)}],
                     ))
