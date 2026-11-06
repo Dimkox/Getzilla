@@ -30,6 +30,56 @@ def _patch(kind: str, path: str) -> str:
     return f'*** Begin Patch\n*** {kind} File: {path}\n{body}*** End Patch\n'
 
 
+def _lock_refusal(error: OSError, stage: str) -> dict:
+    # Keep only code locations, never the exception message, filename or locals.
+    frames = []
+    trace = error.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        frames.append((Path(code.co_filename).name, code.co_name, trace.tb_lineno))
+        trace = trace.tb_next
+    return {'writer': threading.current_thread().name, 'stage': stage,
+            'error': type(error).__name__, 'errno': error.errno, 'frames': frames[-16:]}
+
+
+class _WriterPhaseObserver:
+    """Test-only phases; advisory refusals are not escaped worker failures."""
+    def __init__(self, real_lock, refusals):
+        self.real_lock = real_lock
+        self.refusals = refusals
+        self.current = threading.local()
+        self.failures = {phase: False for phase in
+                         ('barrier', 'before_record', 'acquire', 'update', 'release', 'unknown')}
+
+    def capture(self, _error):
+        phase = getattr(self.current, 'phase', 'unknown')
+        phase = phase if phase in self.failures else 'unknown'
+        self.failures[phase] = True
+
+    @contextmanager
+    def lock(self, *args, **kwargs):
+        stage = self.current.phase = 'acquire'
+        try:
+            with self.real_lock(*args, **kwargs):
+                stage = self.current.phase = 'update'
+                yield
+                stage = self.current.phase = 'release'
+        except OSError as error:
+            self.refusals.append(_lock_refusal(error, stage))
+            raise
+
+    def writer(self, root, start, index, errors):
+        try:
+            self.current.phase = 'barrier'
+            start.wait(timeout=5)
+            self.current.phase = 'before_record'
+            record(root, 's', {f'f{index}.py'})
+            self.current.phase = 'done'
+        except BaseException as error:
+            self.capture(error)
+            errors.append(error)
+
+
 class ReadLedgerHookTests(unittest.TestCase):
     def _shell(self, root: Path, command: str, session: str = 'ledger-session') -> None:
         payload = {'cwd': str(root), 'session_id': session, 'hook_event_name': 'PostToolUse',
@@ -140,31 +190,121 @@ class ReadLedgerHookTests(unittest.TestCase):
 
 
 class ReadLedgerUnitTests(unittest.TestCase):
+    def test_public_two_writer_phase_observer_preserves_updates(self) -> None:
+        factory = globals().get('_WriterPhaseObserver')
+        self.assertTrue(callable(factory), 'fixed worker phases are required')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            observer = factory(state.runtime_lock, [])
+            errors = []
+            start = threading.Barrier(2)
+            threads = [threading.Thread(target=observer.writer, args=(root, start, index, errors))
+                       for index in range(2)]
+            with mock.patch.object(state, 'runtime_lock', observer.lock):
+                for thread in threads:
+                    thread.start()
+                deadline = time.monotonic() + 10
+                for thread in threads:
+                    thread.join(max(0, deadline - time.monotonic()))
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertTrue(all(not values for values in observer.failures.values()))
+            self.assertEqual(len(errors), 0)
+            self.assertEqual(seen(root, 's'), {'f0.py', 'f1.py'})
+
+    def test_advisory_update_and_release_refusals_are_not_escaped_failures(self) -> None:
+        factory = globals().get('_WriterPhaseObserver')
+        self.assertTrue(callable(factory), 'fixed worker phases are required')
+        real_lock = state.runtime_lock
+
+        @contextmanager
+        def release_refusal(*args, **kwargs):
+            with real_lock(*args, **kwargs):
+                yield
+            raise OSError(errno.EIO, 'public fixture release refusal')
+
+        for stage in ('update', 'release'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                refusals, errors = [], []
+                observer = factory(real_lock if stage == 'update' else release_refusal, refusals)
+                with mock.patch.object(state, 'runtime_lock', observer.lock):
+                    if stage == 'update':
+                        with mock.patch.object(ledger, '_entries', side_effect=OSError(errno.EIO, 'public fixture update refusal')):
+                            observer.writer(root, threading.Barrier(1), 0, errors)
+                    else:
+                        observer.writer(root, threading.Barrier(1), 0, errors)
+                self.assertTrue(all(not values for values in observer.failures.values()))
+                self.assertEqual(len(errors), 0)
+                self.assertEqual([row['stage'] for row in refusals], [stage])
+                self.assertEqual(seen(root, 's') or set(), set() if stage == 'update' else {'f0.py'})
+
+    def test_escaped_barrier_snapshot_and_unknown_category_are_closed(self) -> None:
+        factory = globals().get('_WriterPhaseObserver')
+        self.assertTrue(callable(factory), 'fixed worker phases are required')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            observer = factory(state.runtime_lock, [])
+            errors = []
+            barrier = threading.Barrier(1)
+            with mock.patch.object(barrier, 'wait', side_effect=threading.BrokenBarrierError('public fixture barrier')):
+                observer.writer(root, barrier, 0, errors)
+            self.assertIs(observer.failures['barrier'], True)
+            self.assertEqual(sum(observer.failures.values()), 1)
+            self.assertEqual(len(errors), 1)
+            self.assertIsNone(seen(root, 's'))
+            del observer.current.phase
+            observer.capture(RuntimeError('public fixture unknown error'))
+            self.assertIs(observer.failures['unknown'], True)
+
+    def test_acquisition_failure_diagnostic_omits_private_paths_and_message(self) -> None:
+        formatter = globals().get('_lock_refusal')
+        self.assertTrue(callable(formatter), 'lock acquisition needs bounded safe internal frames')
+        namespace = {}
+        exec(compile('def operation():\n    raise FileNotFoundError(2, "PRIVATE-MESSAGE", "/PRIVATE-PATH/ledger")\n',
+                     '/PRIVATE-DIRECTORY/operation.py', 'exec'), namespace)
+        try:
+            namespace['operation']()
+        except OSError as error:
+            diagnostic = formatter(error, 'acquire')
+        self.assertEqual(diagnostic['stage'], 'acquire')
+        self.assertEqual(diagnostic['errno'], 2)
+        self.assertIn(('operation.py', 'operation', 2), diagnostic['frames'])
+        self.assertEqual(set(diagnostic), {'writer', 'stage', 'error', 'errno', 'frames'})
+        for basename, function, line in diagnostic['frames']:
+            self.assertEqual(Path(basename).name, basename)
+            self.assertIsInstance(function, str)
+            self.assertIsInstance(line, int)
+        self.assertNotIn('PRIVATE-', str(diagnostic))
+
+        def nested(depth):
+            if depth:
+                nested(depth - 1)
+            else:
+                namespace['operation']()
+
+        try:
+            nested(30)
+        except OSError as error:
+            diagnostic = formatter(error, 'acquire')
+        self.assertEqual(len(diagnostic['frames']), 16)
+        self.assertIn(('operation.py', 'operation', 2), diagnostic['frames'])
+        self.assertNotIn('PRIVATE-', str(diagnostic))
+
     def test_parallel_writers_keep_every_entry(self) -> None:
         with project_copy(git=True) as root:
             start = threading.Barrier(40)
             errors = []
             refusals = []
             real_lock = state.runtime_lock
+            observer = _WriterPhaseObserver(real_lock, refusals)
 
             @contextmanager
             def observed_lock(*args, **kwargs):
-                stage = 'acquire'
-                try:
-                    with real_lock(*args, **kwargs):
-                        stage = 'update'
-                        yield
-                        stage = 'release'
-                except OSError as error:
-                    refusals.append((threading.current_thread().name, stage, type(error).__name__, error.errno))
-                    raise
+                with observer.lock(*args, **kwargs):
+                    yield
 
             def writer(index):
-                try:
-                    start.wait(timeout=5)
-                    record(root, 's', {f'f{index}.py'})
-                except BaseException as error:
-                    errors.append(error)
+                observer.writer(root, start, index, errors)
 
             threads = [threading.Thread(target=writer, args=(index,), name=f'f{index}.py') for index in range(40)]
             with mock.patch.object(state, 'runtime_lock', observed_lock):
@@ -174,6 +314,12 @@ class ReadLedgerUnitTests(unittest.TestCase):
                 for thread in threads:
                     thread.join(max(0, deadline - time.monotonic()))
             self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertFalse(observer.failures['barrier'])
+            self.assertFalse(observer.failures['before_record'])
+            self.assertFalse(observer.failures['acquire'])
+            self.assertFalse(observer.failures['update'])
+            self.assertFalse(observer.failures['release'])
+            self.assertFalse(observer.failures['unknown'])
             self.assertEqual(errors, [])
             self.assertEqual(seen(root, 's'), {f'f{index}.py' for index in range(40)},
                              f'advisory refusals (writer, stage, error, errno): {refusals}')

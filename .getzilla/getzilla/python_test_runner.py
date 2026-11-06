@@ -166,6 +166,7 @@ class CoreTestRun:
     workers: int
     versions: dict[str, str]
     coverage_metadata: dict[str, object]
+    progress: dict[str, object] | None = None
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -370,20 +371,32 @@ def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
             '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
 
 
-def _application_coverage_config(config: Path, directory: Path) -> Path:
-    """Keep consumer settings; exclude only our absolute external entrypoint."""
+def _application_coverage_config(config: Path, directory: Path, *, root: Path) -> Path:
+    """Preserve application coverage; omit exact external instrumentation only."""
+    from . import pytest_progress
+
     harness = str((STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
     # Coverage's omit values are comma/newline-separated glob patterns with
     # environment expansion. Never broaden an exact infrastructure exclusion.
     if any(character in harness for character in '[]*?,\n\r$'):
         raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
+    omissions = [harness]  # Retain the existing bootstrap-only exception.
+    consumer = root.resolve()
+    for origin in (fsx.__file__, pytest_progress.__file__):
+        path = Path(origin).resolve()
+        if path.is_relative_to(consumer):
+            continue
+        exact = str(path)
+        if any(character in exact for character in '[]*?,\n\r$'):
+            raise RunnerError('managed instrumentation path cannot be represented as an exact coverage omission')
+        omissions.append(exact)
     settings = configparser.RawConfigParser()
     try:
         settings.read_string(config.read_text(encoding='utf-8'))
         if not settings.has_section('run'):
             settings.add_section('run')
         original = settings.get('run', 'omit', fallback='')
-        settings.set('run', 'omit', original + '\n' + harness)
+        settings.set('run', 'omit', original + '\n' + '\n'.join(omissions))
         overlay = directory / 'application.coveragerc'
         with overlay.open('x', encoding='utf-8') as output:
             settings.write(output)
@@ -655,13 +668,25 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         coverage_root = Path(directory) / 'coverage'
         coverage_root.mkdir(mode=0o700)
         if measured:
-            config = _application_coverage_config(config, coverage_root)
+            config = _application_coverage_config(config, coverage_root, root=root)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
         result_file = coverage_root / 'unittest-result.json'
         environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
+        progress_root = Path(directory) / 'progress'
+        progress_nonce = uuid.uuid4().hex
         if workers and engine == 'pytest-xdist':
             command = _pytest_command(workers, 'worksteal')
+            if 1 <= workers <= 64:
+                # The source CLI also serves uninstalled consumer roots. Load
+                # this running engine's plugin; STACK_DIR is real for ZIP installs.
+                environment['PYTHONPATH'] = os.pathsep.join((str(STACK_DIR), environment['PYTHONPATH']))
+                try:
+                    progress_root.mkdir(mode=0o700)
+                except OSError:
+                    pass  # Diagnostic storage cannot prevent the real backend.
+                command += ['-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(progress_root),
+                            '--getzilla-progress-nonce', progress_nonce, '--getzilla-progress-workers', str(workers)]
             if measured:
                 command += ['-p', 'pytest_cov.plugin', '--cov', f'--cov-config={config}', '--cov-report=term']
             command += ['tests']
@@ -683,6 +708,10 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             if engine != 'pytest-xdist':
                 tests = _unittest_result(tests, result_file)
         retained['tests'] = tests
+        progress = None
+        if engine == 'pytest-xdist':
+            from .pytest_progress import read_progress
+            progress = read_progress(progress_root, progress_nonce, workers)
         coverage = None
         facts: dict[str, object] = {}
         if measured:
@@ -694,7 +723,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                     coverage = execute(coverage_command, root, environment, timeout=120)
                     exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
-                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts)
+                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress)
                     raise
                 try:
                     from coverage import Coverage
@@ -715,7 +744,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                 if exported.returncode or tests.returncode or 'failed to return coverage data' in tests.stdout + tests.stderr:
                     coverage.returncode = 1
                     coverage.stderr += '\ncoverage does not qualify an unsuccessful or incomplete test run'
-        return CoreTestRun(tests, coverage, workers, versions, facts)
+        return CoreTestRun(tests, coverage, workers, versions, facts, progress)
 
 
 def run_trust_tests(root: Path, workers: int) -> ProcessResult:
