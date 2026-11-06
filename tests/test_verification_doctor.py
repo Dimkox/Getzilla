@@ -357,10 +357,14 @@ class VerificationTests(unittest.TestCase):
             raise AssertionError('actual test backend is forbidden in this public metadata fixture')
 
         with contextlib.ExitStack() as stack:
-            guards = [stack.enter_context(patch.object(module, name, side_effect=blocked))
-                      for module, names in ((verification_module, ('execute', 'run_named_tests', '_command_check')),
-                                            (runner, ('execute', 'run_core_tests', 'run_named_tests')))
-                      for name in names]
+            guards = [
+                stack.enter_context(patch.object(verification_module, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, 'run_named_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, '_command_check', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_core_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_named_tests', side_effect=blocked)),
+            ]
             stack.enter_context(patch.object(verification_module, 'core_worker_selection',
                                             return_value=WorkerSelection(workers, 'configuration')))
             stack.enter_context(patch.object(verification_module, '_trusted_pytest_metadata', return_value={}))
