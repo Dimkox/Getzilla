@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -238,14 +239,14 @@ class PublicWorkflowControls(unittest.TestCase):
         self.assertEqual(
             {v["cell"] for v in jobs["postgres-acceptance"]["strategy"]["matrix"]["include"]}, {"factory", "trust-ci"}
         )
-        self.assertEqual(set(jobs["linux"]["needs"]), {"linux-core", "postgres-acceptance"})
+        self.assertEqual(set(jobs["linux"]["needs"]), {"platform-install-results", "postgres-acceptance"})
         self.assertEqual(jobs["linux"]["if"], "always()")
         self.assertIn("windows", jobs)
         self.assertIn("macos", jobs)
         self.assertEqual(document["permissions"], {"contents": "read"})
         steps = jobs["postgres-acceptance"]["steps"]
         self.assertTrue(any("getzilla_live.py" in step.get("run", "") for step in steps))
-        self.assertTrue(any("--live-source" in step.get("run", "") and step.get("if") == "always()" for step in steps))
+        self.assertTrue(any("--live-source" in step.get("run", "") and step.get("if") == "always() && steps.source_checkout.outcome == 'success'" for step in steps))
         self.assertNotIn("workflow_dispatch", document.get("on", {}))
 
     def exporter(self):
@@ -299,3 +300,67 @@ class PublicWorkflowControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     export(root, root / "export")
                 self.assertFalse((root / "export").exists())
+
+class AcceptedPrefixBridgeControls(unittest.TestCase):
+    def workflow(self):
+        import yaml
+        return yaml.safe_load((ROOT / '.github/workflows/getzilla.yml').read_text())
+
+    def test_native_linux_body_and_checkout_guards_survive_postgres_join(self):
+        jobs = self.workflow()['jobs']
+        self.assertNotIn('linux-core', jobs)
+        self.assertTrue({'platform-plan', 'platform-install', 'platform-install-results'} <= set(jobs))
+        linux = jobs['linux']
+        self.assertEqual(set(linux['needs']), {'platform-install-results', 'postgres-acceptance'})
+        self.assertEqual(linux['if'], 'always()')
+        self.assertTrue(any(step.get('name') == 'Require every supported native installer cell'
+                            for step in linux['steps']))
+        checkout = next(step for step in linux['steps'] if step.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual((checkout['id'], checkout['if']), ('source_checkout', 'always()'))
+        pg = jobs['postgres-acceptance']
+        self.assertEqual({row['cell'] for row in pg['strategy']['matrix']['include']}, {'factory', 'trust-ci'})
+        source = next(step for step in pg['steps'] if step.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual((source['id'], source['if']), ('source_checkout', 'always()'))
+        exports = [step for step in pg['steps'] if '--live-source' in step.get('run', '')
+                   or step.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual(len(exports), 2)
+        self.assertTrue(all(step['if'] == "always() && steps.source_checkout.outcome == 'success'" for step in exports))
+
+    @unittest.skipUnless(shutil.which('bash'), 'fixed POSIX workflow guard requires bash')
+    def test_postgres_result_guard_refuses_missing_failed_cancelled_and_skipped(self):
+        steps = self.workflow()['jobs']['linux']['steps']
+        guards = [step for step in steps if step.get('name') == 'Require both isolated PostgreSQL cells']
+        self.assertEqual(len(guards), 1)
+        command = guards[0]['run']
+        self.assertEqual(command, 'test "$GETZILLA_POSTGRES_RESULT" = success')
+        for value in ('success', 'failure', 'cancelled', 'skipped', ''):
+            with self.subTest(result=value):
+                result = subprocess.run([shutil.which('bash'), '--noprofile', '--norc', '-c', command],
+                                        env={'GETZILLA_POSTGRES_RESULT': value}, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0 if value == 'success' else 1)
+
+    def test_accepted_recorded_result_default_constructor_preserves_actual_events(self):
+        # Inert unittest events only: no Factory/PG execution or component PASS.
+        from getzilla.factory_tests import RecordedResult
+
+        class PublicFixture(unittest.TestCase):
+            def test_pass(self):
+                self.assertEqual(2 + 2, 4)
+
+            @unittest.skip('public fixture skip')
+            def test_skip(self):
+                pass
+
+            def test_failure(self):
+                self.fail('public fixed fixture failure')
+
+        cases = [PublicFixture(name) for name in ('test_pass', 'test_skip', 'test_failure')]
+        expected = [case.id() for case in cases]
+        result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0, resultclass=RecordedResult).run(
+            unittest.TestSuite(cases))
+        self.assertIsInstance(result, RecordedResult)
+        self.assertEqual(result.testsRun, 3)
+        self.assertEqual(result.started, expected)
+        self.assertEqual(result.executed, [expected[0], expected[2]])
+        self.assertEqual((len(result.failures), len(result.errors), len(result.skipped)), (1, 0, 1))
+        self.assertFalse(result.wasSuccessful())

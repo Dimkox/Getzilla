@@ -102,6 +102,45 @@ class ComponentStateRegressionTests(unittest.TestCase):
 
 
 class ComponentTransactionTests(unittest.TestCase):
+
+    def test_lower_reader_replacement_uses_exact_component_snapshot_error(self) -> None:
+        from getzilla import component_state, fsx
+        reader = getattr(fsx, 'ReadOnlyBoundRoot', None)
+        self.assertTrue(callable(reader))
+        for index, kind in enumerate((reader, component_state.BoundRoot)):
+            with self.subTest(kind=kind.__name__):
+                name = f'owned-{index}.txt'
+                (self.root / name).write_bytes(b'old')
+                replacement = self.root / f'replacement-{index}.txt'
+                replacement.write_bytes(b'new')
+                real = fsx.open_at
+                changed = []
+                def replace_before_open(parent, leaf, flags, *args, **kwargs):
+                    if leaf == name and not changed:
+                        changed.append(True)
+                        os.replace(replacement, self.root / name)
+                    return real(parent, leaf, flags, *args, **kwargs)
+                with kind(self.root) as binding, \
+                        mock.patch.object(fsx, 'open_at', side_effect=replace_before_open):
+                    with self.assertRaises(component_state._FileSnapshotChanged) as caught:
+                        binding.read(name)
+                self.assertIs(type(caught.exception), component_state._FileSnapshotChanged)
+
+    def test_lower_read_default_preserves_dynamic_upper_write_limit(self) -> None:
+        from getzilla import component_state, fsx
+        reader = getattr(fsx, 'ReadOnlyBoundRoot', None)
+        self.assertTrue(callable(reader))
+        (self.root / 'public.txt').write_bytes(b'abc')
+        with reader(self.root) as lower, component_state.BoundRoot(self.root) as upper:
+            self.assertIs(upper.__enter__(), upper)
+            with mock.patch.object(component_state, 'MAX_FILE_BYTES', 2):
+                self.assertEqual(lower.read('public.txt').content, b'abc')
+                self.assertEqual(upper.read('public.txt').content, b'abc')
+                with self.assertRaises(ValueError):
+                    upper.write('declined.txt', b'abc', 0o644, expected=None,
+                                before_publish=lambda: None)
+            self.assertFalse((self.root / 'declined.txt').exists())
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

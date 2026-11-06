@@ -236,6 +236,48 @@ class VisibilityDetectionTests(unittest.TestCase):
         self.assertLessEqual(timeout, 30)
 
 
+class CiGateArchitectureTests(unittest.TestCase):
+    def test_selector_has_specific_network_ownership_without_changing_local_policy(self):
+        from getzilla.architecture import load_architecture
+        from getzilla.architecture_fitness import _owner_for_path
+        snapshot = load_architecture(ROOT)
+        owner = _owner_for_path(snapshot, '.getzilla/getzilla/ci_gate.py')
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner['id'], 'NODE-LOCAL-CI-GATE')
+        self.assertEqual(owner['repository_paths'], ['.getzilla/getzilla/ci_gate.py'])
+        self.assertEqual(owner['runtime']['network'], 'declared_egress')
+        policy = next(node for node in snapshot.system['nodes'] if node['id'] == 'NODE-LOCAL-ROUTE-POLICY')
+        self.assertEqual(policy['runtime']['network'], 'none')
+
+    def test_actual_https_import_requires_the_specific_declared_github_edge(self):
+        import ast
+        import copy
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from getzilla.architecture import load_architecture
+        from getzilla import architecture_fitness as fitness
+        source = '.getzilla/getzilla/ci_gate.py'
+        snapshot = load_architecture(ROOT)
+        tree = ast.parse((ROOT / source).read_bytes(), filename=source)
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path=source, status='modified'),))
+        inventory = SimpleNamespace(root=ROOT, tree=lambda path: tree if path == source else None)
+        # Only this actual source is in this bounded rule contrast. Do not load
+        # the whole repository's unrelated import-root inventory or run HTTP.
+        with mock.patch.object(fitness, '_repository_paths', return_value=(source,)):
+            result = fitness._network_clients(snapshot, diff, inventory)
+            self.assertEqual(result.status, 'pass', result.findings)
+            changed = copy.deepcopy(snapshot.system)
+            edge = next(edge for edge in changed['edges'] if edge['id'] == 'EDGE-LOCAL-CI-GITHUB-VISIBILITY')
+            self.assertEqual((edge['from'], edge['to'], edge['protocol'], edge['authentication']),
+                             ('NODE-LOCAL-CI-GATE', 'NODE-GITHUB', 'https', 'none'))
+            self.assertEqual(edge['failure_behavior']['timeout_ms'], int(ci_gate.HTTP_TIMEOUT_SECONDS * 1000))
+            self.assertEqual(edge['failure_behavior']['max_retries'], 0)
+            changed['edges'].remove(edge)
+            denied = fitness._network_clients(replace(snapshot, system=changed), diff, inventory)
+        self.assertEqual(denied.status, 'fail')
+        self.assertTrue(any('undeclared network client https' in finding for finding in denied.findings))
+
+
 class GateSelectionTests(unittest.TestCase):
     def test_visibility_selects_the_gate(self) -> None:
         self.assertEqual(ci_gate.select_gate('public'), 'github-actions')
@@ -263,6 +305,60 @@ class GateSelectionTests(unittest.TestCase):
 
 
 class WorkflowTemplateTests(unittest.TestCase):
+    def test_explicit_platforms_render_native_matrix_and_reject_unknown_before_write(self) -> None:
+        rendered = ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main',
+                                         platforms=['linux-x64', 'macos-arm64', 'windows-x64']).decode()
+        self.assertIn('runner.os', rendered)
+        self.assertIn('macos-15', rendered)
+        self.assertIn('windows-2025', rendered)
+        self.assertIn('fail-fast: false', rendered)
+        self.assertIn('needs: getzilla-verify-platform', rendered)
+        self.assertIn('if: always()', rendered)
+        self.assertIn('python scripts/getzilla_update.py --only opengrep', rendered)
+        for names in ([], ['unknown'], ['windows-arm64'], ['linux-x64', 'linux-x64']):
+            with self.subTest(names=names), self.assertRaises(ci_gate.CiGateError):
+                ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main', platforms=names)
+        altered = TEMPLATE.read_bytes().replace(b'Install OpenGrep for taint analysis', b'Changed unsupported bootstrap')
+        with self.assertRaises(ci_gate.CiGateError):
+            ci_gate.render_workflow(altered, 'main', platforms=['linux-x64'])
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML not installed')
+    def test_generated_client_aggregate_executes_failure_and_skip_controls(self) -> None:
+        import yaml
+        document = yaml.safe_load(ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main',
+                                                        platforms=['linux-x64', 'windows-x64']))
+        final = document['jobs']['getzilla-verify']
+        steps = document['jobs']['getzilla-verify-platform']['steps']
+        native = next(step for step in steps if step.get('name', '').startswith('Verify native runner'))
+        self.assertEqual(native['shell'], 'bash')
+        guard = final['steps'][0]
+        self.assertEqual(guard['shell'], 'python')
+        for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
+            process = subprocess.run([sys.executable, '-c', guard['run']],
+                                     env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
+                                     capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, expected, result)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash') and os.name != 'nt',
+                         'requires POSIX executable fixture and YAML')
+    def test_native_identity_failure_prevents_the_following_download(self) -> None:
+        import yaml
+        document = yaml.safe_load(ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main', platforms=['windows-x64']))
+        step = next(step for step in document['jobs']['getzilla-verify-platform']['steps']
+                    if step.get('name', '').startswith('Verify native runner'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            interpreter = root/'python'
+            marker = root/'download-ran'
+            interpreter.write_text('#!/bin/sh\nif [ "$2" = "--check-platform" ]; then exit 3; fi\nprintf bad > "$MARKER"\n')
+            interpreter.chmod(0o755)
+            program = step['run'].replace('${{ matrix.platform }}', 'windows-x64')
+            process = subprocess.run([step['shell'], '-c', program],
+                        env={**os.environ, 'PATH': str(root)+os.pathsep+os.environ.get('PATH', ''), 'MARKER': str(marker)},
+                        capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, 3)
+            self.assertFalse(marker.exists())
+
     def test_template_is_minimal_pinned_and_runs_the_pr_gate(self) -> None:
         text = TEMPLATE.read_text(encoding='utf-8')
         self.assertEqual(text.count(ci_gate.BRANCH_PLACEHOLDER), 1)
@@ -324,6 +420,92 @@ class WorkflowTemplateTests(unittest.TestCase):
 
 
 class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and os.name == 'posix', 'requires YAML and POSIX')
+    def test_own_native_macos_probe_uses_separate_artifact_path(self):
+        import yaml
+        document = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        steps = document['jobs']['platform-install']['steps']
+        probes = [s for s in steps if s.get('name') == 'Observe canonical public fixture startup on macOS']
+        self.assertEqual(len(probes), 1)
+        probe = probes[0]
+        self.assertEqual(probe['if'], "${{ always() && matrix.os == 'macos' }}")
+        self.assertGreater(steps.index(probe), next(i for i, s in enumerate(steps) if s['name'].startswith('Exercise the real user installer')))
+        retention = next(s for s in steps if s['name'] == 'Retain actual install and upgrade observations')
+        self.assertGreater(steps.index(retention), steps.index(probe))
+        self.assertEqual(retention['if'], 'always()')
+        self.assertIn('/*.log', retention['with']['path'])
+        target = 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear'
+        self.assertNotIn(target.encode(), ci_gate.render_workflow(TEMPLATE.read_bytes(), 'main'))
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', probe['run']], cwd=ROOT,
+                                    env={'RUNNER_TEMP': tmp, 'GETZILLA_PLATFORM_CELL': 'public-macos'},
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            log = Path(tmp) / 'public-fixture-startup-public-macos/public-fixture-startup.log'
+            rows = [json.loads(line.split('public-fixture-startup ', 1)[1])
+                    for line in log.read_text().splitlines() if 'public-fixture-startup {' in line]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual([r['case'] for r in rows[0]['cases']],
+                             ['exact-direct', 'diagnostic-direct', 'diagnostic-after-startup-clear'])
+            self.assertEqual([r['returncode'] for r in rows[0]['cases']], [0, 0, 0])
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'requires YAML')
+    def test_own_native_macos_probe_preserves_failure_and_timeout(self):
+        import yaml
+        document = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        steps = document['jobs']['platform-install']['steps']
+        probes = [s for s in steps if s.get('name') == 'Observe canonical public fixture startup on macOS']
+        self.assertEqual(len(probes), 1)
+        for failure, expected in [('exit', 9), ('timeout', 1)]:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                def run(command, **kwargs):
+                    self.assertEqual(command[1:5], ['-I', '-S', '-B', '-c'])
+                    self.assertEqual(command[-1], 'tests.test_public_fixture_startup.PublicFixtureStartupTests.test_canonical_startup_is_observed_before_environment_clear')
+                    self.assertEqual(kwargs['timeout'], 15)
+                    self.assertEqual(set(kwargs['env']), {'TMPDIR'})
+                    self.assertEqual(kwargs['stderr'], subprocess.STDOUT)
+                    kwargs['stdout'].write(b'bounded public child observation\n')
+                    if failure == 'timeout':
+                        raise subprocess.TimeoutExpired(command, 15)
+                    return subprocess.CompletedProcess(command, 9)
+                with mock.patch.dict(os.environ, {'RUNNER_TEMP': tmp, 'GETZILLA_PLATFORM_CELL': 'public-macos'}, clear=True), \
+                        mock.patch.object(subprocess, 'run', side_effect=run), self.assertRaises(SystemExit) as stopped:
+                    exec(compile(probes[0]['run'], '<own-workflow-public-probe>', 'exec'), {})
+                self.assertEqual(stopped.exception.code, expected)
+                self.assertTrue((Path(tmp) / 'public-fixture-startup-public-macos/public-fixture-startup.log').is_file())
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_source_and_generated_evidence_require_a_successful_checkout(self) -> None:
+        import yaml
+        workflow = yaml.safe_load((ROOT/'.github/workflows/getzilla.yml').read_text())
+        steps = workflow['jobs']['linux']['steps']
+        checkout = next(s for s in steps if s.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout.get('id'), 'source_checkout')
+        self.assertEqual(checkout.get('if'), 'always()')
+        for step in steps:
+            condition = step.get('if', '')
+            if step.get('run') and ('failure()' in condition or 'always()' in condition):
+                self.assertIn("steps.source_checkout.outcome == 'success'", condition, step['name'])
+        template = yaml.safe_load((ROOT/'.getzilla/templates/ci/github-actions-verify.yml').read_text())
+        generated = template['jobs']['getzilla-verify']['steps']
+        self.assertEqual(generated[0].get('id'), 'source_checkout')
+        export = next(s for s in generated if s.get('id') == 'export_evidence')
+        self.assertIn("steps.source_checkout.outcome == 'success'", export['if'])
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
+    def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
+        import yaml
+        document = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        linux = document['jobs']['linux']
+        self.assertEqual(linux['if'], 'always()')
+        self.assertIn('platform-install-results', linux['needs'])
+        guard = next(step for step in linux['steps'] if step.get('name') == 'Require every supported native installer cell')
+        for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
+            process = subprocess.run(['bash', '-c', guard['run']],
+                                     env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
+                                     capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, expected, result)
+
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_smoke_environment_preserves_hook_owner_for_cli_package_start(self) -> None:
         import yaml
@@ -381,6 +563,25 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = CLI.main(list(argv), **dependencies)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_client_example_writes_selected_platforms_idempotently_and_refuses_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            arguments = ('--write', '--json', '--target', tmp, '--visibility', 'public',
+                         '--platform', 'linux-x64', '--platform', 'windows-x64')
+            code, output, _ = self.run_cli(*arguments)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output)['result'], 'written')
+            before = _snapshot(target)
+            workflow = (target / ci_gate.WORKFLOW_PATH).read_text()
+            self.assertIn('windows-2025', workflow)
+            self.assertIn('needs: getzilla-verify-platform', workflow)
+            code, output, _ = self.run_cli(*arguments)
+            self.assertEqual((code, json.loads(output)['result']), (0, 'unchanged'))
+            code, _, _ = self.run_cli('--write', '--target', tmp, '--visibility', 'public',
+                                      '--platform', 'unknown')
+            self.assertEqual(code, 2)
+            self.assertEqual(_snapshot(target), before)
 
     def test_plan_json_reports_visibility_gate_and_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

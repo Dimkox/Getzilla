@@ -8,6 +8,7 @@ import re
 import signal
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -38,7 +39,7 @@ from .stacks import load_registry, stack_checks
 from .state import get_active_change, get_active_route, update_route
 from .python_test_runner import (
     DEFAULT_CORE_CPU_RESERVE, DEFAULT_CORE_WORKER_CAP, TIMEOUT as CORE_TEST_TIMEOUT,
-    ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
+    OUTPUT_LIMIT, ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
     execute, run_core_tests, run_named_tests,
 )
 from .util import (
@@ -2179,6 +2180,19 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
     return results
 
 
+def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
+    module = ast.parse(source)
+    nodes: set[str] = set()
+    for item in module.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
+            nodes.add(item.name)
+        elif isinstance(item, ast.ClassDef):
+            nodes.update(item.name + '::' + child.name for child in item.body
+                         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and child.name.startswith('test'))
+    return source.count('\n') + 1, nodes
+
+
 def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
     """Bind at most 50 reported paths and test identifiers to committed source."""
     candidates = []
@@ -2205,37 +2219,225 @@ def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, se
         if source.returncode:
             continue
         try:
-            module = ast.parse(source.stdout)
+            result[path] = _pytest_source_metadata(source.stdout)
         except (SyntaxError, ValueError, RecursionError):
             continue
-        nodes: set[str] = set()
-        for item in module.body:
-            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
-                nodes.add(item.name)
-            elif isinstance(item, ast.ClassDef):
-                nodes.update(item.name + '::' + child.name for child in item.body
-                             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                             and child.name.startswith('test'))
-        result[path] = (source.stdout.count('\n') + 1, nodes)
+    return result
+
+
+def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float | None = None) -> dict[str, tuple[int, set[str]]]:
+    """Progress-only limits; leave terminal-output validation's contract intact."""
+    if deadline is None:
+        deadline = time.monotonic() + 2.0
+
+    def bounded_git(arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        result = run(['git', *arguments], cwd=root, timeout=remaining)
+        if result.returncode or time.monotonic() >= deadline:
+            raise TimeoutError
+        return result.stdout
+
+    result: dict[str, tuple[int, set[str]]] = {}
+    try:
+        head = bounded_git(['rev-parse', 'HEAD']).strip()
+        if not re.fullmatch('[0-9a-f]{40,64}', head):
+            return {}
+        names = set(bounded_git(['ls-files', '-z', '--', *paths[:50]]).split('\0'))
+        total = 0
+        for path in paths[:50]:
+            if path not in names:
+                continue
+            size = bounded_git(['cat-file', '-s', head + ':' + path]).strip()
+            if not size.isdecimal() or int(size) > 1_000_000:
+                continue
+            total += int(size)
+            if total > 8 * 1024 * 1024:
+                break
+            source = bounded_git(['show', head + ':' + path])
+            if len(source.encode('utf-8')) > 1_000_000:
+                continue
+            try:
+                result[path] = _pytest_source_metadata(source)
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+        if bounded_git(['rev-parse', 'HEAD']).strip() != head:
+            return {}
+    except (OSError, TimeoutError, UnicodeError, ValueError):
+        return {}  # Deadline/currentness uncertainty cannot identify a source.
+    return result
+
+
+def _core_progress_details(root: Path, progress: dict[str, object] | None) -> dict[str, object]:
+    """Source-bound last reports, not a claim about running or failed tests."""
+    output: dict[str, object] = {'observation': 'LAST_REPORTED_BEFORE_STOP', 'best_effort': True,
+                                 'status': 'not_supported', 'selected_workers': 0,
+                                 'observed_workers': 0, 'omitted_workers': 0, 'slots': []}
+    if not isinstance(progress, dict):
+        return output
+    workers = progress.get('selected_workers')
+    if type(workers) is not int or workers < 0:
+        return output
+    output.update(selected_workers=workers, omitted_workers=workers)
+    if workers > 64 or progress.get('status') == 'not_supported':
+        return output
+    output['status'] = 'unavailable'
+    raw = progress.get('slots')
+    if not isinstance(raw, list) or len(raw) > 64:
+        return output
+    slots, seen, paths = [], set(), []
+    for slot in raw:
+        if not isinstance(slot, dict):
+            continue
+        worker, state, path, key = (slot.get(name) for name in ('worker', 'state', 'path', 'key'))
+        if (type(worker) is not int or not 0 <= worker < workers or worker in seen
+                or not isinstance(state, str) or state not in {'active', 'idle'}):
+            continue
+        seen.add(worker)
+        if (not isinstance(path, str) or len(path) > 256
+                or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', path)
+                or any(part in {'', '.', '..'} for part in path.split('/'))
+                or not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}', key)):
+            path, key = None, None
+        if path is not None and path not in paths:
+            paths.append(path)
+        slots.append((worker, state, path, key))
+    deadline = time.monotonic() + 2.0
+    trusted = _trusted_progress_metadata(root, paths, deadline=deadline) if paths else {}
+    requested = {(path, key) for _, _, path, key in slots if path is not None}
+    identities = {}
+    expired = False
+    for path, (_, nodes) in trusted.items():
+        for node in nodes:
+            if time.monotonic() >= deadline:
+                expired = True
+                break
+            canonical = path + '::' + node
+            if (len(canonical) <= 512 and re.fullmatch(
+                    r'[A-Za-z_][A-Za-z0-9_]{0,127}(?:::[A-Za-z_][A-Za-z0-9_]{0,127})?', node)):
+                pair = (path, hashlib.sha256(canonical.encode('utf-8')).hexdigest())
+                if pair in requested:
+                    identities[pair] = canonical
+        if expired:
+            break
+    if expired:
+        identities = {}
+    rendered = []
+    unknown = False
+    for worker, state, path, key in sorted(slots):
+        identity = identities.get((path, key))
+        unknown |= identity is None
+        candidate = {'worker': worker, 'state': state, 'identity': identity}
+        if len(json.dumps({**output, 'slots': rendered + [candidate]}).encode('utf-8')) > 16000:
+            break
+        rendered.append(candidate)
+    output.update(status=('observed' if len(rendered) == workers and not unknown else
+                          'partial' if rendered else 'unavailable'),
+                  observed_workers=len(slots), omitted_workers=workers - len(rendered), slots=rendered)
+    return output
+
+
+def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
+    """Descriptions are arbitrary data; return only an unambiguous source-bound node."""
+    if len(line) > 1024:
+        return None
+    node_pattern = r'(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)(?=\[|\s|$)'
+    if line.startswith('SUBFAILED'):
+        if not re.match(r'^SUBFAILED[\[(]', line):
+            return None
+        candidates = list(re.finditer(r'(?:^|\s)' + node_pattern, line))
+        if len(candidates) != 1:
+            return None
+        # Consume only balanced description groups. A sole node-looking value
+        # inside a malformed description must not become a reported identity.
+        rest = line[len('SUBFAILED'):]
+        while rest.startswith(('[', '(')):
+            stack: list[str] = []
+            for index, character in enumerate(rest):
+                if character in '[(':
+                    stack.append(character)
+                    if len(stack) > 8:
+                        return None
+                elif character in '])':
+                    if not stack or stack.pop() != {']': '[', ')': '('}[character]:
+                        return None
+                    if not stack:
+                        rest = rest[index + 1:].lstrip(' ')
+                        break
+            else:
+                return None
+        match = re.fullmatch(node_pattern + r'(?:\[[^\n]*\])?(?: - .*)?', rest)
+        if not match:
+            return None
+        kind, node = 'SUBFAILED', match.group(1)
+    else:
+        match = re.match(r'^(FAILED|ERROR)\s+' + node_pattern, line)
+        if not match:
+            return None
+        kind, node = match.groups()
+    path, *names = node.split('::')
+    if (len(path) > 512 or any(part in {'', '.', '..'} for part in path.split('/'))
+            or path not in trusted or any(len(name) > 128 for name in names)):
+        return None
+    name = '::'.join(names)
+    return kind, path, name if name in trusted[path][1] else ''
+
+
+def _pytest_terminal_counts(line: str) -> dict[str, int | None] | None:
+    """Backend-reported counts only, never unique methods/subcases or qualification."""
+    if len(line) > 1024:
+        return None
+    line = line.strip()
+    if line.startswith('=') or line.endswith('='):
+        if not re.fullmatch(r'={3,} .+ ={3,}', line):
+            return None
+        line = line.strip('=').strip()
+    label = r'(?:failed|passed|errors?|skipped|warnings?|xfailed|xpassed|deselected|subtests (?:passed|failed|skipped))'
+    item = r'[0-9]{1,9} ' + label
+    match = re.fullmatch(r'(' + item + r'(?:, ' + item + r')*) in [0-9]{1,8}(?:\.[0-9]{1,6})?s'
+                         r'(?: \([0-9]{1,3}:[0-9]{2}(?::[0-9]{2})?\))?', line)
+    if not match:
+        return None
+    result: dict[str, int | None] = dict.fromkeys(('failed', 'passed', 'errors', 'skipped'))
+    seen = set()
+    for statistic in match.group(1).split(', '):
+        number, name = statistic.split(' ', 1)
+        name = 'errors' if name == 'error' else name
+        if name in seen:
+            return None
+        seen.add(name)
+        if name in result:
+            result[name] = int(number)
     return result
 
 
 def _core_output_excerpt(output: str, *, failed: bool,
-                         trusted: dict[str, tuple[int, set[str]]] | None = None) -> str:
-    """Keep bounded structural failure locations without persisting new raw test data."""
-    normalized = re.sub(r'\x1b\[[0-9;]*m', '', output) if failed else output
-    if not failed or not re.search(r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized):
+                         trusted: dict[str, tuple[int, set[str]]] | None = None,
+                         pytest_output: bool = False) -> str:
+    """Keep bounded reported pytest metadata, not values or execution authority."""
+    oversized = len(output) > OUTPUT_LIMIT
+    normalized = re.sub(r'\x1b\[[0-9;]*m', '', output[:OUTPUT_LIMIT]) if failed else output
+    if not failed or (not pytest_output and not re.search(
+            r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized)):
         return output[-12000:]
     trusted = trusted or {}
     locations: list[str] = []
     summaries: list[str] = []
-    omitted = False
+    identities: list[str] = []
+    count_candidates: list[tuple[int, dict[str, int | None]]] = []
+    omitted = oversized
     captured = False
     summary_section = False
     safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
                    'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
-    for line in normalized.splitlines():
-        line = line[:1024].replace('\\', '/')
+    lines = normalized.split('\n')
+    last_line = max((index for index, line in enumerate(lines) if line.strip()), default=-1)
+    for index, raw_line in enumerate(lines):
+        line = raw_line.rstrip('\r').replace('\\', '/')
+        if len(line) > 1024 or any(ord(character) < 32 for character in line):
+            omitted = True
+            continue
         if re.match(r'^-{3,}\s*Captured\b', line):
             captured = True
             continue
@@ -2246,33 +2448,45 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if captured:
             omitted = True
             continue
+        counts = _pytest_terminal_counts(line)
+        if counts is not None:
+            count_candidates.append((index, counts))
+            if len(count_candidates) > 2:
+                count_candidates = count_candidates[:2]
         location = re.match(r'^(tests/[A-Za-z0-9_./-]+\.py):([0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
-        node = re.match(r'^(FAILED|ERROR)\s+(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)', line)
+        node = _pytest_summary_identity(line, trusted)
         if location and not summary_section:
             path, number, error = location.groups()
-            if path not in trusted or not 1 <= int(number) <= trusted[path][0]:
+            if (path not in trusted or any(part in {'', '.', '..'} for part in path.split('/'))
+                    or len(number) > 9 or not 1 <= int(number) <= trusted[path][0]):
                 continue
             if len(locations) < 100:
                 locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
             else:
                 omitted = True
         elif node:
-            identity = node.group(2).split('::')
-            path, name = identity[0], '::'.join(identity[1:])
-            if path not in trusted:
-                continue
-            if name and name not in trusted[path][1]:
-                name = ''
+            kind, path, name = node
             if len(summaries) < 20:
-                summaries.append(node.group(1) + ' ' + path + ('::' + name if name else ''))
+                summaries.append(kind + ' ' + path + ('::' + name if name else ''))
             else:
                 omitted = True
+            identity = path + '::' + name if name else ''
+            if identity and identity not in identities:
+                if len(identities) < 20 and len(json.dumps(identities + [identity])) <= 2400:
+                    identities.append(identity)
+                else:
+                    omitted = True
     trace = '\n'.join(locations)
     summary = '\n'.join(summaries)
-    if len(trace) > 5500 or len(summary) > 5000:
+    if len(trace) > 5500 or len(summary) > 2500:
         omitted = True
+    reported_counts = (count_candidates[0][1] if not oversized and len(count_candidates) == 1
+                       and count_candidates[0][0] == last_line else
+                       dict.fromkeys(('failed', 'passed', 'errors', 'skipped')))
     parts = ['[sanitized pytest failure locations; values and captured output omitted]',
-             trace[:5500], summary[:5000]]
+             trace[:5500], summary[:2500],
+             'pytest_failure_ids=' + json.dumps(identities or None),
+             'pytest_reported_terminal_counts=' + json.dumps(reported_counts, sort_keys=True)]
     if omitted:
         parts.append('[additional failure locations omitted]')
     return '\n'.join(part for part in parts if part)
@@ -2308,20 +2522,36 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                 if process is not None:
                     backend = core.versions.get('engine', 'pytest-xdist' if workers else 'unittest')
                     diagnostic = process.stderr
+                    # Capture cleanup can fail while preserving a successful exit.
+                    # The failed check must still cross the pytest privacy cut.
+                    pytest_failure = (name == 'python-unittest' and backend == 'pytest-xdist'
+                                      and (process.returncode != 0 or bool(process.cleanup_error)))
+                    failed_output = process.returncode != 0 or pytest_failure
+                    trusted = (_trusted_pytest_metadata(root, process.stdout + '\n' + process.stderr)
+                               if name == 'python-unittest' and failed_output else None)
+                    if pytest_failure:
+                        diagnostic = _core_output_excerpt(process.stderr, failed=True, trusted=trusted, pytest_output=True)
                     if name == 'python-unittest' and process.terminal_state == 'timeout':
                         diagnostic += (
                             '\nInspect the measured CPU allocation, then run a fresh full gate with '
                             'GETZILLA_TEST_WORKERS=N python3 scripts/getzilla_verify.py --mode pr '
                             '(N must fit the available task allocation). This failed run is not reusable evidence.'
                         )
+                    reported_command = list(process.command)
+                    if name == 'python-unittest' and backend == 'pytest-xdist':
+                        for option in ('--getzilla-progress-dir', '--getzilla-progress-nonce'):
+                            if option in reported_command:
+                                index = reported_command.index(option) + 1
+                                if index < len(reported_command):
+                                    reported_command[index] = '<private-progress-value>'
                     results.append(CheckResult(
                         name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
                         f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
-                        command=process.command, stdout=_core_output_excerpt(
-                            process.stdout, failed=process.returncode != 0,
-                            trusted=_trusted_pytest_metadata(root, process.stdout) if name == 'python-unittest' and process.returncode else None),
-                        stderr=(diagnostic + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
+                        command=reported_command, stdout=_core_output_excerpt(
+                            process.stdout, failed=failed_output,
+                            trusted=trusted, pytest_output=pytest_failure),
+                        stderr=(diagnostic + ('\ncleanup failed: details omitted' if process.cleanup_error else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
                                   'requested_workers': str(requested_workers),
@@ -2333,6 +2563,8 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  **({'progress': _core_progress_details(root, getattr(core, 'progress', None))}
+                                     if name == 'python-unittest' else {}),
                                   'versions': json.dumps(core.versions, sort_keys=True),
                                   'coverage': json.dumps(core.coverage_metadata, sort_keys=True)}],
                     ))

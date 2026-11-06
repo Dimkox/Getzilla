@@ -233,3 +233,120 @@ class ReviewPlanTests(unittest.TestCase):
         self.assertEqual(self.reconcile()['review_agents'], route['review_agents'])
         with self.assertRaisesRegex(ValueError, 'unknown explicit reviewer'):
             reconcile_route(self.root, additional_reviewers=('writer',))
+
+    def test_accepted_target_head_or_descendant_preserves_qualified_plan(self):
+        from getzilla.review_plan import validate_review_plan
+        policy = json.loads((self.root / '.getzilla/config/routing.json').read_text())
+        policy['review_floors']['delivery'] = ['code_reviewer', 'test_reviewer']
+        self.write('.getzilla/config/routing.json', json.dumps(policy))
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        head = git(self.root, 'rev-parse', 'HEAD')
+        self.route()
+        qualified = self.reconcile()
+        self.assertIn('test_reviewer', qualified['review_agents'])
+        descendant = git(self.root, 'commit-tree', head + '^{tree}', '-p', head, '-m', 'accepted target')
+        for target in (head, descendant):
+            with self.subTest(target=target):
+                git(self.root, 'update-ref', 'refs/remotes/origin/main', target)
+                self.assertEqual(git(self.root, 'rev-parse', 'HEAD'), head)
+                self.assertEqual(validate_review_plan(self.root, qualified), [])
+
+    def test_changed_route_head_base_cannot_borrow_the_target_base(self):
+        from getzilla.review_plan import validate_review_plan
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        self.route()
+        qualified = self.reconcile()
+        changed = dict(qualified, base_commit=git(self.root, 'rev-parse', 'HEAD'))
+        self.assertTrue(validate_review_plan(self.root, changed))
+
+    def test_acceptance_cannot_discard_a_previously_required_non_head_base(self):
+        from getzilla.review_plan import validate_review_plan
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        target = git(self.root, 'rev-parse', 'HEAD')
+        self.write('app.py', 'value = 3\n')
+        self.commit()
+        self.route()
+        initial = self.reconcile()
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', target)
+        self.assertTrue(validate_review_plan(self.root, initial))
+        qualified = self.reconcile()
+        self.assertEqual(set(qualified['risk_assessment']['bases']), {self.base, target})
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', git(self.root, 'rev-parse', 'HEAD'))
+        self.assertTrue(validate_review_plan(self.root, qualified))
+
+    def test_distinct_non_head_base_with_equal_tree_is_still_required(self):
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        target = git(self.root, 'rev-parse', 'HEAD')
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', target)
+        git(self.root, 'commit', '--allow-empty', '-qm', 'same tree distinct source identity')
+        self.route()
+        qualified = self.reconcile()
+        self.assertNotEqual(target, git(self.root, 'rev-parse', 'HEAD'))
+        self.assertEqual(git(self.root, 'rev-parse', target + '^{tree}'), git(self.root, 'rev-parse', 'HEAD^{tree}'))
+        self.assertEqual(set(qualified['risk_assessment']['bases']), {self.base, target})
+
+    def test_empty_head_comparison_does_not_hide_findings_or_remove_the_only_base(self):
+        from getzilla.review_plan import assess
+        from getzilla.verification import GitRangeBase, GitRangeSelection
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        route = self.route()
+        head = git(self.root, 'rev-parse', 'HEAD')
+        route_base = GitRangeBase('route', 'route.base_commit', self.base, self.base)
+        target = GitRangeBase('pr-target', 'refs/remotes/origin/main', head, head)
+        finding = {'severity': 'error', 'code': 'pr-base-unavailable', 'path': 'git-refs', 'message': 'fixture'}
+        incomplete = assess(self.root, route, GitRangeSelection([route_base, target], [finding]))
+        self.assertEqual(incomplete['risk_assessment']['status'], 'incomplete')
+        self.assertIn('pr-base-unavailable', incomplete['risk_assessment']['gaps'])
+        self.assertEqual(set(incomplete['risk_assessment']['bases']), {self.base, head})
+        for kind in ('route', 'unclassified'):
+            with self.subTest(retained_kind=kind):
+                entries = [route_base, GitRangeBase(kind, 'fixture', head, head)]
+                selection = GitRangeSelection(entries)
+                retained = assess(self.root, route, selection)
+                self.assertEqual(set(retained['risk_assessment']['bases']), {self.base, head})
+                self.assertEqual(selection.bases, entries)
+        for kind in ('route', 'pr-target'):
+            with self.subTest(kind=kind):
+                only = assess(self.root, route, GitRangeSelection([GitRangeBase(kind, 'fixture', head, head)]))
+                self.assertEqual(only['risk_assessment']['status'], 'complete')
+                self.assertEqual(only['risk_assessment']['bases'], [head])
+
+    def test_accepted_target_keeps_exact_role_policy_and_source_freshness(self):
+        import copy
+        from getzilla.review_plan import validate_review_plan
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        self.route()
+        qualified = self.reconcile()
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', git(self.root, 'rev-parse', 'HEAD'))
+        self.assertEqual(validate_review_plan(self.root, qualified), [])
+        changes = {'risk': 'high' if qualified['risk'] == 'low' else 'low',
+                   'risk_assessment': {**qualified['risk_assessment'], 'bases': []},
+                   'review_plan': {**qualified['review_plan'], 'digest': '0' * 64},
+                   'review_agents': [], 'required_evidence': [], 'allowed_agents': []}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(qualified)
+                changed[field] = value
+                self.assertTrue(validate_review_plan(self.root, changed))
+        self.write('app.py', 'value = 3\n')
+        self.assertTrue(validate_review_plan(self.root, qualified))
+        self.commit()
+        self.assertTrue(validate_review_plan(self.root, qualified))
+
+    def test_accepted_target_does_not_supply_missing_receipt_evidence(self):
+        from getzilla.receipts import validate_evidence
+        self.write('app.py', 'value = 2\n')
+        self.commit()
+        self.route()
+        qualified = self.reconcile()
+        git(self.root, 'update-ref', 'refs/remotes/origin/main', git(self.root, 'rev-parse', 'HEAD'))
+        gaps = validate_evidence(self.root, qualified)
+        self.assertFalse(any('review plan' in gap for gap in gaps))
+        self.assertIn('verification: missing receipt', gaps)
+        self.assertIn('code_review: missing receipt', gaps)

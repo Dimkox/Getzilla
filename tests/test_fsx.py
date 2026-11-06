@@ -174,5 +174,117 @@ class FsxTests(unittest.TestCase):
                 process.wait(timeout=5)
 
 
+
+class BoundRootReaderTests(unittest.TestCase):
+    def test_shared_snapshot_error_identity_and_legacy_serialization(self) -> None:
+        import dataclasses
+        import hashlib
+        import pickle
+        from getzilla import component_state
+        for name in ('FileSnapshot', 'ComponentStateError', '_FileSnapshotChanged',
+                     'path_parts', '_identity', '_file_identity'):
+            self.assertIs(getattr(fsx, name, None), getattr(component_state, name))
+        snapshot = fsx.FileSnapshot(b'public fixture', 0o644, (1, 2, 3))
+        self.assertEqual([field.name for field in dataclasses.fields(snapshot)],
+                         ['content', 'mode', 'identity'])
+        self.assertEqual(snapshot.sha256, hashlib.sha256(snapshot.content).hexdigest())
+        self.assertEqual(hash(snapshot), hash(component_state.FileSnapshot(*(
+            snapshot.content, snapshot.mode, snapshot.identity))))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            snapshot.mode = 0
+        self.assertTrue(issubclass(fsx._FileSnapshotChanged, fsx.ComponentStateError))
+        self.assertTrue(issubclass(fsx.ComponentStateError, ValueError))
+        self.assertIs(pickle.loads(b'cgetzilla.component_state\nFileSnapshot\n.'),
+                      fsx.FileSnapshot)
+        for value in (snapshot, fsx.ComponentStateError('public'),
+                      fsx._FileSnapshotChanged('public')):
+            self.assertEqual(type(value).__module__, 'getzilla.component_state')
+            for protocol in (2, 4, pickle.HIGHEST_PROTOCOL):
+                payload = pickle.dumps(value, protocol=protocol)
+                self.assertIn(b'getzilla.component_state', payload)
+                restored = pickle.loads(payload)
+                self.assertIs(type(restored), type(value))
+                if isinstance(value, BaseException):
+                    self.assertEqual(restored.args, value.args)
+                else:
+                    self.assertEqual(restored, value)
+
+    def test_independent_import_orders_preserve_legacy_types(self) -> None:
+        import json
+        import subprocess
+        for first in ('getzilla.fsx', 'getzilla.component_state', 'getzilla.factory_tests'):
+            with self.subTest(first=first):
+                script = (
+                    'import importlib,json,sys,pickle; '
+                    f'sys.path.insert(0,{str(ROOT / ".getzilla")!r}); '
+                    f'importlib.import_module({first!r}); '
+                    'initial="getzilla.component_state" in sys.modules; '
+                    'from getzilla import fsx,component_state as c; '
+                    'available=hasattr(fsx,"ReadOnlyBoundRoot"); '
+                    'same=all(getattr(fsx,n,None) is getattr(c,n) for n in '
+                    '("FileSnapshot","ComponentStateError","_FileSnapshotChanged")); '
+                    'print(json.dumps({"available":available,"same":same,"initial_upper":initial}))'
+                )
+                result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', script],
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0)
+                facts = json.loads(result.stdout)
+                self.assertTrue(facts['available'])
+                self.assertTrue(facts['same'])
+                self.assertEqual(facts['initial_upper'], first == 'getzilla.component_state')
+
+    def test_read_path_limits_context_and_descriptor_lifetime(self) -> None:
+        from unittest import mock
+        reader = getattr(fsx, 'ReadOnlyBoundRoot', None)
+        self.assertTrue(callable(reader))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'data.txt').write_bytes(b'abc')
+            with mock.patch.object(fsx, 'close_dir', wraps=fsx.close_dir) as closed:
+                binding = reader(root)
+                handles = list(binding._handles)
+                with binding as entered:
+                    self.assertIs(entered, binding)
+                    self.assertEqual(binding.read('data.txt').content, b'abc')
+                    self.assertIsNone(binding.read('absent.txt'))
+                    self.assertEqual(binding.read('data.txt', limit=3).content, b'abc')
+                    with self.assertRaises(ValueError):
+                        binding.read('data.txt', limit=2)
+                    for path in ('../escape', 'CON.txt', 'trailing.', 'drive:name'):
+                        with self.subTest(path=path), self.assertRaises(ValueError):
+                            binding.read(path)
+                    self.assertFalse(hasattr(binding, 'write'))
+                    self.assertFalse(hasattr(binding, 'remove'))
+                    with self.assertRaises(TypeError):
+                        binding.parent('not-created/file', create=True)
+                    self.assertFalse((root / 'not-created').exists())
+                self.assertEqual(binding._handles, [])
+                self.assertEqual([call.args[0] for call in closed.call_args_list],
+                                 list(reversed(handles)))
+
+    def test_constructor_failure_rolls_back_opened_ancestry(self) -> None:
+        from unittest import mock
+        reader = getattr(fsx, 'ReadOnlyBoundRoot', None)
+        self.assertTrue(callable(reader))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'owned-reader-fixture'
+            root.mkdir()
+            binding = reader.__new__(reader)
+            opened = []
+            real = fsx.open_dir_at
+            def fail_leaf(parent, name, **kwargs):
+                if name == root.name:
+                    opened.extend(binding._handles)
+                    raise OSError(5, 'public constructor refusal')
+                return real(parent, name, **kwargs)
+            with mock.patch.object(fsx, 'open_dir_at', side_effect=fail_leaf), \
+                    mock.patch.object(fsx, 'close_dir', wraps=fsx.close_dir) as closed:
+                with self.assertRaises(OSError):
+                    reader.__init__(binding, root)
+            self.assertTrue(opened)
+            self.assertEqual(binding._handles, [])
+            self.assertEqual([call.args[0] for call in closed.call_args_list],
+                             list(reversed(opened)))
+
 if __name__ == '__main__':
     unittest.main()

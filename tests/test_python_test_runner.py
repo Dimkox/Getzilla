@@ -1171,6 +1171,7 @@ class CoverageLayout(unittest.TestCase):
 
     def test_private_coverage_config_keeps_all_consumer_options_and_exact_path(self) -> None:
         from coverage import Coverage
+        from getzilla import pytest_progress
         with fixture() as root:
             config = root / '.coveragerc'
             config.write_text('[run]\nbranch = True\nsource = subject\ninclude = */subject.py\n'
@@ -1178,7 +1179,7 @@ class CoverageLayout(unittest.TestCase):
                               '[report]\nfail_under = 100\nomit = separate.py\nprecision = 3\n'
                               '[html]\ndirectory = custom-html\n[paths]\nsource =\n    subject\n    other/subject\n')
             original = config.read_bytes()
-            overlay = python_test_runner._application_coverage_config(config, root)
+            overlay = python_test_runner._application_coverage_config(config, root, root=root)
             before = Coverage(config_file=str(config))
             after = Coverage(config_file=str(overlay))
             for option in ('run:branch', 'run:source', 'run:include', 'run:context', 'run:relative_files',
@@ -1186,11 +1187,111 @@ class CoverageLayout(unittest.TestCase):
                 with self.subTest(option=option):
                     self.assertEqual(before.get_option(option), after.get_option(option))
             harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
-            self.assertEqual(['a.py', 'b.py', harness], after.get_option('run:omit'))
+            self.assertEqual(['a.py', 'b.py', harness, str(Path(fsx.__file__).resolve()),
+                              str(Path(pytest_progress.__file__).resolve())], after.get_option('run:omit'))
             self.assertEqual(original, config.read_bytes())
-            with patch.object(python_test_runner, 'STACK_DIR', root / '[ambiguous]'):
+            fresh = root / 'ambiguous-overlay'
+            fresh.mkdir()
+            with patch.object(python_test_runner, 'STACK_DIR', root / '[ambiguous]' / '.getzilla'):
                 with self.assertRaises(RunnerError):
-                    python_test_runner._application_coverage_config(config, root)
+                    python_test_runner._application_coverage_config(config, fresh, root=root)
+            self.assertFalse((fresh / 'application.coveragerc').exists())
+            self.assertEqual(original, config.read_bytes())
+
+    def test_external_progress_coverage_excludes_only_exact_instrumentation_files(self) -> None:
+        from coverage import Coverage
+        from getzilla import pytest_progress
+        with fixture() as root, tempfile.TemporaryDirectory() as outside:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py')]
+            owned = root / 'owned.py'
+            for path in [*external, owned]:
+                path.write_text('value = 1\nif value == 2:\n value = 3\n')
+            output = root / 'overlay'
+            output.mkdir()
+            with patch.object(fsx, '__file__', str(external[0])), \
+                 patch.object(pytest_progress, '__file__', str(external[1])):
+                try:
+                    overlay = python_test_runner._application_coverage_config(config, output, root=root)
+                except TypeError:
+                    self.fail('coverage ownership needs the actual consumer root')
+            measured = Coverage(config_file=str(overlay), data_file=None)
+            self.assertEqual(measured.get_option('report:fail_under'), 100)
+            harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+            self.assertEqual(measured.get_option('run:omit'), [harness, *map(str, external)])
+            measured.start()
+            try:
+                for path in [*external, owned]:
+                    exec(compile(path.read_text(), str(path), 'exec'), {})
+            finally:
+                measured.stop()
+            self.assertEqual(set(measured.get_data().measured_files()), {str(owned)})
+            self.assertIn(3, measured.analysis2(str(owned))[3])
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_consumer_owned_instrumentation_and_actual_getzilla_root_remain_measured(self) -> None:
+        from coverage import Coverage
+        from getzilla import pytest_progress
+        with fixture() as root:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            package = root / '.getzilla/getzilla'
+            package.mkdir(parents=True)
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py')]
+            for path in owned:
+                path.write_text('value = 1\nif value == 2:\n value = 3\n')
+            output = root / 'overlay'
+            output.mkdir()
+            with patch.object(fsx, '__file__', str(owned[0])), \
+                 patch.object(pytest_progress, '__file__', str(owned[1])):
+                try:
+                    overlay = python_test_runner._application_coverage_config(config, output, root=root)
+                except TypeError:
+                    self.fail('coverage ownership needs the actual consumer root')
+            measured = Coverage(config_file=str(overlay), data_file=None)
+            self.assertEqual(measured.get_option('run:omit'), [str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())])
+            measured.start()
+            try:
+                for path in owned:
+                    exec(compile(path.read_text(), str(path), 'exec'), {})
+            finally:
+                measured.stop()
+            self.assertEqual(set(measured.get_data().measured_files()), set(map(str, owned)))
+            for path in owned:
+                self.assertIn(3, measured.analysis2(str(path))[3])
+            actual_output = root / 'actual-root-overlay'
+            actual_output.mkdir()
+            actual = python_test_runner._application_coverage_config(
+                config, actual_output, root=Path(__file__).resolve().parents[1])
+            self.assertEqual(Coverage(config_file=str(actual)).get_option('run:omit'),
+                             [str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())])
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_new_instrumentation_omissions_refuse_ambiguous_paths_without_output_collision(self) -> None:
+        from getzilla import pytest_progress
+        import inspect
+        self.assertIn('root', inspect.signature(python_test_runner._application_coverage_config).parameters)
+        with fixture() as root, tempfile.TemporaryDirectory() as outside:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            for index, spelling in enumerate(('[ambiguous]', '$EXPANSION', 'comma,value')):
+                output = root / f'fsx-overlay-{index}'
+                output.mkdir()
+                with patch.object(fsx, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+                output = root / f'progress-overlay-{index}'
+                output.mkdir()
+                with patch.object(pytest_progress, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+            self.assertEqual(config.read_bytes(), before)
 
     def test_collection_report_requires_current_complete_typed_result(self) -> None:
         with fixture() as root:
