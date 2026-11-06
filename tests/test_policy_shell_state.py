@@ -46,13 +46,12 @@ def _format_flags(code, result):
             'decision': decision, 'reason_category': category}
 
 
-def _assert_format_diagnostics(case, allowed, reason, code, result, expected, expected_hook, family, form):
-    flags = _format_flags(code, result)
+def _assert_format_diagnostics(case, policy_matches, policy_category, flags, expected_hook, family, form):
     stage = 'ok'
     category = flags['reason_category']
-    if allowed != expected:
+    if not policy_matches:
         stage = 'policy-verdict'
-        category = _format_flags(0, {'reason': reason})['reason_category']
+        category = policy_category
     elif not flags['exit_ok']:
         stage = 'hook-exit'
     elif not flags['mapping']:
@@ -129,7 +128,7 @@ class FormatDiagnosticTests(unittest.TestCase):
                 (False, 0, {'decision': 'deny'}, False, None),
                 (True, 0, {'decision': 'allow'}, True, None)):
             case = unittest.FunctionTestCase(lambda: _assert_format_diagnostics(
-                case, allowed, None, code, body, expected, expected, 'show', 6))
+                case, allowed == expected, 'unknown', _format_flags(code, body), expected, 'show', 6))
             result = unittest.TestResult()
             case.run(result)
             self.assertFalse(result.errors)
@@ -206,7 +205,9 @@ class ShellStatePolicyTests(unittest.TestCase):
         })
         expected_hook = expected if hook_expected is None else hook_expected
         if diagnostic is not None:
-            _assert_format_diagnostics(self, allowed, reason, code, result, expected, expected_hook, *diagnostic)
+            _assert_format_diagnostics(self, allowed == expected,
+                                       _format_flags(0, {'reason': reason})['reason_category'],
+                                       _format_flags(code, result), expected_hook, *diagnostic)
             return
         with self.subTest(layer='hook', command=command):
             self.assertEqual(code, 0, error)
