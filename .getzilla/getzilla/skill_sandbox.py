@@ -6,11 +6,13 @@ explicit Linux Bubblewrap generator; its artifacts need normal source review.
 from __future__ import annotations
 
 import base64
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .component_state import BoundRoot, ComponentStateError, path_parts
+from . import fsx
 
 MAX_FILE_BYTES = 2097152
 MAX_TOTAL_BYTES = 16777216
@@ -48,11 +50,60 @@ def validate_npm_lock(lock):
             raise ValueError('INVALID_DEPENDENCY_INTEGRITY')
 
 
+def _directory_id(info):
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _bmad_dependency_graft(source: Path, deps: Path) -> bool:
+    try:
+        with BoundRoot(source) as source_root, BoundRoot(deps) as dependency_root:
+            with source_root.parent('node_modules') as (parent, name, check):
+                named = fsx.lstat_at(parent, name)
+                if fsx.is_link(named) or not stat.S_ISDIR(named.st_mode):
+                    raise ValueError('UNSAFE_BMAD_GRAFT_TARGET')
+                target = fsx.open_dir_at(parent, name, flags=fsx.O_CLOEXEC)
+                try:
+                    identity = _directory_id(named)
+                    if _directory_id(fsx.fstat_dir(target)) != identity:
+                        raise ValueError('UNSAFE_BMAD_GRAFT_TARGET')
+                    legacy = dependency_root.path == source_root.path / 'node_modules'
+                    dependency_id = _directory_id(fsx.fstat_dir(dependency_root.handle))
+                    if legacy:
+                        if dependency_id != identity:
+                            raise ValueError('UNSAFE_BMAD_GRAFT_TARGET')
+                    else:
+                        if (dependency_root.path.is_relative_to(source_root.path)
+                                or source_root.path.is_relative_to(dependency_root.path)
+                                or dependency_id == identity
+                                or dependency_id == _directory_id(fsx.fstat_dir(source_root.handle))):
+                            raise ValueError('UNRELATED_BMAD_DEPENDENCY_ROOT')
+                        with fsx.scandir(target) as entries:
+                            if any(entries):
+                                raise ValueError('NONEMPTY_BMAD_GRAFT_TARGET')
+                    check()
+                    source_root.check()
+                    dependency_root.check()
+                    if _directory_id(fsx.lstat_at(parent, name)) != identity:
+                        raise ValueError('UNSAFE_BMAD_GRAFT_TARGET')
+                    return not legacy
+                finally:
+                    fsx.close_dir(target)
+    except (ComponentStateError, OSError) as exc:
+        raise ValueError('UNSAFE_BMAD_GRAFT_TARGET') from exc
+
+
 def sandbox_command(component: str, source: Path, deps: Path, stage: Path, agent: str, *, script='sh') -> list[str]:
+    """Build the fixed offline profile over separately admitted input roots.
+
+    BMAD's separate dependencies also appear at /source/node_modules. Exact
+    legacy nesting keeps its old command. MAX_* below govern generated output;
+    command construction does not introduce a legacy input inventory cap.
+    """
     if component not in AGENTS or agent not in AGENTS[component] or script not in {'sh', 'ps'}:
         raise ValueError('UNSUPPORTED_GENERATION_VARIANT')
     if sys.platform != 'linux' or any(not Path(path).is_dir() for path in (source, deps, stage)):
         raise ValueError('UNQUALIFIED_NATIVE_GENERATOR')
+    graft = component == 'bmad' and _bmad_dependency_graft(source, deps)
     if (len({path.resolve() for path in (source, deps, stage)}) != 3
             or any(stage.resolve().is_relative_to(path.resolve()) or path.resolve().is_relative_to(stage.resolve())
                    for path in (source, deps))):
@@ -62,8 +113,10 @@ def sandbox_command(component: str, source: Path, deps: Path, stage: Path, agent
         if Path(path).exists():
             command += ['--ro-bind', path, path]
     command += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', SANDBOX_TMPFS,
-                '--ro-bind', str(source.resolve()), '/source', '--ro-bind', str(deps.resolve()), '/deps',
-                '--bind', str(stage.resolve()), '/work', '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
+                '--ro-bind', str(source.resolve()), '/source', '--ro-bind', str(deps.resolve()), '/deps']
+    if graft:
+        command += ['--ro-bind', str(deps.resolve()), '/source/node_modules']
+    command += ['--bind', str(stage.resolve()), '/work', '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
                 '--setenv', 'HOME', SANDBOX_TMPFS, '--setenv', 'PYTHONDONTWRITEBYTECODE', '1',
                 '--setenv', 'PYTHONPATH', '/source/src:/deps', '--chdir', '/work', '--',
                 '/usr/bin/prlimit', '--core=0', '--as=2147483648', '--cpu=20', '--nproc=1024',
