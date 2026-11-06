@@ -22,6 +22,8 @@ from .util import now_utc
 MAX_FILE_BYTES = 262_144
 MAX_TOTAL_BYTES = 1_048_576
 MAX_FILES = 64
+# Rows can share report files or remain unrun; their finite limit is independent.
+MAX_ACCOUNTING_ROWS = 128
 MAX_FINDINGS = 100
 MAX_PENDING_TASKS = 20
 MAX_DIRTY_PATHS = 256
@@ -261,7 +263,7 @@ def _timestamp(value: Any) -> bool:
 def accounting_rows(accounting: Any) -> list[dict[str, Any]]:
     """The existing bounded accounting format, shared by inspection and synchronization."""
     if (not isinstance(accounting, dict) or accounting.get('schema_version') != 1
-            or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_FILES):
+            or not isinstance(accounting.get('obligations'), list) or len(accounting['obligations']) > MAX_ACCOUNTING_ROWS):
         raise InspectionError('obligation_invalid', 'evidence accounting must be a bounded version 1 obligation list')
     return accounting['obligations']
 
