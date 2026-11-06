@@ -2,6 +2,8 @@
 
 Status: proposed design, awaiting independent review. Scope: [issue #146](https://github.com/Dimkox/Getzilla/issues/146), all seven acceptance criteria. This change supplies documentation and a data schema only. It installs no engine, jurisdiction rules, service, policy pack or gate. It provides neither legal advice nor regulatory certification.
 
+The companion [Enterprise operating model](enterprise-operating-model.md) addresses [issue #157](https://github.com/Dimkox/Getzilla/issues/157): proposed control ownership, approvals, expiring exceptions, incidents and review reporting. It reuses this Foundation and its schema; it adds no policy engine or operational authority.
+
 ## Existing mechanisms and integration audit
 
 The audit baseline is accepted commit `352d62450afea5821346a99cf47ebe8565717d42`. The following are current source behavior, not findings that a law applies to a customer.
