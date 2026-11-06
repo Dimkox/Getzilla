@@ -56,7 +56,10 @@ class ModelDataAdmissionTest(unittest.TestCase):
         result = self.recheck(preview)
         self.assertEqual(result, {'state': 'ready_for_review', 'dispatch_permitted': False,
                                   'account_identity_verified': False})
-        self.assertEqual(preview.endpoint, 'https://api.openai.com/v1/responses')
+        with (Path(__file__).resolve().parent / 'fixtures/model-data-admission-endpoint.json').open('rb') as stream:
+            expected_endpoint = stream.read(1025)
+        self.assertLessEqual(len(expected_endpoint), 1024)
+        self.assertEqual(preview.endpoint, json.loads(expected_endpoint.decode('utf-8'))['endpoint'])
         self.assertEqual(preview.request_bytes, len(self.request.body))
         self.assertEqual(preview.revision, 1)
         self.assertEqual(preview.issued_epoch, 1000)
@@ -75,6 +78,34 @@ class ModelDataAdmissionTest(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(admission.AdmissionError):
                 self.recheck(preview, binding=replace(self.binding, **{field: value}))
         self.assertEqual(self.recheck(preview)['state'], 'ready_for_review')
+
+    def test_malformed_binding_never_copies_during_preview_or_recheck(self):
+        copied = []
+
+        class CopyTrap:
+            def __deepcopy__(self, memo):
+                copied.append('copy')
+                raise AssertionError('preview binding must not be copied')
+
+        class StringCopyTrap(str, CopyTrap):
+            pass
+
+        cycle = []
+        cycle.append(cycle)
+        preview = self.prepare()
+        for field in self.binding.__dataclass_fields__:
+            for case, value in (('cycle', cycle), ('copy', CopyTrap()),
+                                ('string_subclass', StringCopyTrap(getattr(self.binding, field)))):
+                binding = replace(self.binding, **{field: value})
+                for operation, call in (('prepare', lambda: self.prepare(binding=binding)),
+                                        ('recheck', lambda: self.recheck(preview, binding=binding))):
+                    with self.subTest(field=field, case=case, operation=operation):
+                        copied.clear()
+                        with self.assertRaisesRegex(admission.AdmissionError, '^preflight_denied$'):
+                            call()
+                        self.assertEqual(copied, [])
+                        self.assertFalse((self.root / '.getzilla/runtime').exists())
+        self.assertFalse(self.recheck(preview)['dispatch_permitted'])
 
     def test_request_bytes_and_every_contract_field_are_bound(self):
         preview = self.prepare()

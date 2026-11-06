@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -662,6 +663,89 @@ class PackageStatusTests(unittest.TestCase):
             result = self.module().collect_worktree(root, {})
             self.assertIsNone(result['head'])
             self.assertIsNone(result['commits_ahead'])
+
+    def test_ignored_nested_selection_cannot_borrow_parent_git_identity(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
+            selected = Path(directory) / 'selected'
+            selected.mkdir()
+            (selected / 'requirements.txt').write_text('public-example==1.0\n', encoding='utf-8', newline='\n')
+            self.assertEqual(Path(self.git(selected, 'rev-parse', '--show-toplevel')).resolve(), ROOT.resolve())
+            result = self.module().collect_worktree(selected, {'base_commit': self.git(ROOT, 'rev-parse', 'HEAD')})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['branch'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_non_git_selection_has_structured_root_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.module().collect_worktree(Path(directory), {})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_standalone_unicode_and_object_free_roots_keep_real_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('standalone', 'проект-雪'):
+                with self.subTest(name=name):
+                    root = Path(directory) / name
+                    root.mkdir()
+                    self.git(root, 'init', '-q')
+                    self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                             '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+                    head = self.git(root, 'rev-parse', 'HEAD')
+                    result = self.module().collect_worktree(root, {'base_commit': head})
+                    self.assertTrue(result['git_available'])
+                    self.assertEqual(result['head'], head)
+                    self.assertEqual(result['dirty_product_state'], 'clean')
+                    self.assertEqual(result['dirty_product_paths'], [])
+                    self.assertEqual(result['commits_ahead'], 0)
+                    self.assertFalse(result['uncommitted_product_zero_ahead'])
+                    self.assertNotIn('git_root_unknown', self.codes(result))
+
+    def test_linked_worktree_root_keeps_its_own_head_and_dirty_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, linked = Path(directory) / 'main', Path(directory) / 'linked-проект'
+            root.mkdir()
+            self.git(root, 'init', '-q')
+            self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                     '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+            self.git(root, 'worktree', 'add', '--detach', str(linked), 'HEAD')
+            try:
+                (linked / 'public.py').write_text('public = True\n', encoding='utf-8', newline='\n')
+                head = self.git(linked, 'rev-parse', 'HEAD')
+                result = self.module().collect_worktree(linked, {'base_commit': head})
+                self.assertTrue(result['git_available'])
+                self.assertEqual(result['head'], head)
+                self.assertTrue(result['detached'])
+                self.assertEqual(result['dirty_product_paths'], ['public.py'])
+                self.assertEqual(result['dirty_product_state'], 'dirty')
+                self.assertTrue(result['uncommitted_product_zero_ahead'])
+            finally:
+                self.git(root, 'worktree', 'remove', '--force', str(linked))
+
+    def test_incomplete_or_nonroot_git_location_never_qualifies_metadata(self):
+        module = self.module()
+        original = module._git_read
+        cases = ((0, b'true\n'), (0, b'\ntrue'), (0, b'\nfalse\n'),
+                 (0, b'child/\ntrue\n'), (0, b'\ntrue\nextra\n'), (1, b'\ntrue\n'))
+        for code, output in cases:
+            with self.subTest(code=code, output=output):
+                def location(repository, arguments):
+                    if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree']:
+                        return code, output
+                    return original(repository, arguments)
+
+                with patch.object(module, '_git_read', side_effect=location):
+                    result = module.collect_worktree(ROOT, {})
+                self.assertFalse(result['git_available'])
+                self.assertIsNone(result['head'])
+                self.assertEqual(result['dirty_product_state'], 'unknown')
+                self.assertIn('git_root_unknown', self.codes(result))
 
     def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
         with project_copy(git=True) as root:

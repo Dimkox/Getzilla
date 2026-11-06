@@ -69,6 +69,49 @@ def which_all(name: str) -> str:
 
 
 class InstallerScriptTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX installer shell control')
+    def test_observed_uv_tool_bin_is_inherited_before_project_baseline(self):
+        text = (ROOT/'scripts/install.sh').read_text()
+        start = text.index('install_workflow_baseline() {')
+        function = text[start:text.index('\n}\n', start)+3]
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            home = folder/'installation'
+            venv = home/'.venv/bin'
+            venv.mkdir(parents=True)
+            tools = folder/'observed tool bin'
+            tools.mkdir()
+            for name, content in {
+                    'uv': '#!/bin/sh\nif [ "$1" = --version ]; then echo "uv 0.11.12"; else printf "%s\\n" "$FIXTURE_UV_BIN"; fi\n',
+                    'python': '#!/bin/sh\nexit 0\n'}.items():
+                path = venv/name
+                path.write_text(content)
+                path.chmod(0o755)
+            specify = tools/'specify'
+            specify.write_text('#!/bin/sh\necho observed-tool-bin-control\n')
+            specify.chmod(0o755)
+            driver = folder/'probe.sh'
+            driver.write_text('set -eu\nensure_node() { :; }\nnode_ok() { return 0; }\n'
+                              'have() { command -v "$1" >/dev/null; }\nsay() { :; }\nfail() { exit 21; }\n'
+                              + function + '\ninstall_workflow_baseline "$1" "$1/.venv/bin/python"\nspecify --version\n')
+            result = subprocess.run(['bash', str(driver), str(home)], capture_output=True, text=True, timeout=10,
+                    env={**os.environ, 'PATH': str(venv)+':/usr/bin:/bin', 'FIXTURE_UV_BIN': str(tools)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('observed-tool-bin-control', result.stdout)
+            unsafe_bin = folder/'unsafe:bin'
+            unsafe_bin.mkdir()
+            for value in ('', 'relative-bin', str(folder/'missing-bin'), str(unsafe_bin)):
+                with self.subTest(tool_bin=value):
+                    refused = subprocess.run(['bash', str(driver), str(home)], capture_output=True, text=True, timeout=10,
+                        env={**os.environ, 'PATH': str(venv)+':/usr/bin:/bin', 'FIXTURE_UV_BIN': value})
+                    self.assertEqual(refused.returncode, 21)
+
+    def test_missing_tool_is_a_structured_failed_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = baseline.default_runner([str(Path(directory)/'absent-specify'), '--version'], None)
+        self.assertEqual(result.returncode, 127)
+        self.assertIn('not found', result.stderr)
+
     def test_no_option_to_skip_and_failures_stop_the_install(self) -> None:
         shell = (ROOT / 'scripts' / 'install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts' / 'install.ps1').read_text(encoding='utf-8')

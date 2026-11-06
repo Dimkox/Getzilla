@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import configparser
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import metadata
 import importlib.util
 import json
@@ -18,8 +18,9 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
-from . import fsx
+from . import STACK_DIR, fsx
 from ._cpu_capacity import linux_quota_capacity
 from .verification_scope import FORCE_FULL_VARIABLE
 
@@ -165,6 +166,7 @@ class CoreTestRun:
     workers: int
     versions: dict[str, str]
     coverage_metadata: dict[str, object]
+    progress: dict[str, object] | None = None
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -363,6 +365,78 @@ def _environment(root: Path, data_file: Path, *, temporary_root: Path | None = N
     return environment
 
 
+def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
+    # STACK_DIR remains a real directory when the engine lives in getzilla.zip.
+    return [sys.executable, str(STACK_DIR.parent / 'scripts/getzilla_unittest.py'),
+            '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
+
+
+def _application_coverage_config(config: Path, directory: Path, *, root: Path) -> Path:
+    """Preserve application coverage; omit exact external instrumentation only."""
+    from . import pytest_progress
+
+    harness = str((STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+    # Coverage's omit values are comma/newline-separated glob patterns with
+    # environment expansion. Never broaden an exact infrastructure exclusion.
+    if any(character in harness for character in '[]*?,\n\r$'):
+        raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
+    omissions = [harness]  # Retain the existing bootstrap-only exception.
+    consumer = root.resolve()
+    for origin in (fsx.__file__, pytest_progress.__file__):
+        path = Path(origin).resolve()
+        if path.is_relative_to(consumer):
+            continue
+        exact = str(path)
+        if any(character in exact for character in '[]*?,\n\r$'):
+            raise RunnerError('managed instrumentation path cannot be represented as an exact coverage omission')
+        omissions.append(exact)
+    settings = configparser.RawConfigParser()
+    try:
+        settings.read_string(config.read_text(encoding='utf-8'))
+        if not settings.has_section('run'):
+            settings.add_section('run')
+        original = settings.get('run', 'omit', fallback='')
+        settings.set('run', 'omit', original + '\n' + '\n'.join(omissions))
+        overlay = directory / 'application.coveragerc'
+        with overlay.open('x', encoding='utf-8') as output:
+            settings.write(output)
+        return overlay
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise RunnerError('cannot preserve consumer coverage configuration') from exc
+
+
+def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
+    if result.returncode:
+        return result
+    try:
+        nonce = result.command[result.command.index('--nonce') + 1]
+        initial = result_file.lstat()
+        if (not re.fullmatch('[0-9a-f]{32}', nonce) or fsx.is_link(initial)
+                or not stat.S_ISREG(initial.st_mode)):
+            raise ValueError('invalid collection result identity')
+        descriptor = os.open(result_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(descriptor, 'rb') as source:
+            identity = os.fstat(source.fileno())
+            if (not stat.S_ISREG(identity.st_mode)
+                    or (identity.st_dev, identity.st_ino) != (initial.st_dev, initial.st_ino)
+                    or (hasattr(os, 'getuid') and identity.st_uid != os.getuid())):
+                raise ValueError('invalid collection result owner or type')
+            content = source.read(513)
+        if len(content) > 512:
+            raise ValueError('oversized collection result')
+        report = json.loads(content)
+        if (not isinstance(report, dict) or set(report) != {'schema_version', 'nonce', 'tests_run', 'successful'}
+                or type(report['schema_version']) is not int or report['schema_version'] != 1
+                or report['nonce'] != nonce
+                or type(report['tests_run']) is not int or report['tests_run'] < 1
+                or report['successful'] is not True):
+            raise ValueError('no successful nonempty collection')
+    except (OSError, ValueError, TypeError, IndexError):
+        return replace(result, returncode=5,
+                       stderr=result.stderr + '\nunittest collection result missing or invalid\n')
+    return result
+
+
 def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> ProcessResult:
     """Run explicit Core unittest names as a bounded observation, without coverage."""
     if type(budget) is not int or not 1 <= budget <= 180:
@@ -376,8 +450,10 @@ def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> Pro
         raise RunnerError('named tests require nonempty existing tests.test_module[.Class[.test_method]] targets')
     retained: dict[str, ProcessResult] = {}
     with _run_directory('grok-named-smoke-', retained) as directory:
-        retained['tests'] = execute([sys.executable, '-m', 'unittest', *targets], root,
-                                    _environment(root, Path(directory) / '.coverage'), timeout=budget)
+        result_file = Path(directory) / 'unittest-result.json'
+        retained['tests'] = _unittest_result(
+            execute(_unittest_command(result_file, *targets), root,
+                    _environment(root, Path(directory) / '.coverage'), timeout=budget), result_file)
     return retained['tests']
 
 
@@ -457,14 +533,12 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                                 test_files: list[str] | None = None) -> ProcessResult:
     if test_files is None:
         test_files = _unittest_files(root)
-    command = [
-        sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
-        '-m', 'unittest', 'discover', '-s', 'tests', '-p', '<test-file>',
-    ]
+    command = [sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
+               *_unittest_command(Path('<result>'), 'discover', '-s', 'tests', '-p', '<test-file>')[1:]]
     if not test_files:
         return ProcessResult(command, 5, stderr='no unittest modules discovered')
     started = time.monotonic()
-    active: list[tuple[str, subprocess.Popen, Path, Path]] = []
+    active: list[tuple[str, subprocess.Popen, Path, Path, Path]] = []
     completed: list[ProcessResult] = []
     cleanup_errors: list[str] = []
     next_file = 0
@@ -479,14 +553,15 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     next_file += 1
                     stdout = output_root / f'{test_file}.stdout'
                     stderr = output_root / f'{test_file}.stderr'
+                    result_file = output_root / f'{test_file}.result.json'
                     out_handle = stdout.open('wb')
                     err_handle = stderr.open('wb')
                     try:
                         process = fsx.owned_popen(
                             [
                                 sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                                f'--rcfile={config}', '-m', 'unittest', 'discover',
-                                '-s', 'tests', '-p', test_file,
+                                f'--rcfile={config}',
+                                *_unittest_command(result_file, 'discover', '-s', 'tests', '-p', test_file)[1:],
                             ],
                             cwd=root,
                             env={**environment, '_GETZILLA_TEST_CHILD': '1'},
@@ -500,34 +575,30 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                         continue
                     out_handle.close()
                     err_handle.close()
-                    active.append((test_file, process, stdout, stderr))
+                    active.append((test_file, process, stdout, stderr, result_file))
                 for item in list(active):
-                    test_file, process, stdout, stderr = item
+                    test_file, process, stdout, stderr, result_file = item
                     if process.poll() is None:
                         continue
                     active.remove(item)
                     job = fsx.owned_job(process)
                     if job is not None:
                         job.close()  # a finished shard's leftover descendants end with its job
-                    completed.append(ProcessResult(
-                        [
-                            sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                            f'--rcfile={config}', '-m', 'unittest', 'discover',
-                            '-s', 'tests', '-p', test_file,
-                        ],
+                    completed.append(_unittest_result(ProcessResult(
+                        list(process.args),
                         process.returncode if process.returncode is not None else 1,
                         stdout=_read_limited(stdout),
                         stderr=_read_limited(stderr),
-                    ))
+                    ), result_file))
                 if time.monotonic() - started > TIMEOUT:
-                    for _test_file, process, _stdout, _stderr in active:
+                    for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
                                          seconds=time.monotonic() - started, terminal_state='timeout')
                 if active:
                     time.sleep(0.05)
         except BaseException:
-            for test_file, process, _stdout, _stderr in active:
+            for test_file, process, _stdout, _stderr, _result_file in active:
                 try:
                     _stop(process)
                 except Exception as exc:
@@ -596,11 +667,26 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         # storage, outside the fixture guards' nonrecursive ancestor watches.
         coverage_root = Path(directory) / 'coverage'
         coverage_root.mkdir(mode=0o700)
+        if measured:
+            config = _application_coverage_config(config, coverage_root, root=root)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
+        result_file = coverage_root / 'unittest-result.json'
         environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
+        progress_root = Path(directory) / 'progress'
+        progress_nonce = uuid.uuid4().hex
         if workers and engine == 'pytest-xdist':
             command = _pytest_command(workers, 'worksteal')
+            if 1 <= workers <= 64:
+                # The source CLI also serves uninstalled consumer roots. Load
+                # this running engine's plugin; STACK_DIR is real for ZIP installs.
+                environment['PYTHONPATH'] = os.pathsep.join((str(STACK_DIR), environment['PYTHONPATH']))
+                try:
+                    progress_root.mkdir(mode=0o700)
+                except OSError:
+                    pass  # Diagnostic storage cannot prevent the real backend.
+                command += ['-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(progress_root),
+                            '--getzilla-progress-nonce', progress_nonce, '--getzilla-progress-workers', str(workers)]
             if measured:
                 command += ['-p', 'pytest_cov.plugin', '--cov', f'--cov-config={config}', '--cov-report=term']
             command += ['tests']
@@ -610,7 +696,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                 '-m', 'unittest', '<module>',
             ]
         else:
-            command = [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests']
+            command = _unittest_command(result_file, 'discover', '-s', 'tests')
             if measured:
                 command = [sys.executable, '-m', 'coverage', 'run', f'--rcfile={config}', *command[1:]]
         if workers and engine == 'coverage-unittest-parallel':
@@ -619,7 +705,13 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
         else:
             tests = execute(command, root, environment)
+            if engine != 'pytest-xdist':
+                tests = _unittest_result(tests, result_file)
         retained['tests'] = tests
+        progress = None
+        if engine == 'pytest-xdist':
+            from .pytest_progress import read_progress
+            progress = read_progress(progress_root, progress_nonce, workers)
         coverage = None
         facts: dict[str, object] = {}
         if measured:
@@ -631,13 +723,13 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                     coverage = execute(coverage_command, root, environment, timeout=120)
                     exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
-                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts)
+                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress)
                     raise
                 try:
+                    from coverage import Coverage
+                    from coverage.exceptions import CoverageException
                     document = json.loads(report_file.read_text(encoding='utf-8'))
-                    settings = configparser.ConfigParser()
-                    settings.read(config)
-                    expected_branch = settings.getboolean('run', 'branch', fallback=False)
+                    expected_branch = Coverage(config_file=str(config)).get_option('run:branch')
                     if (not isinstance(document, dict)
                             or not isinstance(document.get('files'), dict) or not document['files']
                             or not isinstance(document.get('meta'), dict)
@@ -646,13 +738,13 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                             or not isinstance(document.get('totals'), dict)):
                         raise ValueError('coverage source or branch data missing')
                     facts = {'totals': document['totals'], 'branch_coverage': expected_branch, 'files': sorted(document['files'])}
-                except (OSError, ValueError, TypeError, KeyError, configparser.Error) as exc:
+                except (OSError, ValueError, TypeError, KeyError, CoverageException) as exc:
                     coverage.returncode = 1
                     coverage.stderr += f'\ninvalid current-run coverage: {exc}'
                 if exported.returncode or tests.returncode or 'failed to return coverage data' in tests.stdout + tests.stderr:
                     coverage.returncode = 1
                     coverage.stderr += '\ncoverage does not qualify an unsuccessful or incomplete test run'
-        return CoreTestRun(tests, coverage, workers, versions, facts)
+        return CoreTestRun(tests, coverage, workers, versions, facts, progress)
 
 
 def run_trust_tests(root: Path, workers: int) -> ProcessResult:
@@ -662,15 +754,17 @@ def run_trust_tests(root: Path, workers: int) -> ProcessResult:
         raise RunnerError('trust-ci/tests is missing')
     workers, _engine = select_engine(workers, measured=False)
     _tool_versions(['pytest', 'pytest-xdist'] if workers else [])
-    command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else [
-        sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
-    ]
     retained: dict[str, ProcessResult] = {}
     # Child temp files now live in this folder, so its cleanup must not replace the verdict (#134).
     with _run_directory('grok-trust-tests-', retained) as directory:
+        result_file = Path(directory) / 'unittest-result.json'
+        command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else _unittest_command(
+            result_file, 'discover', '-s', 'tests')
         environment = _environment(suite, Path(directory) / '.coverage')
         environment['PYTHONPATH'] = os.pathsep.join(str(path) for path in (suite / 'src', suite / 'tests', suite))
         retained['tests'] = execute(command, suite, environment)
+        if not workers:
+            retained['tests'] = _unittest_result(retained['tests'], result_file)
     return retained['tests']
 
 

@@ -627,6 +627,8 @@ git diff --cached -- .getzilla/managed-components.json
 
 Use `--agents ''` instead of the second command when selecting no adapters. Adoption writes the selection without installing or deleting adapter files. It does not declare arbitrary old files owned. Repeating the exact established list is a no-op; a different list cannot replace a valid v2 selection through adoption. This command is separate from `getzilla adopt`, which handles folders without Git. Review and commit the manifest before running the project phase of `getzilla update`, for example `getzilla update --no-self --no-tools`.
 
+The [optional module lifecycle](optional-modules.md) uses `getzilla components module registry|status|install|update|enable|disable|uninstall|recover|rollback`. Modules use trusted local checksummed artifacts, stay disabled after install/update, and require explicit project grants. Generic lifecycle performs no provider registration, network or worker launch.
+
 `getzilla components add agent:codex` adds to the existing choice and preserves other selected adapters. Adapter-dependent extras also require a complete selection; non-adapter additions may preserve a legacy ledger without inventing membership. `getzilla setup-agent --agent codex`, run from the installed project or a subdirectory, completes project validation and addition before changing user-level configuration. A later global-configuration failure reports that the project phase already completed. `--forget-key` remains global-only.
 
 Use `getzilla harness` to check selected outputs and `getzilla harness --write` to generate them from the installed canonical inputs. The installed `scripts/getzilla_harness.py` works from a project subdirectory, including with the engine in a ZIP. To regenerate this full source checkout, run `python3 scripts/getzilla_harness.py --repository-all --write`. Repository mode requires the full source markers and cannot override an established subset selection.
@@ -667,6 +669,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
 | `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, checkpoints, watchdog, `progress-inspect` and one-shot `progress-recover` |
+| `evals` | `scripts/getzilla_evals.py` | [Offline agent replay](agent-evals.md), paired baseline comparison and explicit acceptance |
 | `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
 | `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` and the report's matching `--reviewed-context` marker |

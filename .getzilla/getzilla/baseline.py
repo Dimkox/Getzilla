@@ -44,8 +44,11 @@ def _env() -> dict[str, str]:
 
 
 def default_runner(command: list[str], cwd: Path | None) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                          check=False, env=_env(), timeout=1800)
+    try:
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              check=False, env=_env(), timeout=1800)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(command, 127, '', f'executable not found: {Path(command[0]).name}')
 
 
 def components(path: Path = TOOLCHAIN) -> dict[str, dict[str, Any]]:

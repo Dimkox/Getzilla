@@ -79,6 +79,8 @@ def main(argv: list[str] | None = None, **dependencies: object) -> int:
         '--default-branch', dest='branch',
         help='branch whose pushes run the workflow (default: origin/HEAD, otherwise main)',
     )
+    parser.add_argument('--platform', action='append', dest='platforms',
+                        help='public workflow platform ID (repeatable; default Linux x64; see platform-support.json)')
     parser.add_argument('--json', action='store_true', help='print the report as JSON')
     args = parser.parse_args(argv)
     runner = dependencies.get('runner', ci_gate.run_command)
@@ -111,7 +113,7 @@ def main(argv: list[str] | None = None, **dependencies: object) -> int:
         target = ci_gate.resolve_target_root(Path(args.target), runner=runner)  # type: ignore[arg-type]
         action = ci_gate.apply_gate if args.write else ci_gate.plan_gate
         report = action(
-            target, STACK_ROOT, visibility=args.visibility, branch=args.branch, **options,  # type: ignore[arg-type]
+            target, STACK_ROOT, visibility=args.visibility, branch=args.branch, platforms=args.platforms, **options,  # type: ignore[arg-type]
         )
     except (ci_gate.CiGateError, OSError) as exc:
         print(f'getzilla_ci: {exc}', file=sys.stderr)

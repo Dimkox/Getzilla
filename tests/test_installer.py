@@ -78,6 +78,246 @@ def _broken_local_links(document: Path, root: Path) -> list[str]:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_factory_support_has_exact_component_ownership(self) -> None:
+        support = {
+            'engineering/contracts/openapi/factory-result-admission.v2.json',
+            'scripts/getzilla_m8.py',
+            'scripts/getzilla_landing_publish.py',
+            'delivery/src/getzilla_delivery/landing_filesystem.py',
+            'delivery/src/getzilla_delivery/landing_publication.py',
+            'delivery/src/getzilla_delivery/landing_publication_contracts.py',
+        }
+        full = {entry.path for entry in MODULE.build_payload(ROOT)}
+        factory = {entry.path for entry in MODULE.build_payload(ROOT, selection=MODULE.PayloadSelection((), factory=True))}
+        core = {entry.path for entry in MODULE.build_payload(ROOT, selection=MODULE.PayloadSelection(()))}
+        self.assertTrue(support <= full)
+        self.assertTrue(support <= factory)
+        self.assertFalse(support & core)
+        for path in support:
+            self.assertEqual(MODULE.component_of(path), 'factory', path)
+        self.assertEqual({path for path in full if path.startswith('delivery/')},
+                         {path for path in support if path.startswith('delivery/')})
+        self.assertEqual({path for path in full if path.startswith('engineering/')},
+                         {path for path in support if path.startswith('engineering/')})
+        self.assertIn('factory/tests/json_schema_subset.py', full)
+        self.assertNotIn('PROJECT_STATE.json', full)
+        self.assertFalse(any(path.startswith(('tests/', 'side-projects/')) for path in full))
+
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
+    def test_installed_factory_controls_use_only_their_payload(self) -> None:
+        # Isolated Python disables ambient PYTHONPATH and the source checkout.
+        # Collect every module, then execute the affected offline contracts.
+        code = '''
+import importlib, pathlib, sys, unittest
+root = pathlib.Path(sys.argv[1]).resolve()
+sys.path[:0] = [str(root / path) for path in ('.', '.getzilla', 'factory/src', 'delivery/src')]
+loader = unittest.TestLoader()
+suite = loader.discover(str(root / 'factory/tests'), top_level_dir=str(root))
+assert not loader.errors, '\\n'.join(loader.errors)
+expected = {'factory.tests.' + path.stem for path in (root / 'factory/tests').glob('test_*.py')}
+assert expected and expected <= set(sys.modules)
+for name in expected | {'getzilla_factory.owner_autonomy', 'getzilla_delivery.landing_filesystem',
+                        'getzilla_delivery.landing_publication', 'getzilla_delivery.landing_publication_contracts',
+                        'scripts.getzilla_m8', 'scripts.getzilla_landing_publish'}:
+    module = importlib.import_module(name)
+    assert pathlib.Path(module.__file__).resolve().is_relative_to(root), name
+assert suite.countTestCases() > 0
+targets = sys.argv[2:] or ['factory.tests.test_owner_autonomy', 'factory.tests.test_decision_contracts',
+    'factory.tests.test_landing_publication_cli',
+    'factory.tests.test_result_admission_api.ResultEnvelopeV2Tests.test_v2_schema_and_openapi_embed_the_same_canonical_contract']
+result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromNames(targets))
+raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'consumer'
+            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
+
+            def run(*targets):
+                # The publisher validates every ancestor. A checkout may have a
+                # shared parent, so only this child's owned runtime fixture uses
+                # the OS temporary filesystem; process-wide TMPDIR is unchanged.
+                with tempfile.TemporaryDirectory(prefix='factory-installed-control-', dir=os.path.realpath('/tmp')) as child_temp:
+                    environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
+                    return subprocess.run([sys.executable, '-I', '-c', code, str(target), *targets],
+                                          cwd=target, env=environment, text=True, capture_output=True, timeout=90)
+
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            helper = target / 'factory/tests/json_schema_subset.py'
+            content = helper.read_bytes()
+            helper.unlink()
+            missing_helper = run()
+            self.assertNotEqual(missing_helper.returncode, 0, 'missing helper silently used another checkout')
+            self.assertIn('json_schema_subset', missing_helper.stderr)
+            helper.write_bytes(content)
+            contract = target / 'engineering/contracts/openapi/factory-result-admission.v2.json'
+            contract.unlink()
+            missing_contract = run('factory.tests.test_result_admission_api.ResultEnvelopeV2Tests.test_v2_schema_and_openapi_embed_the_same_canonical_contract')
+            self.assertNotEqual(missing_contract.returncode, 0, 'missing OpenAPI input silently passed')
+            self.assertIn('factory-result-admission.v2.json', missing_contract.stderr)
+
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
+    def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
+        code = """
+import hashlib, json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'problems': evidence.get('problems'),
+                  'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', [])),
+                  'qualified_skips': len(evidence.get('skipped', [])),
+                  'required': len(evidence.get('required_ids', [])),
+                  'collected_ids_digest': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
+                  'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
+                  'unqualified_skips': evidence.get('unqualified_skips')}))
+"""
+        with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
+                tempfile.TemporaryDirectory(prefix='g-', dir=os.path.realpath('/tmp')) as child_temp:
+            target = Path(temporary) / 'c'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(ROOT, target, selection=selection)
+            self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
+            environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    env=environment, text=True, capture_output=True, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertGreater(evidence['collected'], 0)
+            self.assertGreater(evidence['executed'], 0)
+            self.assertEqual(evidence['unqualified_skips'], [])
+            print('installed-factory-unit ' + json.dumps(evidence, sort_keys=True))
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
+    def test_archived_engine_verifier_rejects_consumer_package_shadowing(self):
+        code = """
+import json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'stderr': result.stderr[-1000:], 'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', []))}))
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(ROOT, target, selection=selection)
+            # Bound the launch regression to one real case; complete installed
+            # source discovery has its own archive control above.
+            import shutil
+            shutil.rmtree(target / 'factory/tests')
+            (target / 'factory/tests').mkdir()
+            (target / 'factory/tests/__init__.py').touch()
+            (target / 'factory/tests/test_probe.py').write_text(
+                "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): pass\n")
+            (target / 'getzilla').mkdir()
+            (target / 'getzilla/__init__.py').write_text("raise RuntimeError('consumer shadowed selected engine')\n")
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertEqual(evidence['collected'], 1)
+            self.assertEqual(evidence['executed'], 1)
+
+    def test_factory_consumer_payload_keeps_complete_discovery_sources(self) -> None:
+        entries = MODULE.build_payload(ROOT)
+        names = [entry.path for entry in entries]
+        expected = {path.relative_to(ROOT).as_posix() for path in (ROOT / 'factory/tests').rglob('*.py')
+                    if '__pycache__' not in path.parts}
+        self.assertTrue(expected <= set(names), sorted(expected - set(names)))
+        self.assertEqual(len(names), len(set(names)), 'a managed file must be published only once')
+
+    def test_factory_procfs_applicability_names_only_the_ten_existing_dependent_cases(self):
+        from getzilla.factory_tests import skip_allowance
+        dependent = (
+            'test_crc_and_encrypted_members_fail_closed',
+            'test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded',
+            'test_exact_archive_bounds_are_admitted',
+            'test_external_hardlinks_in_object_generation_manifest_and_active_fail_closed',
+            'test_hostile_zip_matrix_preserves_old_active',
+            'test_manifest_tamper_and_generation_symlink_are_rejected',
+            'test_registry_callback_cannot_redirect_object_writes_or_reads',
+            'test_replay_rechecks_digest_origin_and_lifecycle_authority',
+            'test_restart_and_tenant_repository_symlink_isolation',
+            'test_thread_and_process_competitors_converge_and_reconcile',
+        )
+        prefix = 'factory.tests.test_vibevm_store.VibeVMStoreTests.'
+        reason = ('unsupported-procfs-store', 'requires Linux procfs descriptor reopening')
+        for method in dependent:
+            with self.subTest(method=method):
+                self.assertEqual(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}), reason)
+                for fact in (True, None, 0, 'false'):
+                    self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': fact}))
+                self.assertIsNone(skip_allowance(prefix + method, {}))
+        portable = ('test_provenance_is_exact_and_data_only', 'test_resolve_rechecks_authoritative_graph',
+                    'test_boot_marker_injection_and_corruption_fail',
+                    'test_root_must_be_owner_pinned_and_not_writable_by_others',
+                    'test_missing_procfs_refuses_before_registry_callback_or_data_writes',
+                    'test_procfs_probe_closes_owned_descriptors_and_refuses_wrong_identity', 'test_future_unlisted')
+        for method in portable:
+            self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}))
+
+    def test_factory_procfs_fact_is_measured_and_closes_its_owned_descriptors(self):
+        from getzilla import factory_tests
+        probe = getattr(factory_tests, '_procfs_descriptor_reopen', None)
+        self.assertTrue(callable(probe), 'report applicability requires an independent native fact')
+        opened, actual_open = [], os.open
+        def track(*args, **kwargs):
+            descriptor = actual_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with patch.object(factory_tests.os, 'open', side_effect=track):
+            self.assertIs(type(probe()), bool)
+        for descriptor in set(opened):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        with patch.object(factory_tests.os, 'open', side_effect=FileNotFoundError):
+            self.assertFalse(probe())
+        # Controlled descriptor backends prove both outcomes even on a host
+        # without procfs. This is not a native Linux qualification claim.
+        with tempfile.TemporaryDirectory(prefix='public-procfs-identity-') as temporary:
+            for same in (True, False):
+                opened.clear()
+                def controlled_open(path, flags):
+                    if not opened:
+                        self.assertEqual(path, '/')
+                        descriptor = actual_open(temporary, flags)
+                    else:
+                        self.assertEqual(path, f'/proc/self/fd/{opened[0]}')
+                        descriptor = os.dup(opened[0]) if same else actual_open('/', flags)
+                    opened.append(descriptor)
+                    return descriptor
+                with patch.object(factory_tests.sys, 'platform', 'linux'), \
+                        patch.object(factory_tests.os, 'open', side_effect=controlled_open):
+                    self.assertIs(probe(), same)
+                self.assertEqual(len(opened), 2)
+                for descriptor in set(opened):
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_factory_payload_contains_every_bound_regular_input(self):
+        from getzilla.factory_tests import source_inventory
+        selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+        payload = {entry.path: entry for entry in MODULE.build_payload(ROOT, selection=selection)}
+        inventory = source_inventory(ROOT)
+        self.assertIn('factory/tests/fixtures/codex-0.152.1/success.jsonl', inventory)
+        for name, digest in inventory.items():
+            with self.subTest(path=name):
+                self.assertIn(name, payload)
+                self.assertEqual(hashlib.sha256(payload[name].content).hexdigest(), digest)
+
     def test_runtime_state_is_never_walked_or_counted(self) -> None:
         # A Getzilla checkout used as a workspace fills .getzilla/runtime with worktrees and receipts.
         # They are not payload and must not hit the managed-source entry limit (install plans failed with
@@ -714,17 +954,9 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(
             {path for path in generic_paths if path.startswith("factory/tests/")},
             {
-                "factory/tests/__init__.py",
-                "factory/tests/postgres_fixture_reset.py",
-                "factory/tests/postgres_restart_probe.py",
-                "factory/tests/run_disposable_exit.py",
-                "factory/tests/test_api.py",
-                "factory/tests/test_contracts.py",
-                "factory/tests/test_migrations.py",
-                "factory/tests/test_postgres_integration.py",
-                "factory/tests/test_server.py",
-                "factory/tests/test_service.py",
-                "factory/tests/test_state.py",
+                path.relative_to(ROOT).as_posix()
+                for path in (ROOT / "factory/tests").rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
             },
         )
         self.assertFalse(any("__pycache__" in path for path in generic_paths))

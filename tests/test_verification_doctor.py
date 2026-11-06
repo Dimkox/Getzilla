@@ -318,6 +318,219 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
+    def _public_core_cleanup_checks(self, exitcode: int, *, backend: str = 'pytest-xdist',
+                                    cleanup_target: str = 'tests', cleanup_fails: bool = True):
+        from getzilla import python_test_runner as runner
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+
+        class PublicManager:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, *args):
+                if cleanup_fails:
+                    raise OSError('SYNTHETIC_CLEANUP_VALUE\n' + '\x1b[31mPUBLIC_VALUE' * 80)
+
+        class PublicCancellation:
+            result = None
+
+            def check(self, result):
+                self.result = result
+
+        process = ProcessResult(['public-pytest-metadata'], exitcode,
+                                stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR')
+        coverage = ProcessResult(['public-coverage-metadata'], 0)
+        target = process if cleanup_target == 'tests' else coverage
+        cancellation = PublicCancellation()
+        with runner._output_resource(PublicManager(), {'result': target}, 'public capture', cancellation):
+            pass
+        self.assertIs(cancellation.result, target)
+        self.assertEqual(process.returncode, exitcode)
+        if cleanup_fails:
+            self.assertIn('SYNTHETIC_CLEANUP_VALUE', target.cleanup_error)
+        else:
+            self.assertEqual(target.cleanup_error, '')
+        workers = 2 if backend == 'pytest-xdist' else 0
+        core = CoreTestRun(process, coverage, workers, {'engine': backend}, {})
+
+        def blocked(*args, **kwargs):
+            raise AssertionError('actual test backend is forbidden in this public metadata fixture')
+
+        with contextlib.ExitStack() as stack:
+            guards = [
+                stack.enter_context(patch.object(verification_module, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, 'run_named_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, '_command_check', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_core_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_named_tests', side_effect=blocked)),
+            ]
+            stack.enter_context(patch.object(verification_module, 'core_worker_selection',
+                                            return_value=WorkerSelection(workers, 'configuration')))
+            stack.enter_context(patch.object(verification_module, '_trusted_pytest_metadata', return_value={}))
+            port = stack.enter_context(patch.object(verification_module, 'run_core_tests', return_value=core))
+            checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+            port.assert_called_once_with(ROOT, 'pr', workers)
+            for guard in guards:
+                guard.assert_not_called()
+        return process, checks
+
+    def test_producer_cleanup_effective_pytest_failures_sanitize_both_streams(self) -> None:
+        for exitcode in (0, 1):
+            with self.subTest(exitcode=exitcode):
+                process, checks = self._public_core_cleanup_checks(exitcode)
+                self.assertEqual(process.returncode, exitcode)
+                self.assertEqual([item.status for item in checks], ['fail', 'pass'])
+                self.assertIn(f'exit={exitcode}', checks[0].summary)
+                self.assertIn('test_timeout=900s', checks[0].summary)
+                self.assertFalse('SYNTHETIC' in checks[0].stdout + checks[0].stderr,
+                                 'producer cleanup failure must not publish fixture values')
+                self.assertFalse(any(value in checks[0].stderr for value in ('PUBLIC_VALUE', '\x1b')),
+                                 'cleanup exception text and controls must remain private')
+                self.assertIn('pytest_failure_ids=null', checks[0].stdout)
+                self.assertIn('pytest_failure_ids=null', checks[0].stderr)
+                self.assertIn('cleanup failed:', checks[0].stderr)
+                self.assertLessEqual(len(checks[0].stderr), 12000)
+
+    def test_producer_cleanup_keeps_clean_and_nonpytest_stream_contracts(self) -> None:
+        process, clean = self._public_core_cleanup_checks(0, cleanup_fails=False)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in clean], ['pass', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', clean[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', clean[0].stderr)
+        _, legacy = self._public_core_cleanup_checks(0, backend='unittest')
+        self.assertEqual([item.status for item in legacy], ['fail', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', legacy[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', legacy[0].stderr)
+        self.assertFalse(any(value in legacy[0].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'legacy stream compatibility must not append cleanup exception values')
+        self.assertIn('cleanup failed:', legacy[0].stderr)
+
+    def test_producer_coverage_cleanup_preserves_status_without_exception_values(self) -> None:
+        process, checks = self._public_core_cleanup_checks(0, cleanup_target='coverage')
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in checks], ['pass', 'fail'])
+        self.assertIn('SYNTHETIC_STDOUT', checks[0].stdout)
+        self.assertIn('exit=0', checks[1].summary)
+        self.assertIn('cleanup failed:', checks[1].stderr)
+        self.assertFalse(any(value in checks[1].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'coverage cleanup metadata must not publish exception values')
+        self.assertLessEqual(len(checks[1].stderr), 12000)
+
+    def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
+        output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'
+                  '---- Captured stdout call ----\nSYNTHETIC_CAPTURE\n'
+                  '==== short test summary info ====\n'
+                  'SUBFAILED(layer=hook, command=SYNTHETIC_PARAMETER) '
+                  'tests/test_peer.py::PeerTests::test_close - SYNTHETIC_ASSERTION\n'
+                  '1 failed, 6 passed, 2 errors, 3 skipped, 4 warnings, 2 subtests passed in 0.12s\n')
+        result = verification_module._core_output_excerpt(
+            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
+        self.assertIn('pytest_failure_ids=', result)
+        self.assertIn('SUBFAILED tests/test_peer.py::PeerTests::test_close', result)
+        fields = dict(line.split('=', 1) for line in result.splitlines() if line.startswith('pytest_'))
+        self.assertEqual(json.loads(fields['pytest_failure_ids']),
+                         ['tests/test_peer.py::PeerTests::test_close'])
+        self.assertEqual(json.loads(fields['pytest_reported_terminal_counts']),
+                         {'failed': 1, 'passed': 6, 'errors': 2, 'skipped': 3})
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertNotIn('layer=', result)
+
+    def test_pytest_reported_counts_keep_absent_or_ambiguous_values_unknown(self) -> None:
+        examples = [
+            ('==== FAILURES ====\n1 failed, 7 passed in 1.20s\n',
+             {'failed': 1, 'passed': 7, 'errors': None, 'skipped': None}),
+            ('==== ERRORS ====\n\x1b[31m=== 2 errors, 3 skipped in 0.01s ===\x1b[0m\r\n',
+             {'failed': None, 'passed': None, 'errors': 2, 'skipped': 3}),
+        ]
+        for output, expected in examples:
+            with self.subTest(expected=expected):
+                result = verification_module._core_output_excerpt(output, failed=True)
+                self.assertIn('pytest_reported_terminal_counts=', result)
+                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+                self.assertEqual(json.loads(line.split('=', 1)[1]), expected)
+        unknown = {'failed': None, 'passed': None, 'errors': None, 'skipped': None}
+        for suffix in ('1 failed in 0.1s\n2 failed in 0.2s\n',
+                       '1 failed, 2 failed in 0.1s\n',
+                       '999999999999999999 failed in 0.1s\n',
+                       '-1 failed in 0.1s\n',
+                       '1 failed in 0.1s\nSYNTHETIC_TRAILING\n',
+                       '---- Captured stdout call ----\n1 failed in 0.1s\n'):
+            with self.subTest(suffix_length=len(suffix)):
+                result = verification_module._core_output_excerpt('==== FAILURES ====\n' + suffix, failed=True)
+                self.assertIn('pytest_reported_terminal_counts=', result)
+                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+                self.assertEqual(json.loads(line.split('=', 1)[1]), unknown)
+                self.assertNotIn('SYNTHETIC', result)
+
+    def test_known_pytest_failure_without_markers_does_not_return_raw_tail(self) -> None:
+        result = verification_module._core_output_excerpt(
+            'malformed SYNTHETIC_CAPTURE_AND_COMMAND\n', failed=True, pytest_output=True)
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertIn('pytest_failure_ids=null', result)
+
+    def test_pytest_identity_is_unavailable_for_ambiguous_or_untrusted_subtest(self) -> None:
+        trusted = {'tests/test_peer.py': (100, {'PeerTests::test_close', 'PeerTests::test_other'})}
+        for summary in (
+            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_other ) '
+            'tests/test_peer.py::PeerTests::test_close - SYNTHETIC\n',
+            'SUBFAILED(SYNTHETIC) tests/test_peer.py::PeerTests::test_unknown\n',
+            'SUBFAILED(SYNTHETIC) /tests/test_peer.py::PeerTests::test_close\n',
+            'SUBFAILED(SYNTHETIC) tests/../test_peer.py::PeerTests::test_close\n',
+            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_close ) invalid-node\n',
+        ):
+            with self.subTest(summary_length=len(summary)):
+                result = verification_module._core_output_excerpt(
+                    '==== FAILURES ====\ntests/test_peer.py:67: AssertionError\n'
+                    '==== short test summary info ====\n' + summary, failed=True, trusted=trusted)
+                self.assertIn('tests/test_peer.py:67', result)
+                self.assertIn('pytest_failure_ids=null', result)
+                self.assertNotIn('::test_', result)
+                self.assertNotIn('SYNTHETIC', result)
+
+    def test_pytest_parameter_ids_and_controls_never_enter_structured_identity(self) -> None:
+        output = ('==== FAILURES ====\n==== short test summary info ====\n'
+                  'FAILED tests/test_peer.py::PeerTests::test_close[SYNTHETIC_VALUE] - SYNTHETIC_ASSERTION\n')
+        result = verification_module._core_output_excerpt(
+            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
+        self.assertIn('pytest_failure_ids=', result)
+        self.assertNotIn('SYNTHETIC', result)
+        for identity in ('tests/test_peer.py::PeerTests::test_close\x1b]8;;SYNTHETIC',
+                         'tests/test_peer.py::PeerTests::test_close.SYNTHETIC',
+                         'tests/test_peer.py::PeerTests::' + 'test_' + 'x' * 200):
+            result = verification_module._core_output_excerpt(
+                '==== FAILURES ====\nFAILED ' + identity + '\n', failed=True,
+                trusted={'tests/test_peer.py': (100, {'PeerTests::test_close', identity.split('::', 1)[1]})})
+            self.assertIn('pytest_failure_ids=null', result)
+            self.assertNotIn('SYNTHETIC', result)
+
+    def test_pytest_diagnostic_scan_and_records_stay_bounded(self) -> None:
+        output = '==== FAILURES ====\n' + ('SYNTHETIC_VALUE\n' * 160000) + '1 failed in 0.1s\n'
+        result = verification_module._core_output_excerpt(output, failed=True)
+        self.assertLessEqual(len(result), 12000)
+        self.assertNotIn('SYNTHETIC', result)
+        self.assertIn('pytest_reported_terminal_counts=', result)
+        line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
+        self.assertTrue(all(value is None for value in json.loads(line.split('=', 1)[1]).values()))
+
+    def test_known_pytest_caller_sanitizes_both_streams_without_changing_result(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        core = CoreTestRun(ProcessResult(['pytest'], 1, stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR'),
+                           ProcessResult(['coverage'], 1), 2, {'engine': 'pytest-xdist'}, {})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tests').mkdir()
+            with patch.object(verification_module, '_trusted_pytest_metadata', return_value={}), \
+                    patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(2, 'configuration')), \
+                    patch.object(verification_module, 'run_core_tests', return_value=core):
+                checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
+        self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+        self.assertNotIn('SYNTHETIC', checks[0].stdout + checks[0].stderr)
+        self.assertIn('workers=2 exit=1', checks[0].summary)
+        self.assertIn('test_timeout=900s', checks[0].summary)
+
     def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
         failure = ('================ FAILURES ================\n'
                    'tests/test_peer.py:174: AssertionError: secret-token-123\n'
@@ -2137,7 +2350,7 @@ class QualityContourTests(unittest.TestCase):
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             recorded: list[str] = []
-            real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
+            real_check = verification_module._command_check
 
             def fake_exists(name: str) -> bool:
                 if name == 'ruff':
@@ -2490,6 +2703,31 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertIsNotNone(checks['factory-postgres-exit'].command)
             self.assertEqual(os.environ.get('GETZILLA_VERIFY_CAPABILITY'), 'repository-sandbox')
 
+    def test_missing_or_altered_factory_report_blocks_postgres_dispatch(self):
+        for mutation in ('missing', 'altered'):
+            def corrupt(report):
+                if mutation == 'missing':
+                    report.unlink()
+                else:
+                    document = json.loads(report.read_text(encoding='utf-8'))
+                    document['executed'] = []
+                    report.write_text(json.dumps(document), encoding='utf-8')
+
+            with self.subTest(mutation=mutation), self.python_tree(factory_report_mutator=corrupt) as root:
+                executed = []
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    executed.append(name)
+                    return CheckResult(name, 'pass', 'dispatch fixture', command=args)
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    checks = {item.name: item for item in _python(root, 'pr')}
+                self.assertEqual(checks['factory-unit'].status, 'fail')
+                self.assertNotIn('factory-postgres-exit', executed)
+                self.assertEqual(checks['factory-postgres-exit'].status, 'skip')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['blocked_by'], 'factory-unit')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['execution'], 'not_executed')
+
     def test_early_refusal_still_detects_mutation_and_refuses_receipt(self):
         with self.routed_tree() as (root, route):
             def refusal(project, files):
@@ -2544,7 +2782,7 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertTrue(all(item.status == 'skip' and item.command is None for item in checks[1:]))
 
     @contextlib.contextmanager
-    def python_tree(self):
+    def python_tree(self, *, factory_report_mutator=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for rel in ('tests', 'pilot/tests', 'factory/tests'):
@@ -2552,10 +2790,34 @@ class FailFastVerificationTests(unittest.TestCase):
             for rel in ('tests/test_ok.py', 'pilot/tests/test_ok.py', 'factory/tests/test_contracts.py',
                         'factory/tests/run_disposable_exit.py', 'factory/pyproject.toml'):
                 (root / rel).write_text('# dispatch fixture\n')
+            for rel in ('factory/__init__.py', 'factory/tests/__init__.py'):
+                (root / rel).write_text('')
+            (root / 'factory/tests/test_contracts.py').write_text(_PASSING_UNITTEST)
+            factory_unit = verification_module._factory_unit
+            actual_command = verification_module._command_check
+
+            def bound_factory_unit(project):
+                dispatch_command = verification_module._command_check
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    selected = dispatch_command(project, name, args, timeout, **kwargs)
+                    # Dispatch tests stub command outcomes. A successful Factory
+                    # child must still produce its real source-bound report.
+                    if selected.status != 'pass':
+                        return selected
+                    result = actual_command(project, name, args, timeout, **kwargs)
+                    if factory_report_mutator is not None:
+                        factory_report_mutator(Path(args[args.index('--report') + 1]))
+                    return result
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    return factory_unit(project)
+
             with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'ok')), \
                  patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'no non-test python paths')), \
                  patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(None, 'consumer')), \
                  patch.object(verification_module, 'run_core_tests', return_value=None), \
+                 patch.object(verification_module, '_factory_unit', side_effect=bound_factory_unit), \
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \
                  patch.dict(os.environ, {}, clear=False):
                 # The fake dispatcher models a local runner, not the outer CI sandbox.

@@ -4,12 +4,14 @@ import codecs
 import contextlib
 import contextvars
 import fnmatch
+import functools
 import itertools
 import json
 import os
 import posixpath
 import re
 import shlex
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -580,9 +582,14 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
     is marked, never evaluated. Offsets refer to the original command so callers
     can split commands without splitting quoted argument data.
     """
+    budget = _current_invocation_budget()
+    if budget is not None:
+        budget.check()
     tokens: list[_ShellToken] = []
     index = 0
     while index < len(text):
+        if budget is not None:
+            budget.check()
         if text[index] in ' \t\r':
             index += 1
             continue
@@ -595,6 +602,8 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
         quote = ''
         expansion = substitution = opaque = False
         while index < len(text):
+            if budget is not None and index % 256 == 0:
+                budget.check()
             char = text[index]
             if quote == "'":
                 if char == "'":
@@ -630,6 +639,8 @@ def _shell_tokens(text: str) -> list[_ShellToken]:
         if quote:
             raise ValueError('unfinished shell quote')
         values = _split_words(text[start:index])
+        if budget is not None:
+            budget.check()
         if len(values) != 1:
             raise ValueError('unsupported shell word')
         tokens.append(_ShellToken(values[0], start, index, expansion=expansion,
@@ -2673,8 +2684,63 @@ class _Budget:
 
     def tick(self) -> None:
         self._entries += 1
+        self.check()
+
+    def check(self) -> None:
         if self._entries > _SCAN_ENTRY_LIMIT or time.monotonic() > self._deadline:
             raise _BudgetExceeded
+
+
+@dataclass
+class _InvocationScope:
+    budget: _Budget
+    pid: int
+    thread: int
+    active: bool = True
+
+
+_INVOCATION_SCOPE: contextvars.ContextVar[_InvocationScope | None] = contextvars.ContextVar(
+    'policy_invocation_budget', default=None,
+)
+
+
+def _current_invocation_budget() -> _Budget | None:
+    scope = _INVOCATION_SCOPE.get()
+    if scope is not None:
+        if scope.active and scope.pid == os.getpid() and scope.thread == threading.get_ident():
+            return scope.budget
+        # A copied context cannot adopt another invocation's resource lifetime.
+        _INVOCATION_SCOPE.set(None)
+    return None
+
+
+@contextlib.contextmanager
+def _invocation_budget():
+    parent = _current_invocation_budget()
+    scope = _InvocationScope(parent if parent is not None else _Budget(), os.getpid(), threading.get_ident())
+    token = _INVOCATION_SCOPE.set(scope)
+    try:
+        scope.budget.check()
+        yield scope.budget
+    finally:
+        scope.active = False
+        _INVOCATION_SCOPE.reset(token)
+
+
+def _bounded_invocation(fallback):
+    """Bound all public preprocessing and scans without retaining command data."""
+    def decorate(function):
+        @functools.wraps(function)
+        def bounded(*args, **kwargs):
+            try:
+                with _invocation_budget() as budget:
+                    result = function(*args, **kwargs)
+                    budget.check()
+                    return result
+            except _BudgetExceeded:
+                return fallback
+        return bounded
+    return decorate
 
 
 def _brace_options(body: str) -> list[str]:
@@ -3219,6 +3285,7 @@ _SECRET_SCAN_CACHE: dict[tuple[str, str, tuple[str, ...], bool, bytes], str | No
 _GH_OPAQUE_MARKER = 'unresolved GitHub CLI shell expansion'
 
 
+@_bounded_invocation(_BUDGET_MARKER)
 def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
@@ -3245,7 +3312,7 @@ def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str
     if _gh_has_opaque_shell_words(command):
         # A text role cannot hide a file option introduced by shell expansion.
         return _GH_OPAQUE_MARKER
-    budget = _Budget()
+    budget = _current_invocation_budget()
     result: str | None = None
     try:
         handoffs = _consumer_handoffs(root, command)
@@ -3275,6 +3342,7 @@ def _agent_type(tool_input: Any) -> str | None:
     return None
 
 
+@_bounded_invocation((False, f'Policy resource budget exhausted: {_BUDGET_MARKER}'))
 def evaluate_pre_tool(
     root: Path,
     event: dict[str, Any],
@@ -3392,7 +3460,7 @@ def evaluate_pre_tool(
         normalized.append(rel)
 
     if is_read:
-        budget = _Budget()
+        budget = _current_invocation_budget()
         is_grep = isinstance(tool_input, dict) and lowered_tool == 'grep'
         glob_filter = tool_input.get('glob') if is_grep else None
         glob_filter = glob_filter if isinstance(glob_filter, str) and glob_filter else None
