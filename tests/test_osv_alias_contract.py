@@ -17,7 +17,7 @@ from tests.test_security_intelligence import NOW, epss_payload, kev_payload
 MISSING = object()
 ADVISORY = 'GHSA-alias-contract-fixture'
 CVE = 'CVE-2026-12345'
-INVALID = (CVE, None, {}, 1, True, [1], [None], [{}], [''], [' '], ['CVE-2026-12345\n'])
+INVALID = (CVE, {}, 1, True, [1], [None], [{}], [''], [' '], ['CVE-2026-12345\n'])
 
 
 def record(aliases=MISSING):
@@ -56,7 +56,7 @@ class OnlineAliasTests(unittest.TestCase):
         return known_vulns.query_online([dependency], fetch=fetch)[0]
 
     def test_online_preserves_valid_optional_aliases_without_coercion(self):
-        for value, expected in ((MISSING, []), ([], []), ([CVE, 'x_fixture:2026_1'], [CVE, 'x_fixture:2026_1'])):
+        for value, expected in ((MISSING, []), (None, []), ([], []), ([CVE, 'x_fixture:2026_1'], [CVE, 'x_fixture:2026_1'])):
             with self.subTest(value=value):
                 self.assertEqual(self.query(value).aliases, expected)
         for value in INVALID:
@@ -84,7 +84,7 @@ class SnapshotAliasTests(unittest.TestCase):
                 self.assertEqual(pointer.read_bytes(), previous)
                 payload, _ = security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
                 self.assertEqual(payload, archive([CVE]))
-        for value in (MISSING, [], [CVE, 'x_fixture:2026_1']):
+        for value in (MISSING, None, [], [CVE, 'x_fixture:2026_1']):
             with self.subTest(valid=value):
                 self.assertTrue(all(item['status'] == 'pass' for item in refresh(self.database, value)))
 

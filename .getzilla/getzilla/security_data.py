@@ -113,6 +113,8 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     if not isinstance(record, dict):
         raise SecurityDataError('OSV aliases require a record object')
     aliases = record.get('aliases', [])
+    if aliases is None:
+        return []
     if (not isinstance(aliases, list) or not all(
             isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases)):
         raise SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers')
@@ -209,6 +211,8 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('OSV withdrawn must be a timezone-aware RFC 3339 timestamp')
                     _timestamp(withdrawn)
                 affected = record.get('affected', [])
+                if affected is None and 'withdrawn' in record:
+                    affected = []
                 if not isinstance(affected, list) or (not affected and not record.get('withdrawn')):
                     raise ValueError('OSV record lacks affected package coverage')
                 matches = default_match = named_evidence = supplement = False
