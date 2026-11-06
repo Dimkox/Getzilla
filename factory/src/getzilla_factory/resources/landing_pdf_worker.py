@@ -13,12 +13,18 @@ def emit(**values):
 
 def main():
     # Set limits before importing the parser or reading untrusted PDF bytes.
-    resource.setrlimit(resource.RLIMIT_CPU, (5, 6))
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1_048_576, 512 * 1_048_576))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-    resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (5, 6))
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1_048_576, 512 * 1_048_576))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+        resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+    except (OSError, ValueError, MemoryError):
+        # Precomputed bytes also avoid allocating a diagnostic under a failed
+        # memory limit. Never retry parsing with a disabled or larger limit.
+        sys.stdout.buffer.write(b'{"schema_version":1,"error":"pdf_sandbox_unavailable"}')
+        return
     try:
         from importlib.metadata import version
         if version("pypdf") != "6.21.4":

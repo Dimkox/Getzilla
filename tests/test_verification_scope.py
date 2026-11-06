@@ -1032,7 +1032,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
     scope into the runner and stay green while the receipt advertises a profile it did not run.
     """
 
-    def _repo(self, root: Path, omit: tuple[str, ...] = ()) -> tuple[object, str]:
+    def _repo(self, root: Path, omit: tuple[str, ...] = (), *, incomplete_legacy: bool = False) -> tuple[object, str]:
         git = _init_repo(root)
         (root / 'tests').mkdir()
         (root / 'tests' / '__init__.py').write_text('', encoding='utf-8')
@@ -1055,7 +1055,7 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         (root / 'PROJECT_STATE.json').write_text('{"version": "1.0.0"}\n', encoding='utf-8')
         package = root / 'engineering/changes/20261004-scope-fixture'
         package.mkdir(parents=True)
-        (package / 'change-spec.yaml').write_text(json.dumps({
+        declaration = {
             'schema_version': 2, 'change_id': '20261004-scope-fixture',
             'objective': {'id': 'OBJ-001', 'statement': 'scope probe', 'success_metric': 'selected', 'target': 'all'},
             'risk': {'tier': 'green', 'domains': []},
@@ -1064,7 +1064,13 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
             'contracts': {'openapi': [], 'json_schema': [], 'events': []},
             'observability': [], 'rollback': {'strategy': 'forward_fix', 'maximum_steps': 1},
             'approvals': {'required_scopes': []},
-        }))
+        }
+        (package / 'change-spec.yaml').write_text(json.dumps(declaration))
+        # These are fixture inputs, not successor changes. The selected package
+        # below is created by the real lifecycle, including its accounting rows.
+        shutil.copytree(ROOT / '.getzilla/templates/change', root / '.getzilla/templates/change')
+        (root / 'schemas').mkdir()
+        shutil.copyfile(ROOT / 'schemas/change-spec.schema.json', root / 'schemas/change-spec.schema.json')
         git('add', '.')
         git('commit', '-qm', 'baseline')
         base = _git_head(root)
@@ -1080,18 +1086,50 @@ class VerifyDocsStateScopeEndToEndTests(unittest.TestCase):
         # promotion/refusal has its own integration coverage.
         route.update(delivery_lane='full', review_agents=['code_reviewer', 'test_reviewer'],
                      required_evidence=['verification', 'code_review', 'test_review'])
-        # This historical tracked-package fixture predates the task envelope.
-        # Preserve that compatibility arm; modern context is exercised separately.
+        # Exercise normalization of an owned historical route. The tracked spec
+        # remains a docs/range input; it is not a complete selected package.
         for field in ('task_context_version', 'logical_task_id', 'origin_session_id', 'authority_epoch',
                       'state_revision', 'workspace', 'context', 'handoff'):
             route.pop(field, None)
         activate_owned_route(root, route)
-        from getzilla.state import set_active_change
-        set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})
+        if incomplete_legacy:
+            from getzilla.state import set_active_change
+            set_active_change(root, {'change_id': '20261004-scope-fixture', 'path': 'engineering/changes/20261004-scope-fixture'})
+        else:
+            from getzilla.change import start_change
+            from getzilla.state import get_active_change, get_active_route
+            created = start_change(root)
+            selected = get_active_change(root)
+            # Package creation leaves scope UNKNOWN until it is declared. Use
+            # this fixture's actual declaration, with the generated identity;
+            # no approval, receipt or accounting outcome is manufactured.
+            declaration['change_id'] = selected['change_id']
+            (root / selected['path'] / 'change-spec.yaml').write_text(json.dumps(declaration))
+            self.assertEqual(get_active_route(root)['change_id'], selected['change_id'])
+            self.assertEqual(created['status'], 'draft')
+            self.assertTrue(created['evidence_accounting']['obligations'])
+            self.assertTrue(all(row['status'] == 'not_run' for row in created['evidence_accounting']['obligations']))
         return git, base
 
     def _checks(self, report: dict[str, object]) -> dict[str, str]:
         return {str(item['name']): str(item['status']) for item in report['checks']}
+
+    def test_incomplete_legacy_package_refuses_before_running_either_profile(self) -> None:
+        with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:
+            root = Path(tmp)
+            git, _ = self._repo(root, incomplete_legacy=True)
+            (root / 'README.md').write_text('# probe\n\nidentity 1.0.1\n', encoding='utf-8')
+            git('add', '.')
+            git('commit', '-qm', 'docs successor with incomplete legacy package')
+
+            report = verify(root, mode='pr', record=False)
+
+            self.assertTrue(report['docs_state_scope']['eligible'])
+            refusal = next(item for item in report['checks'] if item['name'] == 'diff-risk')
+            self.assertEqual(refusal['status'], 'fail')
+            self.assertIn('selected accounting package does not match task', refusal['summary'])
+            self.assertEqual(self._checks(report).get('python-focused-unittest'), 'skip')
+            self.assertFalse((root / 'full-suite-executed.marker').exists())
 
     def test_verify_selects_and_runs_the_focused_profile_for_a_docs_only_successor(self) -> None:
         with tempfile.TemporaryDirectory(prefix='grok-scope-verify-') as tmp:

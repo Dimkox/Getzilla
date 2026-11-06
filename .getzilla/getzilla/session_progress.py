@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import re
 import secrets
 import shlex
 import stat
+import sys
 import time
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -151,7 +153,17 @@ def _validate(state):
 
 
 def _regular(parent, name, flags, limit):
-    descriptor = fsx.open_at(parent, name, flags | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC, 0o600)
+    # Darwin CI returned ENOENT at this fixed guard's creation open. Bound
+    # only that leaf syscall on the retained parent, never later admission IO.
+    guard_create = (name == Path(LOCK).name and flags == (os.O_RDWR | os.O_CREAT) and limit == 1)
+    attempts = 3 if sys.platform == 'darwin' and guard_create else 1
+    for attempt in range(attempts):
+        try:
+            descriptor = fsx.open_at(parent, name, flags | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC, 0o600)
+            break
+        except OSError as error:
+            if error.errno != errno.ENOENT or attempt + 1 == attempts:
+                raise
     try:
         opened, named = os.fstat(descriptor), fsx.lstat_at(parent, name)
         if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or opened.st_mode & 0o111

@@ -59,7 +59,7 @@ FITNESS_CATEGORIES = (
 RISK_ORDER = {"green": 0, "yellow": 1, "red": 2}
 MAX_ANALYZED_PYTHON_FILES = 2_000
 MAX_ANALYZED_AST_NODES = 200_000
-MAX_QUEUE_ADAPTER_MODULES = 48
+MAX_QUEUE_ADAPTER_MODULES = 64
 MAX_QUEUE_ANALYSIS_BYTES = 2 * 1024 * 1024
 MAX_QUEUE_ANALYSIS_AST_NODES = 400_000
 MAX_QUEUE_ANALYSIS_WORK = 4096
@@ -3523,7 +3523,7 @@ def _queue_signals(
     cache: _QueueResolutionCache,
     current_package: str,
     source_roots: tuple[str, ...],
-    *, source_path: str = '<importer>', source: bytes | None = None,
+    *, source_path: str = '<importer>', source: bytes | None = None, complete_module: bool = False,
     budget: _QueueBudget | None = None,
 ) -> _QueueProvenanceResult:
     budget = budget if budget is not None else _QueueBudget(side)
@@ -3544,7 +3544,8 @@ def _queue_signals(
         budget=budget,
     )
     try:
-        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules)
+        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules,
+                                      complete_module=complete_module)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
     if adapters.unproved_queue_callback:
@@ -3575,6 +3576,8 @@ def _new_queue_sources(
             head_value = read_diff_file(root, diff, path, 'head') or b''
             head_budget = _QueueBudget('head')
             head_budget.source(path, head_value)
+            # These two boundaries retain complete parsed source scopes.
+            # Synthetic export/return consumers do not grant module provenance.
             head = _queue_signals(
                 root,
                 diff,
@@ -3583,7 +3586,7 @@ def _new_queue_sources(
                 head_cache,
                 current_package,
                 source_roots,
-                source_path=path, source=head_value, budget=head_budget,
+                source_path=path, source=head_value, budget=head_budget, complete_module=True,
             )
             side = "base"
             base_value = read_diff_file(root, diff, path, "base")
@@ -3602,7 +3605,7 @@ def _new_queue_sources(
                     base_cache,
                     current_package,
                     source_roots,
-                    source_path=path, source=base_value, budget=base_budget,
+                    source_path=path, source=base_value, budget=base_budget, complete_module=True,
                 )
             delta = set(head.signals) - set(base.signals)
             if delta:

@@ -6153,8 +6153,10 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
         import psycopg
 
         migrations = discover_migrations()
-        if len(migrations) != 23:
-            raise AssertionError("fresh-cluster test requires migrations 001..023")
+        if (len(migrations) != 25 or
+                [item.version for item in migrations] != list(range(1, 26)) or
+                migrations[14].name != "015_execution_canonical_persistence.sql"):
+            raise AssertionError("fresh-cluster test requires the complete current migration history 001..025")
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT to_regnamespace('factory'),to_regrole('factory_artifact_attestor')")
@@ -6217,17 +6219,7 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
         applied = PostgresMigrator(FRESH_CLUSTER_DATABASE_URL).apply()
         self.assertEqual(
             [(item.version, item.name) for item in applied],
-            [
-                (15, "015_execution_canonical_persistence.sql"),
-                (16, "016_contract_execution_canonical_persistence.sql"),
-                (17, "017_execution_recovery_topology.sql"),
-                (18, "018_semantic_validation_bridge.sql"),
-                (19, "019_usage_token_components.sql"),
-                (20, "020_execution_v2_priced_usage.sql"),
-                (21, "021_semantic_repair_child_rejection_reasons.sql"),
-                (22, "022_semantic_repair_plan_rejection_reasons.sql"),
-                (23, "023_factory_v15_decisions.sql"),
-            ],
+            [(item.version, item.name) for item in discover_migrations()[14:]],
         )
         self.assertEqual(PostgresMigrator(FRESH_CLUSTER_DATABASE_URL).apply(), ())
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
@@ -6286,8 +6278,11 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
                     set(cursor.fetchone()[0]),
                     {connection.info.user, "factory_artifact_attestor"},
                 )
-                cursor.execute("SELECT max(version) FROM factory.schema_migrations")
-                self.assertEqual(cursor.fetchone()[0], 23)
+                cursor.execute("SELECT version,name,sha256 FROM factory.schema_migrations ORDER BY version")
+                self.assertEqual(
+                    cursor.fetchall(),
+                    [(migration.version, migration.name, migration.sha256) for migration in discover_migrations()],
+                )
 
 if __name__ == "__main__":
     unittest.main()

@@ -119,7 +119,7 @@ def extract_pdf_text(payload: bytes) -> str:
         if set(document) == {"schema_version", "error"} and document["schema_version"] == 1:
             reason = document["error"]
             if reason in {"pdf_encrypted", "pdf_page_limit", "pdf_empty_or_scanned", "pdf_text_limit",
-                          "pdf_parser_unavailable", "pdf_invalid"}:
+                          "pdf_parser_unavailable", "pdf_sandbox_unavailable", "pdf_invalid"}:
                 raise LandingMediaError(reason)
         if set(document) != {"schema_version", "text"} or document["schema_version"] != 1:
             raise LandingMediaError("pdf_decoder_protocol")

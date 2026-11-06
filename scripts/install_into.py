@@ -73,6 +73,7 @@ MANAGED_FILES = (
     "scripts/getzilla_vulns.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
+    "scripts/getzilla_components.py",
     "scripts/getzilla_doctor.py",
     "scripts/getzilla_status.py",
     "scripts/getzilla_agent.py",
@@ -80,6 +81,8 @@ MANAGED_FILES = (
     "docs/deploy-preflight.md",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
+    "scripts/getzilla_platform_install.py",
+    "scripts/getzilla_update.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
@@ -94,6 +97,9 @@ MANAGED_FILES = (
     "ruff.toml",
     "bandit.yaml",
     ".coveragerc",
+    "schemas/optional-module-v1.schema.json",
+    "schemas/optional-module-registry-v1.schema.json",
+    "docs/optional-modules.md",
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
@@ -121,7 +127,7 @@ ROOT_HOOK_SHIMS = frozenset(
     }
 )
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".getzilla/runtime/",)
+SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -642,6 +648,8 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
+                continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
                 metadata = fsx.lstat_at(descriptor, name)
             except OSError as exc:
@@ -860,7 +868,10 @@ def build_payload(
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
     if selection.engine_archive:
-        engine = [entry for entry in payload if entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+        engine_selection = PayloadSelection(selection.agents, factory=selection.factory, full=selection.full,
+                                            compliance=selection.compliance, extras=selection.extras,
+                                            root_shims=selection.root_shims, engine_archive=False)
+        engine = [entry for entry in payload if engine_selection.includes(entry.path) and entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
                   and "/__pycache__/" not in entry.path]
         chosen += (engine_archive_entry(engine),)
     if selection.compliance:
@@ -1168,12 +1179,13 @@ def _make_plan(
     include_dependencies: bool,
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
+    full_payload: tuple[InstallEntry, ...] | None = None,
     selection: PayloadSelection | None = None,
     accepted_kept_digests: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    full_payload = build_payload(source)
+    full_payload = build_payload(source) if full_payload is None else full_payload
     selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
     if state == "absent" and payload is None:
@@ -1679,10 +1691,12 @@ def _materialize_new(
     include_dependencies: bool,
     include_optional: bool,
     selection: PayloadSelection | None = None,
+    prepared_payload: tuple[InstallEntry, ...] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    payload = with_fresh_sync_record(build_payload(source, selection=selection), selection)
+    payload = (with_fresh_sync_record(build_payload(source, selection=selection), selection)
+               if prepared_payload is None else prepared_payload)
     plan = _make_plan(
         source,
         target,
@@ -1690,6 +1704,7 @@ def _materialize_new(
         include_optional=include_optional,
         payload=payload,
         selection=selection,
+        full_payload=prepared_payload,
     )
     if plan["target_state"] != "absent":
         raise UnsafeInstallTarget("materialization requires an absent target")

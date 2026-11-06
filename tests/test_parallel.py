@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shlex
@@ -9,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timezone
@@ -389,11 +391,82 @@ class BatchTests(unittest.TestCase):
     @unittest.skipIf(fsx.WINDOWS, 'POSIX exec descriptor-closure control')
     def test_timeout_still_applies_after_both_output_descriptors_close(self) -> None:
         script = "import os,time; os.close(1); os.close(2); time.sleep(2)"
-        started = time.monotonic()
         jobs, _ = run_batch(self.root, ['exec ' + _python_command(script)],
                             workers=1, cwd=self.root, timeout=0.1)
         self.assertEqual(jobs[0].returncode, 124)
-        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(jobs[0].observed_bytes, 0)
+        self.assertIsNone(jobs[0].refused)
+        self.assertIsNone(jobs[0].log_error)
+        self.assertEqual(jobs[0].log.read_bytes(), b'')
+
+    def test_eof_alive_deadline_stops_before_fallback_wait(self) -> None:
+        # No scheduler or policy-preflight time participates in this oracle.
+        now = [0.0]
+        events = []
+        eof = threading.Event()
+        readers = []
+        clock_calls = [0]
+
+        class ClosedOutput(io.BytesIO):
+            def read(self, size=-1):
+                readers.append(threading.current_thread())
+                return super().read(size)
+
+            def close(self):
+                super().close()
+                eof.set()
+
+        class Process:
+            stdout = ClosedOutput(b'')
+            returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout):
+                events.append('wait')
+                if self.returncode is None:
+                    raise AssertionError('fallback wait reached a live process')
+                return self.returncode
+
+        def capture_clock():
+            clock_calls[0] += 1
+            if clock_calls[0] == 1:
+                return 0.0  # Capture begins before the actual reader starts.
+            self.assertTrue(eof.wait(1), 'closed reader must reach EOF')
+            readers[0].join(1)
+            self.assertFalse(readers[0].is_alive(), 'real reader must finish')
+            # First loop stays before deadline; after EOF a second iteration
+            # requires the producer-alive predicate, independently of scheduling.
+            now[0] = 0.0 if clock_calls[0] == 2 else 0.1
+            if clock_calls[0] > 5:
+                raise AssertionError('capture deadline did not stop producer')
+            return now[0]
+
+        process = Process()
+
+        def stop(selected, job):
+            self.assertIs(selected, process)
+            self.assertTrue(process.stdout.closed, 'EOF must precede stop')
+            self.assertGreaterEqual(now[0], 0.1, 'stop must come from the expired capture deadline')
+            self.assertNotIn('wait', events, 'deadline stop must precede fallback wait')
+            events.append('stop')
+            process.returncode = -9
+
+        directory = fsx.open_dir(self.root)
+        try:
+            job = parallel.Job(0, 'inert-public-producer')
+            with mock.patch.object(parallel.time, 'monotonic', side_effect=capture_clock), \
+                 mock.patch.object(parallel, '_stop_process', side_effect=stop), \
+                 mock.patch.object(fsx, 'owned_job', return_value=None):
+                parallel._capture(job, directory, self.root, 64, 0.1, lambda *args, **kwargs: process)
+        finally:
+            fsx.close_dir(directory)
+        self.assertEqual(job.returncode, 124)
+        self.assertEqual(events, ['stop', 'stop', 'wait'])
+        self.assertEqual(job.observed_bytes, 0)
+        self.assertIsNone(job.log_error)
+        self.assertEqual((self.root / '000.log').read_bytes(), b'')
 
     @unittest.skipIf(fsx.WINDOWS, 'POSIX SIGINT and process-group control')
     def test_main_thread_interrupt_stops_owned_group_before_returning(self) -> None:
