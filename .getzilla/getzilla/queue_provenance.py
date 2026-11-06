@@ -51,13 +51,15 @@ _CONTAINER_MUTATORS = {
 MAX_DOTTED_IMPORT_DEPTH = 256
 
 
-def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
+def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False) -> ast.AST:
     """Classify only stable stdlib Empty/Full exception uses as non-queue.
 
     Repository callers must first rule out a local queue module. Escapes,
     rebinding, reflection and unknown mock replacement keep ordinary policy.
     Visible selectors/addresses need canonical-use proof; this does not prove
     hidden effects of ordinary helpers.
+    Special module-prefix proof requires complete source syntax; synthetic
+    consumers leave complete_module false and retain ordinary governance.
     This projection never executes imports or modifies the caller's AST.
     """
     nodes = list(ast.walk(tree))
@@ -67,7 +69,8 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
     if not imports or not namespace_is_closed(tree, allow_instrumentation=True):
         return tree
     parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
-    counts = Counter(event.name for event in binding_events(tree))
+    bindings = binding_events(tree)
+    counts = Counter(event.name for event in bindings)
     loads = {}
     for node in nodes:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
@@ -106,6 +109,59 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
     mock_namespaces = {p.rsplit('.', 1)[0] for p in patch_names if '.' in p}
     exception_names = {alias.asname or alias.name for node in imports for alias in node.names
                        if alias.name in {'Empty', 'Full'}}
+    module_name = '__name__'
+    prefix_loads = {
+        id(node.args[0].left)
+        for node in nodes if isinstance(node, ast.Call) and dotted(node.func) in patch_calls
+        and node.args and isinstance(node.args[0], ast.BinOp) and isinstance(node.args[0].op, ast.Add)
+        and isinstance(node.args[0].left, ast.Name) and node.args[0].left.id == module_name
+    }
+    if prefix_loads and (not complete_module or not isinstance(tree, ast.Module)):
+        # A flattened body/export slice cannot supply its lost scope provenance.
+        return tree
+    owners = {id(event.node): binding_owner(event.node, parents) for event in bindings} if prefix_loads else {}
+    local_bindings = {owners[id(event.node)] for event in bindings if event.name == module_name} if prefix_loads else set()
+    declarations = {binding_owner(node, parents) for node in nodes
+                    if isinstance(node, (ast.Global, ast.Nonlocal)) and module_name in node.names} if prefix_loads else set()
+    global_writes = {binding_owner(node, parents) for node in nodes
+                     if isinstance(node, ast.Global) and module_name in node.names} if prefix_loads else set()
+    if prefix_loads and any(event.name == module_name and
+                            (owners[id(event.node)] is None or owners[id(event.node)] in global_writes)
+                            for event in bindings):
+        return tree
+
+    def module_origin(reference):
+        """True for implicit module lookup, False for local, None if unresolved.
+
+        binding_owner indexes declarations; it does not resolve runtime loads.
+        Function bodies skip class namespaces, but their headers do not.
+        """
+        current, function_body = reference, False
+        type_scopes = tuple(getattr(ast, name) for name in ('TypeAlias', 'TypeVar', 'ParamSpec', 'TypeVarTuple')
+                            if hasattr(ast, name))
+        for _ in range(MAX_DOTTED_IMPORT_DEPTH):
+            owner = parents.get(current)
+            if owner is None:
+                return None
+            if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                in_body = current is owner.body if isinstance(owner, ast.Lambda) else current in owner.body
+                if not in_body or owner in declarations:
+                    return None
+                if owner in local_bindings:
+                    return False
+                function_body = True
+            elif isinstance(owner, ast.ClassDef):
+                if not function_body or current not in owner.body:
+                    return None
+            elif isinstance(owner, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp, *type_scopes)):
+                return None
+            elif owner is tree:
+                return True
+            current = owner
+        return None
+
+    if prefix_loads and any(module_origin(node) is not True for node in nodes if id(node) in prefix_loads):
+        return tree
     address_names = {}
     for node in imports:
         for alias in node.names:
@@ -113,6 +169,10 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
                 local = alias.asname or alias.name
                 address_names.setdefault(local, set()).add(local)
                 address_names.setdefault(alias.name, set()).add(local)
+    if prefix_loads:
+        # This is a dependency of prefix normalization, not a name blacklist.
+        # The same address and mutation proof must also protect that binding.
+        address_names[module_name] = {module_name}
     approved_literals = set()
 
     # Match pkgutil.resolve_name's positive grammar, without resolving anything.
@@ -256,6 +316,25 @@ def stdlib_exception_projection(tree: ast.AST) -> ast.AST:
         if inside:
             canonical_operands.add(id(node))
         pending.extend((child, inside) for child in ast.iter_child_nodes(node))
+
+    if prefix_loads:
+        if module_name in replaced or any(isinstance(node, ast.Attribute) and node.attr == module_name
+                                         and isinstance(node.ctx, (ast.Store, ast.Del)) for node in nodes):
+            return tree
+        for reference in loads.get(module_name, ()):
+            if id(reference) in prefix_loads:
+                continue
+            origin = module_origin(reference)
+            if origin is False:
+                # An unrelated local gets no special-binding trust here.
+                continue
+            owner = parents.get(reference)
+            passive = isinstance(owner, (ast.Compare, ast.Expr))
+            message = (isinstance(owner, ast.Call) and reference in owner.args
+                       and isinstance(owner.func, ast.Name) and owner.func.id in exception_names
+                       and isinstance(parents.get(owner), ast.Raise) and parents[owner].exc is owner)
+            if origin is not True or not (passive or message):
+                return tree
 
     for node in nodes:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -1793,8 +1872,10 @@ def analyze_queue_tree(
     value_limit: int = 4096,
     loop_limit: int = 8,
     allow_local_ipc: bool = True,
+    complete_module: bool = False,
 ) -> QueueTreeAnalysis:
+    """Analyze values; only full-source callers may opt into module provenance."""
     if allow_local_ipc:
-        tree = stdlib_exception_projection(tree)
+        tree = stdlib_exception_projection(tree, complete_module=complete_module)
         tree = local_byte_channel_projection(tree)
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
