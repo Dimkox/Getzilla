@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shlex
@@ -389,11 +390,82 @@ class BatchTests(unittest.TestCase):
     @unittest.skipIf(fsx.WINDOWS, 'POSIX exec descriptor-closure control')
     def test_timeout_still_applies_after_both_output_descriptors_close(self) -> None:
         script = "import os,time; os.close(1); os.close(2); time.sleep(2)"
-        started = time.monotonic()
         jobs, _ = run_batch(self.root, ['exec ' + _python_command(script)],
                             workers=1, cwd=self.root, timeout=0.1)
         self.assertEqual(jobs[0].returncode, 124)
-        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(jobs[0].observed_bytes, 0)
+        self.assertIsNone(jobs[0].refused)
+        self.assertIsNone(jobs[0].log_error)
+        self.assertEqual(jobs[0].log.read_bytes(), b'')
+
+    def test_eof_alive_deadline_stops_before_fallback_wait(self) -> None:
+        # No scheduler or policy-preflight time participates in this oracle.
+        now = [0.0]
+        events = []
+
+        class Process:
+            stdout = io.BytesIO(b'')
+            returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout):
+                events.append('wait')
+                if self.returncode is None:
+                    raise AssertionError('fallback wait reached a live process')
+                return self.returncode
+
+        class Reader:
+            def __init__(self, *, target, **kwargs):
+                self.target = target
+                self.ident = None
+
+            def start(self):
+                self.target()  # Synchronous EOF, before the deadline loop.
+
+            def is_alive(self):
+                return False
+
+        class EmptyQueue:
+            def __init__(self, **kwargs):
+                pass
+
+            def empty(self):
+                return True
+
+            def get(self, timeout):
+                now[0] += timeout
+                if now[0] > 0.2:
+                    raise AssertionError('deadline did not stop the live producer')
+                raise parallel.Empty
+
+        process = Process()
+
+        def stop(selected, job):
+            self.assertIs(selected, process)
+            self.assertTrue(process.stdout.closed, 'EOF must precede stop')
+            self.assertGreaterEqual(now[0], 0.1, 'stop must come from the expired capture deadline')
+            self.assertNotIn('wait', events, 'deadline stop must precede fallback wait')
+            events.append('stop')
+            process.returncode = -9
+
+        directory = fsx.open_dir(self.root)
+        try:
+            job = parallel.Job(0, 'inert-public-producer')
+            with mock.patch.object(parallel, 'Thread', Reader), \
+                 mock.patch.object(parallel, 'Queue', EmptyQueue), \
+                 mock.patch.object(parallel.time, 'monotonic', side_effect=lambda: now[0]), \
+                 mock.patch.object(parallel, '_stop_process', side_effect=stop), \
+                 mock.patch.object(fsx, 'owned_job', return_value=None):
+                parallel._capture(job, directory, self.root, 64, 0.1, lambda *args, **kwargs: process)
+        finally:
+            fsx.close_dir(directory)
+        self.assertEqual(job.returncode, 124)
+        self.assertEqual(events, ['stop', 'stop', 'wait'])
+        self.assertEqual(job.observed_bytes, 0)
+        self.assertIsNone(job.log_error)
+        self.assertEqual((self.root / '000.log').read_bytes(), b'')
 
     @unittest.skipIf(fsx.WINDOWS, 'POSIX SIGINT and process-group control')
     def test_main_thread_interrupt_stops_owned_group_before_returning(self) -> None:
