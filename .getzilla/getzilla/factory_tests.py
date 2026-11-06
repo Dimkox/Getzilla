@@ -21,7 +21,7 @@ import uuid
 if not __package__:  # Preserve the source-file entrypoint as well as the archived module.
     sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
 from getzilla import fsx
-from getzilla.component_state import BoundRoot, _file_identity
+from getzilla.fsx import ReadOnlyBoundRoot, _file_identity
 
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 MAX_INPUT_BYTES = 4 * 1024 * 1024
@@ -118,8 +118,8 @@ def _ancestry(root: Path) -> dict[str, list[int]]:
 def _source_root(root: Path):
     root = Path(root).absolute()
     ancestry = _ancestry(root)
-    with BoundRoot(root) as bound:
-        # BoundRoot accepts trusted system aliases for other callers. This
+    with ReadOnlyBoundRoot(root) as bound:
+        # The reader accepts trusted system aliases for other callers. This
         # inventory has a stricter lexical contract and never admits an alias.
         if bound.path != root or _ancestry(root) != ancestry:
             raise ValueError("Factory source root changed during binding")
@@ -129,7 +129,7 @@ def _source_root(root: Path):
             raise ValueError("Factory source ancestry changed during reading")
 
 
-def _input_layout(bound: BoundRoot):
+def _input_layout(bound: ReadOnlyBoundRoot):
     files, directories = {}, {}
     entries = 0
 

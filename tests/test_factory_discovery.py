@@ -23,6 +23,20 @@ FAIL = "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self):
 
 @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
 class FactoryDiscoveryTests(unittest.TestCase):
+
+    def test_readonly_source_binding_import_does_not_load_component_owner(self):
+        source_root = Path(__file__).resolve().parents[1] / '.getzilla'
+        script = (
+            'import json,sys; '
+            f'sys.path.insert(0,{str(source_root)!r}); '
+            'import getzilla.factory_tests; '
+            'print(json.dumps({"component_loaded":"getzilla.component_state" in sys.modules}))'
+        )
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', script],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(json.loads(result.stdout)['component_loaded'])
+
     def test_expected_failure_and_unexpected_success_keep_failure_evidence(self):
         source = ("import unittest\nclass Probe(unittest.TestCase):\n"
                   " @unittest.expectedFailure\n def test_expected(self): self.fail('public-sentinel')\n"

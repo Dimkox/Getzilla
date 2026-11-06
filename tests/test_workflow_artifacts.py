@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 import unicodedata
@@ -971,6 +973,83 @@ deferred: []
         self.assertTrue(placeholder.search("TBD"))
         self.assertTrue(placeholder.search("TODO"))
         self.assertFalse(placeholder.search("The status is stable and documented"))
+
+
+class StandalonePlatformImportTests(unittest.TestCase):
+    def _run_public_import(self, program: str, *arguments: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, '-I', '-B', '-c', program, str(ROOT), *arguments],
+                cwd=directory, capture_output=True, text=True, timeout=20,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fresh_standalone_and_canonical_orders_preserve_real_module_and_pickle(self) -> None:
+        program = r"""
+import importlib.util, pickle, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / '.getzilla'))
+def load(path):
+    spec = importlib.util.spec_from_file_location('public_standalone_workflow', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+if sys.argv[2] == 'canonical_first':
+    from getzilla import component_state
+path = root / '.getzilla/getzilla/workflow_artifacts.py'
+first, second = load(path), load(path)
+assert first.fsx is not second.fsx
+assert sys.modules[second.fsx.__name__] is second.fsx
+assert Path(second.fsx.__file__).resolve() == path.with_name('fsx.py').resolve()
+assert second.valid_package_path('.getzilla/runtime/changes/public', 'public')
+from getzilla import component_state, fsx
+assert component_state.FileSnapshot is fsx.FileSnapshot
+value = component_state.FileSnapshot(b'public', 0o644, (1, 2, 3))
+assert pickle.loads(pickle.dumps(value)) == value
+assert value.__class__.__module__ == 'getzilla.component_state'
+"""
+        for order in ('standalone_first', 'canonical_first'):
+            with self.subTest(order=order):
+                self._run_public_import(program, order)
+
+    def test_failed_sibling_execution_restores_prior_module_none_or_absence(self) -> None:
+        self._run_public_import(r"""
+import importlib.util, sys, tempfile
+from pathlib import Path
+root = Path(sys.argv[1])
+original = root / '.getzilla/getzilla/workflow_artifacts.py'
+key, missing = '_getzilla_workflow_artifacts_fsx', object()
+def load(path):
+    spec = importlib.util.spec_from_file_location('public_standalone_workflow', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+for prior in ('absent', 'none', 'loaded'):
+    if prior == 'absent':
+        sys.modules.pop(key, None)
+    elif prior == 'none':
+        sys.modules[key] = None
+    else:
+        actual = load(original).fsx
+        assert sys.modules[key] is actual
+    before = sys.modules.get(key, missing)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / 'workflow_artifacts.py'
+        path.write_bytes(original.read_bytes())
+        path.with_name('fsx.py').write_text(
+            "import sys\nassert sys.modules.get(__name__).__dict__ is globals()\n"
+            "raise RuntimeError('public sibling import failure')\n",
+            encoding='utf-8',
+        )
+        try:
+            load(path)
+        except RuntimeError as error:
+            assert str(error) == 'public sibling import failure'
+        else:
+            raise AssertionError('failed sibling import was swallowed')
+    assert sys.modules.get(key, missing) is before
+""")
 
 
 if __name__ == "__main__":
