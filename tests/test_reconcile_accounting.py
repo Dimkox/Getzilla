@@ -221,7 +221,8 @@ class ReconcileAccountingTests(unittest.TestCase):
         original = json.loads(path.read_text())
         full = copy.deepcopy(original)
         full['evidence_accounting']['obligations'].extend(
-            {'id': f'ordinary-{i}', 'kind': 'run', 'status': 'not_run', 'reason': 'Not run.'} for i in range(62))
+            {'id': f'ordinary-{i}', 'kind': 'run', 'status': 'not_run', 'reason': 'Not run.'}
+            for i in range(package_status.MAX_ACCOUNTING_ROWS - 2))
         padded = copy.deepcopy(original)
         padded['ordinary_padding'] = ['x' * 60000] * 4 + ['']
         def encode(value):
