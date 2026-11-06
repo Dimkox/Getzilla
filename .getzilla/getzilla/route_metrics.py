@@ -4,7 +4,6 @@ Unknown costs stay unknown; failed check outcomes are not confirmed defects.
 from __future__ import annotations
 
 import json
-import os
 import statistics
 from datetime import datetime, timezone
 from .metrics_journal import deduplicate, digest, load, record, source_summary, import_observations, regular  # noqa: F401
@@ -64,12 +63,17 @@ def _when(item: dict[str, Any]) -> datetime:
     return datetime.strptime(item['at'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
 
 
-def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dict[str, Any]:
+def summarize(events: Iterable[dict[str, Any]], root: Path | None = None, *, reader=None) -> dict[str, Any]:
     """Per route: time to the first passing verification, runs, reviews and blocking findings caught.
 
     `coverage` covers the journal only (unreadable or skipped lines). `route_observations` covers
     what each route did not observe (merge, cost, commits); unknown values stay None, never zero.
     """
+    if not getattr(events, 'available', True):
+        return {'routes': None, 'profiles': None, 'sessions': None, 'counters': None,
+                'coverage': {'complete': False, 'gaps': ['local observations unavailable']},
+                'route_observations': {'complete': False, 'routes_with_gaps': None, 'routes': None},
+                'interpretation': 'Local observation counts are unknown.'}
     events = deduplicate(events, getattr(events, 'gaps', []))
     routes: dict[str, dict[str, Any]] = {}
     for item in sorted(events, key=lambda event: event['at']):
@@ -98,7 +102,7 @@ def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dic
         start, done = route['created_at'], route['first_green_at']
         route['minutes_to_pass'] = (round((_when({'at': done}) - _when({'at': start})).total_seconds() / 60, 1)
                                     if start and done else None)
-        route.update(source_summary(events, route['route_id'], root))
+        route.update(source_summary(events, route['route_id'], root, reader=reader))
         route['failed_check_or_review_outcomes'] = route['verify_blocking'] + route['review_blocking']
     profiles: dict[str, dict[str, Any]] = {}
     for route in routes.values():
@@ -122,19 +126,25 @@ def summarize(events: Iterable[dict[str, Any]], root: Path | None = None) -> dic
                          'ended_at': next((item['at'] for item in reversed(selected) if item['event'] == 'session_end'), None)})
     with_gaps = [route['route_id'] for route in routes.values() if route.get('gaps')]
     return {'routes': sorted(routes.values(), key=lambda route: route['created_at'] or ''), 'profiles': profiles, 'sessions': sessions,
-            'coverage': {'complete': not events.gaps, 'gaps': events.gaps},
+            'coverage': {'complete': not events.gaps, 'gaps': events.gaps,
+                         'source_scope': 'canonical_root_only', 'evidence_grade': 'unqualified_legacy_observations'},
             'route_observations': {'complete': not with_gaps, 'routes_with_gaps': len(with_gaps), 'routes': len(routes)},
             'interpretation': 'Grant materializations are not human interventions; check outcomes are not confirmed defects.'}
 
 
-def counters(root: Path) -> dict[str, dict[str, Any]]:
+def counters(root: Path, *, reader=None) -> dict[str, dict[str, Any]]:
+    if reader is None:
+        from .trace_storage import LocalRead
+        try:
+            with LocalRead(root) as owned:
+                return counters(root, reader=owned)
+        except (OSError, ValueError):
+            return {}
     found: dict[str, dict[str, Any]] = {}
+    reader.check_root(root)
     for name, relative in COUNTERS.items():
         try:
-            with regular(root, relative) as descriptor:
-                raw = os.read(descriptor, 65_537)
-            if len(raw) > 65_536:
-                continue
+            raw = reader.read(relative, 65_536)
             data = json.loads(raw)
         except (OSError, ValueError):
             continue

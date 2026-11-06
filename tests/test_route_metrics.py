@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,9 @@ class RecordingTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         (self.root / '.getzilla').mkdir()
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(self.root)
 
     def lines(self) -> list[dict]:
         return [json.loads(line) for line in (self.root / METRICS).read_text(encoding='utf-8').splitlines()]
@@ -101,9 +105,10 @@ class RecordingTests(unittest.TestCase):
 
     def test_nonfinite_and_invalid_timestamp_are_incomplete_not_crashes(self):
         path = self.root / METRICS
-        path.parent.mkdir(parents=True)
+        path.parent.mkdir(parents=True, mode=0o700)
         path.write_text('{"at":"not-a-time","event":"verify","route_id":"r1"}\n'
                         '{"at":"2026-10-18T09:00:00Z","event":"verify","route_id":"r1","blocking":NaN}\n')
+        path.chmod(0o600)
         result = summarize(load(self.root))
         self.assertFalse(result['coverage']['complete'])
         self.assertEqual(result['routes'], [])
@@ -111,8 +116,9 @@ class RecordingTests(unittest.TestCase):
     def test_wrong_field_types_and_bounded_rows_are_rejected(self):
         from getzilla.metrics_journal import MAX_ROW
         path = self.root / METRICS
-        path.parent.mkdir(parents=True)
+        path.parent.mkdir(parents=True, mode=0o700)
         path.write_text(json.dumps(event(0, 'verify', 'r1', blocking='not-a-number')) + '\n' + 'x' * MAX_ROW + '\n')
+        path.chmod(0o600)
         result = summarize(load(self.root))
         self.assertEqual(result['routes'], [])
         self.assertFalse(result['coverage']['complete'])
@@ -204,7 +210,7 @@ class RecordingTests(unittest.TestCase):
 
     def test_report_cli_prints_profiles_and_hook_counters(self) -> None:
         runtime = self.root / '.getzilla' / 'runtime'
-        runtime.mkdir()
+        runtime.mkdir(mode=0o700)
         now = datetime.now(timezone.utc)
         stamps = [(now - timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%SZ') for minutes in (30, 20, 10)]
         (self.root / METRICS).write_text('\n'.join(json.dumps(item) for item in [
@@ -214,6 +220,8 @@ class RecordingTests(unittest.TestCase):
         ]) + '\n', encoding='utf-8')
         (runtime / 'path-hints.json').write_text(json.dumps({'refused': 4, 'hinted': 9, 'named': 7, 'edit_unread_refused': 2}), encoding='utf-8')
         (runtime / 'parallel-guard.json').write_text(json.dumps({'chain': 2, 'loop': 1, 'since': 'x'}), encoding='utf-8')
+        for relative in (METRICS, '.getzilla/runtime/path-hints.json', '.getzilla/runtime/parallel-guard.json'):
+            (self.root / relative).chmod(0o600)
         cli = [sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py')]
         text = subprocess.run([*cli, '--since', '1d'], cwd=self.root, capture_output=True, text=True, check=True).stdout
         self.assertIn('1 route(s)', text)
@@ -235,9 +243,10 @@ class RecordingTests(unittest.TestCase):
 
     def test_report_cli_bounds_the_route_gap_list(self) -> None:
         stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        (self.root / '.getzilla' / 'runtime').mkdir()
+        (self.root / '.getzilla' / 'runtime').mkdir(mode=0o700)
         (self.root / METRICS).write_text('\n'.join(json.dumps({'at': stamp, 'event': 'route', 'route_id': f'r{index}'})
                                                    for index in range(12)) + '\n', encoding='utf-8')
+        (self.root / METRICS).chmod(0o600)
         text = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py'), '--since', '1d'], cwd=self.root,
                               capture_output=True, text=True, check=True).stdout
         self.assertIn('(12 of 12 routes', text)
@@ -246,12 +255,13 @@ class RecordingTests(unittest.TestCase):
 
     def test_report_cli_never_prints_terminal_control_characters_from_the_journal(self) -> None:
         stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        (self.root / '.getzilla' / 'runtime').mkdir()
+        (self.root / '.getzilla' / 'runtime').mkdir(mode=0o700)
         hostile = 'r1\x1b]0;owned\x07‮'
         (self.root / METRICS).write_text('\n'.join(json.dumps(item) for item in [
             {'at': stamp, 'event': 'route', 'route_id': hostile},
             {'at': stamp, 'event': 'verify', 'route_id': hostile, 'status': 'pass', 'profile': 'std\x1b[2J'},
         ]) + '\n', encoding='utf-8')
+        (self.root / METRICS).chmod(0o600)
         text = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'getzilla_report.py'), '--since', '1d'],
                               cwd=self.root, capture_output=True, text=True, check=True).stdout
         self.assertNotIn('\x1b', text)

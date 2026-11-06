@@ -20,6 +20,8 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.route_metrics import counters, load, summarize, import_observations  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
+from getzilla.trace_storage import LocalRead  # noqa: E402
+from getzilla.metrics_journal import Observations  # noqa: E402
 
 MAX_GAP_ROUTES = 10
 
@@ -52,10 +54,30 @@ def main(argv: list[str] | None = None) -> int:
     root = find_root()
     if args.import_observations:
         import_observations(root, args.import_observations)
-    summary = summarize(load(root, _since(args.since)), root)
-    summary['counters'] = counters(root)
+    since = _since(args.since)
+    reader = None
+    try:
+        reader = LocalRead(root)
+        summary = summarize(load(root, since, reader=reader), root, reader=reader)
+        if summary['routes'] is not None:
+            summary['counters'] = counters(root, reader=reader)
+        reader.check()
+    except (OSError, ValueError):
+        summary = summarize(Observations(available=False))
+    try:
+        return _emit(summary, args)
+    finally:
+        if reader is not None:
+            reader.close()
+
+
+def _emit(summary, args):
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0
+    if summary['routes'] is None:
+        print('Getzilla report: local observation counts unknown.')
+        print('Coverage gaps: local observations unavailable')
         return 0
     print(f'Getzilla report, last {args.since}: {len(summary["routes"])} route(s)')
     if summary['profiles']:
