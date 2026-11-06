@@ -329,7 +329,13 @@ def stdlib_exception_projection(tree: ast.AST, *, complete_module: bool = False)
                 # An unrelated local gets no special-binding trust here.
                 continue
             owner = parents.get(reference)
-            passive = isinstance(owner, (ast.Compare, ast.Expr))
+            literal_compare = False
+            if (isinstance(owner, ast.Compare) and len(owner.ops) == len(owner.comparators) == 1
+                    and isinstance(owner.ops[0], (ast.Eq, ast.NotEq))):
+                other = owner.comparators[0] if owner.left is reference else owner.left
+                literal_compare = ((owner.left is reference or owner.comparators[0] is reference)
+                                   and isinstance(other, ast.Constant) and type(other.value) is str)
+            passive = isinstance(owner, ast.Expr) or literal_compare
             message = (isinstance(owner, ast.Call) and reference in owner.args
                        and isinstance(owner.func, ast.Name) and owner.func.id in exception_names
                        and isinstance(parents.get(owner), ast.Raise) and parents[owner].exc is owner)

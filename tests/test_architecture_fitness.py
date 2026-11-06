@@ -2571,6 +2571,28 @@ class ArchitectureFitnessTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(self._complete_queue_source(prefix + source).signals)
 
+    def test_special_prefix_comparison_requires_closed_literal_operands(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+                  'patch(__name__+".unrelated",None)\n')
+        comparisons = ('__name__ == opaque', 'opaque != __name__',
+                       '__name__ in container', '__name__ not in container',
+                       '__name__ == "__main__" == opaque',
+                       'lower < __name__ < upper',
+                       '__name__ == factory()', '__name__ == __name__',
+                       '__name__ is "__main__"')
+        for comparison in comparisons:
+            with self.subTest(comparison=comparison):
+                result = self._complete_queue_source(prefix + f'if {comparison}:\n    pass\n')
+                self.assertIn('import:queue.Full', result.signals)
+
+    def test_special_prefix_closed_literal_comparison_preserves_main_guard(self):
+        prefix = ('from queue import Full\nfrom unittest.mock import patch\ndef f():\n    raise Full()\n'
+                  'patch(__name__+".unrelated",None)\n')
+        for comparison in ('__name__ == "__main__"', '"__main__" == __name__',
+                           '__name__ != "sample"', '"sample" != __name__'):
+            with self.subTest(comparison=comparison):
+                self.assertFalse(self._complete_queue_source(prefix + f'if {comparison}:\n    pass\n').signals)
+
     def test_partial_queue_ast_cannot_invent_implicit_module_origin(self):
         tree = ast.parse('from queue import Full\nfrom unittest.mock import patch\n'
                          'def f():\n    raise Full()\n'
