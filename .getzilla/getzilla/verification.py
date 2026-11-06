@@ -2404,9 +2404,13 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                 if process is not None:
                     backend = core.versions.get('engine', 'pytest-xdist' if workers else 'unittest')
                     diagnostic = process.stderr
-                    pytest_failure = name == 'python-unittest' and backend == 'pytest-xdist' and process.returncode != 0
+                    # Capture cleanup can fail while preserving a successful exit.
+                    # The failed check must still cross the pytest privacy cut.
+                    pytest_failure = (name == 'python-unittest' and backend == 'pytest-xdist'
+                                      and (process.returncode != 0 or bool(process.cleanup_error)))
+                    failed_output = process.returncode != 0 or pytest_failure
                     trusted = (_trusted_pytest_metadata(root, process.stdout + '\n' + process.stderr)
-                               if name == 'python-unittest' and process.returncode else None)
+                               if name == 'python-unittest' and failed_output else None)
                     if pytest_failure:
                         diagnostic = _core_output_excerpt(process.stderr, failed=True, trusted=trusted, pytest_output=True)
                     if name == 'python-unittest' and process.terminal_state == 'timeout':
@@ -2420,9 +2424,9 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
                         f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
                         command=process.command, stdout=_core_output_excerpt(
-                            process.stdout, failed=process.returncode != 0,
+                            process.stdout, failed=failed_output,
                             trusted=trusted, pytest_output=pytest_failure),
-                        stderr=(diagnostic + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
+                        stderr=(diagnostic + ('\ncleanup failed: details omitted' if process.cleanup_error else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
                                   'requested_workers': str(requested_workers),

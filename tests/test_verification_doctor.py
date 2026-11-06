@@ -318,6 +318,103 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
+    def _public_core_cleanup_checks(self, exitcode: int, *, backend: str = 'pytest-xdist',
+                                    cleanup_target: str = 'tests', cleanup_fails: bool = True):
+        from getzilla import python_test_runner as runner
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+
+        class PublicManager:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, *args):
+                if cleanup_fails:
+                    raise OSError('SYNTHETIC_CLEANUP_VALUE\n' + '\x1b[31mPUBLIC_VALUE' * 80)
+
+        class PublicCancellation:
+            result = None
+
+            def check(self, result):
+                self.result = result
+
+        process = ProcessResult(['public-pytest-metadata'], exitcode,
+                                stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR')
+        coverage = ProcessResult(['public-coverage-metadata'], 0)
+        target = process if cleanup_target == 'tests' else coverage
+        cancellation = PublicCancellation()
+        with runner._output_resource(PublicManager(), {'result': target}, 'public capture', cancellation):
+            pass
+        self.assertIs(cancellation.result, target)
+        self.assertEqual(process.returncode, exitcode)
+        if cleanup_fails:
+            self.assertIn('SYNTHETIC_CLEANUP_VALUE', target.cleanup_error)
+        else:
+            self.assertEqual(target.cleanup_error, '')
+        workers = 2 if backend == 'pytest-xdist' else 0
+        core = CoreTestRun(process, coverage, workers, {'engine': backend}, {})
+
+        def blocked(*args, **kwargs):
+            raise AssertionError('actual test backend is forbidden in this public metadata fixture')
+
+        with contextlib.ExitStack() as stack:
+            guards = [stack.enter_context(patch.object(module, name, side_effect=blocked))
+                      for module, names in ((verification_module, ('execute', 'run_named_tests', '_command_check')),
+                                            (runner, ('execute', 'run_core_tests', 'run_named_tests')))
+                      for name in names]
+            stack.enter_context(patch.object(verification_module, 'core_worker_selection',
+                                            return_value=WorkerSelection(workers, 'configuration')))
+            stack.enter_context(patch.object(verification_module, '_trusted_pytest_metadata', return_value={}))
+            port = stack.enter_context(patch.object(verification_module, 'run_core_tests', return_value=core))
+            checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+            port.assert_called_once_with(ROOT, 'pr', workers)
+            for guard in guards:
+                guard.assert_not_called()
+        return process, checks
+
+    def test_producer_cleanup_effective_pytest_failures_sanitize_both_streams(self) -> None:
+        for exitcode in (0, 1):
+            with self.subTest(exitcode=exitcode):
+                process, checks = self._public_core_cleanup_checks(exitcode)
+                self.assertEqual(process.returncode, exitcode)
+                self.assertEqual([item.status for item in checks], ['fail', 'pass'])
+                self.assertIn(f'exit={exitcode}', checks[0].summary)
+                self.assertIn('test_timeout=900s', checks[0].summary)
+                self.assertFalse('SYNTHETIC' in checks[0].stdout + checks[0].stderr,
+                                 'producer cleanup failure must not publish fixture values')
+                self.assertFalse(any(value in checks[0].stderr for value in ('PUBLIC_VALUE', '\x1b')),
+                                 'cleanup exception text and controls must remain private')
+                self.assertIn('pytest_failure_ids=null', checks[0].stdout)
+                self.assertIn('pytest_failure_ids=null', checks[0].stderr)
+                self.assertIn('cleanup failed:', checks[0].stderr)
+                self.assertLessEqual(len(checks[0].stderr), 12000)
+
+    def test_producer_cleanup_keeps_clean_and_nonpytest_stream_contracts(self) -> None:
+        process, clean = self._public_core_cleanup_checks(0, cleanup_fails=False)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in clean], ['pass', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', clean[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', clean[0].stderr)
+        _, legacy = self._public_core_cleanup_checks(0, backend='unittest')
+        self.assertEqual([item.status for item in legacy], ['fail', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', legacy[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', legacy[0].stderr)
+        self.assertFalse(any(value in legacy[0].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'legacy stream compatibility must not append cleanup exception values')
+        self.assertIn('cleanup failed:', legacy[0].stderr)
+
+    def test_producer_coverage_cleanup_preserves_status_without_exception_values(self) -> None:
+        process, checks = self._public_core_cleanup_checks(0, cleanup_target='coverage')
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in checks], ['pass', 'fail'])
+        self.assertIn('SYNTHETIC_STDOUT', checks[0].stdout)
+        self.assertIn('exit=0', checks[1].summary)
+        self.assertIn('cleanup failed:', checks[1].stderr)
+        self.assertFalse(any(value in checks[1].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'coverage cleanup metadata must not publish exception values')
+        self.assertLessEqual(len(checks[1].stderr), 12000)
+
     def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
         output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'
                   '---- Captured stdout call ----\nSYNTHETIC_CAPTURE\n'
