@@ -183,7 +183,7 @@ def read_progress(directory: Path, nonce: str, workers: int) -> dict[str, object
         for ordinal in range(workers):
             try:
                 slots.append(_read_slot(handle, ordinal, nonce))
-            except (OSError, ValueError, TypeError, UnicodeError):
+            except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
                 continue
     except OSError:
         pass

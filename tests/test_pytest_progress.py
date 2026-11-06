@@ -87,9 +87,14 @@ class ProgressTests(unittest.TestCase):
         writer.pytest_runtest_logstart('tests/test_public.py::test_case', None)
         valid = (directory / 'worker-0.json').read_bytes()
         for content in (b'{', valid.replace(NONCE.encode(), b'b' * 32), valid + b' ' * (2049 - len(valid)),
+                        b'[' * 1001 + b']' * 1001,
                         valid.replace(b'"sequence":1', b'"sequence":true')):
             (directory / 'worker-0.json').write_bytes(content)
-            self.assertEqual(module.read_progress(directory, NONCE, 2)['status'], 'unavailable')
+            try:
+                observation = module.read_progress(directory, NONCE, 2)
+            except RecursionError:
+                self.fail('bounded malformed JSON escaped the diagnostic refusal boundary')
+            self.assertEqual(observation['status'], 'unavailable')
         (directory / 'worker-0.json').write_bytes(valid)
         self.assertEqual(module.read_progress(directory, NONCE, 2)['status'], 'partial')
 
