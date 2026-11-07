@@ -203,9 +203,14 @@ def public_source_copy(source: Path | None = None) -> Iterator[Path]:
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
     """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
-        modes = _public_modes(PROJECT)
-        def copy_file(source, destination):
-            return _copy_public_file(source, destination, PROJECT, modes)
+        # Tests can explicitly substitute a Gitless synthetic PROJECT. Keep its
+        # original generic copy contract; never turn a real Git error into a fallback.
+        if PROJECT == Path(__file__).resolve().parents[1] or os.path.lexists(PROJECT / '.git'):
+            modes = _public_modes(PROJECT)
+            def copy_file(source, destination):
+                return _copy_public_file(source, destination, PROJECT, modes)
+        else:
+            copy_file = shutil.copy2
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):

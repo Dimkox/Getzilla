@@ -315,8 +315,8 @@ class ProjectSyncTests(unittest.TestCase):
     def test_kept_codex_pair_is_preserved_without_owned_proofs(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
         manifest = self.select(('codex',))
-        installer = upgrade.load_installer(ROOT)
-        payload = {entry.path: entry for entry in installer.build_payload(ROOT, selection=installer.PayloadSelection(('codex',)))}
+        installer = upgrade.load_installer(self.source_home)
+        payload = {entry.path: entry for entry in installer.build_payload(self.source_home, selection=installer.PayloadSelection(('codex',)))}
         pair = ('.codex/hooks.json', '.codex/config.toml')
         (self.project / '.codex').mkdir()
         for path in pair:

@@ -88,6 +88,28 @@ class PublicSourceFixtureTests(unittest.TestCase):
             support.copy_public_source(self.source / '.getzilla', target)
         self.assertFalse(target.exists())
 
+    def test_substituted_gitless_project_keeps_generic_untracked_working_modes(self):
+        source = self.source.parent / 'synthetic'
+        payload = source / '.getzilla/untracked.py'
+        payload.parent.mkdir(parents=True)
+        payload.write_bytes(b'# current synthetic working bytes\n')
+        payload.chmod(0o664)
+        with patch.object(support, 'PROJECT', source), support.project_copy() as root:
+            copied = root / '.getzilla/untracked.py'
+            self.assertEqual(copied.read_bytes(), payload.read_bytes())
+            if os.name == 'posix':
+                self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o664)
+        target = source.parent / 'strict-not-created'
+        with self.assertRaises(subprocess.CalledProcessError):
+            support.copy_public_source(source, target)
+        self.assertFalse(target.exists())
+
+    def test_real_project_git_failure_does_not_fall_back_to_generic_copy(self):
+        with patch.object(support, '_public_modes', side_effect=ValueError('invalid Git source')):
+            with self.assertRaisesRegex(ValueError, 'invalid Git source'):
+                with support.project_copy():
+                    self.fail('real project bypassed strict mode admission')
+
     def test_installer_uses_only_logical_modes_from_owned_fixture_source(self):
         from tests.test_installer import MODULE, ROOT
 
