@@ -320,7 +320,44 @@
         "pinned_commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
         "install": {
           "user": "git clone --branch <upstream_tag>, HEAD must equal pinned_commit",
-          "project": "skills/ copied into .agents/skills and the agent skill directory without overwriting; Copilot additionally needs the upstream marketplace plugin (not pinned)"
+          "project": "fixed pinned-source assets copied into canonical and selected agent skill directories; no marketplace plugin or semantic safety approval"
+        },
+        "asset_inputs": {
+          "source_commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+          "source_archive_sha256": "29714b2c4c727ecc6600f9e5982a0dcbb829860ba79626f1941a0f233e85331a",
+          "dependency_lock_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-claude-sh.json",
+            "sha256": "959b450ef75117074b0567a4c2f061f585b0e5fdc6c0a3045a4010aa6960d3e7",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-codex-sh.json",
+            "sha256": "fea4bb6af67537af582976074c13683e46e55d3f14fc23404bb79320359b5509",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-qwen-sh.json",
+            "sha256": "2e159fb839a40a17546a4d836bfa930fee27765a4ab81747fd889275a349b92c",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-gemini-sh.json",
+            "sha256": "e91d7d6ed8f2f6663db43aff194c62322327c06a617a6e315e09329143a3a13c",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-grok-sh.json",
+            "sha256": "6b9dbc7a96e559cc1bcf51e39a884e1d62857d85ea3913877993f90e86362d06",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-copilot-sh.json",
+            "sha256": "9ab9a9978cd74b28d85e454886bb71aedc8d3e35c38b15a15726cfe362a36f0f",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          }
         }
       },
       {
@@ -357,7 +394,7 @@
         "pinned_commit": "790dae9c8e2a1d73575cb2d40b14dd4963391f29",
         "install": {
           "user": "git clone --branch <upstream_tag> (pinned source of record); Node.js for the installer",
-          "project": "npx --yes bmad-method@<pinned> install --directory <staging> --tools <tool> --yes, merged without overwriting",
+          "project": "validated fixed generated assets; full source/dependency-lock/argv/file custody; no ambient npx execution",
           "tools": {
             "claude": "claude-code",
             "codex": "codex",
@@ -365,6 +402,43 @@
             "gemini": "gemini",
             "grok": "grok",
             "copilot": "github-copilot"
+          }
+        },
+        "asset_inputs": {
+          "source_commit": "790dae9c8e2a1d73575cb2d40b14dd4963391f29",
+          "source_archive_sha256": "844dbb5bfd02be49a1aa4c6a75b542a6d2cfa5cf594b188aaa993e8184c4ea73",
+          "dependency_lock_sha256": "7008085090efa9f320b1376178b208747c48c10370c1725f73cc1135c6a91c20"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/bmad-claude-sh.json",
+            "sha256": "0c5c4c46d6d55ce41a1e24fb080d491228821708dc4e207491417dadc2411cb7",
+            "argv_sha256": "24cb43ba277880e4558a820b7e91b6bfbfd9431d123b15e03eda05940b262d82"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/bmad-codex-sh.json",
+            "sha256": "cc9e1976a4e614b8f3474c3d2c375a957c2fb6e6fac5eb8ad6c11fc4a6e16242",
+            "argv_sha256": "7d14dffc63128b1ad8162d406c62f7e630b1c4a1a8d93eb0df5778722fa57f4e"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/bmad-qwen-sh.json",
+            "sha256": "23f87c69f58ddad4dba11b80c0cba41ee8da9fd0707513b6a95573e88e6b7214",
+            "argv_sha256": "3459c37951d07f583764a2f63bd7c26850cae73b6405c1929ef408ecb6a76ba8"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/bmad-gemini-sh.json",
+            "sha256": "41be49422a7804c9b2e93e737de1dea56e3e829d7ac87bdf63ff182fd8251465",
+            "argv_sha256": "c35f4895085fc0e38b383d58f7b2d6ed1b874f51feb25d2f83331670e8fafea5"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/bmad-grok-sh.json",
+            "sha256": "a11ef6a088bb4955430854f48c86317e9895362703b6e62d57ef00bac04cdf5e",
+            "argv_sha256": "aaa09f497986b72ab14af0fb738b6ac5ec8d17e2243b3c872621605129886589"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/bmad-copilot-sh.json",
+            "sha256": "00afbaac17719a94037a6e6179129a1b1d099cfa0f7d3bba9950faed73d581b1",
+            "argv_sha256": "d0d28b1c32a1a9aa6e32a9d0f89ee529387acaa824ed310a50191f85f0abcbc5"
           }
         }
       },
@@ -393,8 +467,8 @@
         ],
         "pinned_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175",
         "install": {
-          "user": "uv tool install --force specify-cli --from git+https://github.com/<repository>.git@<upstream_tag>",
-          "project": "specify init --here --integration <integration> --non-interactive --ignore-agent-tools in a staging directory, merged without overwriting",
+          "user": "full pinned Git source and bound assets; standalone specify CLI is not installed or required for project materialization",
+          "project": "validated fixed sh/ps assets for the selected integration; no ambient specify execution",
           "integrations": {
             "claude": "claude",
             "codex": "codex",
@@ -402,6 +476,73 @@
             "gemini": "gemini",
             "grok": "grok",
             "copilot": "copilot"
+          }
+        },
+        "asset_inputs": {
+          "source_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175",
+          "source_archive_sha256": "33b3ee3f7c8dfb6ea5be60c6df31b97f44e7ca7a29a303eb3af7a882fdc62281",
+          "dependency_lock_sha256": "465faa6ad8743a19e8acee80467e8376a4aebbe286853149c66f487c309d560a"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-claude-sh.json",
+            "sha256": "5d2c2de74ffc9caba8cb3cd2b844c7965be02c6e8ae5c9a5eb2e40b8b9130fa6",
+            "argv_sha256": "4e82bdc57f083deeca3b3da617d1dae5754d9941b9febf6053fba73c86365001"
+          },
+          "claude-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-claude-ps.json",
+            "sha256": "53a7065ce282061a23f63f9e0bb5049a392388f0a1f240075f6f3ff304bfc9e4",
+            "argv_sha256": "b70bdb0b9ff2f019bc23c5e606e882521e782a115717fc9096b96c39a50346c3"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-codex-sh.json",
+            "sha256": "f069de93ed8ab7dc9c8b8ce0cbd05b4b8b59e0aceca09d2940df423b1889054a",
+            "argv_sha256": "2faa3f5125eafbd88981cfbf98322de3a1fe50a554da218a38507c8b213bce46"
+          },
+          "codex-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-codex-ps.json",
+            "sha256": "df86c4b12fa3545498f5b033da7550e907184c6cbc5263d5f8bc95fd02b2f24b",
+            "argv_sha256": "dc44ee322abc779cd58d442580e6633a77d4bf1b56f92697660ad2680a9eee39"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-qwen-sh.json",
+            "sha256": "0d4d7ad7f0f7745f883f1bca0f6da8294359d21f3125a4d44127675618311bf8",
+            "argv_sha256": "133992e2561bd7a53c6556fdda86a6b946138def7566fb417b051315c501180b"
+          },
+          "qwen-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-qwen-ps.json",
+            "sha256": "2771557e4af0e7449c937327689ed60ccee018b99495ac89fc22a5ccd3b69186",
+            "argv_sha256": "e9e7f224d31a95093c4de1dfa19b53a8c71196aa55bded94db99a768da88756e"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-gemini-sh.json",
+            "sha256": "2d59d26152527c1facd83bb0bf8e2df94cd09a22fc6e655a6af6c2413262f82a",
+            "argv_sha256": "f4d378d0621a6dae7d9ad0c174f1e23e01bef2ab4b2520530efaae3acdbe730a"
+          },
+          "gemini-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-gemini-ps.json",
+            "sha256": "310467e81dd0e4f3ab42039afec00464b89731baa26638f274081046b2d31cff",
+            "argv_sha256": "2d63024779672cace509948132134ad0fd92c29560ba3cd6c6c5b394d8d72eb3"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-grok-sh.json",
+            "sha256": "37008635d6bce6c1bad587864b56d4cbd8bb80fca4a5f5e3388e8a2388849bcf",
+            "argv_sha256": "0645f60b725cab0edccb416c407bef6c67c025e4eea4d98ed23eba6660c4eb7a"
+          },
+          "grok-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-grok-ps.json",
+            "sha256": "31411be166ea99d1898cd9bbfd8049f2d1847fb9c757c71690e60a26ba14fd92",
+            "argv_sha256": "6e8cf37bac1a5d963d8f3715ea0310558d05f069841fc03f7a03e978ae5713fd"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-copilot-sh.json",
+            "sha256": "3de3abdd8936075ec6693c68b540a8c27df8546b4d1e6d1efa8b25bc60ae3e2f",
+            "argv_sha256": "aac04cfd2e33497d375525c1a3f08264d63de28629189cec7779071f9fc4fd31"
+          },
+          "copilot-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-copilot-ps.json",
+            "sha256": "966ea9f91f97904bb12c976c622d6f428667a5bbccc95408748b061ca8e077a4",
+            "argv_sha256": "810485ccf94810e2204c0389999b69d480d406a39e1fbfba8e86a17b2520c68c"
           }
         }
       }
