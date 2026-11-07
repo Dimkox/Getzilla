@@ -158,6 +158,10 @@ def blob_id(content: bytes, object_format: str) -> str:
     return digest.hexdigest()
 
 
+def _published_mode(git_mode: str) -> int:
+    return 0o755 if git_mode == '100755' else 0o644
+
+
 def accept_local(installer, project: Path, ref: str = 'HEAD') -> tuple[dict[str, str], bytes | None, list[str]]:
     """Digests of the kept paths as committed now: (digests, new sync record or None, accepted paths).
 
@@ -386,8 +390,13 @@ def planned_changes(installer, home: Path, project: Path,
                 and not matches_owned(current, owned_proof(manifest, entry.path))
                 and not historical_match and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
-        record_owned(manifest, entry.path, content, entry.mode)
-        if tree.get(entry.path) != (mode, blob_id(content, object_format)):
+        changed = tree.get(entry.path) != (mode, blob_id(content, object_format))
+        owned_mode = _published_mode(mode)
+        if not changed and current is not None and not mode_matches(current.mode, owned_mode):
+            # No Git publication will change an unchanged file's physical mode.
+            owned_mode = current.mode
+        record_owned(manifest, entry.path, content, owned_mode)
+        if changed:
             changes.append((entry.path, content, mode))
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
     try:
@@ -586,7 +595,7 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 if path in component['files']:
                     component['files'].remove(path)
         else:
-            record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
+            record_owned(pending_manifest, path, content, _published_mode(mode))
     changes = permitted
     encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None
     validate_manifest_publication(original_manifest, encoded, kept, kept_digests)

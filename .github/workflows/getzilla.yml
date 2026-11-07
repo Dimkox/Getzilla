@@ -191,6 +191,39 @@ jobs:
       - name: Record startup capacity
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         run: python scripts/getzilla_startup_cpu.py --no-probe
+      - name: Set up the fixed Linux Node dependency
+        id: node_setup
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          architecture: x64
+          package-manager-cache: false
+      - name: Admit physical Node inside the read-only runtime root
+        id: node_runtime
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_setup.outcome == 'success'
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, shutil, stat, subprocess
+          expected = pathlib.Path(os.environ['RUNNER_TOOL_CACHE']).resolve(strict=True) / 'node' / '24.22.2' / 'x64' / 'bin' / 'node'
+          selected = pathlib.Path(shutil.which('node') or '').resolve(strict=True)
+          if selected != expected or not selected.is_file():
+              raise SystemExit('selected Node is outside its declared cache entry')
+          if subprocess.check_output([str(selected), '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('selected Node version differs')
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          selected_digest = digest(selected)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0755', '--', str(selected), '/usr/bin/node'], check=True)
+          node = pathlib.Path('/usr/bin/node')
+          info = node.lstat()
+          if (node.is_symlink() or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o755
+                  or node.resolve(strict=True) != node or digest(node) != selected_digest):
+              raise SystemExit('physical Node identity differs')
+          if subprocess.check_output(['/usr/bin/node', '--version'], text=True).strip() != 'v24.22.2':
+              raise SystemExit('physical Node version differs')
+          print(json.dumps({'node_version': '24.22.2', 'sha256': selected_digest, 'physical_runtime_admitted': True}))
       - name: Admit Bubblewrap for required Linux sandbox tests
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
@@ -208,6 +241,10 @@ jobs:
           fi
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.2 bandit==1.9.4 tomli==2.4.1
+      - name: Require the real Linux CJS ESM and read-only sandbox profile
+        id: node_profile_admission
+        if: success() && steps.source_checkout.outcome == 'success' && steps.node_runtime.outcome == 'success'
+        run: python -m unittest tests.test_skill_sandbox.BmadDependencyGraft.test_synthetic_cjs_esm_load_and_all_input_mounts_are_read_only
       - name: Known vulnerabilities in pinned dependencies (OSV)
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         run: python scripts/getzilla_vulns.py --online
@@ -233,7 +270,7 @@ jobs:
           python -m unittest tests.test_opengrep
           python -c "import sys; sys.path.insert(0, '.getzilla'); from pathlib import Path; from getzilla.verification import _opengrep; r = _opengrep(Path('.')); print(r.status, r.summary); [print(d) for d in r.details]; sys.exit(r.status != 'pass')"
       - name: Core tests
-        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'
         shell: bash
         run: |
           set -o pipefail
