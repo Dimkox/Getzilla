@@ -49,3 +49,7 @@ bounded DOM/responses, viewport/theme/locale/version and font/CSS/coverage facts
 Screenshots cannot prove functionality or accessibility. This local feature adds
 no private/native authority and does not enable private previews. Current MIT
 terms remain unchanged; draft legal decisions are not final legal approval.
+
+The command pins the reviewed0.1.0 manifest. A different self-consistent passive
+artifact is not executable authority, even with matching local ownership. New
+code needs a new reviewed artifact and command pin; ownership alone is insufficient.

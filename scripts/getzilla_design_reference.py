@@ -25,6 +25,7 @@ from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
 PERMISSION = 'design.reference.read'
+EXPECTED_MANIFEST_SHA256 = '52ddcb4e5b1ff2de970a808d0b7aa1a666c07646065e9f4bd24bedaaab1fdd4e'
 MAX_HISTORY = 32
 MAX_RECORD_BYTES = 1024 * 1024
 
@@ -65,7 +66,8 @@ def _load(root, admission):
 def _admitted(root):
     admission = admit_module(root, NAME, permission=PERMISSION)
     _need(admission.get('allowed') is True and admission.get('external_authority') is False
-          and admission.get('workers') == 0 and admission.get('version') == '0.1.0')
+          and admission.get('workers') == 0 and admission.get('version') == '0.1.0'
+          and admission.get('manifest_sha256') == EXPECTED_MANIFEST_SHA256)
     return admission
 
 

@@ -189,6 +189,42 @@ class LocalDesignReferenceTests(unittest.TestCase):
         schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.1.0/pack-v1.schema.json').read_text())
         jsonschema.Draft202012Validator(schema).validate(result)
 
+    def test_self_consistent_passive_ownership_cannot_admit_different_addon_code(self):
+        from getzilla.optional_modules import admit_module, manage_modules
+        from getzilla.state import bind_session, current_session
+        from tests.test_optional_modules import OptionalModuleTests
+        previous = current_session()
+        session = previous or 'public-design-fixture-session'
+        bind_session(session)
+        self.addCleanup(bind_session, previous)
+        OptionalModuleTests.install_core(self, self.root)
+        source = self.root / 'public-source'
+        artifact = source / '.getzilla/optional-modules/design-reference/0.1.0'
+        artifact.mkdir(parents=True)
+        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE'):
+            shutil.copyfile(ROOT / '.getzilla/optional-modules/design-reference/0.1.0' / name, artifact / name)
+        reference = artifact / 'reference.py'
+        reference.write_bytes(reference.read_bytes() + b'\n# different inert public artifact\n')
+        descriptor = json.loads((artifact / 'module.json').read_text())
+        for entry in descriptor['files']:
+            if entry['path'] == 'reference.py':
+                entry['sha256'] = hashlib.sha256(reference.read_bytes()).hexdigest()
+        (artifact / 'module.json').write_text(json.dumps(descriptor))
+        registry = json.loads((ROOT / '.getzilla/config/optional-modules.json').read_text())
+        registry['modules']['design-reference']['versions']['0.1.0']['sha256'] = hashlib.sha256(
+            (artifact / 'module.json').read_bytes()).hexdigest()
+        (source / '.getzilla/config').mkdir()
+        (source / '.getzilla/config/optional-modules.json').write_text(json.dumps(registry))
+        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=source)
+        manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
+        self.assertTrue(admit_module(self.root, 'design-reference', permission='design.reference.read')['allowed'])
+        create_public_task(self.root, session)
+        (self.root / 'tokens.json').write_text('{"x":"1px"}')
+        command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
+        with self.assertRaises(command.DesignReferenceError):
+            command.capture(self.root, ['tokens.json'], capture_id='foreign', captured_at='2026-11-07T00:00:00Z')
+        self.assertFalse(list((self.root / '.getzilla/runtime').glob('changes/*/evidence/design-reference/*.json')))
+
     def test_actual_owned_task_evidence_replay_diff_capacity_and_missing_owner(self):
         from getzilla.optional_modules import manage_modules
         from getzilla.state import bind_session, current_session
