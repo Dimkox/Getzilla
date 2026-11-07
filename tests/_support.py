@@ -59,7 +59,7 @@ def _test_directory() -> Iterator[str]:
 @contextlib.contextmanager
 def _scanner_environment(minimal_runtime: bool) -> Iterator[None]:
     """Synthetic verifier projects own their OSV inputs; the outer gate keeps its real configuration."""
-    keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE') if minimal_runtime else ()
+    keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE')
     previous = {key: os.environ.pop(key, None) for key in keys}
     try:
         yield
@@ -121,7 +121,7 @@ def activate_owned_route(root: Path, route: dict) -> None:
 
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
+    """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
