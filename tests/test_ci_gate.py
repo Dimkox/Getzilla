@@ -499,7 +499,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         linux = document['jobs']['linux']
         self.assertEqual(linux['if'], 'always()')
         self.assertIn('platform-install-results', linux['needs'])
-        guard = next(step for step in linux['steps'] if step.get('name') == 'Require every supported native installer cell')
+        guard = next(step for step in linux['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env', {}))
+        self.assertEqual(guard['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
         for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
             process = subprocess.run(['bash', '-c', guard['run']],
                                      env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},

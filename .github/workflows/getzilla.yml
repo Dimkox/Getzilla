@@ -45,14 +45,15 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - name: Select the declared required native pairs
+      - name: Select the declared Linux native pairs
         id: inventory
         shell: bash
         run: |
-          matrix=$(python scripts/getzilla_platform_install.py --matrix)
+          matrix=$(python scripts/getzilla_platform_install.py --matrix --profile linux)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   platform-install:
+    name: Linux native installer (${{ matrix.id }})
     needs: platform-plan
     strategy:
       fail-fast: false
@@ -131,6 +132,7 @@ jobs:
           if-no-files-found: error
 
   platform-install-results:
+    name: Linux native install and upgrade observations
     if: always()
     needs: [platform-plan, platform-install]
     runs-on: ubuntu-24.04
@@ -146,12 +148,12 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - name: Download only this run and attempt's platform observations
+      - name: Download only this run and attempt's Linux platform observations
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: getzilla-platform-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: getzilla-platform-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/platform-results
-      - name: Require complete native install and upgrade observations
+      - name: Require complete Linux native install and upgrade observations
         env:
           GETZILLA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           GETZILLA_PLATFORM_JOB_RESULT: ${{ needs.platform-install.result }}
@@ -160,7 +162,7 @@ jobs:
           import os, pathlib, subprocess, sys
           results = pathlib.Path(os.environ['RUNNER_TEMP']) / 'platform-results'
           sys.exit(subprocess.call([sys.executable, 'scripts/getzilla_platform_install.py',
-              '--aggregate', str(results), '--head', os.environ['GETZILLA_EXPECTED_HEAD'],
+              '--aggregate', str(results), '--profile', 'linux', '--head', os.environ['GETZILLA_EXPECTED_HEAD'],
               '--job-result', os.environ['GETZILLA_PLATFORM_JOB_RESULT']]))
 
   linux:
@@ -169,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Require every supported native installer cell
+      - name: Require both declared Linux native installer cells
         shell: bash
         env:
           GETZILLA_PLATFORM_RESULT: ${{ needs.platform-install-results.result }}

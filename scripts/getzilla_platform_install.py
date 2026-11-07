@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'.getzilla'))
-from getzilla.platform_install import load_artifacts, load_contract, native_platform, validate_results  # noqa: E402
+from getzilla.platform_install import load_artifacts, load_contract, native_platform, select_platforms, validate_results  # noqa: E402
 
 
 def main(argv=None):
@@ -29,10 +29,16 @@ def main(argv=None):
     parser.add_argument('--project', type=Path, help='absent target for the exact historical payload restore')
     parser.add_argument('--head')
     parser.add_argument('--job-result', default='missing')
+    parser.add_argument('--profile', choices=('all', 'linux'),
+                        help='explicit native scope for matrix or aggregate only; default: all')
     args = parser.parse_args(argv)
+    if args.profile is not None and not (args.matrix or args.aggregate is not None):
+        parser.error('--profile applies only to --matrix or --aggregate')
     try:
         contract = load_contract(ROOT)
         required = [c for c in contract['cells'] if c['required']]
+        if args.profile == 'linux':
+            required = select_platforms(required, ['linux-x64', 'linux-arm64'])
         if args.restore_stable_payload is not None:
             if args.project is None:
                 raise ValueError('--restore-stable-payload requires an absent --project target')
@@ -75,7 +81,8 @@ def main(argv=None):
                     cli_sha256=hashlib.sha256((ROOT/'scripts/getzilla_cli.py').read_bytes()).hexdigest(),
                     managed_sha256=hashlib.sha256((ROOT/'scripts/getzilla_doctor.py').read_bytes()).hexdigest(),
                     job_result=args.job_result)
-        print(json.dumps({'authority': 'observations-only', 'problems': problems, 'required_cells': len(required)}))
+        print(json.dumps({'authority': 'observations-only', 'problems': problems, 'required_cells': len(required),
+                          'profile': args.profile or 'all', 'required_platforms': [c['id'] for c in required]}))
         return int(bool(problems))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(json.dumps({'status': 'failed', 'authority': 'observations-only', 'error': str(error)[:512]}))
