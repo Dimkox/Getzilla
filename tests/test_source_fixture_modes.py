@@ -100,8 +100,14 @@ class PublicSourceFixtureTests(unittest.TestCase):
             if os.name == 'posix':
                 self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o664)
         target = source.parent / 'strict-not-created'
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaises((subprocess.CalledProcessError, ValueError)) as refusal:
             support.copy_public_source(source, target)
+        if isinstance(refusal.exception, ValueError):
+            self.assertEqual(str(refusal.exception), 'test source must be the Git worktree root')
+        else:
+            self.assertEqual(refusal.exception.returncode, 128)
+            self.assertEqual(refusal.exception.cmd, [
+                'git', '--no-optional-locks', '-C', str(source), 'rev-parse', '--show-toplevel'])
         self.assertFalse(target.exists())
 
     def test_real_project_git_failure_does_not_fall_back_to_generic_copy(self):
