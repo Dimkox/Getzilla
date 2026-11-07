@@ -21,6 +21,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from tests._support import public_source_copy
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
@@ -377,7 +379,8 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(outputs.get('.grok/skills/' + relative), source.read_bytes(), relative)
 
     def test_committed_harnesses_match_the_canonical_sources(self) -> None:
-        self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
+        with public_source_copy(ROOT) as source:
+            self.assertEqual(drift(source), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
 
     def test_every_harness_runs_every_canonical_hook_script(self) -> None:
         grok = json.loads((ROOT / '.grok/hooks.json').read_text(encoding='utf-8'))['hooks']
