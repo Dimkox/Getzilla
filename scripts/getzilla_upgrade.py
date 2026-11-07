@@ -36,6 +36,7 @@ HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla import fsx
+from getzilla.baseline_assets import archive_entries, read_archive
 from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
@@ -189,18 +190,27 @@ HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[
 
 
 def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
-                  incoming: set[str], ref: str = 'HEAD') -> tuple[list[str], list[str], list[str]]:
+                  incoming: set[str], ref: str = 'HEAD', *,
+                  incoming_archive: bytes | None = None) -> tuple[list[str], list[str], list[str]]:
     """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
 
     Only a pre-rename file whose Getzilla replacement is committed or arrives with this update is
     retired; one without a replacement (a vendored factory the update does not install) stays.
     """
     present = set(tree) | incoming
+    try:
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in present:
+            with BoundRoot(project) as binding:
+                current_archive = read_archive(binding)
+                incoming_archive = current_archive[0].content if current_archive else None
+        members = archive_entries(incoming_archive) if incoming_archive is not None else {}
+    except ValueError as exc:
+        raise UpdateError('cannot prove legacy replacement archive members') from exc
 
     def replaced(path: str) -> bool:
         current = installer.legacy_to_current_path(path)
-        # The engine may ship as one archive instead of a folder of modules.
-        return current in present or (current.startswith(installer.ENGINE_DIR) and installer.ENGINE_ARCHIVE in present)
+        # The physical archive name alone proves no logical replacement.
+        return current in present or current in members
 
     retire = sorted(item['path'] for item in installer._legacy_migration(project)
                     if item['path'] in tree and replaced(item['path']))
@@ -507,7 +517,15 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
             if log.returncode != 0:
                 raise UpdateError(f'cannot read {old_log} from HEAD')
             changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
-        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes}, expected_head)
+        incoming_archive = next((content for path, content, _mode in changes
+                                 if path == installer.ENGINE_ARCHIVE), None)
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in tree:
+            current_archive = read_archive(transaction)
+            observations[installer.ENGINE_ARCHIVE] = current_archive[0] if current_archive else None
+            incoming_archive = current_archive[0].content if current_archive else None
+        legacy, importers, legacy_kept = legacy_report(
+            installer, project, tree, {path for path, content, _mode in changes if content is not None},
+            expected_head, incoming_archive=incoming_archive)
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')

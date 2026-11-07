@@ -189,6 +189,21 @@ class ArchiveUpgradeTests(unittest.TestCase):
         upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
 
+    def test_legacy_report_does_not_invent_missing_archive_module(self):
+        from tests.test_getzilla_upgrade import upgrade
+        prefix = '.grok-stack/adaptive_grok/'
+        for name in ('present.py', 'absent.py'):
+            path = self.project/prefix/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'# old inert public module\n')
+        packed = self.project/INSTALL.ENGINE_ARCHIVE
+        packed.write_bytes(archive([('getzilla/present.py', b'# current inert module\n', 0o644)]))
+        self.commit('exact archive and two legacy modules')
+        retired, _importers, _kept = upgrade.legacy_report(INSTALL, self.project,
+                                                          upgrade.head_tree(self.project), set())
+        self.assertIn(prefix+'present.py', retired)
+        self.assertNotIn(prefix+'absent.py', retired)
+
     def test_identical_unowned_legacy_member_cannot_retire(self):
         from tests.test_getzilla_upgrade import upgrade, git
         from getzilla.component_state import MANIFEST, encode_manifest, read_state
