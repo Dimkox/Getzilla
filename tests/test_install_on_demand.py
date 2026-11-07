@@ -14,6 +14,8 @@ import errno
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -458,12 +460,12 @@ class FreshSelectionTests(unittest.TestCase):
     def test_installed_harness_from_a_subdirectory_uses_selected_zip_engine(self) -> None:
         from getzilla.component_state import read_state
         source_manifest = (ROOT / MANIFEST).read_bytes()
-        with tempfile.TemporaryDirectory() as tmp:
+        with public_source_copy(ROOT) as source, tempfile.TemporaryDirectory() as tmp:
             for index, agents in enumerate(((), ('codex',))):
                 with self.subTest(agents=agents):
                     target = Path(tmp) / str(index)
                     INSTALL._materialize_new(
-                        ROOT, target, include_dependencies=False, include_optional=False,
+                        source, target, include_dependencies=False, include_optional=False,
                         selection=INSTALL.PayloadSelection(agents, engine_archive=True),
                     )
                     self.assertTrue((target / INSTALL.ENGINE_ARCHIVE).is_file())
