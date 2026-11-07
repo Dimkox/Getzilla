@@ -20,7 +20,7 @@ PROMPT = 'Исправить баг ✓ в обработчике Битрикс
 
 def _hook(root: Path, name: str, payload: dict) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        [sys.executable, str(root / '.grok/hooks' / name)],
+        [sys.executable, str(root / '.getzilla/hooks' / name)],
         cwd=root,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         capture_output=True,

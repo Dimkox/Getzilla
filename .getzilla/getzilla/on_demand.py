@@ -146,8 +146,23 @@ class _AdditionPlan:
 
 
 def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[str, Any],
-                     kept: frozenset[str]) -> None:
+                     kept: frozenset[str]) -> bool:
     kept_pair = bool(kept & {'.codex/hooks.json', '.codex/config.toml'})
+    # Removal retains Entire activation. Re-add accepts only the exact stock
+    # overlay with the stock enabled config, never an arbitrary custom pair.
+    from .adapter_removal import codex_retained_configuration
+    source_overlay = payload.get('.getzilla/config/codex-hooks.json')
+    current_overlay = binding.read('.getzilla/config/codex-hooks.json')
+    if (current_overlay.content if current_overlay else None) != (source_overlay.content if source_overlay else None):
+        raise ComponentStateError('custom Codex canonical overlay must be reconciled before adding files')
+    hooks = binding.read('.codex/hooks.json')
+    config = binding.read('.codex/config.toml')
+    config_entry = payload.get('.codex/config.toml')
+    overlay_only = bool(not kept_pair and source_overlay is not None and hooks is not None
+                        and hooks.content == codex_retained_configuration(payload['.getzilla/config/hooks.json'].content,
+                                                                        source_overlay.content)
+                        and mode_matches(hooks.mode, 0o644) and config is not None and config_entry is not None
+                        and config.content == config_entry.content and mode_matches(config.mode, config_entry.mode))
     for path in ('.codex/hooks.json', '.codex/config.toml'):
         entry = payload.get(path)
         if entry is None:
@@ -156,11 +171,10 @@ def _codex_preflight(binding: BoundRoot | ComponentTransaction, payload: dict[st
         if current is None and kept_pair:
             raise ComponentStateError(f'kept-local Codex activation requires the complete existing pair: {path}')
         if current is not None and (current.content != entry.content or not mode_matches(current.mode, entry.mode)):
+            if path == '.codex/hooks.json' and overlay_only:
+                continue
             raise ComponentStateError(f'custom Codex activation must be reconciled before adding files: {path}')
-    source_overlay = payload.get('.grok/codex-hooks.json')
-    current_overlay = binding.read('.grok/codex-hooks.json')
-    if (current_overlay.content if current_overlay else None) != (source_overlay.content if source_overlay else None):
-        raise ComponentStateError('custom Codex canonical overlay must be reconciled before adding files')
+    return overlay_only
 
 
 def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
@@ -179,8 +193,7 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
     by_path = {entry.path: entry for entry in payload}
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, kept_digests, {*by_path, '.getzilla/config/compliance.json'})
-    if 'codex' in requested_agents:
-        _codex_preflight(binding, by_path, kept)
+    reactivate_codex = 'codex' in requested_agents and _codex_preflight(binding, by_path, kept)
     results: list[Added] = []
     operations: list[tuple[Any, FileSnapshot | None]] = []
     planned: set[str] = set()
@@ -221,6 +234,13 @@ def _addition_plan(root: Path, needs: list[str], payload: tuple[Any, ...],
                 added.kept.append(entry.path)
                 continue
             if current is not None:
+                if entry.path == '.codex/hooks.json' and reactivate_codex:
+                    operations.append((entry, current))
+                    planned.add(entry.path)
+                    added.files.append(entry.path)
+                    changed_components.add(component)
+                    remember(entry)
+                    continue
                 if current.content != entry.content or not mode_matches(current.mode, entry.mode):
                     added.kept.append(entry.path)
                 else:

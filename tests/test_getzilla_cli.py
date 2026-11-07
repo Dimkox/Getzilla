@@ -41,6 +41,21 @@ class GetzillaCliTests(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertTrue((ROOT / 'scripts' / script).is_file(), script)
 
+    def test_uninstall_uses_global_root_bound_component_command(self) -> None:
+        from unittest import mock
+        with mock.patch.object(cli, 'project_python', return_value='fixture-python'), \
+                mock.patch.object(cli.subprocess, 'run', return_value=subprocess.CompletedProcess([], 23)) as call:
+            self.assertEqual(cli.main(['uninstall']), 23)
+        self.assertEqual(call.call_args.args[0], ['fixture-python', str(ROOT / 'scripts/getzilla_components.py'), 'uninstall'])
+
+    def test_remove_and_uninstall_reject_new_project_operand(self) -> None:
+        for args in (('remove', 'agent:codex', '--project', 'unused'), ('uninstall', '--project', 'unused')):
+            with self.subTest(args=args):
+                result = subprocess.run([sys.executable, str(ROOT / 'scripts/getzilla_components.py'), *args],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('unrecognized arguments', result.stderr)
+
     def test_windows_test_run_uses_utf8_mode(self) -> None:
         from unittest import mock
         calls = []

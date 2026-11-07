@@ -119,6 +119,29 @@ def core_worker_selection(root: Path, mode: str) -> WorkerSelection:
     return WorkerSelection(int(value), source)
 
 
+_CLEANUP_STAGES = frozenset({'owned_stop_reap', 'stdout_capture_file', 'stdout_capture_directory',
+                             'stderr_capture_file', 'stderr_capture_directory', 'run_scratch_directory'})
+_CLEANUP_CATEGORIES = frozenset({'permission', 'not_found', 'timeout', 'recursion', 'os_error', 'other'})
+_CLEANUP_ORIGINS = frozenset({'process', 'tests', 'parallel_shard', 'coverage_combine',
+                              'coverage_report', 'coverage_export'})
+_CLEANUP_LIMIT = 16
+
+
+@dataclass(frozen=True)
+class CleanupFact:
+    stage: str
+    category: str
+    errno: int | None = None
+    origin: str = 'process'
+
+
+@dataclass(frozen=True)
+class CleanupMetadata:
+    facts: tuple[CleanupFact, ...] = ()
+    overflow: bool = False
+    unavailable: bool = False
+
+
 @dataclass
 class ProcessResult:
     command: list[str]
@@ -128,6 +151,121 @@ class ProcessResult:
     seconds: float = 0.0
     terminal_state: str = 'completed'
     cleanup_error: str = ''
+    cleanup_metadata: CleanupMetadata = CleanupMetadata()
+
+
+def _validated_cleanup(value) -> CleanupMetadata:
+    if (type(value) is not CleanupMetadata or type(value.facts) is not tuple
+            or type(value.overflow) is not bool or type(value.unavailable) is not bool):
+        return CleanupMetadata(unavailable=True)
+    facts = []
+    unavailable = value.unavailable
+    for fact in value.facts[:_CLEANUP_LIMIT]:
+        if (type(fact) is not CleanupFact or type(fact.stage) is not str or fact.stage not in _CLEANUP_STAGES
+                or type(fact.category) is not str or fact.category not in _CLEANUP_CATEGORIES
+                or type(fact.origin) is not str or fact.origin not in _CLEANUP_ORIGINS
+                or not (fact.errno is None or type(fact.errno) is int and 0 <= fact.errno <= 65535)):
+            unavailable = True
+        else:
+            facts.append(fact)
+    return CleanupMetadata(tuple(facts), value.overflow or len(value.facts) > _CLEANUP_LIMIT, unavailable)
+
+
+def _merge_cleanup(*values: CleanupMetadata) -> CleanupMetadata:
+    facts = []
+    overflow = unavailable = False
+    for value in values:
+        valid = _validated_cleanup(value)
+        available = _CLEANUP_LIMIT - len(facts)
+        facts.extend(valid.facts[:available])
+        overflow = overflow or valid.overflow or len(valid.facts) > available
+        unavailable = unavailable or valid.unavailable
+    return CleanupMetadata(tuple(facts), overflow, unavailable)
+
+
+def _with_cleanup_origin(value: CleanupMetadata, origin: str) -> CleanupMetadata:
+    valid = _validated_cleanup(value)
+    if type(origin) is not str or origin not in _CLEANUP_ORIGINS:
+        return CleanupMetadata(unavailable=True)
+    return CleanupMetadata(tuple(replace(fact, origin=origin) if fact.origin == 'process' else fact
+                                 for fact in valid.facts), valid.overflow, valid.unavailable)
+
+
+def _stored_cleanup(target) -> CleanupMetadata:
+    try:
+        value = target.cleanup_metadata if isinstance(target, ProcessResult) else getattr(
+            target, '_getzilla_cleanup_metadata', CleanupMetadata())
+    except BaseException:
+        return CleanupMetadata(unavailable=True)
+    return _validated_cleanup(value)
+
+
+def _retain_cleanup(target, metadata: CleanupMetadata) -> None:
+    if target is None:
+        return
+    valid = _validated_cleanup(metadata)
+    if not (valid.facts or valid.overflow or valid.unavailable):
+        return
+    combined = _merge_cleanup(_stored_cleanup(target), valid)
+    try:
+        if isinstance(target, ProcessResult):
+            target.cleanup_metadata = combined
+        else:
+            target._getzilla_cleanup_metadata = combined
+    except BaseException:
+        return  # A diagnostic sidecar must never replace the primary exception.
+
+
+def _cleanup_failure(stage: str | None, error: BaseException) -> CleanupMetadata:
+    if type(stage) is not str or stage not in _CLEANUP_STAGES:
+        return CleanupMetadata(unavailable=True)
+    if isinstance(error, PermissionError):
+        category = 'permission'
+    elif isinstance(error, FileNotFoundError):
+        category = 'not_found'
+    elif isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        category = 'timeout'
+    elif isinstance(error, RecursionError):
+        category = 'recursion'
+    elif isinstance(error, OSError):
+        category = 'os_error'
+    else:
+        category = 'other'
+    try:
+        number = getattr(error, 'errno', None)
+    except BaseException:
+        number = None
+    if not (type(number) is int and 0 <= number <= 65535):
+        number = None
+    return CleanupMetadata((CleanupFact(stage, category, number),))
+
+
+def _result_cleanup(value, origin: str) -> CleanupMetadata:
+    metadata = _stored_cleanup(value)
+    if isinstance(value, ProcessResult):
+        if value.cleanup_error and not metadata.facts:
+            metadata = replace(metadata, unavailable=True)
+    else:
+        try:
+            present = isinstance(value, BaseException) and type(
+                getattr(value, '_getzilla_cleanup_metadata', None)) is CleanupMetadata
+        except BaseException:
+            present = False
+        if not present:
+            metadata = replace(metadata, unavailable=True)
+    return _with_cleanup_origin(metadata, origin)
+
+
+def cleanup_details(value, *, origin: str = 'process', extra=None,
+                    extra_origin: str = 'coverage_export') -> dict[str, object]:
+    """Project closed facts only; private cleanup strings never become public data."""
+    metadata = _result_cleanup(value, origin)
+    if extra is not None and extra is not value:
+        metadata = _merge_cleanup(metadata, _result_cleanup(extra, extra_origin))
+    return {'status': 'recorded' if metadata.facts else ('unavailable' if metadata.unavailable else 'none_reported'),
+            'facts': [{'stage': fact.stage, 'category': fact.category, 'origin': fact.origin,
+                       **({'errno': fact.errno} if fact.errno is not None else {})} for fact in metadata.facts],
+            'overflow': metadata.overflow, 'unavailable': metadata.unavailable}
 
 
 class RunCancelled(SystemExit):
@@ -167,6 +305,7 @@ class CoreTestRun:
     versions: dict[str, str]
     coverage_metadata: dict[str, object]
     progress: dict[str, object] | None = None
+    coverage_export: ProcessResult | None = None
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -244,13 +383,18 @@ def _cancellation():
 
 
 @contextmanager
-def _output_resource(manager, retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+def _output_resource(manager, retained: dict[str, ProcessResult | CleanupMetadata], label: str, cancellation: Cancellation, *,
+                     stage: str | None = None):
     """Close capture resources without replacing a result or primary exception."""
     handle = manager.__enter__()
     primary: BaseException | None = None
     try:
         yield handle
     except BaseException as exc:
+        if retained.get('result') is None:
+            pending = retained.pop('cleanup_metadata', None)
+            if pending is not None:
+                _retain_cleanup(exc, pending)
         primary = exc
         raise
     finally:
@@ -258,10 +402,13 @@ def _output_resource(manager, retained: dict[str, ProcessResult], label: str, ca
             manager.__exit__(type(primary) if primary else None, primary,
                              primary.__traceback__ if primary else None)
         except Exception as cleanup:
-            diagnostic = f'{label} output cleanup failed: {type(cleanup).__name__}: {cleanup}'[:512]
             result = retained.get('result')
             if result is None and isinstance(primary, RunCancelled):
                 result = primary.result
+            _retain_cleanup(result if result is not None else (primary if primary is not None else cleanup),
+                            _merge_cleanup(retained.pop('cleanup_metadata', CleanupMetadata()),
+                                           _cleanup_failure(stage, cleanup)))
+            diagnostic = f'{label} output cleanup failed: {type(cleanup).__name__}: {cleanup}'[:512]
             if result is not None:
                 result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
             elif primary is None:
@@ -273,22 +420,27 @@ def _output_resource(manager, retained: dict[str, ProcessResult], label: str, ca
 
 
 @contextmanager
-def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+def _output_file(retained: dict[str, ProcessResult | CleanupMetadata], label: str, cancellation: Cancellation, *,
+                 file_stage: str | None = None, directory_stage: str | None = None):
     # Anonymous files still emit parent-directory events on Linux. Keep their
     # continuous writes below a stable sibling of child fixture trees, so a
     # fixture's bounded ancestor guard does not consume runner output noise.
     with _output_resource(tempfile.TemporaryDirectory(prefix='grok-capture-'), retained,
-                          f'{label} directory', cancellation) as directory:
-        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation) as handle:
+                          f'{label} directory', cancellation,
+                          stage=directory_stage) as directory:
+        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation,
+                              stage=file_stage) as handle:
             yield handle
 
 
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
     started = time.monotonic()
-    retained: dict[str, ProcessResult] = {}
-    with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled) as stdout, \
-            _output_file(retained, 'stderr', cancelled) as stderr:
+    retained: dict[str, ProcessResult | CleanupMetadata] = {}
+    with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled,
+            file_stage='stdout_capture_file', directory_stage='stdout_capture_directory') as stdout, \
+            _output_file(retained, 'stderr', cancelled, file_stage='stderr_capture_file',
+                         directory_stage='stderr_capture_directory') as stderr:
         cancelled.check(ProcessResult(command, 128 + (cancelled() or 0), terminal_state='cancelled'))
         try:
             process = fsx.owned_popen(command, cwd=root, env=environment, stdout=stdout, stderr=stderr)
@@ -301,6 +453,7 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
             return result
         reason = ''
         cleanup_error = ''
+        cleanup_metadata = CleanupMetadata()
         try:
             while process.poll() is None:
                 if cancelled():
@@ -317,12 +470,15 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
             try:
                 _stop(process)
             except Exception as cleanup:
+                _retain_cleanup(exc, _cleanup_failure('owned_stop_reap', cleanup))
                 exc.add_note(f'owned process cleanup failed: {cleanup}')
             raise
         original_returncode = process.returncode
         try:
             _stop(process)
         except Exception as exc:
+            cleanup_metadata = _merge_cleanup(cleanup_metadata, _cleanup_failure('owned_stop_reap', exc))
+            retained['cleanup_metadata'] = cleanup_metadata
             cleanup_error = f'{type(exc).__name__}: {exc}'[:512]
         if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > OUTPUT_LIMIT:
             reason = 'test process output limit exceeded'
@@ -341,7 +497,9 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         if code is None:
             code = 1
         result = ProcessResult(command, code, out, err + reason, time.monotonic() - started,
-                               'timeout' if reason == 'test process timeout' else 'completed', cleanup_error)
+                               'timeout' if reason == 'test process timeout' else 'completed', cleanup_error,
+                               cleanup_metadata)
+        retained.pop('cleanup_metadata', None)
         retained['result'] = result
         cancelled.check(result)
         return result
@@ -594,14 +752,20 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
-                                         seconds=time.monotonic() - started, terminal_state='timeout')
+                                         seconds=time.monotonic() - started, terminal_state='timeout',
+                                         cleanup_metadata=_merge_cleanup(*(
+                                             _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                                             for item in completed)))
                 if active:
                     time.sleep(0.05)
-        except BaseException:
+        except BaseException as primary:
+            _retain_cleanup(primary, _merge_cleanup(*(
+                _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard') for item in completed)))
             for test_file, process, _stdout, _stderr, _result_file in active:
                 try:
                     _stop(process)
                 except Exception as exc:
+                    _retain_cleanup(primary, _cleanup_failure('owned_stop_reap', exc))
                     cleanup_errors.append(f'{test_file}: {type(exc).__name__}: {exc}'[:256])
             raise
     failed = [result for result in completed if result.returncode != 0]
@@ -609,7 +773,10 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
     stderr = ''.join(result.stderr[-4000:] for result in failed[-20:])
     if failed:
         return ProcessResult(command, failed[0].returncode, stdout=stdout, stderr=stderr,
-                             seconds=time.monotonic() - started)
+                             seconds=time.monotonic() - started,
+                             cleanup_metadata=_merge_cleanup(*(
+                                 _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                                 for item in completed)))
     combine = execute(
         [sys.executable, '-m', 'coverage', 'combine', f'--rcfile={config}', str(data_file.parent)],
         root,
@@ -618,7 +785,11 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
     )
     return ProcessResult(command, combine.returncode, stdout=combine.stdout, stderr=combine.stderr,
                          seconds=time.monotonic() - started,
-                         cleanup_error=combine.cleanup_error)
+                         cleanup_error=combine.cleanup_error,
+                         cleanup_metadata=_merge_cleanup(*(
+                             _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                             for item in completed),
+                             _with_cleanup_origin(_stored_cleanup(combine), 'coverage_combine')))
 
 
 @contextmanager
@@ -638,6 +809,8 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
             result = retained.get('tests')
             if result is None and isinstance(primary, RunCancelled):
                 result = primary.result
+            _retain_cleanup(result if result is not None else (primary if primary is not None else cleanup),
+                            _cleanup_failure('run_scratch_directory', cleanup))
             if result is not None:
                 diagnostic = f'{type(cleanup).__name__}: {cleanup}'[:512]
                 result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
@@ -713,17 +886,21 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             from .pytest_progress import read_progress
             progress = read_progress(progress_root, progress_nonce, workers)
         coverage = None
+        exported = None
         facts: dict[str, object] = {}
         if measured:
             coverage_command = [sys.executable, '-m', 'coverage', 'report', f'--rcfile={config}']
             if not data_file.is_file():
                 coverage = ProcessResult(coverage_command, 1, stderr='current run produced no coverage data')
             else:
+                exporting = False
                 try:
                     coverage = execute(coverage_command, root, environment, timeout=120)
+                    exporting = True
                     exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
-                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress)
+                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress,
+                                              exc.result if exporting else None)
                     raise
                 try:
                     from coverage import Coverage
@@ -744,7 +921,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                 if exported.returncode or tests.returncode or 'failed to return coverage data' in tests.stdout + tests.stderr:
                     coverage.returncode = 1
                     coverage.stderr += '\ncoverage does not qualify an unsuccessful or incomplete test run'
-        return CoreTestRun(tests, coverage, workers, versions, facts, progress)
+        return CoreTestRun(tests, coverage, workers, versions, facts, progress, exported)
 
 
 def run_trust_tests(root: Path, workers: int) -> ProcessResult:

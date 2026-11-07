@@ -4,7 +4,7 @@ globs: **/*.py,pyproject.toml,**/pyproject.toml,ruff.toml,.coveragerc
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/20-python.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/20-python.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Python implementation
 

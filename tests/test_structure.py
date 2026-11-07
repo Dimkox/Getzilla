@@ -223,7 +223,7 @@ class StructureTests(unittest.TestCase):
             "decisions.md",
             "mistakes.md",
             "Makefile",
-            ".grok/hooks/adaptive.json",
+            ".getzilla/config/hooks.json",
             ".getzilla/config/routing.json",
             ".getzilla/config/policy.json",
             "scripts/getzilla_route.py",
@@ -307,8 +307,8 @@ class StructureTests(unittest.TestCase):
         for relative in ('AGENTS.md', '.getzilla/templates/consumer-AGENTS.md.tmpl',
                          '.agents/skills/getzilla-delivery/SKILL.md',
                          '.agents/skills/verification-evidence/SKILL.md',
-                         '.grok/agents/code_reviewer.md', '.grok/agents/code_reviewer.toml',
-                         '.grok/agents/test_reviewer.md', '.grok/agents/test_reviewer.toml'):
+                         '.grok/agents/code_reviewer.md', '.getzilla/agents/code_reviewer.toml',
+                         '.grok/agents/test_reviewer.md', '.getzilla/agents/test_reviewer.toml'):
             text = (ROOT / relative).read_text()
             self.assertIn('canonical project root', text, relative)
             self.assertIn('.getzilla/runtime', text, relative)
@@ -329,7 +329,7 @@ class StructureTests(unittest.TestCase):
         for role in ("code_reviewer", "test_reviewer"):
             with self.subTest(role=role):
                 brief = (ROOT / f".grok/agents/{role}.md").read_text(encoding="utf-8")
-                policy = (ROOT / f".grok/agents/{role}.toml").read_text(encoding="utf-8")
+                policy = (ROOT / f".getzilla/agents/{role}.toml").read_text(encoding="utf-8")
                 self.assertIn("mode = \"read-only\"", policy)
                 for content in (brief, policy):
                     for requirement in common_requirements:
@@ -1171,7 +1171,7 @@ class StructureTests(unittest.TestCase):
         self.assertIn("Durable artifact jobs and their source digests are recorded separately", runbook)
 
     def test_hook_registration_has_required_lifecycle_events(self) -> None:
-        hooks = json.loads((ROOT / ".grok/hooks/adaptive.json").read_text(encoding="utf-8"))["hooks"]
+        hooks = json.loads((ROOT / ".getzilla/config/hooks.json").read_text(encoding="utf-8"))["hooks"]
         for event in (
             "SessionStart",
             "UserPromptSubmit",
