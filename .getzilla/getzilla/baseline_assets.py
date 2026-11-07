@@ -100,7 +100,7 @@ def validate_resources(entries, read):
         entries = {path: (body, 0o644) for path, body in packed.items()}
     if (set(expected) != set(packed)
             or any(len(packed[path]) != size or digest(packed[path]) != path[len(BLOB_PREFIX):-4]
-                   or entries[path][1] != 0o644 for path, size in expected.items())):
+                   or not mode_matches(entries[path][1], 0o644) for path, size in expected.items())):
         raise ValueError('INCOMPLETE_ASSET_ARCHIVE')
 
 

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import zipfile
 import warnings
+from unittest import mock
 
 from tests.test_install_on_demand import INSTALL, ROOT
 from getzilla import baseline_assets as assets
@@ -258,3 +259,71 @@ class ArchiveUpgradeTests(unittest.TestCase):
             upgrade.sync_project(ROOT, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(policy.read_bytes(), b'{"schema_version":1,"dispositions":[]}\n')
+
+
+class ResourceModeContractTests(unittest.TestCase):
+    """Linux pure-data controls of the existing host-mode projection, not native Windows."""
+    def resource_inputs(self):
+        config_path = '.getzilla/config/toolchain.json'
+        metadata = {config_path:(ROOT/config_path).read_bytes()}
+        config = json.loads(metadata[config_path])
+        entries = {}
+        for component in config['workflow_sources']['components']:
+            for record in component['generated_assets'].values():
+                raw = (ROOT/record['path']).read_bytes()
+                metadata[record['path']] = raw
+                for item in json.loads(raw)['files']:
+                    path = BLOBS+item['sha256']+'.txt'
+                    if path not in entries:
+                        entries[path] = ((ROOT/path).read_bytes(),0o644)
+        self.assertEqual(len(entries),522)
+        return entries,metadata.__getitem__
+
+    def test_resource_modes_preserve_posix_strictness(self):
+        from getzilla import fsx
+        entries,read = self.resource_inputs()
+        with mock.patch.object(fsx,'WINDOWS',False):
+            assets.validate_resources(entries,read)
+            for mode in (0o664,0o666,0o755):
+                projected = {path:(body,mode) for path,(body,_mode) in entries.items()}
+                with self.subTest(mode=mode),self.assertRaises(ValueError):
+                    assets.validate_resources(projected,read)
+
+    def test_windows_projection_uses_mode_contract_without_skipping_custody(self):
+        from getzilla import fsx
+        entries,read = self.resource_inputs()
+        projected = {path:(body,0o666) for path,(body,_mode) in entries.items()}
+        first = next(iter(projected))
+        body = projected[first][0]
+        self.assertTrue(body)
+        with mock.patch.object(fsx,'WINDOWS',True):
+            assets.validate_resources(projected,read)
+            readonly = {path:(data,0o444) for path,(data,_mode) in projected.items()}
+            with self.assertRaises(ValueError):
+                assets.validate_resources(readonly,read)
+            for kind in ('missing','extra','hash','size'):
+                changed = dict(projected)
+                if kind == 'missing':
+                    changed.pop(first)
+                elif kind == 'extra':
+                    extra = BLOBS+'0'*64+'.txt'
+                    self.assertNotIn(extra,changed)
+                    changed[extra] = (b'not declared',0o666)
+                elif kind == 'hash':
+                    changed[first] = (bytes([body[0]^1])+body[1:],0o666)
+                else:
+                    changed[first] = (body+b'\n',0o666)
+                with self.subTest(kind=kind),self.assertRaises(ValueError):
+                    assets.validate_resources(changed,read)
+
+    def test_zip_metadata_modes_remain_literal_under_both_host_projections(self):
+        from getzilla import fsx
+        body = b'fixed public archive text\n'
+        name = 'templates/baseline/blobs/'+hashlib.sha256(body).hexdigest()+'.txt'
+        for windows in (False,True):
+            with self.subTest(windows=windows),mock.patch.object(fsx,'WINDOWS',windows):
+                self.assertEqual(assets.archive_entries(archive([(name,body,0o644)])),
+                                 {'.getzilla/'+name:(body,0o644)})
+                for mode in (0o666,0o755,stat.S_IFLNK|0o777):
+                    with self.subTest(mode=mode),self.assertRaises(ValueError):
+                        assets.archive_entries(archive([(name,body,mode)]))
