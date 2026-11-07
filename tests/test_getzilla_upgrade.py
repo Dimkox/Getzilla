@@ -261,7 +261,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_bytes(b'{"old": "history"}\n')
         self.commit('retain state before legacy log migration')
         before = git(self.project, 'rev-parse', 'HEAD')
-        self.assertEqual(upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project), [])
+        self.assertEqual(upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project), [])
         with self.assertRaisesRegex(upgrade.UpdateError, 'kept.*manifest'):
             upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
