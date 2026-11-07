@@ -3,6 +3,7 @@ import hashlib
 import io
 from pathlib import Path
 import stat
+import struct
 import json
 import subprocess
 import tempfile
@@ -34,6 +35,50 @@ class ResourceArchiveTests(unittest.TestCase):
     def decode(self, raw):
         self.assertTrue(callable(getattr(assets, 'archive_entries', None)), 'closed archive reader is missing')
         return assets.archive_entries(raw)
+
+    def raw_suffix_archive(self, name, body, *, nul):
+        declared = (name + 'Xsuffix').encode('ascii')
+        raw = bytearray(archive([(declared.decode('ascii'), body, 0o644)]))
+        # Patch BOTH wire names; ZipInfo(name-with-NUL) would truncate on write.
+        for signature, fixed, length_offset in ((b'PK\x03\x04', 30, 26),
+                                                  (b'PK\x01\x02', 46, 28)):
+            header = raw.index(signature)
+            length, = struct.unpack_from('<H', raw, header + length_offset)
+            self.assertEqual(length, len(declared))
+            start = header + fixed
+            self.assertEqual(raw[start:start + length], declared)
+            if nul:
+                raw[start + len(name)] = 0
+                self.assertEqual(raw[start:start + length], name.encode('ascii') + b'\0suffix')
+        with zipfile.ZipFile(io.BytesIO(raw)) as container:
+            member, = container.infolist()
+            self.assertEqual(member.orig_filename, name + ('\0suffix' if nul else 'Xsuffix'))
+            self.assertEqual(member.filename, name if nul else name + 'Xsuffix')
+        return bytes(raw)
+
+    def name_cases(self):
+        body = b'owned inert public resource\n'
+        return (('getzilla/public.py', b'VALUE = 1\n'),
+                ('templates/baseline/blobs/' + hashlib.sha256(body).hexdigest() + '.txt', body))
+
+    def test_raw_nul_code_and_resource_names_refuse(self):
+        for name, body in self.name_cases():
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'UNSAFE_ASSET_ARCHIVE_MEMBER'):
+                self.decode(self.raw_suffix_archive(name, body, nul=True))
+
+    def test_canonical_names_admit_and_unsupported_non_nul_suffix_refuses(self):
+        for name, body in self.name_cases():
+            with self.subTest(name=name):
+                self.assertEqual(self.decode(archive([(name, body, 0o644)])),
+                                 {'.getzilla/' + name: (body, 0o644)})
+                with self.assertRaisesRegex(ValueError, 'UNSAFE_ASSET_ARCHIVE_MEMBER'):
+                    self.decode(self.raw_suffix_archive(name, body, nul=False))
+
+    def test_raw_nul_name_refuses_before_opening_member_body(self):
+        raw = self.raw_suffix_archive('getzilla/public.py', b'VALUE = 1\n', nul=True)
+        with mock.patch.object(zipfile.ZipFile, 'open', side_effect=AssertionError('invalid name must not select a body')):
+            with self.assertRaisesRegex(ValueError, 'UNSAFE_ASSET_ARCHIVE_MEMBER'):
+                self.decode(raw)
 
     def test_closed_members_and_content_hashes(self):
         body = b'owned public text\n'

@@ -33,6 +33,8 @@ def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
             if not 1 <= len(archive.infolist()) <= MAX_FILES:
                 raise ValueError('ASSET_ARCHIVE_BOUNDS')
             for member in archive.infolist():
+                if member.orig_filename != member.filename:
+                    raise ValueError('UNSAFE_ASSET_ARCHIVE_MEMBER')
                 name = member.filename
                 path_parts(name)
                 logical = '.getzilla/' + name
