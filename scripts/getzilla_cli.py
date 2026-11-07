@@ -21,6 +21,7 @@ sys.path.insert(0, str(HOME / '.getzilla'))
 from getzilla.interpreter import project_python  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
     'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),

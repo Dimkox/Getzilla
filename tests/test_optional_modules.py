@@ -650,5 +650,73 @@ class OptionalModuleTests(unittest.TestCase):
         self.assertEqual(result['target_state'], 'absent')
 
 
+class DesignReferenceModuleTests(unittest.TestCase):
+    """Only the new public design-reference module, never the optional catalogue."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        self.root = self.workspace / 'project'
+        self.root.mkdir()
+        OptionalModuleTests.install_core(self, self.root)
+
+    def install_reference(self):
+        from getzilla.optional_modules import load_registry
+        self.assertIn('design-reference', load_registry(ROOT).data['modules'])
+        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+
+    def test_public_reference_lifecycle_keeps_foreign_files_and_disabled_state(self):
+        foreign = self.root / 'user.css'
+        foreign.write_text(':root { --owned-by-user: 3px; }')
+        self.install_reference()
+        self.assertFalse(admit_module(self.root, 'design-reference')['allowed'])
+        artifact = self.root / '.getzilla/modules/design-reference/reference.py'
+        expected = artifact.read_bytes()
+        artifact.write_bytes(expected + b'\n# foreign change\n')
+        with self.assertRaises(ModuleError):
+            manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
+        artifact.write_bytes(expected)
+        manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
+        admission = admit_module(self.root, 'design-reference', permission='design.reference.read')
+        self.assertTrue(admission['allowed'])
+        self.assertFalse(admission['external_authority'])
+        self.assertEqual(admission['workers'], 0)
+        manage_modules(self.root, 'update', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'disable', {'design-reference': None})
+        self.assertFalse(admit_module(self.root, 'design-reference')['allowed'])
+        manage_modules(self.root, 'uninstall', {'design-reference': None})
+        self.assertEqual(foreign.read_text(), ':root { --owned-by-user: 3px; }')
+        self.assertFalse((self.root / '.getzilla/modules/design-reference/reference.py').exists())
+
+    def test_explicit_installer_bundle_roundtrips_without_default_addon_payload(self):
+        install = installer()
+        try:
+            selection = install.PayloadSelection((), engine_archive=True, design_reference=True)
+        except TypeError:
+            self.fail('existing installer lacks explicit design-reference artifact selection')
+        selected = self.workspace / 'selected'
+        install._materialize_new(ROOT, selected, include_dependencies=False,
+                                 include_optional=False, selection=selection)
+        prefix = '.getzilla/optional-modules/design-reference/0.1.0/'
+        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE'):
+            self.assertEqual((selected / prefix / name).read_bytes(), (ROOT / prefix / name).read_bytes())
+        self.assertFalse((selected / '.getzilla/modules').exists())
+        observed = subprocess.run([sys.executable, str(selected / 'scripts/getzilla_design_reference.py'), '--help'],
+                                  cwd=selected, capture_output=True, timeout=10)
+        self.assertEqual(observed.returncode, 0)
+        manage_modules(selected, 'install', {'design-reference': '0.1.0'}, source=selected)
+        self.assertFalse(admit_module(selected, 'design-reference')['allowed'])
+        # A source install can itself supply exactly the same explicit artifact bundle.
+        second = self.workspace / 'second'
+        second.mkdir()
+        OptionalModuleTests.install_core(self, second)
+        manage_modules(second, 'install', {'design-reference': '0.1.0'}, source=selected)
+        self.assertEqual((second / '.getzilla/modules/design-reference/reference.py').read_bytes(),
+                         (ROOT / prefix / 'reference.py').read_bytes())
+        plain = install.build_payload(ROOT, selection=install.PayloadSelection(()))
+        self.assertFalse([entry for entry in plain if entry.path.startswith('.getzilla/optional-modules/')])
+
+
 if __name__ == '__main__':
     unittest.main()

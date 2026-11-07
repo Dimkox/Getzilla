@@ -3,8 +3,20 @@
   "core_api": 1,
   "publishers": {
     "getzilla": {
-      "licenses": ["MIT"]
+      "licenses": [
+        "MIT"
+      ]
     }
   },
-  "modules": {}
+  "modules": {
+    "design-reference": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/design-reference/0.1.0/module.json",
+          "sha256": "52ddcb4e5b1ff2de970a808d0b7aa1a666c07646065e9f4bd24bedaaab1fdd4e"
+        }
+      }
+    }
+  }
 }
