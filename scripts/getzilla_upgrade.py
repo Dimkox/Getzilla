@@ -277,6 +277,8 @@ def planned_changes(installer, home: Path, project: Path,
     object_format = git(project, 'rev-parse', '--show-object-format').stdout.strip() or 'sha1'
     changes = []
     by_path = {entry.path: entry for entry in payload}
+    incoming_archive = by_path.get(installer.ENGINE_ARCHIVE)
+    archive_members = installer.archive_entries(incoming_archive.content) if incoming_archive else {}
     known = set(by_path) | {path for record in manifest['components'].values() for path in record['files']}
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, digests if digests is not None else kept_digests, known)
@@ -295,6 +297,19 @@ def planned_changes(installer, home: Path, project: Path,
             raise installer.UnsafeInstallTarget(str(exc)) from exc
         for record in manifest['components'].values():
             record.get('owned', {}).pop(path, None)
+    # Retire only actual incoming members whose old physical bytes are positively owned.
+    # A .py suffix or a resource prefix is not proof that the archive replaces a file.
+    for path, (body, mode) in sorted(archive_members.items()):
+        if path in by_path or path not in tree or path in kept:
+            continue
+        current = binding.read(path)
+        if observations is not None:
+            observations[path] = current
+        if not matches_owned(current, owned_proof(state.manifest, path)):
+            raise UpdateError(f'ownership conflict for archived member: {path}')
+        if current.content != body or not mode_matches(current.mode, mode):
+            raise UpdateError(f'archived member differs from its owned legacy file: {path}')
+        changes.append((path, None, ''))
     retained_overlay = binding.read('.grok/codex-hooks.json')
     if observations is not None:
         observations['.grok/codex-hooks.json'] = retained_overlay

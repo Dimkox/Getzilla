@@ -254,6 +254,8 @@ class SkillCliTests(unittest.TestCase):
         driver = r'''
 import json,runpy,sys
 from pathlib import Path
+script,root,kind,mode=sys.argv[1:]
+sys.path.insert(0,str(Path(script).resolve().parents[1]/'.getzilla'))
 from getzilla.component_state import ComponentTransaction
 class DirectInterruption(BaseException):
     pass
@@ -313,7 +315,7 @@ finally:
 '''
         result = subprocess.run([sys.executable, '-c', driver, str(ROOT / 'scripts/getzilla_skill_preflight.py'),
                                  str(fixture.root), kind, 'unknown' if unknown else 'ordinary'],
-                                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True,
+                                env={**{k:v for k,v in os.environ.items() if k != 'PYTHONPATH'}, 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True,
                                 timeout=30, check=False)
         self.assertFalse((fixture.root / '.agents').exists())
         return result, fixture

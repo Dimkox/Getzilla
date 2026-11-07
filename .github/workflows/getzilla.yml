@@ -189,6 +189,14 @@ jobs:
       - name: Record startup capacity
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         run: python scripts/getzilla_startup_cpu.py --no-probe
+      - name: Admit Bubblewrap for required Linux sandbox tests
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          /usr/bin/bwrap --version
+          /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / -- /usr/bin/true
       - name: Install test requirements
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash

@@ -173,6 +173,7 @@ class EdgeContracts(unittest.TestCase):
             source.mkdir()
             deps = root / 'deps'
             deps.mkdir()
+            (source / 'node_modules').mkdir(mode=0o700)
             stage = source / 'stage'
             stage.mkdir()
             reason = 'OVERLAPPING_GENERATOR_ROOTS' if sys.platform == 'linux' else 'UNQUALIFIED_NATIVE_GENERATOR'

@@ -97,8 +97,13 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(MODULE.component_of(path), 'factory', path)
         self.assertEqual({path for path in full if path.startswith('delivery/')},
                          {path for path in support if path.startswith('delivery/')})
+        core_proofs = {'engineering/verification-dispositions.json',
+                       'engineering/vendor-custody/bmad-whitespace.json',
+                       'engineering/vendor-custody/bmad-whitespace.md'}
+        self.assertTrue(core_proofs <= core)
+        self.assertTrue(core_proofs.isdisjoint(support))
         self.assertEqual({path for path in full if path.startswith('engineering/')},
-                         {path for path in support if path.startswith('engineering/')})
+                         {path for path in support if path.startswith('engineering/')} | core_proofs)
         self.assertIn('factory/tests/json_schema_subset.py', full)
         self.assertNotIn('PROJECT_STATE.json', full)
         self.assertFalse(any(path.startswith(('tests/', 'side-projects/')) for path in full))

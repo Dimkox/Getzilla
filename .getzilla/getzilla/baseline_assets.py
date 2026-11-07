@@ -5,6 +5,8 @@ import io
 import csv
 import json
 import re
+import stat
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,90 @@ from .skill_sandbox import MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, OUTPUT_PR
 
 MAX_MANIFEST_BYTES = 524288
 _AGENTS = {'claude', 'codex', 'qwen', 'gemini', 'grok', 'copilot'}
+ENGINE_ARCHIVE = '.getzilla/getzilla.zip'
+BLOB_PREFIX = '.getzilla/templates/baseline/blobs/'
+ARCHIVE_LIMIT = 16 * 1024 * 1024
+
+
+def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
+    """Decode the existing source container; no extraction or code execution."""
+    if type(raw) is not bytes or len(raw) > ARCHIVE_LIMIT:
+        raise ValueError('ASSET_ARCHIVE_BOUNDS')
+    result, total = {}, 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            if not 1 <= len(archive.infolist()) <= MAX_FILES:
+                raise ValueError('ASSET_ARCHIVE_BOUNDS')
+            for member in archive.infolist():
+                name = member.filename
+                path_parts(name)
+                logical = '.getzilla/' + name
+                resource = re.fullmatch(r'templates/baseline/blobs/([a-f0-9]{64})\.txt', name)
+                code = re.fullmatch(r'getzilla/(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.py', name)
+                mode = member.external_attr >> 16
+                if (not (resource or code) or '\\' in name or logical in result or member.is_dir()
+                        or stat.S_IFMT(mode) not in (0, stat.S_IFREG) or stat.S_IMODE(mode) != 0o644
+                        or member.flag_bits & 1 or member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                        or member.file_size > MAX_FILE_BYTES):
+                    raise ValueError('UNSAFE_ASSET_ARCHIVE_MEMBER')
+                total += member.file_size
+                if total > ARCHIVE_LIMIT:
+                    raise ValueError('ASSET_ARCHIVE_BOUNDS')
+                with archive.open(member) as stream:
+                    body = stream.read(MAX_FILE_BYTES + 1)
+                if len(body) != member.file_size or resource and digest(body) != resource[1]:
+                    raise ValueError('ASSET_ARCHIVE_HASH')
+                if b'\0' in body:
+                    raise ValueError('UNSAFE_ASSET_ARCHIVE_MEMBER')
+                body.decode('utf-8')
+                result[logical] = (body, 0o644)
+    except (OSError, zipfile.BadZipFile, UnicodeError, RuntimeError) as exc:
+        raise ValueError('INVALID_ASSET_ARCHIVE') from exc
+    return result
+
+
+def read_archive(binding: BoundRoot):
+    """Keep the descriptor-bound container snapshot paired with its actual members."""
+    snapshot = binding.read(ENGINE_ARCHIVE, limit=ARCHIVE_LIMIT)
+    if snapshot is None:
+        return None
+    if snapshot.mode & 0o111:
+        raise ValueError('UNSAFE_ASSET_ARCHIVE')
+    entries = archive_entries(snapshot.content)
+    if binding.read(ENGINE_ARCHIVE, limit=ARCHIVE_LIMIT) != snapshot:
+        raise ValueError('ASSET_ARCHIVE_CHANGED')
+    return snapshot, entries
+
+
+def validate_resources(entries, read):
+    """All configured manifests must have their complete closed resource set."""
+    packed = {path: body for path, (body, _mode) in entries.items() if path.startswith(BLOB_PREFIX)}
+    config = parse_json(read('.getzilla/config/toolchain.json'), limit=1048576)
+    expected = {}
+    for component in config['workflow_sources']['components']:
+        for record in component['generated_assets'].values():
+            if not re.fullmatch(r'\.getzilla/templates/baseline/[a-z0-9-]+\.json', record['path']):
+                raise ValueError('INVALID_ASSET_CONFIG')
+            raw = read(record['path'])
+            if digest(raw) != record['sha256']:
+                raise ValueError('ASSET_HASH_MISMATCH')
+            metadata = parse_json(raw, limit=MAX_MANIFEST_BYTES)
+            for item in metadata['files']:
+                if not re.fullmatch('[a-f0-9]{64}', item['sha256']):
+                    raise ValueError('INVALID_ASSET_CONFIG')
+                path = BLOB_PREFIX + item['sha256'] + '.txt'
+                if path in expected and expected[path] != item['bytes']:
+                    raise ValueError('ASSET_CONTENT_MISMATCH')
+                expected[path] = item['bytes']
+    if not packed:
+        # Legacy Python-only containers are valid only with the complete loose
+        # resource closure. An empty set is not proof of unrelated content.
+        packed = {path: read(path) for path in expected}
+        entries = {path: (body, 0o644) for path, body in packed.items()}
+    if (set(expected) != set(packed)
+            or any(len(packed[path]) != size or digest(packed[path]) != path[len(BLOB_PREFIX):-4]
+                   or entries[path][1] != 0o644 for path, size in expected.items())):
+        raise ValueError('INCOMPLETE_ASSET_ARCHIVE')
 
 
 @dataclass(frozen=True)
@@ -32,6 +118,16 @@ def load(component: str, agent: str, *, windows=False, source_root: Path | None 
     source_root = STACK_DIR.parent if source_root is None else source_root
     try:
         with BoundRoot(source_root) as binding:
+            archived = read_archive(binding)
+            if archived is not None:
+                def read_metadata(path):
+                    file = binding.read(path, limit=MAX_FILE_BYTES if path.startswith(BLOB_PREFIX) else 1048576)
+                    if file is None:
+                        raise ValueError('MISSING_ASSET_MANIFEST')
+                    if path.startswith(BLOB_PREFIX) and not mode_matches(file.mode, 0o644):
+                        raise ValueError('ASSET_MODE_MISMATCH')
+                    return file.content
+                validate_resources(archived[1], read_metadata)
             raw_config = binding.read('.getzilla/config/toolchain.json', limit=1048576)
             if raw_config is None:
                 raise ValueError('MISSING_ASSET_CONFIG')
@@ -81,10 +177,13 @@ def load(component: str, agent: str, *, windows=False, source_root: Path | None 
                 if content is None:
                     blob = binding.read('.getzilla/templates/baseline/blobs/' + item['sha256'] + '.txt',
                                         limit=MAX_FILE_BYTES)
-                    if blob is None:
+                    packed = archived[1].get(BLOB_PREFIX + item['sha256'] + '.txt') if archived else None
+                    if blob is not None and packed is not None and (blob.content, blob.mode) != packed:
+                        raise ValueError('CONFLICTING_ASSET_REPRESENTATIONS')
+                    if blob is None and packed is None:
                         raise ValueError('MISSING_ASSET_BLOB')
-                    content = blob.content
-                    if blob.mode & 0o111 or b'\0' in content:
+                    content = blob.content if blob is not None else packed[0]
+                    if blob is not None and blob.mode & 0o111 or b'\0' in content:
                         raise ValueError('UNSUPPORTED_ASSET_BLOB')
                     try:
                         content.decode('utf-8')
@@ -94,6 +193,8 @@ def load(component: str, agent: str, *, windows=False, source_root: Path | None 
                 if len(content) != item['bytes'] or digest(content) != item['sha256']:
                     raise ValueError('ASSET_CONTENT_MISMATCH')
                 result.append((name, content, item['mode']))
+            if archived and binding.read(ENGINE_ARCHIVE, limit=ARCHIVE_LIMIT) != archived[0]:
+                raise ValueError('ASSET_ARCHIVE_CHANGED')
         return AssetPayload(component, agent, record['sha256'], tuple(result))
     except (ComponentStateError, OSError, KeyError, TypeError, StopIteration) as exc:
         raise ValueError('UNQUALIFIED_BASELINE_ASSETS') from exc
