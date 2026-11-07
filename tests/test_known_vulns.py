@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import copy
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import unittest
 import zipfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -178,8 +180,9 @@ class OfflineTests(unittest.TestCase):
             KV.scan(root, environ={'GETZILLA_OSV_DB': db})
 
     def test_range_edges(self) -> None:
-        affected = {'ranges': [{'type': 'ECOSYSTEM', 'events': [
-            {'introduced': '1.0'}, {'fixed': '1.5'}, {'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
+        affected = {'package': {'ecosystem': 'PyPI'}, 'ranges': [
+            {'type': 'ECOSYSTEM', 'events': [{'introduced': '1.0'}, {'fixed': '1.5'}]},
+            {'type': 'ECOSYSTEM', 'events': [{'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
@@ -187,7 +190,8 @@ class OfflineTests(unittest.TestCase):
         open_ended = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '3.0.0'}]}]}
         self.assertTrue(KV._in_ranges('9.9.9', open_ended))
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
-        self.assertFalse(KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}))
+        with self.assertRaises(KV.VulnerabilityError):
+            KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]})
 
 
 class OnlineTests(unittest.TestCase):
@@ -350,6 +354,117 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
             KV.download_database(Path(db), ['Hex'], fetch=fetch)  # an ecosystem Getzilla does not download
+
+
+class NativeAliasTests(unittest.TestCase):
+    dependency = KV.Dependency('PyPI', 'jinja2', '2.11.0', 'requirements.txt')
+
+    @staticmethod
+    def archive(records):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w') as bundle:
+            for index, record in enumerate(records):
+                bundle.writestr(f'public-{index}.json', json.dumps(record))
+        return data.getvalue()
+
+    @staticmethod
+    def record(case='matched', aliases='CVE-2099-9999'):
+        record = copy.deepcopy(JINJA)
+        record['aliases'] = aliases
+        if case == 'withdrawn':
+            record['withdrawn'] = '2026-01-01T00:00:00Z'
+        elif case == 'unrelated':
+            record['affected'][0]['package']['name'] = 'unrelated-public-package'
+        elif case == 'unaffected':
+            record['affected'][0]['ranges'][0]['events'][-1]['fixed'] = '1.0.0'
+        return record
+
+    def test_description_preserves_nullable_aliases_without_mutating_records(self):
+        for case, aliases in enumerate((None, [], ['CVE-2024-22195', 'OSV_PUBLIC:1'])):
+            with self.subTest(case=case):
+                record = self.record(aliases=aliases)
+                before = copy.deepcopy(record)
+                finding = KV._describe(record, self.dependency)
+                self.assertEqual(finding.aliases, sorted(aliases or []))
+                self.assertIsNot(finding.aliases, aliases)
+                self.assertEqual(record, before)
+        record = self.record()
+        del record['aliases']
+        self.assertEqual(KV._describe(record, self.dependency).aliases, [])
+
+    def test_description_rejects_invalid_alias_shape_elements_and_ids_without_echo(self):
+        malformed = ('CVE-2099-9999', {}, {'CVE-2099-9999': True}, 0, True,
+                     [1], [None], [[]], [''], ['GHSA-public,'], [' CVE-2099-9999 '],
+                     ['CVE-2099-9999\n'], ['CVE-2099-9999', False])
+        for case, aliases in enumerate(malformed):
+            with self.subTest(case=case):
+                try:
+                    KV._describe(self.record(aliases=aliases), self.dependency)
+                except KV.VulnerabilityError as error:
+                    self.assertEqual(str(error), 'OSV aliases must be null or a list of valid identifiers')
+                except (TypeError, ValueError):
+                    self.fail('malformed aliases escaped as an untyped error')
+                else:
+                    self.fail('malformed aliases were accepted or coerced')
+
+    def test_offline_alias_admission_precedes_every_record_filter(self):
+        for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
+                _mirror(Path(database), 'PyPI', [self.record(case)])
+                with self.assertRaises(KV.VulnerabilityError):
+                    KV.query_offline([self.dependency], Path(database))
+
+    def test_online_detail_alias_admission_precedes_description(self):
+        def fetch(url, body):
+            if url == KV.OSV_API+'/querybatch':
+                return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]}).encode()
+            self.assertEqual(url, KV.OSV_API+'/vulns/'+JINJA['id'])
+            return json.dumps(self.record()).encode()
+        with patch.object(KV, '_describe', return_value=KV.Finding(self.dependency, JINJA['id'])) as describe:
+            with self.assertRaises(KV.VulnerabilityError):
+                KV.query_online([self.dependency], fetch=fetch)
+            describe.assert_not_called()
+
+    def test_online_nullable_aliases_preserve_actual_findings(self):
+        for case, aliases in enumerate((None, [], ['CVE-2024-22195'])):
+            with self.subTest(case=case):
+                record = self.record(aliases=aliases)
+                def fetch(url, body):
+                    if url == KV.OSV_API+'/querybatch':
+                        return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]}).encode()
+                    self.assertEqual(url, KV.OSV_API+'/vulns/'+JINJA['id'])
+                    return json.dumps(record).encode()
+                [finding] = KV.query_online([self.dependency], fetch=fetch)
+                self.assertEqual(finding.aliases, aliases or [])
+
+    def test_rejected_alias_refresh_preserves_prior_archive_bytes_and_inode(self):
+        for case in ('matched', 'withdrawn'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
+                old = self.archive([JINJA])
+                _mirror(Path(database), 'PyPI', [JINJA])
+                target = Path(database)/'PyPI/all.zip'
+                target.write_bytes(old)
+                identity = target.stat().st_dev, target.stat().st_ino
+                rejected = False
+                try:
+                    KV.download_database(Path(database), ['PyPI'],
+                        fetch=lambda _url, _body: self.archive([self.record(case)]))
+                except KV.VulnerabilityError:
+                    rejected = True
+                self.assertEqual(target.read_bytes(), old, 'rejected refresh replaced the prior cache')
+                self.assertEqual((target.stat().st_dev, target.stat().st_ino), identity)
+                self.assertTrue(rejected)
+                self.assertFalse(target.with_suffix('.zip.partial').exists())
+
+    def test_nullable_archive_publication_roundtrips_through_actual_reader(self):
+        with tempfile.TemporaryDirectory() as database:
+            data = self.archive([self.record(aliases=None)])
+            target = Path(database)/'PyPI/all.zip'
+            written = KV.download_database(Path(database), ['PyPI'], fetch=lambda _url, _body: data)
+            self.assertEqual(written, [str(target)])
+            self.assertEqual(target.read_bytes(), data)
+            [finding] = KV.query_offline([self.dependency], Path(database))
+            self.assertEqual(finding.aliases, [])
 
 
 if __name__ == '__main__':
