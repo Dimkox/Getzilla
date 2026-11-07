@@ -13,6 +13,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
@@ -135,9 +137,9 @@ targets = sys.argv[2:] or ['factory.tests.test_owner_autonomy', 'factory.tests.t
 result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromNames(targets))
 raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
 '''
-        with tempfile.TemporaryDirectory() as directory:
+        with public_source_copy(ROOT) as source, tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'consumer'
-            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
+            MODULE.materialize_new(source, target, selection=MODULE.PayloadSelection.full_layout())
 
             def run(*targets):
                 # The publisher validates every ancestor. A checkout may have a
@@ -184,11 +186,12 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                   'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
                   'unqualified_skips': evidence.get('unqualified_skips')}))
 """
-        with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
+        with public_source_copy(ROOT) as source, \
+                tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
                 tempfile.TemporaryDirectory(prefix='g-', dir=os.path.realpath('/tmp')) as child_temp:
             target = Path(temporary) / 'c'
             selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
-            MODULE.materialize_new(ROOT, target, selection=selection)
+            MODULE.materialize_new(source, target, selection=selection)
             self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
             environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
             result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,

@@ -26,6 +26,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
@@ -502,7 +503,11 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
         package = affected.get('package') or {}
         if package.get('ecosystem') != dependency.ecosystem:
             continue
-        if normalize_name(dependency.ecosystem, str(package.get('name', ''))) != normalize_name(dependency.ecosystem, dependency.name):
+        name = normalize_name(dependency.ecosystem, str(package.get('name', '')))
+        if name == '*':
+            if not _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
+                continue
+        elif name != normalize_name(dependency.ecosystem, dependency.name):
             continue
         specific = affected.get('database_specific') or {}
         severity = severity or str(specific.get('severity') or '')
@@ -594,7 +599,9 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                     package = affected.get('package') or {}
                     if package.get('ecosystem') != ecosystem:
                         continue
-                    for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
+                    name = normalize_name(ecosystem, str(package.get('name', '')))
+                    candidates = chain.from_iterable(by_name.values()) if name == '*' else by_name.get(name, ())
+                    for dependency in candidates:
                         if _in_ranges(dependency.version, affected, ecosystem=ecosystem):
                             findings.append(_describe(record, dependency))
     unique = {(item.dependency, item.vuln_id): item for item in findings}
