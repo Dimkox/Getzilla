@@ -35,8 +35,16 @@ and coverage. Its digest excludes the run envelope's capture ID/time. Evidence i
 an advisory JSON record with readable summary and relative source references,
 published exclusively under the actual task's evidence/design-reference folder.
 At most32 records are retained; capacity refuses instead of pruning history.
-Replay of the same full record matches. Capture ID/time can be supplied explicitly
-for reproducible replay. Existing records are never replaced.
+Capture IDs are unique within the actual task. Exact replay of the same full
+record, including retained timestamp, returns its existing record even at capacity.
+Reusing an ID with different content, timestamp or task context refuses before a
+second write. A new event needs a new ID. Existing records are never replaced.
+The bounded32-record history is validated before publication; unknown, malformed,
+cross-task, duplicate-ID or unsafe entries cause refusal. There is no second
+ledger. Existing task serialization coordinates writers; it is not OS confinement.
+Older contexts/epochs from the same stable task remain historical advisory data.
+Each new capture needs fresh current ownership, scope and admission. Old records
+never authorize a new action or qualify a PASS. A context change needs a new ID.
 
 `getzilla design-reference diff <previous-record-sha256> <current-record-sha256>`
 reads only that task's immutable records. It compares token values and logical

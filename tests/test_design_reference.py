@@ -72,6 +72,123 @@ class LocalDesignReferenceTests(unittest.TestCase):
         return module.capture(self.root, files, capture_id=capture_id,
                               captured_at='2026-11-07T00:00:00Z')
 
+    def record_fixture(self):
+        from getzilla.optional_modules import manage_modules
+        from getzilla.state import bind_session, current_session
+        from tests.test_optional_modules import OptionalModuleTests
+        previous = current_session()
+        session = previous or 'public-design-fixture-session'
+        bind_session(session)
+        self.addCleanup(bind_session, previous)
+        OptionalModuleTests.install_core(self, self.root)
+        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
+        _route, directory = create_public_task(self.root, session)
+        command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
+        (self.root / 'tokens.json').write_text('{"x":"1px"}')
+        first = command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
+        return command, directory / 'evidence/design-reference', first
+
+    def test_full32_history_keeps_exact_replay_and_refuses_the_next_event(self):
+        command, directory, first = self.record_fixture()
+        for index in range(31):
+            command.capture(self.root, ['tokens.json'], capture_id='event-' + str(index),
+                            captured_at='2026-11-07T00:00:00Z')
+        before = {path.name: path.read_bytes() for path in directory.iterdir()}
+        self.assertEqual(len(before), 32)
+        replay = command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(first['artifact'], replay['artifact'])
+        with self.assertRaises(command.DesignReferenceError) as refused:
+            command.capture(self.root, ['tokens.json'], capture_id='event-32', captured_at='2026-11-07T00:00:00Z')
+        self.assertEqual(refused.exception.args, ('design_reference_capacity',))
+        self.assertEqual({path.name: path.read_bytes() for path in directory.iterdir()}, before)
+
+    def test_older_task_contexts_are_advisory_and_new_ids_use_fresh_binding(self):
+        from getzilla.continuity import ack_scope, submit
+        from getzilla.spec import canonical_spec_digest
+        from getzilla.state import current_session
+        command, directory, first = self.record_fixture()
+        old = (self.root / first['artifact']).read_bytes()
+        text = 'Include a second owned public observation; preserve the first advisory snapshot.'
+        route = submit(self.root, text, current_session())
+        package = directory.parents[1]
+        requirements = (package / 'requirements.md').read_bytes() + text.encode() + b'\n'
+        (package / 'requirements.md').write_bytes(requirements)
+        spec = json.loads((package / 'change-spec.yaml').read_text())
+        ack_scope(self.root, {'version': 1, 'operation_id': 'public-context-amendment',
+                             'route_id': route['route_id'], 'logical_task_id': route['logical_task_id'],
+                             'authority_epoch': route['authority_epoch'], 'revision': route['context']['revision'],
+                             'spec_digest': canonical_spec_digest(spec),
+                             'requirements_digest': hashlib.sha256(requirements).hexdigest(),
+                             'items': {'original': ['OBJ-001', 'AC-001'],
+                                       route['context']['pending'][0]['id']: ['AC-001']}})
+        second = command.capture(self.root, ['tokens.json'], capture_id='new-context', captured_at='2026-11-07T00:00:00Z')
+        new = json.loads((self.root / second['artifact']).read_bytes())
+        self.assertGreater(new['task']['context_revision'], json.loads(old)['task']['context_revision'])
+        self.assertEqual((self.root / first['artifact']).read_bytes(), old)
+        self.assertEqual(command.compare(self.root, first['sha256'], second['sha256'])['changed'], [])
+        with self.assertRaises(command.DesignReferenceError):
+            command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
+        # Pure reader DTO contrast only: no actual handoff, principal or route change.
+        context, _directory = command._task(self.root)
+        later_epoch = dict(context, authority_epoch=1, context_revision=0)
+        later_epoch['digest'] = hashlib.sha256(command._encode({key: value for key, value in later_epoch.items() if key != 'digest'})).hexdigest()
+        admission = command._admitted(self.root)
+        module = command._load(self.root, admission)
+        with command.ReadOnlyBoundRoot(self.root) as binding:
+            try:
+                historical = command._history(binding, directory.relative_to(self.root).as_posix(), module,
+                                              later_epoch, admission)
+            except command.DesignReferenceError:
+                self.fail('older epochs are historical advisory data, not current authority')
+        self.assertEqual(len(historical), 2)
+        self.assertEqual(command._task(self.root)[0]['authority_epoch'], 0)
+
+    def test_unknown_malformed_duplicate_or_unowned_history_refuses_before_new_write(self):
+        command, directory, first = self.record_fixture()
+        original = (self.root / first['artifact']).read_bytes()
+        extra = json.loads(original)
+        extra['unknown'] = 'public fixture'
+        extra['pack']['capture']['id'] = 'public-extra-capture'
+        duplicate = json.loads(original)
+        duplicate['pack']['capture']['timestamp'] = '2026-11-07T00:00:01Z'
+        other_task = json.loads(original)
+        other_task['task']['logical_task_id'] = 'task:public-other-record'
+        other_task['pack']['capture']['id'] = 'public-other-capture'
+        task = other_task['task']
+        task['digest'] = hashlib.sha256(command._encode({key: value for key, value in task.items() if key != 'digest'})).hexdigest()
+        future = json.loads(original)
+        future['pack']['capture']['id'] = 'public-future-capture'
+        future['task']['authority_epoch'] = 1
+        future['task']['digest'] = hashlib.sha256(command._encode({key: value for key, value in future['task'].items() if key != 'digest'})).hexdigest()
+        cases = [b'not JSON', b'{"schema_version":1,"schema_version":1}',
+                 command._encode(extra), command._encode(duplicate), command._encode(other_task), command._encode(future),
+                 b'x' * (command.MAX_RECORD_BYTES + 1)]
+        for raw in cases:
+            path = directory / (hashlib.sha256(raw).hexdigest() + '.json')
+            path.write_bytes(raw)
+            path.chmod(0o600)
+            with self.assertRaises(command.DesignReferenceError):
+                command.capture(self.root, ['tokens.json'], capture_id='second', captured_at='2026-11-07T00:00:00Z')
+            self.assertEqual(len(list(directory.iterdir())), 2)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual((self.root / first['artifact']).read_bytes(), original)
+            path.unlink()  # Only this test's own injected fixture.
+        unknown = directory / 'unknown.json'
+        unknown.write_bytes(b'public unknown entry')
+        with self.assertRaises(command.DesignReferenceError):
+            command.capture(self.root, ['tokens.json'], capture_id='second', captured_at='2026-11-07T00:00:00Z')
+        self.assertEqual(unknown.read_bytes(), b'public unknown entry')
+        unknown.unlink()
+        if not command.fsx.WINDOWS:
+            target = self.root / first['artifact']
+            target.chmod(0o644)
+            with self.assertRaises(command.DesignReferenceError):
+                command.capture(self.root, ['tokens.json'], capture_id='second', captured_at='2026-11-07T00:00:00Z')
+            self.assertEqual(len(list(directory.iterdir())), 1)
+            target.chmod(0o600)
+
     def test_json_css_preserve_raw_units_locators_and_repeatable_content(self):
         module = self.extractor()
         (self.root / 'tokens.json').write_text('{"space":{"small":"8px"},"weight":700}')
@@ -244,12 +361,20 @@ class LocalDesignReferenceTests(unittest.TestCase):
         route, directory = create_public_task(self.root, session)
         first = command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
         old = (self.root / first['artifact']).read_bytes()
-        replay = command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
+        with patch.object(command, 'MAX_HISTORY', 1):
+            replay = command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
         self.assertEqual(first['artifact'], replay['artifact'])
         self.assertTrue(replay['replayed'])
         self.assertTrue(first['advisory'])
         self.assertEqual(json.loads(old)['task']['logical_task_id'], route['logical_task_id'])
+        with self.assertRaises(command.DesignReferenceError) as refused:
+            command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:01Z')
+        self.assertEqual(refused.exception.args, ('design_reference_id_conflict',))
+        self.assertEqual(len(list((directory / 'evidence/design-reference').iterdir())), 1)
         (self.root / 'tokens.json').write_text('{"x":"3px","y":"2px"}')
+        with self.assertRaises(command.DesignReferenceError):
+            command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
+        self.assertEqual(len(list((directory / 'evidence/design-reference').iterdir())), 1)
         second = command.capture(self.root, ['tokens.json'], capture_id='b', captured_at='2026-11-07T00:00:00Z')
         difference = command.compare(self.root, first['sha256'], second['sha256'])
         self.assertEqual(len(difference['changed']), 1)
