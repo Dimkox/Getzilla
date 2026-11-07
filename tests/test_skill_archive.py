@@ -77,6 +77,24 @@ class ResourceArchiveTests(unittest.TestCase):
             with self.assertRaises(INSTALL.UnsafeInstallTarget):
                 INSTALL.build_payload(target, selection=selection)
 
+    def test_installed_manifest_cannot_omit_mandatory_component_files(self):
+        from getzilla.component_state import MANIFEST, decode_manifest, encode_manifest
+        cases = (('core','scripts/getzilla_route.py',False),
+                 ('core','engineering/vendor-custody/bmad-whitespace.md',False),
+                 ('factory','factory/pyproject.toml',True))
+        for component, missing, factory in cases:
+            with self.subTest(component=component, missing=missing), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory)/'consumer'
+                selection = INSTALL.PayloadSelection((),factory=factory,engine_archive=True)
+                INSTALL._materialize_new(ROOT,target,include_dependencies=False,include_optional=False,selection=selection)
+                manifest = decode_manifest((target/MANIFEST).read_bytes())
+                manifest['components'][component]['files'].remove(missing)
+                manifest['components'][component]['owned'].pop(missing)
+                (target/MANIFEST).write_bytes(encode_manifest(manifest))
+                (target/missing).unlink()
+                with self.assertRaises(INSTALL.UnsafeInstallTarget):
+                    INSTALL.build_payload(target,selection=selection)
+
     def test_conflicting_loose_archive_resource_refuses(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)/'consumer'

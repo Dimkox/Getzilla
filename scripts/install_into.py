@@ -909,6 +909,7 @@ def _build_full_payload(
         # A Core installation is a source for its installed components, not for
         # absent Factory files. Its inventoried manifest declares that boundary.
         installed = None
+        installed_components = {'core'}
         manifest_identity = next((identity for path, identity in inventory
                                   if path == COMPONENT_MANIFEST), None)
         if manifest_identity is not None:
@@ -918,11 +919,13 @@ def _build_full_payload(
             except ComponentStateError as exc:
                 raise UnsafeInstallTarget('invalid installed source manifest') from exc
             installed = {path for record in manifest['components'].values() for path in record['files']}
+            installed_components.update(manifest['components'])
         entries = []
         for relative, expected_identity in inventory:
             if relative in ROOT_HOOK_SHIMS:
                 continue
-            if installed is not None and expected_identity is None and relative not in installed:
+            if (installed is not None and expected_identity is None and relative not in installed
+                    and component_of(relative) not in installed_components):
                 optional = tree.read(relative, MAX_SOURCE_FILE_BYTES, missing_ok=True)
                 if optional is not None:
                     entries.append(InstallEntry(relative, *optional))
