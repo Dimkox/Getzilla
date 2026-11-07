@@ -5,6 +5,7 @@ from copy import deepcopy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -707,6 +708,25 @@ class DesignReferenceModuleTests(unittest.TestCase):
         self.assertEqual(observed.returncode, 0)
         manage_modules(selected, 'install', {'design-reference': '0.1.0'}, source=selected)
         self.assertFalse(admit_module(selected, 'design-reference')['allowed'])
+        from getzilla.state import bind_session, current_session
+        from tests.test_design_reference import create_public_task
+        previous = current_session()
+        session = previous or 'public-design-fixture-session'
+        bind_session(session)
+        self.addCleanup(bind_session, previous)
+        create_public_task(selected, session)
+        manage_modules(selected, 'enable', {'design-reference': None}, grants=['design.reference.read'])
+        (selected / 'public-tokens.json').write_text('{"gap":"12px"}')
+        result = subprocess.run([sys.executable, str(selected / 'scripts/getzilla_design_reference.py'),
+                                 '--root', str(selected), 'capture', '--file', 'public-tokens.json',
+                                 '--capture-id', 'installed-public', '--timestamp', '2026-11-07T00:00:00Z'],
+                                cwd=selected, env={**os.environ, 'GETZILLA_SESSION_ID': session,
+                                                   'PYTHONDONTWRITEBYTECODE': '1'},
+                                capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0)
+        evidence = json.loads((selected / json.loads(result.stdout)['artifact']).read_bytes())
+        self.assertEqual(evidence['pack']['content']['tokens'][0]['raw_value'], '12px')
+        self.assertEqual(evidence['pack']['content']['tokens'][0]['unit'], 'px')
         # A source install can itself supply exactly the same explicit artifact bundle.
         second = self.workspace / 'second'
         second.mkdir()

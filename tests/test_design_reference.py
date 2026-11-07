@@ -24,6 +24,39 @@ def load_file(path, name):
     return module
 
 
+def create_public_task(root, session):
+    """Use normal task/package/scope APIs on an owned public fixture only."""
+    from getzilla.change import start_change
+    from getzilla.continuity import ack_scope, submit
+    from getzilla.spec import canonical_spec_digest
+    subprocess.run(['git', 'init', '--quiet', str(root)], check=True,
+                   capture_output=True, timeout=10)
+    route = submit(root, 'Observe this owned public token fixture only.', session, new_task=True)
+    shutil.copytree(ROOT / '.getzilla/templates/change', root / '.getzilla/templates/change', dirs_exist_ok=True)
+    (root / 'schemas').mkdir(exist_ok=True)
+    for name in ('change-spec.schema.json', 'change-spec-v1.schema.json'):
+        shutil.copyfile(ROOT / 'schemas' / name, root / 'schemas' / name)
+    (root / 'tests').mkdir(exist_ok=True)
+    shutil.copyfile(Path(__file__), root / 'tests/test_design_reference.py')
+    package = start_change(root, 'Public design-reference fixture')
+    directory = root / '.getzilla/runtime/changes' / package['change_id']
+    spec = json.loads((directory / 'change-spec.yaml').read_text())
+    spec['objective'] = {'id': 'OBJ-001', 'statement': 'Observe owned public local fixture values.',
+                         'success_metric': 'Advisory immutable record only.', 'target': 'tokens.json'}
+    spec['acceptance_criteria'] = [{'id': 'AC-001', 'statement': 'Retain immutable advisory public observations.',
+                                    'evidence': [{'test': 'tests/test_design_reference.py'}]}]
+    (directory / 'change-spec.yaml').write_text(json.dumps(spec))
+    requirements = b'Observe owned public local fixture values only; no acceptance authority.\n'
+    (directory / 'requirements.md').write_bytes(requirements)
+    ack_scope(root, {'version': 1, 'operation_id': 'public-fixture-scope',
+                    'route_id': route['route_id'], 'logical_task_id': route['logical_task_id'],
+                    'authority_epoch': route['authority_epoch'], 'revision': 0,
+                    'spec_digest': canonical_spec_digest(spec),
+                    'requirements_digest': hashlib.sha256(requirements).hexdigest(),
+                    'items': {'original': ['OBJ-001', 'AC-001']}})
+    return route, directory
+
+
 class LocalDesignReferenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -157,10 +190,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         jsonschema.Draft202012Validator(schema).validate(result)
 
     def test_actual_owned_task_evidence_replay_diff_capacity_and_missing_owner(self):
-        from getzilla.change import start_change
-        from getzilla.continuity import ack_scope, submit
         from getzilla.optional_modules import manage_modules
-        from getzilla.spec import canonical_spec_digest
         from getzilla.state import bind_session, current_session
         from tests.test_optional_modules import OptionalModuleTests
         previous_session = current_session()
@@ -175,31 +205,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         with self.assertRaises(command.DesignReferenceError):
             command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
         self.assertFalse(list((self.root / '.getzilla/runtime').glob('changes/*/evidence/design-reference/*.json')))
-        subprocess.run(['git', 'init', '--quiet', str(self.root)], check=True,
-                       capture_output=True, timeout=10)
-        route = submit(self.root, 'Observe this owned public token fixture only.', session, new_task=True)
-        shutil.copytree(ROOT / '.getzilla/templates/change', self.root / '.getzilla/templates/change')
-        (self.root / 'schemas').mkdir()
-        for name in ('change-spec.schema.json', 'change-spec-v1.schema.json'):
-            shutil.copyfile(ROOT / 'schemas' / name, self.root / 'schemas' / name)
-        (self.root / 'tests').mkdir()
-        shutil.copyfile(Path(__file__), self.root / 'tests/test_design_reference.py')
-        package = start_change(self.root, 'Public design-reference fixture')
-        directory = self.root / '.getzilla/runtime/changes' / package['change_id']
-        spec = json.loads((directory / 'change-spec.yaml').read_text())
-        spec['objective'] = {'id': 'OBJ-001', 'statement': 'Observe owned public local fixture values.',
-                             'success_metric': 'Advisory immutable record only.', 'target': 'tokens.json'}
-        spec['acceptance_criteria'] = [{'id': 'AC-001', 'statement': 'Retain immutable advisory public observations.',
-                                        'evidence': [{'test': 'tests/test_design_reference.py'}]}]
-        (directory / 'change-spec.yaml').write_text(json.dumps(spec))
-        requirements = b'Observe owned public local fixture values only; no acceptance authority.\n'
-        (directory / 'requirements.md').write_bytes(requirements)
-        ack_scope(self.root, {'version': 1, 'operation_id': 'public-fixture-scope',
-                             'route_id': route['route_id'], 'logical_task_id': route['logical_task_id'],
-                             'authority_epoch': route['authority_epoch'], 'revision': 0,
-                             'spec_digest': canonical_spec_digest(spec),
-                             'requirements_digest': hashlib.sha256(requirements).hexdigest(),
-                             'items': {'original': ['OBJ-001', 'AC-001']}})
+        route, directory = create_public_task(self.root, session)
         first = command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
         old = (self.root / first['artifact']).read_bytes()
         replay = command.capture(self.root, ['tokens.json'], capture_id='a', captured_at='2026-11-07T00:00:00Z')
