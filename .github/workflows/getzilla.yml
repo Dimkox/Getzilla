@@ -168,7 +168,7 @@ jobs:
   linux:
     if: always()
     needs: platform-install-results
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - name: Require both declared Linux native installer cells

@@ -54,6 +54,22 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         return manifest
 
+    def test_legacy_report_does_not_invent_missing_archive_module(self):
+        installer = upgrade.load_installer(ROOT)
+        prefix = '.grok-stack/adaptive_grok/'
+        for name in ('present.py', 'absent.py'):
+            path = self.project/prefix/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'# old inert public module\n')
+        packed = self.project/installer.ENGINE_ARCHIVE
+        packed.write_bytes(installer.engine_archive_entry([installer.InstallEntry(
+            installer.ENGINE_DIR+'present.py', b'# current inert module\n', 0o644)]).content)
+        self.commit('exact archive and two legacy modules')
+        retired, _importers, _kept = upgrade.legacy_report(installer, self.project,
+                                                          upgrade.head_tree(self.project), set())
+        self.assertIn(prefix+'present.py', retired)
+        self.assertNotIn(prefix+'absent.py', retired)
+
     def test_empty_selection_keeps_unselected_custom_files_and_records_target_ownership(self) -> None:
         from getzilla.component_state import read_state
         self.select(())

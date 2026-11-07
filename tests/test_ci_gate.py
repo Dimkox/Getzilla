@@ -492,6 +492,20 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         export = next(s for s in generated if s.get('id') == 'export_evidence')
         self.assertIn("steps.source_checkout.outcome == 'success'", export['if'])
 
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_own_linux_host_keeps_the_required_namespace_admission(self) -> None:
+        import yaml
+        current = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']
+        self.assertEqual(current['runs-on'], 'ubuntu-22.04')
+        frozen = subprocess.check_output(['git','show',
+            'a927eac9a5170941eca0d167741dab619e550f2b:'+ci_gate.SOURCE_WORKFLOW_PATH],cwd=ROOT)
+        previous = yaml.safe_load(frozen)['jobs']['linux']
+        def admission(job):
+            return next(step for step in job['steps'] if '/usr/bin/bwrap --unshare-all' in step.get('run',''))
+        self.assertEqual(admission(current),admission(previous))
+        self.assertFalse(admission(current).get('continue-on-error',False))
+        self.assertFalse(current.get('continue-on-error',False))
+
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
         import yaml
@@ -499,7 +513,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         linux = document['jobs']['linux']
         self.assertEqual(linux['if'], 'always()')
         self.assertIn('platform-install-results', linux['needs'])
-        guard = next(step for step in linux['steps'] if step.get('name') == 'Require every supported native installer cell')
+        guard = next(step for step in linux['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env', {}))
+        self.assertEqual(guard['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
         for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
             process = subprocess.run(['bash', '-c', guard['run']],
                                      env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
