@@ -261,6 +261,30 @@ class LocalDesignReferenceTests(unittest.TestCase):
         path.write_text('@media (min-width: 3px) { :root { --gap: 2px; } }')
         self.assertEqual(self.capture(module, ['theme.css'])['content']['coverage']['status'], 'complete')
 
+    def test_context_admission_requires_complete_bounded_headers_in_all_four_families(self):
+        module = self.extractor()
+        path = self.root / 'theme.css'
+        supported = ('@media screen', '@media screen and (min-width: 3px)',
+                     '@media (min-width: 3px)', '@supports (display: grid)',
+                     '@container card (min-width: 3px)', '@container (width: 3px)',
+                     '@layer theme', '@layer theme.base')
+        unqualified = ('@media screen and and', '@media nonsense',
+                       '@supports nonsense', '@supports (display: grid) trailing',
+                       '@container nonsense', '@container card (min-width: 3px) trailing',
+                       '@layer .', '@layer theme, other',
+                       '@media (min-width: 3px) or (height: 4px)',
+                       '@supports selector(:root)', '@container style(--theme: dark)',
+                       '@layer theme..base')
+        for complete, headers in ((True, supported), (False, unqualified)):
+            for header in headers:
+                with self.subTest(complete=complete, header=header):
+                    path.write_text(header + ' { :root { --gap: 2px; } }')
+                    result = self.capture(module, ['theme.css'])['content']
+                    self.assertEqual(result['tokens'][0]['raw_value'], '2px')
+                    self.assertEqual(result['tokens'][0]['context'], [header, ':root'])
+                    self.assertEqual(result['coverage']['status'], 'complete' if complete else 'partial')
+                    self.assertEqual(result['coverage']['reasons'], [] if complete else ['unsupported-css'])
+
     def test_explicit_selection_caps_and_changed_source_refuse(self):
         module = self.extractor()
         (self.root / 'tokens.json').write_text('{"x":"1px","y":"2px"}')

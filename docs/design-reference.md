@@ -34,6 +34,13 @@ selectors, ordinary attribute tests, listed simple pseudo-classes, combinators
 and comma lists. Bare markers, unsupported functional/escaped/nested selectors
 or other unqualified headers make coverage partial; extracted values stay raw
 source observations. This is not a full stylesheet validator or CSS engine.
+Context headers must match a complete supported form within512 characters:
+media types `all`, `screen` or `print` (optional `only`/`not`), and/or width/height
+features joined by `and`; simple supports tests for `display: grid|flex|block`;
+optional named containers with width/height features; and simple dotted layer
+names. Width/height features allow `min-`/`max-`, zero or nonnegative decimal
+`px`/`em`/`rem` lengths. Names use ASCII identifiers and exclude reserved words.
+Other forms, including complex conditions, remain partial with raw observations.
 
 Version1 canonical content includes tokens, source identities, capture parameters
 and coverage. Its digest excludes the run envelope's capture ID/time. Evidence is

@@ -122,6 +122,30 @@ def _selector_supported(header):
         start = end + 1
 
 
+def _context_supported(header):
+    """Prove complete headers in a small closed subset, not arbitrary CSS."""
+    if len(header) > 512:
+        return False
+    space = r'[ \t\r\n\f]'
+    identifier = r'[A-Za-z_][A-Za-z0-9_-]*'
+    length = r'(?:0|[0-9]+(?:\.[0-9]+)?(?:px|em|rem))'
+    feature = (r'\(' + space + r'*(?:min-|max-)?(?:width|height)' + space
+               + '*:' + space + '*' + length + space + r'*\)')
+    features = feature + '(?:' + space + '+and' + space + '+' + feature + ')*'
+    media = '(?:(?:only|not)' + space + '+)?(?:all|screen|print)'
+    media += '(?:' + space + '+and' + space + '+' + features + ')?'
+    media = '(?:' + media + '|' + features + ')'
+    supports = r'\(' + space + '*display' + space + '*:' + space
+    supports += r'*(?:grid|flex|block)' + space + r'*\)'
+    # Exclude CSS-wide keywords and reserved container/layer names.
+    name = r'(?!(?:initial|inherit|unset|revert|revert-layer|default|none|normal|and|or|not)(?![A-Za-z0-9_-]))' + identifier
+    container = '(?:' + name + space + '+)?' + features
+    layer = name + r'(?:\.' + name + ')*'
+    patterns = {'media': media, 'supports': supports, 'container': container, 'layer': layer}
+    return any(re.fullmatch('@' + family + space + '+' + pattern, header)
+               is not None for family, pattern in patterns.items())
+
+
 def capture(root, files, *, capture_id, captured_at):
     started = time.monotonic()
     tokens, sources, reasons, seen = [], [], set(), set()
@@ -210,7 +234,9 @@ def capture(root, files, *, capture_id, captured_at):
                     level += 1 if text[closing] == '{' else -1
                     cursor = closing + 1
                 end = closing
-                if header.startswith(('@media ', '@supports ', '@container ', '@layer ')):
+                if re.match(r'@(media|supports|container|layer)(?![A-Za-z0-9_-])', header):
+                    if not _context_supported(header):
+                        reasons.add('unsupported-css')
                     rules(at + 1, end, context + [header], depth + 1)
                 elif header.startswith('@'):
                     reasons.add('unsupported-css')
