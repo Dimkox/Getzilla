@@ -60,6 +60,22 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         return manifest
 
+    def test_legacy_report_does_not_invent_missing_archive_module(self):
+        installer = upgrade.load_installer(ROOT)
+        prefix = '.grok-stack/adaptive_grok/'
+        for name in ('present.py', 'absent.py'):
+            path = self.project/prefix/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'# old inert public module\n')
+        packed = self.project/installer.ENGINE_ARCHIVE
+        packed.write_bytes(installer.engine_archive_entry([installer.InstallEntry(
+            installer.ENGINE_DIR+'present.py', b'# current inert module\n', 0o644)]).content)
+        self.commit('exact archive and two legacy modules')
+        retired, _importers, _kept = upgrade.legacy_report(installer, self.project,
+                                                          upgrade.head_tree(self.project), set())
+        self.assertIn(prefix+'present.py', retired)
+        self.assertNotIn(prefix+'absent.py', retired)
+
     def test_empty_selection_keeps_unselected_custom_files_and_records_target_ownership(self) -> None:
         from getzilla.component_state import read_state
         self.select(())
@@ -200,6 +216,105 @@ class ProjectSyncTests(unittest.TestCase):
         head = git(self.project, 'rev-parse', 'HEAD')
         self.assertIn('up to date', upgrade.sync_project(self.source_home, self.project))
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+
+    def _mode_source(self, mode: int = 0o664) -> tuple[Path, Path]:
+        source = self.project.parent / 'source'
+        source.mkdir(mode=0o700)
+        files = {
+            '.getzilla/getzilla/public_fixture.py': b'# inert source, never imported\n',
+            '.getzilla/config/toolchain.json': b'{"tools":[],"workflow_sources":{"components":[]}}\n',
+            '.getzilla/templates/consumer-AGENTS.md.tmpl': b'# Public fixture\n',
+            'scripts/public_fixture.py': b'# committed source\n',
+        }
+        for relative, body in files.items():
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            path.chmod(0o755 if relative.endswith('.py') and mode & 0o111 else 0o644)
+        (source / 'VERSION').write_text('0.0.1\n')
+        git(source, 'init', '--quiet', '--initial-branch=main')
+        git(source, 'add', '-A')
+        git(source, 'commit', '--quiet', '-m', 'public source fixture')
+        leaf = source / 'scripts/public_fixture.py'
+        leaf.write_bytes(b'# current working source\n')
+        leaf.chmod(mode)
+        installer = upgrade.load_installer(ROOT)
+        for patcher in (mock.patch.object(installer, 'MANAGED_FILES', tuple(files)),
+                        mock.patch.object(installer, 'MANAGED_DIRS', ()),
+                        mock.patch.object(upgrade, 'load_installer', return_value=installer)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return source, leaf
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_source_group_write_bits_do_not_change_published_ownership(self) -> None:
+        from getzilla.component_state import MANIFEST, read_state
+        source, leaf = self._mode_source()
+        self.assertEqual(git(source, 'ls-files', '--stage', '--', 'scripts/public_fixture.py').split()[0], '100644')
+        self.assertNotEqual(git(source, 'show', 'HEAD:scripts/public_fixture.py').encode() + b'\n', leaf.read_bytes())
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        proof = read_state(self.project).manifest['components']['core']['owned'][target.relative_to(self.project).as_posix()]
+        self.assertEqual(target.read_bytes(), b'# current working source\n')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(proof, {'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'mode': 0o644})
+        head, manifest = git(self.project, 'rev-parse', 'HEAD'), (self.project / MANIFEST).read_bytes()
+        try:
+            result = upgrade.sync_project(source, self.project)
+        except upgrade.UpdateError:
+            self.fail('unchanged Git publication must not drift with donor group-write mode')
+        self.assertIn('up to date', result)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+        self.assertEqual((self.project / MANIFEST).read_bytes(), manifest)
+        self.assertEqual(target.read_bytes(), b'# current working source\n')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(leaf.read_bytes(), b'# current working source\n')
+        self.assertEqual(leaf.stat().st_mode & 0o777, 0o664)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_unchanged_owned_group_write_mode_is_not_falsely_normalized(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
+        source, _leaf = self._mode_source()
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        target.chmod(0o664)
+        manifest = read_state(self.project).manifest
+        record_owned(manifest, 'scripts/public_fixture.py', target.read_bytes(), 0o664)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('record actual owned physical mode')
+        head = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(source, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o664)
+        self.assertEqual(read_state(self.project).manifest, manifest)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_custom_byte_and_mode_changes_still_refuse_before_publication(self) -> None:
+        source, leaf = self._mode_source()
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        for content, mode in ((b'# custom bytes\n', 0o644), (leaf.read_bytes(), 0o600)):
+            with self.subTest(mode=mode):
+                target.write_bytes(content)
+                target.chmod(mode)
+                self.commit('custom target state')
+                head, branches = git(self.project, 'rev-parse', 'HEAD'), git(self.project, 'branch', '--list')
+                with self.assertRaisesRegex(upgrade.UpdateError, 'ownership conflict'):
+                    upgrade.sync_project(source, self.project)
+                self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+                self.assertEqual(git(self.project, 'branch', '--list'), branches)
+                self.assertEqual(target.read_bytes(), content)
+                self.assertEqual(target.stat().st_mode & 0o777, mode)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_executable_publication_records_actual_git_mode(self) -> None:
+        from getzilla.component_state import read_state
+        source, leaf = self._mode_source(0o775)
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(read_state(self.project).manifest['components']['core']['owned']['scripts/public_fixture.py']['mode'], 0o755)
+        self.assertEqual(leaf.stat().st_mode & 0o777, 0o775)
 
     def test_uncommitted_changes_stop_the_sync(self) -> None:
         (self.project / 'notes.txt').write_text('work in progress\n', encoding='utf-8')

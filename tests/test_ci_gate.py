@@ -492,6 +492,71 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         export = next(s for s in generated if s.get('id') == 'export_evidence')
         self.assertIn("steps.source_checkout.outcome == 'success'", export['if'])
 
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_own_linux_host_keeps_the_required_namespace_admission(self) -> None:
+        import yaml
+        current = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']
+        self.assertEqual(current['runs-on'], 'ubuntu-22.04')
+        frozen = subprocess.check_output(['git','show',
+            'a927eac9a5170941eca0d167741dab619e550f2b:'+ci_gate.SOURCE_WORKFLOW_PATH],cwd=ROOT)
+        previous = yaml.safe_load(frozen)['jobs']['linux']
+        def admission(job):
+            return next(step for step in job['steps'] if '/usr/bin/bwrap --unshare-all' in step.get('run',''))
+        self.assertEqual(admission(current),admission(previous))
+        self.assertFalse(admission(current).get('continue-on-error',False))
+        self.assertFalse(current.get('continue-on-error',False))
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_own_linux_admits_fixed_node_before_the_real_profile_and_core(self) -> None:
+        import yaml
+        job = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']
+        steps = job['steps']
+        by_id = {step['id']: step for step in steps if 'id' in step}
+        self.assertIn('node_setup', by_id)
+        setup = by_id['node_setup']
+        self.assertEqual(setup['uses'], 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1')
+        self.assertEqual(setup['with'], {'node-version': '24.22.2', 'architecture': 'x64',
+                                         'package-manager-cache': False})
+        runtime = by_id['node_runtime']
+        self.assertIn("steps.node_setup.outcome == 'success'", runtime['if'])
+        self.assertEqual(runtime['shell'], 'python')
+        # Bind this CI-only physical admission, not a PATH-only setup or a link.
+        for requirement in ("'node' / '24.22.2' / 'x64' / 'bin' / 'node'",
+                            "selected != expected", "['sudo', 'install', '-T', '-m', '0755', '--'",
+                            "node = pathlib.Path('/usr/bin/node')", "node.is_symlink()",
+                            "stat.S_ISREG(info.st_mode)", "stat.S_IMODE(info.st_mode) != 0o755",
+                            "digest(node) != selected_digest", "'/usr/bin/node', '--version'",
+                            "!= 'v24.22.2'"):
+            self.assertIn(requirement, runtime['run'])
+        admission = by_id['node_profile_admission']
+        self.assertEqual(admission['run'].split(), ['python', '-m', 'unittest',
+            'tests.test_skill_sandbox.BmadDependencyGraft.test_synthetic_cjs_esm_load_and_all_input_mounts_are_read_only'])
+        self.assertEqual(admission['if'], "success() && steps.source_checkout.outcome == 'success' && steps.node_runtime.outcome == 'success'")
+        bubblewrap = next(step for step in steps if '/usr/bin/bwrap --unshare-all' in step.get('run', ''))
+        requirements = next(step for step in steps if step.get('name') == 'Install test requirements')
+        for dependency in (runtime, bubblewrap, requirements):
+            self.assertLess(steps.index(dependency), steps.index(admission))
+        core = next(step for step in steps if step.get('name') == 'Core tests')
+        self.assertLess(steps.index(admission), steps.index(core))
+        for step in (setup, runtime, admission, core, job):
+            self.assertFalse(step.get('continue-on-error', False))
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
+    def test_own_core_requires_successful_node_admission_not_missing_or_failed(self) -> None:
+        import yaml
+        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']['steps']
+        core = next(step for step in steps if step.get('name') == 'Core tests')
+        self.assertEqual(core['if'], "(success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'")
+        condition = core['if'].replace('(success() || failure())', 'true')
+        condition = condition.replace("steps.source_checkout.outcome == 'success'", '[[ "$CHECKOUT" == success ]]')
+        condition = condition.replace("steps.node_profile_admission.outcome == 'success'", '[[ "$ADMISSION" == success ]]')
+        for checkout, admission, expected in (('success', 'success', 0), ('success', 'failure', 1),
+                ('success', 'skipped', 1), ('success', 'cancelled', 1), ('success', '', 1), ('', 'success', 1)):
+            with self.subTest(checkout=checkout, admission=admission):
+                result = subprocess.run(['bash', '-c', condition],
+                    env={'CHECKOUT': checkout, 'ADMISSION': admission}, capture_output=True, timeout=3)
+                self.assertEqual(result.returncode, expected)
+
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
         import yaml
@@ -499,7 +564,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
         linux = document['jobs']['linux']
         self.assertEqual(linux['if'], 'always()')
         self.assertIn('platform-install-results', linux['needs'])
-        guard = next(step for step in linux['steps'] if step.get('name') == 'Require every supported native installer cell')
+        guard = next(step for step in linux['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env', {}))
+        self.assertEqual(guard['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
         for result, expected in [('success', 0), ('failure', 1), ('skipped', 1), ('cancelled', 1), ('', 1)]:
             process = subprocess.run(['bash', '-c', guard['run']],
                                      env={**os.environ, 'GETZILLA_PLATFORM_RESULT': result},
