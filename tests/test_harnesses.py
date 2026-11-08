@@ -21,6 +21,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from tests._support import public_source_copy
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
@@ -428,7 +430,8 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(outputs.get('.grok/skills/' + relative), source.read_bytes(), relative)
 
     def test_committed_harnesses_match_the_canonical_sources(self) -> None:
-        self.assertEqual(drift(ROOT), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
+        with public_source_copy(ROOT) as source:
+            self.assertEqual(drift(source), [], 'run: python3 scripts/getzilla_harness.py --repository-all --write')
 
     def test_every_harness_runs_every_canonical_hook_script(self) -> None:
         grok = json.loads((ROOT / '.getzilla/config/hooks.json').read_text(encoding='utf-8'))['hooks']
@@ -860,7 +863,8 @@ class CursorRuleTests(unittest.TestCase):
     def test_cli_checks_read_only_repairs_on_write_and_reports_source_errors(self) -> None:
         root = self.fixture()
         for rel in ('scripts/getzilla_harness.py', '.getzilla/getzilla/__init__.py',
-                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py', '.getzilla/getzilla/component_state.py'):
+                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py', '.getzilla/getzilla/component_state.py',
+                    '.getzilla/getzilla/skill_inventory.py', '.getzilla/getzilla/skill_preflight.py'):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / rel, root / rel)
         def run(*args: str) -> subprocess.CompletedProcess:

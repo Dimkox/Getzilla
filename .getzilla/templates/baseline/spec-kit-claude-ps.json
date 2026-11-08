@@ -1,0 +1,223 @@
+{
+  "agent": "claude",
+  "argv": [
+    "/usr/bin/prlimit",
+    "--core=0",
+    "--as=2147483648",
+    "--cpu=20",
+    "--nproc=1024",
+    "--nofile=256",
+    "--fsize=16777216",
+    "--",
+    "/usr/bin/python3",
+    "-c",
+    "from specify_cli import main; main()",
+    "init",
+    "--here",
+    "--integration",
+    "claude",
+    "--non-interactive",
+    "--ignore-agent-tools",
+    "--script",
+    "ps"
+  ],
+  "binding": {
+    "dependency_lock_sha256": "465faa6ad8743a19e8acee80467e8376a4aebbe286853149c66f487c309d560a",
+    "source_archive_sha256": "33b3ee3f7c8dfb6ea5be60c6df31b97f44e7ca7a29a303eb3af7a882fdc62281",
+    "source_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175"
+  },
+  "component": "spec-kit",
+  "files": [
+    {
+      "bytes": 12139,
+      "mode": 420,
+      "path": ".claude/skills/speckit-analyze/SKILL.md",
+      "sha256": "299d136fbc16ff71592dc8e7b765914d55d571b9cd95ddd378593619a9b5fe5d"
+    },
+    {
+      "bytes": 22766,
+      "mode": 420,
+      "path": ".claude/skills/speckit-checklist/SKILL.md",
+      "sha256": "bd6eaf7623befcad231f8ee8bf6ae3f03bb49ee6264887fbe13c5102ce417aa4"
+    },
+    {
+      "bytes": 19815,
+      "mode": 420,
+      "path": ".claude/skills/speckit-clarify/SKILL.md",
+      "sha256": "b7ed324427867c31b025b0acb01f6eba80c69252b9d69edf2bf8013d384b9b9c"
+    },
+    {
+      "bytes": 10640,
+      "mode": 420,
+      "path": ".claude/skills/speckit-constitution/SKILL.md",
+      "sha256": "fcac0fbd9c99c987abcaab97df79eaf54f106f5aa16f6dd2b4b7f5324221877c"
+    },
+    {
+      "bytes": 13508,
+      "mode": 420,
+      "path": ".claude/skills/speckit-converge/SKILL.md",
+      "sha256": "1f7a90a1b03b94d14687d96fd1125e0173bd20a19017e12519017d57f63312c5"
+    },
+    {
+      "bytes": 13201,
+      "mode": 420,
+      "path": ".claude/skills/speckit-implement/SKILL.md",
+      "sha256": "d8822195af8c04155179c914cc67323cbe4228cda75c8bff0b3b3e209abf4941"
+    },
+    {
+      "bytes": 8350,
+      "mode": 420,
+      "path": ".claude/skills/speckit-plan/SKILL.md",
+      "sha256": "db4fd9659ecd7b42843d56961607e26dc66439fffec92c733027fb016f83e679"
+    },
+    {
+      "bytes": 18749,
+      "mode": 420,
+      "path": ".claude/skills/speckit-specify/SKILL.md",
+      "sha256": "d4d93f2444355136e78bb533988aa2dd560dc4b258f4923f67b1a437e7de38f8"
+    },
+    {
+      "bytes": 11689,
+      "mode": 420,
+      "path": ".claude/skills/speckit-tasks/SKILL.md",
+      "sha256": "78f32c4d6892f19e8249fbc319e0c5cf2e15c2339e3f50baf0cecb0358de695e"
+    },
+    {
+      "bytes": 8179,
+      "mode": 420,
+      "path": ".claude/skills/speckit-taskstoissues/SKILL.md",
+      "sha256": "341be56e99263d77fdc974489675499576b3cd96ca7ec55cf27fb681c5b0ab9f"
+    },
+    {
+      "bytes": 384,
+      "mode": 420,
+      "path": ".specify/.gitignore",
+      "sha256": "8c908410d177a1ef3d0dee16d7ad55f2ac3333df3104c4d4adee1c9b82f1dbc1"
+    },
+    {
+      "bytes": 1060,
+      "mode": 420,
+      "path": ".specify/LICENSE",
+      "sha256": "2510b446bc1f0cf9702453075d20cd88631e20e5642658edb7325d9c1eb534f7"
+    },
+    {
+      "bytes": 170,
+      "mode": 420,
+      "path": ".specify/init-options.json",
+      "sha256": "5fcde9b54e6693960a21c815e2ef7de4c16c35680bb298e29b327db3146ea1c7"
+    },
+    {
+      "bytes": 275,
+      "mode": 420,
+      "path": ".specify/integration.json",
+      "sha256": "b4505b915820fd019ef8923a3050f75ee80b8a0cc6cd78be7384374a6523d58b"
+    },
+    {
+      "bytes": 1284,
+      "mode": 420,
+      "path": ".specify/integrations/claude.manifest.json",
+      "sha256": "247696e4d86fd6f5c6efe2cbdd27aea9267bde906caf4f291343435f18d32f69"
+    },
+    {
+      "bytes": 1516,
+      "mode": 420,
+      "path": ".specify/integrations/speckit.manifest.json",
+      "sha256": "22cc2dba8cf3cc6d6e4614fc55d72d340458ac5bbf1310bb7306ffa8319c3320"
+    },
+    {
+      "bytes": 103,
+      "mode": 420,
+      "path": ".specify/memory/.constitution-template.json",
+      "sha256": "8fc4b39294bae0c10d59547ad7d415b6f0e890d656cbf7171dd567f4e9054711"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/memory/constitution.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 6631,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/check-prerequisites.ps1",
+      "sha256": "af4b8f5e8d373827726b79532cf57c567b1538c0494058d8095683c7fe107c49"
+    },
+    {
+      "bytes": 35295,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/common.ps1",
+      "sha256": "9837a02a1ca9e61a16a1ff7ec7429c95d8e1c87ec49400cc2807133bb89a5317"
+    },
+    {
+      "bytes": 14876,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/create-new-feature.ps1",
+      "sha256": "481c7368541a816b1679e5ed65fa9e5aea84b09f8be3a02ff8a340e3b48dd58a"
+    },
+    {
+      "bytes": 889,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/resolve-template.ps1",
+      "sha256": "e49c565a09902e4ebd4b5a51c4e014d5067fdee5b1592f15cb44ef31f430d745"
+    },
+    {
+      "bytes": 3058,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-plan.ps1",
+      "sha256": "3b8173f1553bbf67ae021af949a29e2d3e3bb35805be95e4ba8d0ab83173c66f"
+    },
+    {
+      "bytes": 3892,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-tasks.ps1",
+      "sha256": "57cd05e12bd472c60ac0554ad61b89770c278d50c48e484fb824196f44f75076"
+    },
+    {
+      "bytes": 2033,
+      "mode": 420,
+      "path": ".specify/templates/checklist-template.md",
+      "sha256": "856532b3cb66171c662cc16f16b31a5856e4655a8666aad1e545bbfc7f603ca1"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/templates/constitution-template.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 3682,
+      "mode": 420,
+      "path": ".specify/templates/plan-template.md",
+      "sha256": "7e637502d41eccf0ca672496636365691fdca62ef37b27ec07fcb412dbfa90d4"
+    },
+    {
+      "bytes": 4556,
+      "mode": 420,
+      "path": ".specify/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "bytes": 9171,
+      "mode": 420,
+      "path": ".specify/templates/tasks-template.md",
+      "sha256": "fc29a233f6f5a27ca31f1aa46b596af6500c627441c6e62b2bc4a1d721525842"
+    },
+    {
+      "bytes": 2118,
+      "mode": 420,
+      "path": ".specify/workflows/speckit/workflow.yml",
+      "sha256": "177761c5e7df28126beea043b5cb45aeaf7958090c022dc11ac71399422fcfbc"
+    },
+    {
+      "bytes": 369,
+      "mode": 420,
+      "path": ".specify/workflows/workflow-registry.json",
+      "sha256": "c28fa513add4420d5c456297eb282293d3cae9adefb3a1c113e8c27f6dae836b"
+    }
+  ],
+  "generator": "linux-bubblewrap-offline-v1",
+  "permissions_granted": false,
+  "schema_version": 1,
+  "script": "ps",
+  "semantic_safety": "unqualified"
+}

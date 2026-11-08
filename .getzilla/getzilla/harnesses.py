@@ -7,6 +7,7 @@ import tomllib
 from pathlib import Path, PurePosixPath
 
 from . import fsx as fsx
+from .skill_inventory import inspect_payload as inspect_skill_payload
 from .component_state import (
     MANIFEST, V2, KNOWN_AGENTS, BoundRoot, ComponentTransaction, FileSnapshot,
     ManifestState, agent_of, component_transaction, encode_manifest,
@@ -203,6 +204,7 @@ def _skills(binding: BoundRoot | ComponentTransaction) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for path in binding.files(SKILL_SOURCE, recursive=True):
         files[path.removeprefix(SKILL_SOURCE + '/')] = _source(binding, path)
+    inspect_skill_payload((SKILL_SOURCE + '/' + path, content) for path, content in files.items())
     return files
 
 

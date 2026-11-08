@@ -13,10 +13,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+CLOSED_BASELINE_METADATA = b'{"tools":[],"workflow_sources":{"components":[]}}\n'
 SPEC = importlib.util.spec_from_file_location("install_into", ROOT / "scripts/install_into.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
@@ -97,8 +100,13 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(MODULE.component_of(path), 'factory', path)
         self.assertEqual({path for path in full if path.startswith('delivery/')},
                          {path for path in support if path.startswith('delivery/')})
+        core_proofs = {'engineering/verification-dispositions.json',
+                       'engineering/vendor-custody/bmad-whitespace.json',
+                       'engineering/vendor-custody/bmad-whitespace.md'}
+        self.assertTrue(core_proofs <= core)
+        self.assertTrue(core_proofs.isdisjoint(support))
         self.assertEqual({path for path in full if path.startswith('engineering/')},
-                         {path for path in support if path.startswith('engineering/')})
+                         {path for path in support if path.startswith('engineering/')} | core_proofs)
         self.assertIn('factory/tests/json_schema_subset.py', full)
         self.assertNotIn('PROJECT_STATE.json', full)
         self.assertFalse(any(path.startswith(('tests/', 'side-projects/')) for path in full))
@@ -129,9 +137,9 @@ targets = sys.argv[2:] or ['factory.tests.test_owner_autonomy', 'factory.tests.t
 result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromNames(targets))
 raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
 '''
-        with tempfile.TemporaryDirectory() as directory:
+        with public_source_copy(ROOT) as source, tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'consumer'
-            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
+            MODULE.materialize_new(source, target, selection=MODULE.PayloadSelection.full_layout())
 
             def run(*targets):
                 # The publisher validates every ancestor. A checkout may have a
@@ -178,11 +186,12 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                   'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
                   'unqualified_skips': evidence.get('unqualified_skips')}))
 """
-        with tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
+        with public_source_copy(ROOT) as source, \
+                tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
                 tempfile.TemporaryDirectory(prefix='g-', dir=os.path.realpath('/tmp')) as child_temp:
             target = Path(temporary) / 'c'
             selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
-            MODULE.materialize_new(ROOT, target, selection=selection)
+            MODULE.materialize_new(source, target, selection=selection)
             self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
             environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
             result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
@@ -400,6 +409,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             template.write_bytes(old)
             template.chmod(0o640)
             (source / MODULE.CONSUMER_AGENTS_TEMPLATE).write_text('fixture consumer contract\n')
+            metadata = source / '.getzilla/config/toolchain.json'
+            metadata.parent.mkdir(parents=True)
+            metadata.write_bytes(CLOSED_BASELINE_METADATA)
             original_read = MODULE._SourceTree.read
             reads = []
             def mutate_after_bound_read(tree, relative, limit, expected_identity=None):
@@ -1251,6 +1263,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                 template.parent.mkdir(parents=True)
                 template.write_text("managed agents\n", encoding="utf-8")
                 (managed / "required.md").write_text("required\n", encoding="utf-8")
+                metadata = source / '.getzilla/config/toolchain.json'
+                metadata.parent.mkdir(parents=True)
+                metadata.write_bytes(CLOSED_BASELINE_METADATA)
                 target = root / "target"
                 relocated = root / "relocated"
                 outside = root / "outside.txt"
@@ -1274,7 +1289,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
 
                 with (
                     patch.object(MODULE, "MANAGED_DIRS", (".grok",)),
-                    patch.object(MODULE, "MANAGED_FILES", (MODULE.CONSUMER_AGENTS_TEMPLATE,)),
+                    patch.object(MODULE, "MANAGED_FILES", (MODULE.CONSUMER_AGENTS_TEMPLATE, ".getzilla/config/toolchain.json")),
                 ):
                     positive = root / "unrelocated"
                     MODULE._materialize_new(
@@ -1327,7 +1342,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                 payload.write_bytes(b"managed payload\n")
                 toolchain = source / ".getzilla/config/toolchain.json"
                 toolchain.parent.mkdir(parents=True)
-                toolchain.write_text('{"tools": []}\n', encoding="utf-8")
+                self.assertLessEqual(len(CLOSED_BASELINE_METADATA), 256)
+                source_cap = max(32, len(CLOSED_BASELINE_METADATA))
+                toolchain.write_bytes(CLOSED_BASELINE_METADATA)
                 victim = {
                     "managed": payload,
                     "agents": agents,
@@ -1337,11 +1354,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                     "toolchain": toolchain,
                 }[family]
                 outside = root / "outside.bin"
-                outside.write_bytes(
-                    b'{"tools": [], "padding": "xxxxxxxxxxxxxxxxxxxxxxxx"}\n'
-                    if family == "toolchain"
-                    else b"x" * 34
-                )
+                outside.write_bytes(b'x' * (source_cap + 2))
                 saved = root / "saved-source"
                 swapped = False
                 path_bytes_read = 0
@@ -1383,7 +1396,7 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                         return text
                     return real_read_text(path, *args, **kwargs)
 
-                managed_files = (MODULE.CONSUMER_AGENTS_TEMPLATE,)
+                managed_files = (MODULE.CONSUMER_AGENTS_TEMPLATE, ".getzilla/config/toolchain.json")
                 if family == "managed":
                     managed_files += ("payload.bin",)
                 if family == "factory readme":
@@ -1410,16 +1423,26 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                 with (
                     patch.object(MODULE, "MANAGED_DIRS", ()),
                     patch.object(MODULE, "MANAGED_FILES", managed_files),
-                    patch.object(MODULE, "MAX_SOURCE_FILE_BYTES", 32),
-                    patch.object(MODULE, "MAX_TOOLCHAIN_BYTES", 32),
-                    patch.object(MODULE.os, "open", side_effect=race_descriptor_open),
-                    patch.object(Path, "read_bytes", race_path_bytes),
-                    patch.object(Path, "read_text", race_path_text),
+                    patch.object(MODULE, "MAX_SOURCE_FILE_BYTES", source_cap),
                 ):
-                    with self.assertRaises(MODULE.UnsafeInstallTarget):
-                        invocation()
+                    # Admit the complete benign source before injecting the race.
+                    # The advisory32 negative bound below is distinct from source admission.
+                    self.assertIsNotNone(invocation())
+                    self.assertFalse(swapped)
+                    with (
+                        patch.object(MODULE, "MAX_TOOLCHAIN_BYTES", 32),
+                        patch.object(MODULE.os, "open", side_effect=race_descriptor_open),
+                        patch.object(Path, "read_bytes", race_path_bytes),
+                        patch.object(Path, "read_text", race_path_text),
+                    ):
+                        relative = victim.relative_to(source).as_posix()
+                        with self.assertRaisesRegex(
+                            MODULE.UnsafeInstallTarget,
+                            rf"^cannot read managed source {re.escape(relative)}:",
+                        ):
+                            invocation()
                 self.assertTrue(swapped)
-                self.assertLessEqual(path_bytes_read, 33)
+                self.assertLessEqual(path_bytes_read, source_cap + 1)
 
     @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     @unittest.skipUnless(os.path.isdir('/proc/self/fd'), 'fault injection resolves descriptors through /proc/self/fd')

@@ -10,6 +10,8 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest import mock
 
 
@@ -30,6 +32,10 @@ def git(project: Path, *args: str) -> str:
 
 
 class ProjectSyncTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source_home = cls.enterClassContext(public_source_copy(ROOT))
+
     def test_checkout_preserves_modes_in_isolated_callers(self) -> None:
         from tests.test_adapter_removal import _assert_publication_modes
         _assert_publication_modes(self, 'update')
@@ -61,6 +67,22 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         return manifest
 
+    def test_legacy_report_does_not_invent_missing_archive_module(self):
+        installer = upgrade.load_installer(ROOT)
+        prefix = '.grok-stack/adaptive_grok/'
+        for name in ('present.py', 'absent.py'):
+            path = self.project/prefix/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'# old inert public module\n')
+        packed = self.project/installer.ENGINE_ARCHIVE
+        packed.write_bytes(installer.engine_archive_entry([installer.InstallEntry(
+            installer.ENGINE_DIR+'present.py', b'# current inert module\n', 0o644)]).content)
+        self.commit('exact archive and two legacy modules')
+        retired, _importers, _kept = upgrade.legacy_report(installer, self.project,
+                                                          upgrade.head_tree(self.project), set())
+        self.assertIn(prefix+'present.py', retired)
+        self.assertNotIn(prefix+'absent.py', retired)
+
     def test_empty_selection_keeps_unselected_custom_files_and_records_target_ownership(self) -> None:
         from getzilla.component_state import read_state
         self.select(())
@@ -68,7 +90,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.codex/custom.txt').write_text('user file')
         self.commit('explicit empty selection')
         with mock.patch.dict(os.environ, {'GETZILLA_AGENT': 'codex'}):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         state = read_state(self.project)
         self.assertEqual(state.require_selection(), ())
         self.assertIn('scripts/getzilla_route.py', state.manifest['components']['core']['owned'])
@@ -83,7 +105,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('custom managed path')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, 'conflict'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertEqual(target.read_text(), '# custom route implementation\n')
@@ -98,7 +120,7 @@ class ProjectSyncTests(unittest.TestCase):
         record_owned(manifest, 'scripts/getzilla_route.py', target.read_bytes(), 0o644)
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('record an older managed version')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         current = read_state(self.project).manifest['components']['core']['owned']['scripts/getzilla_route.py']
         self.assertEqual(current['sha256'], hashlib.sha256(target.read_bytes()).hexdigest())
         self.assertEqual(target.read_bytes(), (ROOT / 'scripts/getzilla_route.py').read_bytes())
@@ -148,7 +170,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.gitignore').write_text(MANIFEST + '\n')
         self.commit('selection is not committed')
         with self.assertRaisesRegex(upgrade.UpdateError, 'committed'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
 
     def test_owned_read_only_grok_config_is_not_replaced_by_stock_policy(self) -> None:
@@ -179,7 +201,7 @@ class ProjectSyncTests(unittest.TestCase):
         config.write_bytes(b'[features]\ncodex_hooks = true\n[custom]\nkeep = true\n')
         saved_overlay, saved_config = overlay_path.read_bytes(), config.read_bytes()
         self.commit('custom Codex overlay and settings')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(overlay_path.read_bytes(), saved_overlay)
         self.assertEqual(config.read_bytes(), saved_config)
         hooks = json.loads((self.project / '.codex/hooks.json').read_text())['hooks']['Stop']
@@ -643,7 +665,7 @@ class ProjectSyncTests(unittest.TestCase):
             return result
         with mock.patch.object(upgrade, 'planned_changes', side_effect=moving):
             with self.assertRaisesRegex(upgrade.UpdateError, 'changed'):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertFalse((self.project / 'scripts').exists())
 
@@ -656,7 +678,7 @@ class ProjectSyncTests(unittest.TestCase):
             return result
         with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
         self.assertEqual((self.project / 'scripts/getzilla_route.py').read_text(), '# changed after checkout\n')
 
@@ -673,7 +695,7 @@ class ProjectSyncTests(unittest.TestCase):
             return result
         with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
         self.assertEqual(json.loads((self.project / MANIFEST).read_bytes())['agents'], [])
 
@@ -686,13 +708,13 @@ class ProjectSyncTests(unittest.TestCase):
             return result
         with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
         branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'post-checkout')
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), git(self.project, 'rev-parse', branch))
 
     def test_sync_commits_on_a_new_branch_and_is_idempotent(self) -> None:
-        result = upgrade.sync_project(ROOT, self.project)
+        result = upgrade.sync_project(self.source_home, self.project)
         branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
         self.assertIn(branch, result)
         self.assertEqual(git(self.project, 'branch', '--show-current'), branch)
@@ -704,13 +726,112 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertTrue(agents.startswith('# Project rules\n\nKeep this.\n'))
         self.assertEqual(agents.count('<!-- ADAPTIVE-GROK-PRO:START -->'), 1)
         head = git(self.project, 'rev-parse', 'HEAD')
-        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertIn('up to date', upgrade.sync_project(self.source_home, self.project))
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+
+    def _mode_source(self, mode: int = 0o664) -> tuple[Path, Path]:
+        source = self.project.parent / 'source'
+        source.mkdir(mode=0o700)
+        files = {
+            '.getzilla/getzilla/public_fixture.py': b'# inert source, never imported\n',
+            '.getzilla/config/toolchain.json': b'{"tools":[],"workflow_sources":{"components":[]}}\n',
+            '.getzilla/templates/consumer-AGENTS.md.tmpl': b'# Public fixture\n',
+            'scripts/public_fixture.py': b'# committed source\n',
+        }
+        for relative, body in files.items():
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            path.chmod(0o755 if relative.endswith('.py') and mode & 0o111 else 0o644)
+        (source / 'VERSION').write_text('0.0.1\n')
+        git(source, 'init', '--quiet', '--initial-branch=main')
+        git(source, 'add', '-A')
+        git(source, 'commit', '--quiet', '-m', 'public source fixture')
+        leaf = source / 'scripts/public_fixture.py'
+        leaf.write_bytes(b'# current working source\n')
+        leaf.chmod(mode)
+        installer = upgrade.load_installer(ROOT)
+        for patcher in (mock.patch.object(installer, 'MANAGED_FILES', tuple(files)),
+                        mock.patch.object(installer, 'MANAGED_DIRS', ()),
+                        mock.patch.object(upgrade, 'load_installer', return_value=installer)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return source, leaf
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_source_group_write_bits_do_not_change_published_ownership(self) -> None:
+        from getzilla.component_state import MANIFEST, read_state
+        source, leaf = self._mode_source()
+        self.assertEqual(git(source, 'ls-files', '--stage', '--', 'scripts/public_fixture.py').split()[0], '100644')
+        self.assertNotEqual(git(source, 'show', 'HEAD:scripts/public_fixture.py').encode() + b'\n', leaf.read_bytes())
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        proof = read_state(self.project).manifest['components']['core']['owned'][target.relative_to(self.project).as_posix()]
+        self.assertEqual(target.read_bytes(), b'# current working source\n')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(proof, {'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'mode': 0o644})
+        head, manifest = git(self.project, 'rev-parse', 'HEAD'), (self.project / MANIFEST).read_bytes()
+        try:
+            result = upgrade.sync_project(source, self.project)
+        except upgrade.UpdateError:
+            self.fail('unchanged Git publication must not drift with donor group-write mode')
+        self.assertIn('up to date', result)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+        self.assertEqual((self.project / MANIFEST).read_bytes(), manifest)
+        self.assertEqual(target.read_bytes(), b'# current working source\n')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(leaf.read_bytes(), b'# current working source\n')
+        self.assertEqual(leaf.stat().st_mode & 0o777, 0o664)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_unchanged_owned_group_write_mode_is_not_falsely_normalized(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
+        source, _leaf = self._mode_source()
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        target.chmod(0o664)
+        manifest = read_state(self.project).manifest
+        record_owned(manifest, 'scripts/public_fixture.py', target.read_bytes(), 0o664)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('record actual owned physical mode')
+        head = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(source, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o664)
+        self.assertEqual(read_state(self.project).manifest, manifest)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_custom_byte_and_mode_changes_still_refuse_before_publication(self) -> None:
+        source, leaf = self._mode_source()
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        for content, mode in ((b'# custom bytes\n', 0o644), (leaf.read_bytes(), 0o600)):
+            with self.subTest(mode=mode):
+                target.write_bytes(content)
+                target.chmod(mode)
+                self.commit('custom target state')
+                head, branches = git(self.project, 'rev-parse', 'HEAD'), git(self.project, 'branch', '--list')
+                with self.assertRaisesRegex(upgrade.UpdateError, 'ownership conflict'):
+                    upgrade.sync_project(source, self.project)
+                self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
+                self.assertEqual(git(self.project, 'branch', '--list'), branches)
+                self.assertEqual(target.read_bytes(), content)
+                self.assertEqual(target.stat().st_mode & 0o777, mode)
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permission bits')
+    def test_executable_publication_records_actual_git_mode(self) -> None:
+        from getzilla.component_state import read_state
+        source, leaf = self._mode_source(0o775)
+        upgrade.sync_project(source, self.project)
+        target = self.project / 'scripts/public_fixture.py'
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(read_state(self.project).manifest['components']['core']['owned']['scripts/public_fixture.py']['mode'], 0o755)
+        self.assertEqual(leaf.stat().st_mode & 0o777, 0o775)
 
     def test_uncommitted_changes_stop_the_sync(self) -> None:
         (self.project / 'notes.txt').write_text('work in progress\n', encoding='utf-8')
         with self.assertRaisesRegex(upgrade.UpdateError, 'uncommitted changes'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
         self.assertFalse((self.project / 'scripts').exists())
 
@@ -720,7 +841,7 @@ class ProjectSyncTests(unittest.TestCase):
                   'kept_local_sha256': {'ruff.toml': hashlib.sha256(local).hexdigest()}}
         (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps(record), encoding='utf-8')
         self.commit('keep ruff.toml')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual((self.project / 'ruff.toml').read_bytes(), local)
 
     def test_kept_manifest_refuses_update_before_files_or_new_branch(self) -> None:
@@ -734,7 +855,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('keep target component state')
         head = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, 'kept.*manifest'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertEqual((self.project / MANIFEST).read_bytes(), original)
@@ -742,7 +863,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_kept_manifest_allows_an_already_current_update(self) -> None:
         from getzilla.component_state import MANIFEST
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         manifest = (self.project / MANIFEST).read_bytes()
         (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
             'schema_version': 1, 'kept_local': [MANIFEST],
@@ -750,13 +871,13 @@ class ProjectSyncTests(unittest.TestCase):
         }))
         self.commit('keep current target component state')
         before = git(self.project, 'rev-parse', 'HEAD')
-        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertIn('up to date', upgrade.sync_project(self.source_home, self.project))
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual((self.project / MANIFEST).read_bytes(), manifest)
 
     def test_kept_manifest_also_fences_final_migration_ownership_changes(self) -> None:
         from getzilla.component_state import MANIFEST
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         git(self.project, 'branch', '-m', 'installed')
         manifest = (self.project / MANIFEST).read_bytes()
         (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
@@ -767,9 +888,9 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_bytes(b'{"old": "history"}\n')
         self.commit('retain state before legacy log migration')
         before = git(self.project, 'rev-parse', 'HEAD')
-        self.assertEqual(upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project), [])
+        self.assertEqual(upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project), [])
         with self.assertRaisesRegex(upgrade.UpdateError, 'kept.*manifest'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'installed')
         self.assertEqual(git(self.project, 'branch', '--list', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)), '')
@@ -794,7 +915,7 @@ class ProjectSyncTests(unittest.TestCase):
         }))
         self.commit('retain formerly owned files')
         for _ in range(2):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
             records = read_state(self.project).manifest['components']
             for path, content in contents.items():
                 self.assertEqual((self.project / path).read_bytes(), content)
@@ -813,7 +934,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('keep Codex config without hooks')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, 'Codex'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertFalse((self.project / '.codex/hooks.json').exists())
@@ -821,8 +942,8 @@ class ProjectSyncTests(unittest.TestCase):
     def test_kept_codex_pair_is_preserved_without_owned_proofs(self) -> None:
         from getzilla.component_state import MANIFEST, encode_manifest, read_state, record_owned
         manifest = self.select(('codex',))
-        installer = upgrade.load_installer(ROOT)
-        payload = {entry.path: entry for entry in installer.build_payload(ROOT, selection=installer.PayloadSelection(('codex',)))}
+        installer = upgrade.load_installer(self.source_home)
+        payload = {entry.path: entry for entry in installer.build_payload(self.source_home, selection=installer.PayloadSelection(('codex',)))}
         pair = ('.codex/hooks.json', '.codex/config.toml')
         (self.project / '.codex').mkdir()
         for path in pair:
@@ -835,7 +956,7 @@ class ProjectSyncTests(unittest.TestCase):
             'kept_local_sha256': {path: hashlib.sha256(payload[path].content).hexdigest() for path in pair},
         }))
         self.commit('keep coherent Codex activation')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         owned = read_state(self.project).manifest['components']['agent:codex']['owned']
         for path in pair:
             self.assertEqual((self.project / path).read_bytes(), payload[path].content)
@@ -851,7 +972,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('keep the new log absent')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, 'kept'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertFalse((self.project / path).exists())
@@ -865,9 +986,9 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / 'AGENTS.md').write_text('# Project rules, edited later\n', encoding='utf-8')
         self.commit('edit AGENTS.md')
         with self.assertRaisesRegex(upgrade.UpdateError, '--accept-local'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
-        result = upgrade.sync_project(ROOT, self.project, accept=True)
+        result = upgrade.sync_project(self.source_home, self.project, accept=True)
         self.assertIn('kept your current AGENTS.md', result)
         self.assertEqual((self.project / 'AGENTS.md').read_text(encoding='utf-8'), '# Project rules, edited later\n')
         saved = json.loads((self.project / '.getzilla/AGBP_SYNC.json').read_text(encoding='utf-8'))
@@ -879,7 +1000,7 @@ class ProjectSyncTests(unittest.TestCase):
     def test_existing_update_branch_is_not_reused(self) -> None:
         git(self.project, 'branch', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
         with self.assertRaisesRegex(upgrade.UpdateError, 'already exists'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
     def test_a_failure_before_the_branch_leaves_the_project_unchanged(self) -> None:
@@ -892,7 +1013,7 @@ class ProjectSyncTests(unittest.TestCase):
 
         with mock.patch.object(publication, '_git_out', side_effect=failing):
             with self.assertRaisesRegex(upgrade.UpdateError, 'simulated'):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
@@ -903,7 +1024,7 @@ class ProjectSyncTests(unittest.TestCase):
             (self.project / 'scripts').symlink_to(outside)
             self.commit('link scripts')
             with self.assertRaises(upgrade.UpdateError):
-                upgrade.sync_project(ROOT, self.project)
+                upgrade.sync_project(self.source_home, self.project)
             self.assertEqual(os.listdir(outside), [])
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
@@ -912,17 +1033,17 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('ignore bandit.yaml')
         (self.project / 'bandit.yaml').write_text('mine\n', encoding='utf-8')
         with self.assertRaisesRegex(upgrade.UpdateError, 'bandit.yaml'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual((self.project / 'bandit.yaml').read_text(encoding='utf-8'), 'mine\n')
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
 
     def test_a_subfolder_is_not_a_repository_root(self) -> None:
         (self.project / 'sub/.getzilla').mkdir(parents=True)
         with self.assertRaisesRegex(upgrade.UpdateError, 'not the root'):
-            upgrade.sync_project(ROOT, self.project / 'sub')
+            upgrade.sync_project(self.source_home, self.project / 'sub')
 
     def test_the_projects_own_lint_configuration_stays_and_a_sync_record_appears(self) -> None:
-        result = upgrade.sync_project(ROOT, self.project)
+        result = upgrade.sync_project(self.source_home, self.project)
         self.assertEqual((self.project / 'ruff.toml').read_text(encoding='utf-8'), 'line-length = 80\n')
         self.assertIn('kept your own ruff.toml', result)
         self.assertEqual((self.project / 'bandit.yaml').read_bytes(), (ROOT / 'bandit.yaml').read_bytes())
@@ -941,7 +1062,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_a_pre_rename_project_gets_its_record_moved_and_its_old_files_listed(self) -> None:
         self._pre_rename()
-        result = upgrade.sync_project(ROOT, self.project)
+        result = upgrade.sync_project(self.source_home, self.project)
         record = json.loads((self.project / '.getzilla/AGBP_SYNC.json').read_text(encoding='utf-8'))
         self.assertEqual(record['kept_local'], ['ruff.toml'])
         self.assertIn('pre-rename file(s) remain', result)
@@ -950,7 +1071,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_retire_legacy_removes_the_old_files_in_the_same_commit(self) -> None:
         self._pre_rename()
-        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        result = upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertIn('removed', result)
         self.assertFalse((self.project / '.grok-stack').exists())
         self.assertFalse((self.project / 'scripts/grok_route.py').exists())
@@ -964,7 +1085,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / 'factory/src/adaptive_factory/cli.py').write_text('live = 1\n', encoding='utf-8')
         (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_text('{"sync": 1}\n', encoding='utf-8')
         self.commit('vendored factory and sync log')
-        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        result = upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertTrue((self.project / 'factory/src/adaptive_factory/cli.py').is_file())
         self.assertIn('no Getzilla replacement', result)
         self.assertFalse((self.project / '.grok-stack').exists())
@@ -977,7 +1098,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.grok-stack/AGBP_SYNC.log.jsonl').write_text('{"old": 1}\n', encoding='utf-8')
         (self.project / '.getzilla/AGBP_SYNC.log.jsonl').write_text('{"new": 1}\n', encoding='utf-8')
         self.commit('sync log at both paths')
-        upgrade.sync_project(ROOT, self.project, retire=True)
+        upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertTrue((self.project / '.getzilla/getzilla.zip').is_file())
         self.assertFalse((self.project / '.getzilla/getzilla/verification.py').exists())
         self.assertFalse((self.project / '.grok-stack').exists())
@@ -985,22 +1106,22 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_accept_local_with_retire_legacy_removes_the_old_record(self) -> None:
         self._pre_rename()
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         git(self.project, 'switch', '--quiet', 'main')
         git(self.project, 'merge', '--quiet', '--ff-only', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
         git(self.project, 'branch', '-D', upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
         (self.project / 'ruff.toml').write_text('line-length = 90\n', encoding='utf-8')
         self.commit('change a kept file')
-        result = upgrade.sync_project(ROOT, self.project, accept=True, retire=True)
+        result = upgrade.sync_project(self.source_home, self.project, accept=True, retire=True)
         self.assertIn('kept your current ruff.toml', result)
         self.assertFalse((self.project / '.grok-stack').exists())
 
     def test_a_missing_record_alone_does_not_make_an_update_branch(self) -> None:
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         git(self.project, 'rm', '--quiet', '.getzilla/AGBP_SYNC.json')
         self.commit('drop the record')
         head = git(self.project, 'rev-parse', 'HEAD')
-        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertIn('up to date', upgrade.sync_project(self.source_home, self.project))
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), head)
 
     def test_dated_evidence_that_names_the_old_engine_does_not_block_retirement(self) -> None:
@@ -1009,7 +1130,7 @@ class ProjectSyncTests(unittest.TestCase):
         evidence.parent.mkdir(parents=True)
         evidence.write_text('from adaptive_grok import state\n', encoding='utf-8')
         self.commit('dated evidence')
-        result = upgrade.sync_project(ROOT, self.project, retire=True)
+        result = upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertIn('dated evidence file(s)', result)
         self.assertFalse((self.project / 'scripts/grok_route.py').exists())
         self.assertTrue(evidence.is_file())
@@ -1020,9 +1141,9 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / 'tests/test_old.py').write_text('from adaptive_grok import verification\n', encoding='utf-8')
         self.commit('pin the old engine')
         with self.assertRaisesRegex(upgrade.UpdateError, 'tests/test_old.py'):
-            upgrade.sync_project(ROOT, self.project, retire=True)
+            upgrade.sync_project(self.source_home, self.project, retire=True)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
-        self.assertIn('tests/test_old.py', upgrade.sync_project(ROOT, self.project))
+        self.assertIn('tests/test_old.py', upgrade.sync_project(self.source_home, self.project))
 
 
 class HelperTests(unittest.TestCase):

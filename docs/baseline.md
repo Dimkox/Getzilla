@@ -6,26 +6,26 @@ Every Getzilla install has the same baseline, with no option to skip any part of
 |---|---|---|
 | Security | OSV CVE database, OpenGrep scanner with Getzilla rules | OpenGrep version and SHA-256 in `updater.py` |
 | Superpowers | skills for brainstorming, plans, TDD, debugging, review | tag + commit in `toolchain.json` |
-| BMAD | `_bmad/` method files and the agent's BMAD skills | npm version = tag, commit recorded |
-| Spec Kit | `specify` CLI, `.specify/` and the agent's `/speckit-*` skills | tag + commit; installed with `uv` |
+| BMAD | `_bmad/` method files and the agent's BMAD skills | full source commit, dependency lock, fixed generation command and asset hash |
+| Spec Kit | `.specify/` and the agent's `/speckit-*` skills | full source commit, hashed dependency closure, sh/ps variant and asset hash |
 
 ## Installer
 
 `install.sh` / `install.ps1` install the security data, then the workflow baseline:
 
-1. Node.js 20+ (pinned archives, as for the agent CLIs) for the BMAD installer;
-2. `uv` 0.11.12 in Getzilla's own environment (reused when that exact version is already on PATH), which
-   installs the Spec Kit CLI with its own Python 3.11+;
+1. Agent runtimes remain separate from workflow asset installation.
+2. Ordinary project onboarding requires neither an ambient BMAD/Spec Kit executable nor Bubblewrap.
 3. `scripts/getzilla_update.py --only baseline`: each source is cloned at its pinned tag into
    `~/.getzilla/baseline/<id>` and must resolve to the pinned commit (`PINNED_COMMIT_MISMATCH` otherwise),
-   and the Spec Kit CLI is installed from the pinned tag.
+   and the shipped generated asset hashes are checked. This step does not install a `specify` CLI.
 
 If any step fails, the installer stops with an error and the command to retry. A new project
 (`GETZILLA_NEW_PROJECT`) is connected right after it is created.
 
 Updating to newer upstream versions is separate: `scripts/getzilla_update.py --only agents --only sources`
 fetches the latest releases for observation; a new version becomes the baseline only when
-`toolchain.json` (`pinned`, `upstream_tag`, `pinned_commit`) is updated and its verification tests pass.
+`toolchain.json` (`pinned`, `upstream_tag`, `pinned_commit`, `asset_inputs`, `generated_assets`) and the
+bound assets are updated and reviewed together. A Git pin alone is not semantic approval.
 
 ## Offline mirror
 
@@ -57,13 +57,30 @@ getzilla baseline apply --project DIR [--agent claude|codex|qwen|gemini|grok|cop
 getzilla baseline status [--project DIR] [--agent NAME]
 ```
 
-- Superpowers skills are copied into `.agents/skills` (Getzilla's canonical skill source) and the
-  agent's skill directory, with the upstream LICENSE. Copilot additionally needs the upstream
-  marketplace plugin, which is not pinned.
-- BMAD runs `npx bmad-method@<pinned> install --tools <agent> --yes` and Spec Kit runs
-  `specify init --here --integration <agent> --non-interactive` in an empty staging directory.
-  Their files are merged into the project **without overwriting** anything; kept files are listed.
-  An existing `_bmad/` or `.specify/` is left as it is.
+- Superpowers skills and LICENSE files come from the fixed pinned-source assets. Copilot receives
+  canonical context only; no marketplace plugin is installed or trusted by this path.
+- BMAD/Spec Kit files come from fixed generated assets, not `npx` or ambient `specify`. Their generation
+  used pinned source and hash-checked dependencies in a disposable Linux network/PID/user namespace,
+  with read-only source/dependencies, an empty environment and scratch output. Exact source, dependency,
+  command and per-file bindings are retained in each variant manifest and in `toolchain.json`.
+- Generated output is stored as readable UTF-8 content-addressed blobs and24variant manifests, without
+  binary encoding. Blob hashes bind exact original bytes, including upstream CRLF. The scoped Git
+  attribute disables newline conversion while keeping normal text diff detection.
+- Consumer installation validates complete manifest/blob/file custody before copying. It does not execute
+  upstream code, install dependencies or grant network/secret/tool permissions. The reviewed shipped instructions become discoverable in native skill paths; copying is not a semantic safety proof.
+  Existing `_bmad/` and `.specify/` directories remain untouched; conflicting/unsafe new paths refuse.
+  BMAD project-name rendering updates its file manifest and produces a separate materialized digest.
+- The entire asset path is code-bearing supply-chain data. Asset-only `.txt`/`.json` edits retain full
+  executable verification and security/release risk reviews; they cannot use docs-focused or light lanes.
+- Six agent adapters are covered. Spec Kit has separate `sh` and `ps` assets. Native Windows/macOS
+  script execution and sandbox behavior require their own qualification; data-copy tests do not prove it.
+
+New external skills use the separate [preflight and interview](skill-preflight.md) path. The shipped
+catalog is source custody, not a claim that arbitrary instructions are safe. Interrupted multi-file
+materialization can leave copied files; it never reports success for an incomplete copy. Reconcile
+partial state explicitly before retrying. There is no automatic execution fallback.
+An incomplete bounded runtime diagnostic blocks a retry from treating its partial directory as existing
+user data, including after changing agent adapters. Reused identical bytes must match the platform mode contract; incompatible modes refuse without chmod. Successful custody digests use actual observed bytes and modes. This record can only cause refusal; it grants no authority and is not a permission ledger.
 
 ## Verify
 
@@ -72,3 +89,5 @@ fails with `WORKFLOW_BASELINE_MISSING` / `PROJECT_BASELINE_MISSING` until the ba
 and connected; `fast` mode warns. CI runners skip this check (the baseline belongs to the agent's
 machine). Security tools were already mandatory in `pr`/`release`: a skipped OpenGrep or an
 unconfigured vulnerability check fails the quality gate there.
+
+Exact immutable upstream whitespace uses source-bound reviewed dispositions. Each finding binds its whole blob, line, rule, mode, pinned Git commit/tree path proof, consumer inventory and separate custody evidence. Worktree, index and HEAD proofs must agree. Raw error severity/output stay visible. Unlisted or changed findings and missing/stale/foreign proofs fail. This classifies exact preserved bytes; it grants no permission or safety/legal approval and skips no other check.

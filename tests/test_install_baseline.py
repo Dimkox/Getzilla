@@ -13,6 +13,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls.current_home = cls.enterClassContext(public_source_copy(ROOT))
         cls.temporary = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temporary.name).resolve()
         cls.base.chmod(0o700)
@@ -119,7 +122,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
 
     def update(self, **kwargs):
         with mock.patch.dict(os.environ, self.environment):
-            return upgrade.sync_project(ROOT, self.project, baseline_release='v2.3.0', **kwargs)
+            return upgrade.sync_project(self.current_home, self.project, baseline_release='v2.3.0', **kwargs)
 
     def test_restored_fixture_uses_qualified_old_bytes_and_actual_old_plan(self):
         from getzilla.install_baseline import load_baseline
@@ -229,7 +232,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.commit()
         self.before = self.git('rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, 'ignored local files'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.current_home, self.project)
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
         self.assertTrue(all((self.project/path).is_file() for path in anchors))
         self.assertEqual(sentinel.read_bytes(), b'ignored user data\x00\xff')
@@ -238,7 +241,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
         anchors, sentinel = self.stock_ignored_runtime()
         self.update()
         head = self.git('rev-parse', 'HEAD')
-        result = upgrade.sync_project(ROOT, self.project)
+        result = upgrade.sync_project(self.current_home, self.project)
         self.assertIn('is up to date', result)
         self.assertEqual(self.git('rev-parse', 'HEAD'), head)
         self.assertEqual(self.git('ls-files', '--', *anchors), '')
@@ -541,7 +544,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.assertEqual(self.run_process(['git', 'ls-files', '.getzilla/runtime'], restored), '')
         before = self.run_process(['git', 'rev-parse', 'HEAD'], restored)
         with mock.patch.dict(os.environ, self.environment):
-            upgrade.sync_project(ROOT, restored, baseline_release='v2.3.0')
+            upgrade.sync_project(self.current_home, restored, baseline_release='v2.3.0')
         self.assertEqual(read_state(restored).require_selection(), ('qwen',))
         self.assertEqual(user.read_text(), '{"theme":"custom"}\n')
         self.assertEqual((restored/'scripts/getzilla_route.py').read_bytes(), (ROOT/'scripts/getzilla_route.py').read_bytes())
@@ -605,7 +608,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
                        {'baseline_release': 'v2.3.0', 'accept': True},
                        {'baseline_release': 'v2.3.0', 'retire': True}):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(upgrade.UpdateError, 'baseline'):
-                upgrade.sync_project(ROOT, self.project, **kwargs)
+                upgrade.sync_project(self.current_home, self.project, **kwargs)
             self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
             self.assertEqual(self.git('status', '--porcelain'), '')
 
