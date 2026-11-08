@@ -266,6 +266,8 @@ def _union_assessment(root: Path, route: dict[str, Any], text: str) -> None:
     for field in ('domains', 'task_domains', 'workflow_skills', 'analysis_agents', 'review_agents',
                   'allowed_agents', 'quality_profiles', 'required_evidence', 'human_gates'):
         route[field] = list(dict.fromkeys([*route.get(field, []), *assessed.get(field, [])]))
+    if not route.get('write_agent') and assessed.get('write_agent'):
+        route['write_agent'] = assessed['write_agent']
     if route.get('write_agent'):
         route['allowed_agents'] = list(dict.fromkeys([*route['allowed_agents'], route['write_agent']]))
     # Intake keeps existing obligations, but the old exact-diff assessment no

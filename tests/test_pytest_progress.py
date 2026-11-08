@@ -402,3 +402,165 @@ class ProgressTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336FailureEventTests(unittest.TestCase):
+    def setup_writer(self):
+        module = importlib.import_module('getzilla.pytest_progress')
+        root, directory = ProgressTests.directory(self)
+        writer = ProgressTests.writer(self, module, directory, workers=1)
+        self.assertTrue(hasattr(writer, 'pytest_runtest_logreport'), 'failed-report hook must exist')
+        return module, root, directory, writer
+
+    def report(self, node='tests/test_public.py::Probe::test_one[PARAM_CANARY]', phase='call', failed=True):
+        class PublicReport:
+            @property
+            def longrepr(self):
+                raise AssertionError('report payload must not be inspected')
+            @property
+            def sections(self):
+                raise AssertionError('captured streams must not be inspected')
+        value = PublicReport()
+        value.nodeid, value.when, value.failed = node, phase, failed
+        return value
+
+    def observed(self, module, directory):
+        result = module.read_progress(directory, NONCE, 1)
+        self.assertIn('failure_events', result, 'failure prefix was not retained by reader')
+        return result['failure_events']
+
+    def test_failure_prefix_survives_activity_and_never_saves_report_payload(self):
+        module, _, directory, writer = self.setup_writer()
+        writer.pytest_runtest_logreport(self.report(failed=False))
+        self.assertFalse((directory / 'worker-0.failures.jsonl').exists())
+        for phase in ('setup', 'call', 'teardown'):
+            writer.pytest_runtest_logreport(self.report(phase=phase))
+            writer.pytest_runtest_logstart('tests/test_other.py::test_other', None)
+            writer.pytest_runtest_logfinish('tests/test_other.py::test_other', None)
+        self.assertTrue((directory / 'worker-0.failures.jsonl').is_file(), 'failed-report prefix absent')
+        raw = (directory / 'worker-0.failures.jsonl').read_text()
+        self.assertNotIn('PARAM_CANARY', raw)
+        self.assertNotIn('Probe', raw)
+        observations = self.observed(module, directory)
+        self.assertEqual([event['phase'] for event in observations['workers'][0]['events']],
+                         ['setup', 'call', 'teardown'])
+        self.assertEqual([event['ordinal'] for event in observations['workers'][0]['events']], [1, 2, 3])
+        self.assertEqual(module.read_progress(directory, NONCE, 1)['slots'][0]['state'], 'idle')
+
+    def test_four_maximal_rows_dropped_overflow_and_total_byte_limit(self):
+        module, _, directory, writer = self.setup_writer()
+        writer.pytest_runtest_logreport(self.report('/PRIVATE_CANARY.py::invalid'))
+        path = 'tests/' + 'x' * 247 + '.py'
+        node = path + '::' + 'C' * 128 + '::' + 'm' * 124
+        self.assertEqual(len(node), 512)
+        for _ in range(5):
+            writer.pytest_runtest_logreport(self.report(node, 'teardown'))
+        file = directory / 'worker-0.failures.jsonl'
+        raw = file.read_bytes()
+        self.assertLessEqual(len(raw), 2048)
+        self.assertEqual(len(raw.splitlines()), 7)
+        self.assertNotIn(b'PRIVATE_CANARY', raw)
+        observed = self.observed(module, directory)['workers'][0]
+        self.assertEqual(len(observed['events']), 4)
+        self.assertTrue(observed['overflow'])
+        self.assertTrue(observed['dropped'])
+        writer.pytest_runtest_logreport(self.report(node))
+        self.assertEqual(file.read_bytes(), raw)
+
+    def test_exclusive_create_and_name_substitution_cannot_write_an_alien_file(self):
+        module, root, directory, writer = self.setup_writer()
+        file = directory / 'worker-0.failures.jsonl'
+        file.write_bytes(b'FOREIGN_CANARY')
+        writer.pytest_runtest_logreport(self.report())
+        self.assertEqual(file.read_bytes(), b'FOREIGN_CANARY')
+        self.assertEqual(self.observed(module, directory)['status'], 'unavailable')
+        file.unlink()
+        second = ProgressTests.writer(self, module, directory, workers=1)
+        second.pytest_runtest_logreport(self.report())
+        moved = root / 'our-created-stream'
+        try:
+            file.rename(moved)
+        except OSError:
+            if os.name == 'nt':
+                self.skipTest('open-descriptor rename is unavailable on this Windows fixture')
+            raise
+        file.write_bytes(b'REPLACEMENT_CANARY')
+        second.pytest_runtest_logreport(self.report(phase='teardown'))
+        self.assertEqual(file.read_bytes(), b'REPLACEMENT_CANARY')
+        self.assertTrue(moved.read_bytes().startswith(b'{"version":1,'))
+        self.assertEqual(self.observed(module, directory)['status'], 'unavailable')
+
+    def test_short_append_retains_complete_prefix_and_discloses_partial_tail(self):
+        module, _, directory, writer = self.setup_writer()
+        writer.pytest_runtest_logreport(self.report())
+        original_write = os.write
+        def short(fd, content):
+            return original_write(fd, content[:13])
+        with patch.object(module.os, 'write', side_effect=short):
+            writer.pytest_runtest_logreport(self.report(phase='teardown'))
+        prefix = self.observed(module, directory)
+        self.assertTrue(prefix['workers'], 'complete failure prefix discarded')
+        observed = prefix['workers'][0]
+        self.assertEqual(len(observed['events']), 1)
+        self.assertTrue(observed['partial_tail'])
+        self.assertEqual(self.observed(module, directory)['status'], 'partial')
+        before = (directory / 'worker-0.failures.jsonl').read_bytes()
+        writer.pytest_runtest_logreport(self.report())
+        self.assertEqual((directory / 'worker-0.failures.jsonl').read_bytes(), before)
+
+    def test_closed_header_records_replay_caps_and_incomplete_header_refuse(self):
+        module, _, directory, writer = self.setup_writer()
+        writer.pytest_runtest_logreport(self.report())
+        file = directory / 'worker-0.failures.jsonl'
+        valid = file.read_bytes()
+        header, event = valid.splitlines()
+        changed_event = json.loads(event)
+        changed_event['phase'] = 'unknown'
+        changes = [b'{', header.decode('ascii').encode('utf-16') + b'\n' + event + b'\n',
+                   valid.replace(NONCE.encode(), b'b' * 32),
+                   valid.replace(b'"worker":0', b'"worker":true'),
+                   header[:-1] + b',"version":1}\n' + event + b'\n',
+                   header + b'\n' + json.dumps(changed_event).encode() + b'\n',
+                   valid + event + b'\n', valid + b'not-json\n', valid + b'x' * 2048]
+        for index, content in enumerate(changes):
+            with self.subTest(case=index):
+                file.write_bytes(content)
+                self.assertEqual(self.observed(module, directory)['status'], 'unavailable')
+        file.write_bytes(valid + b'{"kind":"failure"')
+        observed = self.observed(module, directory)['workers'][0]
+        self.assertEqual(len(observed['events']), 1)
+        self.assertTrue(observed['partial_tail'])
+        file.write_bytes(valid)
+        alias = directory / 'alias'
+        os.link(file, alias)
+        self.assertEqual(self.observed(module, directory)['status'], 'unavailable')
+        alias.unlink()
+
+    def test_mock_timeout_reads_prefix_before_cleanup_without_deriving_counts(self):
+        module, _, _, _ = self.setup_writer()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / 'tests').mkdir()
+            (root / '.coveragerc').write_text('[run]\nsource = app\n')
+            retained = []
+            def execute(command, cwd, environment, **kwargs):
+                progress = Path(command[command.index('--getzilla-progress-dir') + 1])
+                nonce = command[command.index('--getzilla-progress-nonce') + 1]
+                config = SimpleNamespace(getoption=lambda name: {'getzilla_progress_dir': str(progress),
+                    'getzilla_progress_nonce': nonce, 'getzilla_progress_workers': '1'}[name],
+                    workerinput={'workerid': 'gw0'}, pluginmanager=SimpleNamespace(register=lambda value, name: retained.append(value)))
+                module.pytest_configure(config)
+                retained[0].pytest_runtest_logreport(self.report())
+                retained[0].pytest_unconfigure(None)
+                retained.append(progress)
+                return runner.ProcessResult(command, 124, seconds=900.2, terminal_state='timeout')
+            with patch.object(runner, 'select_engine', return_value=(1, 'pytest-xdist')), \
+                    patch.object(runner, '_tool_versions', return_value={}), \
+                    patch.object(runner, 'execute', side_effect=execute) as invoked:
+                result = runner.run_core_tests(root, 'pr', 1)
+            self.assertEqual(invoked.call_count, 1)
+            self.assertEqual((result.tests.returncode, result.tests.terminal_state), (124, 'timeout'))
+            self.assertEqual(result.tests.seconds, 900.2)
+            self.assertEqual(result.coverage.returncode, 1)
+            self.assertEqual(runner.TIMEOUT, 900)
+            self.assertEqual(len(result.progress['failure_events']['workers'][0]['events']), 1)
+            self.assertFalse(retained[-1].parent.exists())

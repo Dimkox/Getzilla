@@ -96,7 +96,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
             diagnostic = result.stderr or result.stdout
             diagnostic = diagnostic.replace(str(cls.base), '<historical-fixture>').replace(str(ROOT), '<candidate>')
             diagnostic = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', diagnostic)
-            diagnostic = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', diagnostic)
+            diagnostic = re.sub(r'(?i)(https?://)[^/\s@]+@', r'\1[redacted]@', diagnostic)
             diagnostic = re.sub(r'(?i)\b([\w-]*(?:token|password|secret|api[_-]?key|authorization)[\w-]*)\s*[:=][^\r\n]*',
                                 r'\1=[redacted]', diagnostic)
             diagnostic = diagnostic[-2048:]
@@ -664,3 +664,16 @@ class HistoricalUpgradeTests(unittest.TestCase):
                     upgrade.main(args)
                 self.assertEqual(caught.exception.code, 2)
             self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
+
+class Low336UserinfoTests(unittest.TestCase):
+    def test_historical_diagnostic_redacts_all_http_scheme_cases(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        holder = SimpleNamespace(environment={}, base=Path('/public-fixture'))
+        for scheme in ('https', 'HTTPS', 'HtTpS', 'HTTP'):
+            result = SimpleNamespace(returncode=9, stdout='', stderr=scheme + '://public:USERINFO_CANARY@example.invalid/path')
+            with self.subTest(scheme=scheme), patch.object(subprocess, 'run', return_value=result):
+                with self.assertRaises(AssertionError) as caught:
+                    HistoricalUpgradeTests.run_process.__func__(holder, ['public-inert-command'])
+                self.assertNotIn('USERINFO_CANARY', str(caught.exception))
+                self.assertIn('[redacted]@example.invalid/path', str(caught.exception))
