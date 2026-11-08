@@ -441,6 +441,24 @@ def decode_document(content: str) -> dict:
     return json.loads(content, object_pairs_hook=pairs)
 
 
+def _fixture_owners(document: dict, binding: dict) -> tuple[set[str], set[str]]:
+    """Exact source modules/classes for collected declared cases, without imports."""
+    modules = {".".join(Path(path).with_suffix("").parts) for path in binding["source_inventory"]
+               if path.startswith("factory/tests/") and path.endswith(".py")}
+    module_owners, class_owners = set(), set()
+    for identifier in set(document["expected_ids"]) & set(document["collected_ids"]):
+        parent = identifier.rpartition(".")[0]
+        module = parent.rpartition(".")[0]
+        function_case, class_case = parent in modules, module in modules
+        # Ambiguous module/class spellings do not prove a fixture owner.
+        if function_case == class_case:
+            continue
+        module_owners.add(parent if function_case else module)
+        if class_case:
+            class_owners.add(parent)
+    return module_owners, class_owners
+
+
 def validate_report(document: dict, expected_binding: dict) -> None:
     if (not isinstance(document, dict) or set(document) != _REPORT_KEYS
             or type(document["schema_version"]) is not int or document["schema_version"] != 3
@@ -458,6 +476,7 @@ def validate_report(document: dict, expected_binding: dict) -> None:
     problems = document["problems"]
     if not isinstance(problems, list) or len(problems) > 10000:
         raise ValueError("Factory problem inventory exceeds bound")
+    module_owners, class_owners = _fixture_owners(document, expected_binding)
     for row in problems:
         if (not isinstance(row, dict) or set(row) != {"id", "phase", "kind", "exception", "frames"}
                 or not isinstance(row["id"], str) or not 1 <= len(row["id"]) <= 2048
@@ -472,8 +491,8 @@ def validate_report(document: dict, expected_binding: dict) -> None:
         elif row["phase"] == "unqualified_fixture":
             related = row["id"] == "unqualified_fixture" and row["kind"] == "error"
         else:
-            related = (row["kind"] == "error"
-                       and any(identifier.startswith(row["id"] + ".") for identifier in document["collected_ids"]))
+            owners = class_owners if row["phase"].endswith("Class") else module_owners
+            related = row["kind"] == "error" and row["id"] in owners
         if not related:
             raise ValueError("Factory problem is not bound to its case or fixture")
         for frame in row["frames"]:

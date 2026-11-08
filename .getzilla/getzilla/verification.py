@@ -2276,11 +2276,86 @@ def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float 
     return result
 
 
+def _progress_failure_rows(progress, workers):
+    raw = progress.get('failure_events')
+    if (type(raw) is not dict or set(raw) != {'version', 'status', 'workers'}
+            or type(raw['version']) is not int or raw['version'] != 1
+            or raw['status'] not in ('not_supported', 'unavailable', 'partial', 'observed')
+            or type(raw['workers']) is not list or len(raw['workers']) > 64):
+        return []
+    rows, seen = [], set()
+    for row in raw['workers']:
+        if (type(row) is not dict
+                or set(row) != {'worker', 'sequence', 'overflow', 'dropped', 'partial_tail', 'events'}
+                or type(row['worker']) is not int or not 0 <= row['worker'] < workers
+                or type(row['sequence']) is not int or not 1 <= row['sequence'] <= 2**63 - 1
+                or any(type(row[name]) is not bool for name in ('overflow', 'dropped', 'partial_tail'))
+                or type(row['events']) is not list or len(row['events']) > 4
+                or (row['overflow'] and len(row['events']) != 4)
+                or (not row['events'] and not row['dropped'])):
+            continue
+        if row['worker'] in seen:
+            return []
+        seen.add(row['worker'])
+        previous, valid = 0, True
+        for event in row['events']:
+            if (type(event) is not dict or set(event) != {'ordinal', 'phase', 'path', 'key'}
+                    or type(event['ordinal']) is not int or not previous < event['ordinal'] <= row['sequence']
+                    or event['phase'] not in ('setup', 'call', 'teardown')
+                    or type(event['path']) is not str or len(event['path']) > 256
+                    or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', event['path'])
+                    or any(part in {'', '.', '..'} for part in event['path'].split('/'))
+                    or type(event['key']) is not str or not re.fullmatch('[0-9a-f]{64}', event['key'])):
+                valid = False
+                break
+            previous = event['ordinal']
+        if valid:
+            rows.append(row)
+    return sorted(rows, key=lambda row: row['worker'])
+
+
+def _failure_progress_details(rows, identities, workers):
+    output = {'version': 1, 'observation': 'FAILED_REPORTS_BEFORE_STOP', 'prefix_only': True,
+              'status': 'unavailable', 'overflow': None, 'dropped': None, 'partial_tail': None,
+              'render_truncated': False, 'events': []}
+    if not rows:
+        return output
+    known = len(rows) == workers
+    proven = {name: any(row[name] for row in rows) for name in ('overflow', 'dropped', 'partial_tail')}
+    # Positive facts survive uncertainty; absence is not yet a negative proof.
+    for name, value in proven.items():
+        output[name] = True if value else None
+    unknown = False
+    for row in rows:
+        for event in row['events']:
+            identity = identities.get((event['path'], event['key']))
+            unknown |= identity is None
+            candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
+                         'phase': event['phase'], 'identity': identity}
+            proposed = {**output, 'events': output['events'] + [candidate]}
+            # Reserve the longest final flag spelling without publishing a
+            # provisional FALSE. Finalizing certainty must not exceed the cap.
+            budgeted = {**proposed, **{name: True if value else False for name, value in proven.items()}}
+            if len(json.dumps(budgeted).encode('utf-8')) > 8192:
+                output['render_truncated'] = True
+                break
+            output['events'].append(candidate)
+        if output['render_truncated']:
+            break
+    uncertain = not known or unknown or output['render_truncated'] or any(proven.values())
+    for name, value in proven.items():
+        output[name] = True if value else None if uncertain else False
+    output['status'] = 'partial' if uncertain else 'observed'
+    return output
+
+
 def _core_progress_details(root: Path, progress: dict[str, object] | None) -> dict[str, object]:
-    """Source-bound last reports, not a claim about running or failed tests."""
+    """Source-bound last slots and failed-report prefixes, never test totals."""
     output: dict[str, object] = {'observation': 'LAST_REPORTED_BEFORE_STOP', 'best_effort': True,
                                  'status': 'not_supported', 'selected_workers': 0,
-                                 'observed_workers': 0, 'omitted_workers': 0, 'slots': []}
+                                 'observed_workers': 0, 'omitted_workers': 0, 'slots': [],
+                                 'failure_events': _failure_progress_details([], {}, 0)}
+    output['failure_events']['status'] = 'not_supported'
     if not isinstance(progress, dict):
         return output
     workers = progress.get('selected_workers')
@@ -2290,10 +2365,16 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
     if workers > 64 or progress.get('status') == 'not_supported':
         return output
     output['status'] = 'unavailable'
+    output['failure_events']['status'] = 'unavailable'
+    failures = _progress_failure_rows(progress, workers)
     raw = progress.get('slots')
     if not isinstance(raw, list) or len(raw) > 64:
-        return output
-    slots, seen, paths = [], set(), []
+        if not failures:
+            return output
+        raw = []
+    slots, seen = [], set()
+    # One shared bounded source lookup; failures precede last-reported slots.
+    paths = list(dict.fromkeys(event['path'] for row in failures for event in row['events']))
     for slot in raw:
         if not isinstance(slot, dict):
             continue
@@ -2313,6 +2394,7 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
     deadline = time.monotonic() + 2.0
     trusted = _trusted_progress_metadata(root, paths, deadline=deadline) if paths else {}
     requested = {(path, key) for _, _, path, key in slots if path is not None}
+    requested.update((event['path'], event['key']) for row in failures for event in row['events'])
     identities = {}
     expired = False
     for path, (_, nodes) in trusted.items():
@@ -2330,6 +2412,7 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
             break
     if expired:
         identities = {}
+    output['failure_events'] = _failure_progress_details(failures, identities, workers)
     rendered = []
     unknown = False
     for worker, state, path, key in sorted(slots):
@@ -2340,7 +2423,7 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
             break
         rendered.append(candidate)
     output.update(status=('observed' if len(rendered) == workers and not unknown else
-                          'partial' if rendered else 'unavailable'),
+                           'partial' if rendered else 'unavailable'),
                   observed_workers=len(slots), omitted_workers=workers - len(rendered), slots=rendered)
     return output
 

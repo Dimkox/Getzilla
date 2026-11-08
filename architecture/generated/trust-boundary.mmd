@@ -1,10 +1,13 @@
 flowchart LR
   subgraph domain_96fb748595c57dce["TD-EXTERNAL-PLATFORM"]
+    node_662c15ead8b897ee["NODE-CISA-SECURITY-FEED | external_system | public CISA feed endpoints"]
     node_0456afc65ddefc44["NODE-ENTIRE | external_system | Entire"]
+    node_57e24ded05c6433e["NODE-EPSS-SECURITY-FEED | external_system | public EPSS feed endpoint"]
     node_8b8a8cd21b180532["NODE-GITHUB | external_system | GitHub"]
     node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
     node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
     node_69f0245ef987c48b["NODE-PILOT-MODEL-PROVIDER | external_system | external model provider"]
+    node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
     node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
   end
   subgraph domain_ece8d94ff661d9fb["TD-EXTERNAL-POLICY"]
@@ -38,6 +41,7 @@ flowchart LR
     node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
     node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
     node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
+    node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
     node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
     node_e1da543fa66b0086["NODE-STAGED-DELIVERY-SOURCE | local_component | repository engineering"]
     node_05e59b1e4a9cc0f9["NODE-WORKFLOW-ARTIFACT-COMPILER | local_component | repository engineering"]
@@ -106,6 +110,12 @@ flowchart LR
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-CISA | dependency | https"| node_662c15ead8b897ee
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-EPSS | dependency | https"| node_57e24ded05c6433e
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS | dependency | https"| node_8b8a8cd21b180532
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-API | dependency | https"| node_8acae282d21dd9c2
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-BUCKET | dependency | https"| node_7b13ed12e8efab1c
+  node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-PYPI | dependency | https"| node_ed77fd8e957c8e8c
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https"| node_8b8a8cd21b180532

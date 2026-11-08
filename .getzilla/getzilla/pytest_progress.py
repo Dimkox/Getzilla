@@ -12,6 +12,8 @@ from . import fsx
 
 MAX_WORKERS = 64
 MAX_SLOT_BYTES = 2048
+MAX_FAILURE_BYTES = 2048
+MAX_FAILURE_EVENTS = 4
 _FIELDS = {'version', 'nonce', 'worker', 'sequence', 'state', 'path', 'key'}
 
 
@@ -58,6 +60,14 @@ class _WorkerProgress:
         self.temporary = f'worker-{worker}.tmp'
         self.identity: tuple[int, int] | None = None
         self.disabled = False
+        self.failure_fd = None
+        self.failure_identity = None
+        self.failure_written = 0
+        self.failure_sequence = 0
+        self.failure_rows = 0
+        self.failure_dropped = False
+        self.failure_overflow = False
+        self.failure_disabled = False
 
     def _publish(self, nodeid: str, state: str) -> None:
         if self.disabled:
@@ -88,6 +98,65 @@ class _WorkerProgress:
             except OSError:
                 pass
 
+    def _failure_write(self, record, reserve):
+        content = json.dumps(record, separators=(',', ':'), ensure_ascii=True).encode('ascii') + b'\n'
+        info = os.fstat(self.failure_fd)
+        if (not _regular(info) or (info.st_dev, info.st_ino) != self.failure_identity
+                or info.st_size != self.failure_written
+                or self.failure_written + len(content) + reserve > MAX_FAILURE_BYTES):
+            raise OSError('unavailable failure stream')
+        # One bounded append to the exclusively-created, held inode. No named
+        # replacement, reopen, truncate or unlink can clobber a substituted name.
+        if os.write(self.failure_fd, content) != len(content):
+            raise OSError('incomplete failure append')
+        self.failure_written += len(content)
+
+    def _failure_append(self, record):
+        if self.failure_fd is None:
+            self.failure_fd = fsx.open_at(self.handle, f'worker-{self.worker}.failures.jsonl',
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | fsx.O_NOFOLLOW, 0o600)
+            info = os.fstat(self.failure_fd)
+            self.failure_identity = (info.st_dev, info.st_ino)
+            self._failure_write({'version': 1, 'kind': 'core-failed-reports', 'nonce': self.nonce,
+                                 'worker': self.worker}, 128)
+        reserve = (64 if not self.failure_dropped else 0) + 64 if record['kind'] == 'failure' else (
+            64 if record['kind'] == 'dropped' else 0)
+        self._failure_write(record, reserve)
+
+    def pytest_runtest_logreport(self, report):
+        if self.failure_disabled or self.failure_overflow:
+            return
+        try:
+            if report.failed is not True:
+                return
+            if self.failure_sequence >= 2**63 - 1:
+                raise ValueError('failure serial exhausted')
+            self.failure_sequence += 1
+            serial = self.failure_sequence
+            if self.failure_rows >= MAX_FAILURE_EVENTS:
+                self._failure_append({'kind': 'overflow', 'ordinal': serial})
+                self.failure_overflow = True
+                return
+            phase, node = report.when, report.nodeid
+            path, key = _node_identity(node) if type(node) is str else (None, None)
+            if phase not in ('setup', 'call', 'teardown') or path is None:
+                if not self.failure_dropped:
+                    self._failure_append({'kind': 'dropped', 'ordinal': serial})
+                    self.failure_dropped = True
+                return
+            self._failure_append({'kind': 'failure', 'ordinal': serial, 'phase': phase, 'path': path, 'key': key})
+            self.failure_rows += 1
+        except Exception:
+            # This optional diagnostic must never replace a primary test error.
+            # Keep any complete prefix, including a possible torn final row.
+            self.failure_disabled = True
+            if self.failure_fd is not None:
+                try:
+                    os.close(self.failure_fd)
+                except OSError:
+                    pass
+                self.failure_fd = None
+
     def pytest_runtest_logstart(self, nodeid, location):
         self._publish(nodeid, 'active')
 
@@ -95,6 +164,12 @@ class _WorkerProgress:
         self._publish(nodeid, 'idle')
 
     def pytest_unconfigure(self, config):
+        if self.failure_fd is not None:
+            try:
+                os.close(self.failure_fd)
+            except OSError:
+                pass
+            self.failure_fd = None
         try:
             fsx.close_dir(self.handle)
         except OSError:
@@ -170,25 +245,105 @@ def _read_slot(handle, ordinal: int, nonce: str) -> dict[str, object]:
     return {name: document[name] for name in ('worker', 'sequence', 'state', 'path', 'key')}
 
 
+def _failure_json(content):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate failure field')
+            result[key] = value
+        return result
+    value = json.loads(content.decode('utf-8', 'strict'), object_pairs_hook=pairs)
+    if type(value) is not dict:
+        raise ValueError('invalid failure record')
+    return value
+
+
+def _read_failure_prefix(handle, ordinal, nonce):
+    name = f'worker-{ordinal}.failures.jsonl'
+    before = fsx.lstat_at(handle, name)
+    if not _regular(before) or before.st_size > MAX_FAILURE_BYTES:
+        raise ValueError('unavailable failure stream')
+    descriptor = fsx.open_at(handle, name, os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as source:
+        held = os.fstat(source.fileno())
+        if not _regular(held) or (before.st_dev, before.st_ino) != (held.st_dev, held.st_ino):
+            raise ValueError('changed failure stream')
+        content = source.read(MAX_FAILURE_BYTES + 1)
+        after = os.fstat(source.fileno())
+    named = fsx.lstat_at(handle, name)
+    def identity(info):
+        return info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_nlink
+    if (not _regular(named) or identity(before) != identity(after) or identity(after) != identity(named)
+            or len(content) != after.st_size or len(content) > MAX_FAILURE_BYTES):
+        raise ValueError('changed failure stream')
+    lines = content.split(b'\n')
+    tail = lines.pop()
+    if not lines:
+        raise ValueError('incomplete failure header')
+    header = _failure_json(lines.pop(0))
+    if (set(header) != {'version', 'kind', 'nonce', 'worker'}
+            or type(header['version']) is not int or header['version'] != 1
+            or header['kind'] != 'core-failed-reports' or type(header['nonce']) is not str
+            or not re.fullmatch('[0-9a-f]{32}', header['nonce']) or header['nonce'] != nonce
+            or type(header['worker']) is not int or header['worker'] != ordinal or len(lines) > 6):
+        raise ValueError('invalid failure header')
+    events, serial, dropped, overflow = [], 0, False, False
+    for line in lines:
+        row = _failure_json(line)
+        kind, number = row.get('kind'), row.get('ordinal')
+        if overflow or type(number) is not int or not serial < number <= 2**63 - 1:
+            raise ValueError('invalid failure serial')
+        serial = number
+        if kind == 'failure':
+            if (set(row) != {'kind', 'ordinal', 'phase', 'path', 'key'} or len(events) >= MAX_FAILURE_EVENTS
+                    or row['phase'] not in ('setup', 'call', 'teardown')
+                    or type(row['path']) is not str or len(row['path']) > 256
+                    or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', row['path'])
+                    or any(part in {'', '.', '..'} for part in row['path'].split('/'))
+                    or type(row['key']) is not str or not re.fullmatch('[0-9a-f]{64}', row['key'])):
+                raise ValueError('invalid failure source')
+            events.append({key: row[key] for key in ('ordinal', 'phase', 'path', 'key')})
+        elif kind == 'dropped' and set(row) == {'kind', 'ordinal'} and not dropped:
+            dropped = True
+        elif kind == 'overflow' and set(row) == {'kind', 'ordinal'} and len(events) == MAX_FAILURE_EVENTS:
+            overflow = True
+        else:
+            raise ValueError('invalid failure fact')
+    if not serial:
+        raise ValueError('failure header has no observation')
+    return {'worker': ordinal, 'sequence': serial, 'overflow': overflow, 'dropped': dropped,
+            'partial_tail': bool(tail), 'events': events}
+
+
 def read_progress(directory: Path, nonce: str, workers: int) -> dict[str, object]:
     report: dict[str, object] = {'status': 'not_supported', 'selected_workers': workers,
-                                 'observed_workers': 0, 'omitted_workers': workers, 'slots': []}
+                                 'observed_workers': 0, 'omitted_workers': workers, 'slots': [],
+                                 'failure_events': {'version': 1, 'status': 'not_supported', 'workers': []}}
     if type(workers) is not int or not 1 <= workers <= MAX_WORKERS:
         return report
     report['status'] = 'unavailable'
     handle = None
-    slots = []
+    slots, failures = [], []
     try:
         handle = _private_directory(directory)
         for ordinal in range(workers):
             try:
                 slots.append(_read_slot(handle, ordinal, nonce))
             except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
-                continue
+                pass
+            try:
+                failures.append(_read_failure_prefix(handle, ordinal, nonce))
+            except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
+                pass
     except OSError:
         pass
     finally:
         fsx.close_dir(handle)
     report.update(status='observed' if len(slots) == workers else 'partial' if slots else 'unavailable',
                   observed_workers=len(slots), omitted_workers=workers - len(slots), slots=slots)
+    complete = len(failures) == workers and not any(
+        row['overflow'] or row['dropped'] or row['partial_tail'] for row in failures)
+    report['failure_events'] = {'version': 1, 'status': 'observed' if complete else 'partial' if failures else 'unavailable',
+                                'workers': failures}
     return report

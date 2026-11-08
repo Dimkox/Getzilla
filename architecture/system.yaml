@@ -2009,6 +2009,146 @@
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-OSV-API",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-API",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-OSV-BUCKET",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-ADVISORY-BUCKET",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-CISA",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CISA-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-EPSS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-EPSS-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-PYPI",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PYPI-REGISTRY",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -3166,6 +3306,74 @@
       "data_classification": "DATA-REPOSITORY-SOURCE",
       "id": "NODE-ENTIRE",
       "owner": "Entire",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/security_acquisition.py",
+        ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_osv_snapshot.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-CISA-SECURITY-FEED",
+      "owner": "public CISA feed endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-EPSS-SECURITY-FEED",
+      "owner": "public EPSS feed endpoint",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-PYPI-REGISTRY",
+      "owner": "public PyPI registry and artifact endpoints",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {

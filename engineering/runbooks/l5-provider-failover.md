@@ -83,7 +83,7 @@ The journal retains ambiguous input for recovery until expiry. Terminal completi
 
 ## Backend upgrade and rollback
 
-Upgrade every configured dedicated `getzilla-landing-server` before adopting the CLI. It requires authenticated `GET /v2/landing-backend` and `GET /v2/landing-jobs/{job_id}/attempt`; old v1-only hosts do not qualify. Capability, actor, source, and profile bindings are checked before POST, and expected actor/profile headers bind the POST itself. The old closed v1 responses remain available to direct clients.
+The following v1-to-v2 backend upgrade notes are historical. Current callers require capability schema v3 from authenticated `GET /v4/landing-backend`, as described in the migration section below. Old v1-only hosts do not qualify; retained v2/v3 capability handlers may return their declared 409 without an available worker-bound profile. Capability, actor, source, and profile bindings remain checked before POST, and expected actor/profile headers bind the POST itself. Retained historical contracts do not prove old worker availability.
 
 Backend startup validates SQLite v1, adds the observation column transactionally, and upgrades to v2. Historical rows retain null observations and do not become fallback evidence. Stop the service/publication writer and take a consistent `getzilla-landing-state backup --config PATH --snapshot NEW_PRIVATE_PATH` before upgrading; retain its manifest digest. The new backup reader accepts v1 and v2. The caller journal is separate and is not included in that backend snapshot.
 

@@ -229,12 +229,13 @@ class VerifierRecoveryTests(unittest.TestCase):
 
         with routed_fixture() as (root, _), patch.object(verifier, '_python', return_value=[verifier.CheckResult('python-unittest', 'fail', 'specific assertion')]):
             report = verifier.verify(root, mode='fast', record=False)
-        error_output = io.StringIO()
-        with patch.object(verifier, 'verify', return_value=report), \
-             patch.object(sys, 'argv', ['getzilla_verify.py', '--json', '--no-record']), \
-             contextlib.redirect_stdout(BrokenOutput()), contextlib.redirect_stderr(error_output):
-            with self.assertRaises(SystemExit) as caught:
-                runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
+            error_output = io.StringIO()
+            with patch.object(verifier, 'verify', return_value=report), \
+                 patch.object(util, 'find_root', return_value=root), \
+                 patch.object(sys, 'argv', ['getzilla_verify.py', '--json', '--no-record']), \
+                 contextlib.redirect_stdout(BrokenOutput()), contextlib.redirect_stderr(error_output):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(str(ROOT / 'scripts/getzilla_verify.py'), run_name='__main__')
         self.assertEqual(caught.exception.code, 1)
         retained = json.loads(error_output.getvalue())
         self.assertEqual(retained['check_status'], 'fail')
@@ -1097,3 +1098,37 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(receipt['details']['docs_state_scope'], report['docs_state_scope'])
             self.assertEqual(receipt['details']['checks'], report['checks'])
             self.assertEqual(receipt['tree_fingerprint'], report['tree_fingerprint'])
+
+class Low336PublicationFixtureTests(unittest.TestCase):
+    def test_publication_fault_never_writes_surrounding_checkout_report(self):
+        with tempfile.TemporaryDirectory() as outer_raw, tempfile.TemporaryDirectory() as inner_raw:
+            outer, inner = Path(outer_raw), Path(inner_raw)
+            outside_report = outer / '.getzilla/runtime/evidence/verification.json'
+            outside_report.parent.mkdir(parents=True)
+            outside_report.write_bytes(b'public surrounding evidence\n')
+            original_dump = util.dump_json
+            active = []
+            @contextlib.contextmanager
+            def public_fixture():
+                active.append(True)
+                try:
+                    yield inner, {}
+                finally:
+                    active.clear()
+            def only_owned_report(path, value):
+                self.assertTrue(active, 'publication fixture ended before script invocation')
+                self.assertTrue(Path(path).is_relative_to(inner), 'publication escaped its owned fixture')
+                return original_dump(path, value)
+            report = {'status': 'fail', 'mode': 'fast', 'profiles': [], 'changed_files': [],
+                      'checks': [verifier.CheckResult('python-unittest', 'fail', 'specific assertion').to_dict()]}
+            from getzilla import interpreter
+            with patch.dict(globals(), {'routed_fixture': public_fixture}), \
+                    patch.object(verifier, 'verify', return_value=report), \
+                    patch.object(util, 'find_root', return_value=outer), \
+                    patch.object(util, 'git_head', return_value='a' * 40), \
+                    patch.object(util, 'dump_json', side_effect=only_owned_report), \
+                    patch.object(interpreter, 'reexec_in_project_venv'), patch.object(signal, 'signal'):
+                case = VerifierRecoveryTests('test_report_publication_failure_emits_retained_report_on_stderr')
+                case.test_report_publication_failure_emits_retained_report_on_stderr()
+            self.assertEqual(outside_report.read_bytes(), b'public surrounding evidence\n')
+            self.assertTrue((inner / '.getzilla/runtime/evidence/verification.json').is_file())

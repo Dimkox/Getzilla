@@ -15,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from tests._support import public_source_copy
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 from getzilla.component_state import (  # noqa: E402
@@ -743,3 +745,13 @@ class DesignReferenceModuleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336ManagedSchemaTests(unittest.TestCase):
+    def test_public_minimal_payload_ships_exact_runtime_schema(self):
+        install = installer()
+        with public_source_copy(ROOT) as source:
+            schema = 'schemas/module-runtime-v1.schema.json'
+            payload = {entry.path: entry for entry in install.build_payload(source, selection=install.PayloadSelection(()))}
+            self.assertIn(schema, payload)
+            self.assertEqual(payload[schema].content, (ROOT / schema).read_bytes())
+            self.assertEqual(payload[schema].mode, 0o644)
