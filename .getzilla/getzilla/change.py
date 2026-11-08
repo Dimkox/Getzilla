@@ -204,7 +204,8 @@ def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: st
 
 
 @serialized_task
-def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str, Any]:
+def transition(root: Path, change_id: str, target: str, reason: str, *,
+               requirement_ids: tuple[str, ...] | None = None) -> dict[str, Any]:
     from .continuity import normalize_route, scope_gaps, _ensure_idle, validate_package_state
     from .state import _route_document
     route = normalize_route(root)
@@ -221,6 +222,15 @@ def transition(root: Path, change_id: str, target: str, reason: str) -> dict[str
         raise FileNotFoundError(path)
     state = _route_document(root, path)
     validate_package_state(state, route, change_id)
+    # A new amendment must invalidate ready/reviewed state even while its meaning is unresolved.
+    # This regression grants no write permission: worker start and pre-tool checks still enforce scope.
+    regression = state['status'] in {'verifying', 'reviewing', 'ready'} or (
+        state['status'] == 'implementing' and route.get('status') in {'verifying', 'reviewing', 'ready'})
+    if target == 'implementing' and not regression:
+        from .task_intent import write_scope_gaps
+        gaps = write_scope_gaps(root, route, requirement_ids=requirement_ids)
+        if gaps:
+            raise ValueError('; '.join(gaps))
     if target in {'released', 'archived', 'cancelled'}:
         # Check before the first package write, while the outer transition lock
         # prevents grant/worker/scope changes. Closing metadata is not evidence.

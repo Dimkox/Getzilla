@@ -10,7 +10,7 @@ import argparse
 import json
 import os
 
-from getzilla.continuity import ack_scope, finish_task, submit
+from getzilla.continuity import ack_scope, finish_task, submit, update_intent
 from getzilla.package_status import read_package_file
 from getzilla.router import route_context
 from getzilla.state import bind_session, get_active_route, require_route_owner
@@ -24,6 +24,7 @@ actions.add_argument('--show', action='store_true')
 actions.add_argument('--new-task', metavar='TEXT', help='Deliberate fresh task; refuses open packages and active workers')
 actions.add_argument('--continue', dest='continue_route', metavar='ROUTE_ID', help='Exact task selection/handoff')
 actions.add_argument('--ack-scope', metavar='JSON_PATH', help='Repository-relative bounded acknowledgment request')
+actions.add_argument('--intent', metavar='JSON_PATH', help='Record a scoped semantic question or exact human answer')
 actions.add_argument('--reconcile', action='store_true', help='Derive reviews from the exact committed diff')
 parser.add_argument('--add-reviewer', action='append', default=[], help='With --reconcile, retain this explicitly selected reviewer in future plans')
 actions.add_argument('--complete', action='store_true')
@@ -36,7 +37,7 @@ parser.add_argument('--json', action='store_true')
 args = parser.parse_args()
 root = find_root()
 bind_session(args.session)
-if args.task is not None and any((args.show, args.new_task is not None, args.continue_route, args.ack_scope,
+if args.task is not None and any((args.show, args.new_task is not None, args.continue_route, args.ack_scope, args.intent,
                                   args.reconcile, args.complete, args.cancel)):
     parser.error('positional task cannot be combined with an explicit route action')
 if args.add_reviewer and not args.reconcile:
@@ -50,10 +51,12 @@ try:
         data = reconcile_route(root, additional_reviewers=tuple(args.add_reviewer))
     elif args.complete or args.cancel:
         data = finish_task(root, cancel=args.cancel)
-    elif args.ack_scope:
-        raw = read_package_file(root, args.ack_scope, 262144)
+    elif args.ack_scope or args.intent:
+        request_path = args.intent or args.ack_scope
+        raw = read_package_file(root, request_path, 262144)
         from getzilla.spec import _parse_canonical_json
-        data = ack_scope(root, _parse_canonical_json(raw, root / args.ack_scope))
+        action = update_intent if args.intent else ack_scope
+        data = action(root, _parse_canonical_json(raw, root / request_path))
     elif args.continue_route or args.new_task is not None or args.task is not None:
         data = submit(root, args.new_task if args.new_task is not None else args.task or '', args.session,
                       new_task=args.new_task is not None, continue_route=args.continue_route,

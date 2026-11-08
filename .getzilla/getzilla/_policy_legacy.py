@@ -1042,9 +1042,24 @@ def _extract_paths(value: Any) -> list[str]:
     return paths
 
 
+def _structured_relative_path(root: Path, raw: str, *, execution_cwd: Path | None) -> str | None:
+    """Resolve mutation targets once for intent and ordinary protected-path policy."""
+    try:
+        path = Path(raw)
+        if not path.is_absolute():
+            if (not isinstance(execution_cwd, Path) or not execution_cwd.is_absolute() or
+                    not execution_cwd.is_dir() or safe_relative_path(root, execution_cwd) is None):
+                return None
+            path = execution_cwd / path
+        return safe_relative_path(root, path)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _extract_patch_paths(command: str) -> list[str]:
     patterns = [
         r'^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$',
+        r'^\*\*\* Move to:\s*(.+?)\s*$',
         r'^\+\+\+\s+(?:b/)?(.+?)\s*$',
         r'^---\s+(?:a/)?(.+?)\s*$',
     ]
@@ -3348,6 +3363,7 @@ def evaluate_pre_tool(
     event: dict[str, Any],
     *,
     _skip_substring_control_plane_guard: bool = False,
+    execution_cwd: Path | None = None,
 ) -> tuple[bool, str | None]:
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
@@ -3441,21 +3457,21 @@ def evaluate_pre_tool(
 
     candidate_paths = _extract_paths(tool_input)
     if tool == 'apply_patch' and isinstance(tool_input, dict):
-        candidate_paths.extend(_extract_patch_paths(str(tool_input.get('command', ''))))
+        candidate_paths.extend(_extract_patch_paths(str(tool_input.get('command', tool_input.get('patch', '')))))
 
     lowered_tool = tool.lower()
     is_read = (
         lowered_tool in {'read', 'read_file', 'open_file', 'fs_read', 'grep', 'notebookread', 'search'}
         or ('read' in lowered_tool and tool.startswith('mcp__'))
     )
-    is_write = tool in {'apply_patch', 'Edit', 'Write'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
+    is_write = tool in {'apply_patch', 'Edit', 'Write', 'MultiEdit'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
 
     normalized: list[str] = []
     for raw in candidate_paths:
-        rel = safe_relative_path(root, raw)
+        rel = _structured_relative_path(root, raw, execution_cwd=execution_cwd) if is_write else safe_relative_path(root, raw)
         if rel is None:
             if is_write:
-                return False, f'Write outside repository root is blocked: {raw}'
+                return False, f'Write outside repository root or from an unresolved execution directory is blocked: {raw}'
             continue
         normalized.append(rel)
 

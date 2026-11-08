@@ -31,6 +31,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument('--agent-id', required=True)
     start.add_argument('--agent-type', required=True)
     start.add_argument('--generation')
+    start.add_argument('--requirement', action='append', help='Stable typed ID of this independent implementation scope')
     for action in ('heartbeat', 'progress', 'activity', 'status-request', 'status-ack',
                    'interrupt-request', 'interrupt-ack', 'resume', 'terminated', 'report'):
         command = commands.add_parser(action)
@@ -88,7 +89,8 @@ def run(args: argparse.Namespace, root: Path) -> dict | None:
                                       progress_seconds=args.progress_seconds)), flush=True)
         return None
     if args.action == 'start':
-        return record_agent_start(root, args.agent_id, args.agent_type, generation=args.generation)
+        scope = {'requirement_ids': tuple(args.requirement)} if args.requirement else {}
+        return record_agent_start(root, args.agent_id, args.agent_type, generation=args.generation, **scope)
     if args.action == 'report':
         record_terminal_report(root, args.agent_id, args.generation, args.route_id, args.task_id, args.result)
         return {'reported': True}

@@ -115,6 +115,9 @@ def _validate_ack(route: dict[str, Any], ack: Any) -> None:
 def validate_route(root: Path, route: dict[str, Any]) -> None:
     if not isinstance(route, dict):
         raise ValueError('invalid task envelope')
+    if 'intent_state' in route:
+        from .task_intent import validate_intent
+        validate_intent(route['intent_state'])
     if not has_task_context(route):
         if 'task' in route and not isinstance(route['task'], str):
             raise ValueError('invalid legacy task text')
@@ -473,7 +476,8 @@ def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_
         raise ValueError('invalid selected package checkpoints')
 
 
-def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False) -> dict[str, Any] | None:
+def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False,
+                       gate: bool = True) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
     from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
@@ -492,7 +496,7 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
     validate_package_state(package_state, route, change_id)
     raw_spec = read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable)
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
-    _validate_document(spec, gate=True, root=root)
+    _validate_document(spec, gate=gate, root=root)
     if spec.get('change_id') != change_id:
         raise ValueError('typed spec change identity mismatch')
     requirements = read_package_file(root, active['path'] + '/requirements.md', sync=durable)
@@ -541,6 +545,8 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'package_path': documents['path'] if documents else None,
              'spec_digest': documents['spec_digest'] if documents else None,
              'requirements_digest': documents['requirements_digest'] if documents else None}
+    if 'intent_state' in route:
+        value.update(version=2, intent_digest=digest(route['intent_state']))
     return {**value, 'digest': digest(value)}
 
 
@@ -555,6 +561,8 @@ def unavailable_authority_notice(root: Path) -> str:
 def legacy_evidence_allowed(route: dict[str, Any] | None) -> bool:
     if not route:
         return True
+    if 'intent_state' in route:
+        return False
     if not has_task_context(route):
         return True
     context = route.get('context') or {}
@@ -598,7 +606,8 @@ def scope_gaps(root: Path, route: dict[str, Any] | None = None) -> list[str]:
                     'original' not in ack.get('items', {}) or documents['state'].get('scope_ack') != ack or
                     any(target not in _typed_targets(documents['spec']) for mapped in ack['items'].values() for target in mapped)):
                 gaps.append('scope_sync_required: original/acknowledged scope or package transaction is stale')
-        return gaps
+        from .task_intent import intent_gaps
+        return [*gaps, *intent_gaps(root, route)]
     except (ValueError, OSError, KeyError, TypeError) as error:
         return ['scope_sync_required: ' + str(error)]
 
@@ -724,10 +733,13 @@ def ack_scope(root: Path, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _typed_targets(spec: dict[str, Any]) -> set[str]:
-    result = {spec['objective']['id']}
-    for name in ('acceptance_criteria', 'invariants', 'forbidden_outcomes'):
-        result.update(item['id'] for item in spec.get(name, []))
-    return result
+    from .spec import requirement_targets
+    return set(requirement_targets(spec))
+
+
+def update_intent(root: Path, request: dict[str, Any]) -> dict[str, Any]:
+    from .task_intent import update_intent as transition_intent
+    return transition_intent(root, request)
 
 
 def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str, Any]) -> bool:
@@ -812,6 +824,13 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
     lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
     for item in context.get('pending', []):
         lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
+    for question in (route.get('intent_state') or {}).get('questions', []):
+        answer = question['answer']
+        lines.append(f"Human question {question['id']} for {', '.join(question['targets'])}: {question['question']}")
+        if answer:
+            lines.append(f"Human response ({answer.get('resolution', 'answered')}; {answer['source_ref']}): {answer['text']}")
+        else:
+            lines.append('Unresolved: ask the human before the affected implementation; independent work may continue.')
     lines.extend(details)
     recovery = f"Full stored intake: .getzilla/runtime/routes/{route['route_id']}.json; "
     recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n' + evidence_recovery
