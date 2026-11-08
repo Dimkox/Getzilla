@@ -237,6 +237,30 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.assertEqual(result['content']['coverage']['status'], 'partial')
         self.assertIn('unsupported-css', result['content']['coverage']['reasons'])
 
+    def test_selector_admission_keeps_ordinary_rules_and_never_completes_unqualified_headers(self):
+        module = self.extractor()
+        path = self.root / 'theme.css'
+        ordinary = (':root', '.theme', '#app', 'html .theme > .card', ':root, .theme',
+                    '[data-theme="dark"]', 'button:hover')
+        for selector in ordinary:
+            with self.subTest(supported=selector):
+                path.write_text(selector + ' { --gap: 2px; }')
+                result = self.capture(module, ['theme.css'])
+                self.assertEqual(result['content']['coverage']['status'], 'complete')
+                self.assertEqual(result['content']['coverage']['reasons'], [])
+                self.assertEqual(result['content']['tokens'][0]['raw_value'], '2px')
+        for selector in ('.', '#', '.theme >', ':root,', 'div..theme', ':is(.theme)', '& .theme'):
+            with self.subTest(unqualified=selector):
+                path.write_text(selector + ' { --gap: 2px; }')
+                try:
+                    result = self.capture(module, ['theme.css'])
+                except module.ReferenceError:
+                    continue
+                self.assertEqual(result['content']['coverage']['status'], 'partial')
+                self.assertIn('unsupported-css', result['content']['coverage']['reasons'])
+        path.write_text('@media (min-width: 3px) { :root { --gap: 2px; } }')
+        self.assertEqual(self.capture(module, ['theme.css'])['content']['coverage']['status'], 'complete')
+
     def test_explicit_selection_caps_and_changed_source_refuse(self):
         module = self.extractor()
         (self.root / 'tokens.json').write_text('{"x":"1px","y":"2px"}')

@@ -27,7 +27,7 @@ from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '52ddcb4e5b1ff2de970a808d0b7aa1a666c07646065e9f4bd24bedaaab1fdd4e'
+EXPECTED_MANIFEST_SHA256 = '6bf4095c7fa9e6ca15936da7e37baa4e4768b7521d97729dc0eb8fc0b429525c'
 MAX_HISTORY = 32
 MAX_RECORD_BYTES = 1024 * 1024
 

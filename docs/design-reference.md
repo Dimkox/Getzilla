@@ -29,6 +29,11 @@ coverage; imports are never followed. JSON object keys and numeric spelling are
 retained. The CSS subset supports declarations and bounded media/supports/layer/
 container contexts; it does not compute styles, cascade, inherited values or
 browser state. No JS/TS configuration, callbacks, network or model runs.
+Selector admission is conservative: ASCII type/class/ID selectors, universal
+selectors, ordinary attribute tests, listed simple pseudo-classes, combinators
+and comma lists. Bare markers, unsupported functional/escaped/nested selectors
+or other unqualified headers make coverage partial; extracted values stay raw
+source observations. This is not a full stylesheet validator or CSS engine.
 
 Version1 canonical content includes tokens, source identities, capture parameters
 and coverage. Its digest excludes the run envelope's capture ID/time. Evidence is

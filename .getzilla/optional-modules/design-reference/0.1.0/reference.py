@@ -98,6 +98,30 @@ def _scan(text, start, stop, delimiters):
     return stop
 
 
+def _selector_supported(header):
+    """Prove only a small ordinary selector subset; everything else is partial."""
+    if len(header) > 512:
+        return False
+    identifier = r'[A-Za-z_][A-Za-z0-9_-]*'
+    whitespace = r'[ \t\r\n\f]'
+    quoted = r'''(?:"[^"\\\x00-\x1f]*"|'[^'\\\x00-\x1f]*')'''
+    attribute = (r'\[' + whitespace + '*' + identifier + '(?:' + whitespace + '*[~|^$*]?='
+                 + whitespace + '*(?:' + identifier + '|' + quoted + '))?' + whitespace + r'*\]')
+    pseudo = r':(?:root|hover|focus|focus-visible|focus-within|active|disabled|enabled|checked|empty|first-child|last-child|only-child)'
+    suffix = '(?:[.#]' + identifier + '|' + pseudo + '|' + attribute + ')'
+    compound = '(?:(?:' + identifier + r'|\*)' + suffix + '*|' + suffix + '+)'
+    selector = compound + '(?:(?:' + whitespace + '*[>+~]' + whitespace + '*|'
+    selector += whitespace + '+)' + compound + ')*'
+    start = 0
+    while True:
+        end = _scan(header, start, len(header), ',')
+        if re.fullmatch(selector, header[start:end].strip(' \t\r\n\f')) is None:
+            return False
+        if end == len(header):
+            return True
+        start = end + 1
+
+
 def capture(root, files, *, capture_id, captured_at):
     started = time.monotonic()
     tokens, sources, reasons, seen = [], [], set(), set()
@@ -169,7 +193,7 @@ def capture(root, files, *, capture_id, captured_at):
             while start < stop:
                 budget()
                 at = _scan(text, start, stop, '{;}')
-                header = text[start:at].strip()
+                header = text[start:at].strip(' \t\r\n\f')
                 if at == stop:
                     _need(not header)
                     return
@@ -192,6 +216,8 @@ def capture(root, files, *, capture_id, captured_at):
                     reasons.add('unsupported-css')
                 else:
                     selector = header
+                    if not _selector_supported(selector):
+                        reasons.add('unsupported-css')
                     declaration = at + 1
                     while declaration < end:
                         cut = _scan(text, declaration, end, ';{}')
