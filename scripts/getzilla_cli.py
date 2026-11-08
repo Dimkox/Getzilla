@@ -54,7 +54,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
-    'components': ('getzilla_components.py', 'managed selection: status, add agent:<name>|factory, adopt --agents <complete-list>'),
+    'components': ('getzilla_components.py', 'managed selection: status, add, remove agent:<name>, uninstall, adopt'),
+    'uninstall': ('getzilla_components.py', 'remove selected adapters in a clean Git consumer; shared engine stays'),
     'compliance': ('getzilla_compliance.py', 'scaffold optional compliance adapters for a registered AI system'),
     'baseline': ('getzilla_baseline.py', 'mandatory pinned baseline: status, apply to a project'),
     'risk-terms': ('getzilla_risk_terms.py', 'risk vocabulary language packs: check, scaffold, languages'),
@@ -70,7 +71,8 @@ def usage() -> str:
     lines = ['usage: getzilla <command> [arguments]', '', 'commands:']
     lines += [f'  {name:<{width}}  {summary}' for name, (_, summary) in COMMANDS.items()]
     lines.append(f"  {'test':<{width}}  run the test suite on the measured CPU capacity")
-    lines += ['', "`getzilla <command> --help` shows a command's own options."]
+    lines += ['', '`getzilla test --require-parallel [targets/options]` refuses a missing parallel backend.',
+              "`getzilla <command> --help` shows a command's own options."]
     return '\n'.join(lines)
 
 
@@ -94,7 +96,7 @@ def test_workers() -> int:
         return max(1, (os.cpu_count() or 1) - 2)
 
 
-def run_tests(args: list[str]) -> int:
+def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
     targets = args or ['tests']
     python = project_python(HOME)
     # UTF-8 mode on Windows: tests decode CLI output and fixtures as UTF-8, as on POSIX; product
@@ -107,6 +109,9 @@ def run_tests(args: list[str]) -> int:
         print(f'getzilla test: {workers} parallel workers', flush=True)
         command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
     else:
+        if require_parallel:
+            print('getzilla test: required pytest-xdist backend is unavailable', file=sys.stderr)
+            return probe.returncode
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
         command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
@@ -119,10 +124,14 @@ def main(argv: list[str]) -> int:
         return 0
     command, rest = argv[0], argv[1:]
     if command == 'test':
-        return run_tests(rest)
+        require_parallel = bool(rest and rest[0] == '--require-parallel')
+        return run_tests(rest[1:] if require_parallel else rest, require_parallel=require_parallel)
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
+    if command == 'uninstall':
+        return subprocess.run([project_python(HOME), str(HOME / 'scripts/getzilla_components.py'),
+                               'uninstall', *rest], check=False).returncode
     # `update` changes the project from the Getzilla installation, never from the project's own copy.
     script = HOME / 'scripts' / COMMANDS[command][0] if command == 'update' else script_path(COMMANDS[command][0])
     return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode

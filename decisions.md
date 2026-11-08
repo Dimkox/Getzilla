@@ -1202,3 +1202,7 @@ Model IDs are opaque provider identifiers, not filesystem paths; existing OpenRo
 ## 2026-11-04 — Separate eval cohorts from experiment variables
 
 Pin cases and grading rules in one contract digest, and declare model, prompt, tool, index, config or source identity changes in a protocol. This permits paired comparisons while refusing hidden assertion or grader changes. Keep baseline acceptance separate from replay so a failing output cannot replace its control (#305).
+
+### 2026-11-04 — Neutral hook root discovery
+
+Require the engine initializer when a launcher selects an installed hook root. After shared hooks move into `.getzilla`, checking only that directory also accepts a planted hook-only subtree; the regression must use the neutral path.

@@ -4,7 +4,7 @@ globs: **/*auth*.*,**/*security*.*,**/*mcp*.*,**/api/**,trust-ci/**,.github/work
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/10-security.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/10-security.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Security-sensitive changes
 

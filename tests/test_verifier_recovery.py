@@ -351,6 +351,9 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
             for label in ('stdout', 'stderr'):
                 self.assertIn(f'{label} output close fault', result.cleanup_error)
                 self.assertIn(f'{label} capture directory cleanup fault', result.cleanup_error)
+            self.assertEqual([fact.stage for fact in result.cleanup_metadata.facts],
+                             ['stderr_capture_file', 'stderr_capture_directory',
+                              'stdout_capture_file', 'stdout_capture_directory'])
             self.assertTrue(directories)
             self.assertTrue(all(not directory.exists() for directory in directories))
 
@@ -484,10 +487,18 @@ class OwnedRunnerRecoveryTests(unittest.TestCase):
         self.assertEqual(closed, {'stdout': True, 'stderr': True})
 
     def test_output_close_failure_keeps_pre_result_primary_exception(self):
+        primary = ValueError('specific pre-result failure')
         with output_close_faults(('stdout', 'stderr')) as closed, \
-             patch.object(runner.subprocess, 'Popen', side_effect=ValueError('specific pre-result failure')):
+             patch.object(runner.subprocess, 'Popen', side_effect=primary):
             with self.assertRaisesRegex(ValueError, 'specific pre-result failure') as caught:
                 runner.execute([sys.executable, '-c', 'pass'], ROOT, os.environ.copy())
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(caught.exception.args, ('specific pre-result failure',))
+        metadata = runner.cleanup_details(caught.exception)
+        self.assertEqual([item['stage'] for item in metadata['facts']],
+                         ['stderr_capture_file', 'stdout_capture_file'])
+        self.assertTrue(all(item['category'] == 'os_error' for item in metadata['facts']))
+        self.assertNotIn('output close fault', json.dumps(metadata))
         for label in ('stdout', 'stderr'):
             self.assertTrue(any(f'{label} output close fault' in note for note in caught.exception.__notes__))
         self.assertEqual(closed, {'stdout': True, 'stderr': True})

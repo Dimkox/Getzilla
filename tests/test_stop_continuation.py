@@ -46,7 +46,7 @@ class StopContinuationTests(unittest.TestCase):
         data = {'cwd': str(root), 'sessionId': 's1', 'hookEventName': 'stop',
                 'reason': 'end_turn', 'stopHookActive': False,
                 'lastAssistantMessage': 'The remaining controls still need delivery.', **payload}
-        proc = subprocess.run([sys.executable, str(root / '.grok/hooks/stop_gate.py')], cwd=root,
+        proc = subprocess.run([sys.executable, str(root / '.getzilla/hooks/stop_gate.py')], cwd=root,
                               env=env, input=json.dumps(data).encode('utf-8'),
                               capture_output=True, timeout=20)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -97,7 +97,7 @@ class StopContinuationTests(unittest.TestCase):
     def test_canonical_grok_stop_launcher(self):
         with project_copy(git=True) as root:
             self.package(root)
-            config = json.loads((PROJECT / '.grok/hooks.json').read_text(encoding='utf-8'))
+            config = json.loads((PROJECT / '.getzilla/config/hooks.json').read_text(encoding='utf-8'))
             command = config['hooks']['Stop'][0]['hooks'][0]['command']
             proc = subprocess.run(['bash', '-c', command], cwd=root, capture_output=True,
                                   input=json.dumps({'cwd': str(root), 'sessionId': 's1',

@@ -557,6 +557,52 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                     env={'CHECKOUT': checkout, 'ADMISSION': admission}, capture_output=True, timeout=3)
                 self.assertEqual(result.returncode, expected)
 
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_required_linux_core_uses_full_measured_parallel_runner(self) -> None:
+        import yaml
+        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']['steps']
+        core = next(step for step in steps if step.get('name') == 'Core tests')
+        script = core['run']
+        self.assertIn('set -euo pipefail', script)
+        self.assertIn("cli.project_python(cli.HOME), '-c', 'import pytest, xdist'", script)
+        self.assertIn('check=True', script)
+        self.assertIn('python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20', script)
+        self.assertNotIn('unittest discover', script)
+        self.assertNotIn('continue-on-error', core)
+
+    @unittest.skipUnless(os.name == 'posix' and importlib.util.find_spec('yaml') and shutil.which('bash'),
+                         'requires POSIX, YAML and bash')
+    def test_required_linux_core_preserves_preflight_and_parallel_failure_status(self) -> None:
+        import yaml
+        steps = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux']['steps']
+        script = next(step for step in steps if step.get('name') == 'Core tests')['run']
+        # Execute only an inert public shim, never the represented repository tests.
+        for preflight, runner, expected, calls in ((7, 0, 7, 1), (0, 0, 0, 2),
+                (0, 1, 1, 2), (0, 2, 2, 2), (0, 3, 3, 2), (0, 5, 5, 2)):
+            with self.subTest(preflight=preflight, runner=runner), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                shim = root / 'python'
+                shim.write_text(f'#!{sys.executable}\n' +
+                    "import os, pathlib, sys\n"
+                    "with pathlib.Path(os.environ['CALL_LOG']).open('a') as stream:\n"
+                    "    stream.write('preflight\\n' if sys.argv[1:] == ['-'] else 'runner\\n')\n"
+                    "if sys.argv[1:] == ['-']:\n"
+                    "    sys.stdin.read()\n"
+                    "    raise SystemExit(int(os.environ['PREFLIGHT_RC']))\n"
+                    "expected = ['scripts/getzilla_cli.py', 'test', '--require-parallel', 'tests', '--max-worker-restart=0', '--durations=20']\n"
+                    "if sys.argv[1:] != expected:\n"
+                    "    raise SystemExit(91)\n"
+                    "raise SystemExit(int(os.environ['RUNNER_RC']))\n", encoding='utf-8')
+                shim.chmod(0o755)
+                log = root / 'calls'
+                environment = {**os.environ, 'PATH': str(root) + os.pathsep + os.defpath,
+                    'RUNNER_TEMP': str(root), 'CALL_LOG': str(log),
+                    'PREFLIGHT_RC': str(preflight), 'RUNNER_RC': str(runner)}
+                result = subprocess.run(['bash', '-c', script], cwd=ROOT, env=environment,
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, expected)
+                self.assertEqual(log.read_text().splitlines(), ['preflight', 'runner'][:calls])
+
     @unittest.skipUnless(importlib.util.find_spec('yaml') and shutil.which('bash'), 'requires YAML and bash')
     def test_required_linux_status_fails_for_missing_or_cancelled_platform_results(self) -> None:
         import yaml

@@ -273,8 +273,15 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'
         shell: bash
         run: |
-          set -o pipefail
-          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          import sys
+          sys.path.insert(0, 'scripts')
+          import getzilla_cli as cli
+          subprocess.run([cli.project_python(cli.HOME), '-c', 'import pytest, xdist'], check=True)
+          PY
+          python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
       - name: Trust CI tests
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
@@ -339,7 +346,7 @@ jobs:
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
-        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks
       - name: Hooks and CLI smoke
         env:
           GETZILLA_SESSION_ID: ci
@@ -353,13 +360,13 @@ jobs:
           git config user.name smoke
           git config user.email smoke@example.invalid
           prompt='{"prompt":"Add a health endpoint to the API","session_id":"ci","hook_event_name":"UserPromptSubmit"}'
-          echo "$prompt" | python .grok/hooks/session_start.py
-          echo "$prompt" | python .grok/hooks/user_prompt_submit.py
+          echo "$prompt" | python .getzilla/hooks/session_start.py
+          echo "$prompt" | python .getzilla/hooks/user_prompt_submit.py
           echo '{"session_id":"ci","tool_name":"Bash","tool_input":{"command":"git push origin main"},"hook_event_name":"PreToolUse"}' \
-            | python .grok/hooks/pre_tool_use.py | tee "$RUNNER_TEMP/pre.json"
+            | python .getzilla/hooks/pre_tool_use.py | tee "$RUNNER_TEMP/pre.json"
           grep -q '"deny"' "$RUNNER_TEMP/pre.json"
           for hook in post_tool_use pre_compact stop_gate subagent_start subagent_stop session_end; do
-            echo '{"session_id":"ci","hook_event_name":"Smoke"}' | python ".grok/hooks/$hook.py"
+            echo '{"session_id":"ci","hook_event_name":"Smoke"}' | python ".getzilla/hooks/$hook.py"
           done
           python scripts/getzilla_route.py --show
           python scripts/getzilla_change.py start --title "Health endpoint"
@@ -440,13 +447,13 @@ jobs:
           git config user.name smoke
           git config user.email smoke@example.invalid
           prompt='{"prompt":"Add a health endpoint to the API","session_id":"ci","hook_event_name":"UserPromptSubmit"}'
-          echo "$prompt" | python3 .grok/hooks/session_start.py
-          echo "$prompt" | python3 .grok/hooks/user_prompt_submit.py
+          echo "$prompt" | python3 .getzilla/hooks/session_start.py
+          echo "$prompt" | python3 .getzilla/hooks/user_prompt_submit.py
           echo '{"session_id":"ci","tool_name":"Bash","tool_input":{"command":"git push origin main"},"hook_event_name":"PreToolUse"}' \
-            | python3 .grok/hooks/pre_tool_use.py | tee "$RUNNER_TEMP/pre.json"
+            | python3 .getzilla/hooks/pre_tool_use.py | tee "$RUNNER_TEMP/pre.json"
           grep -q '"deny"' "$RUNNER_TEMP/pre.json"
           for hook in post_tool_use pre_compact stop_gate subagent_start subagent_stop session_end; do
-            echo '{"session_id":"ci","hook_event_name":"Smoke"}' | python3 ".grok/hooks/$hook.py"
+            echo '{"session_id":"ci","hook_event_name":"Smoke"}' | python3 ".getzilla/hooks/$hook.py"
           done
           python3 scripts/getzilla_doctor.py
           python3 scripts/getzilla_route.py --show

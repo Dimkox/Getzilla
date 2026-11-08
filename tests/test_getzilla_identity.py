@@ -139,7 +139,7 @@ class GetzillaIdentityTests(unittest.TestCase):
         self.assertEqual(offenders, [], "predecessor identity found:\n" + "\n".join(offenders[:50]))
 
     def test_grok_build_cli_contract_is_kept(self) -> None:
-        for relative in (".grok/config.toml", ".grok/hooks.json"):
+        for relative in (".grok/config.toml", ".grok/hooks.json", ".getzilla/config/hooks.json"):
             self.assertTrue((ROOT / relative).is_file(), relative)
         self.assertTrue((ROOT / ".getzilla/getzilla/__init__.py").is_file())
 

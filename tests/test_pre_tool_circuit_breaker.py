@@ -85,8 +85,8 @@ class DenialCircuitBreakerTest(unittest.TestCase):
         import sys
         from unittest.mock import patch
         from tests._support import PROJECT
-        sys.path.insert(0, str(PROJECT / '.grok/hooks'))
-        spec = importlib.util.spec_from_file_location('denial_probe_hook', PROJECT / '.grok/hooks/pre_tool_use.py')
+        sys.path.insert(0, str(PROJECT / '.getzilla/hooks'))
+        spec = importlib.util.spec_from_file_location('denial_probe_hook', PROJECT / '.getzilla/hooks/pre_tool_use.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         with project_copy() as root:
