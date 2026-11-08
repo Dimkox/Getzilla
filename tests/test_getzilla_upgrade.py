@@ -7,17 +7,20 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 from tests._support import public_source_copy
 from unittest import mock
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 import getzilla_upgrade as upgrade  # noqa: E402
+from getzilla import adapter_removal as publication  # noqa: E402
 
 GIT_ENV = {'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid',
            'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
@@ -32,6 +35,10 @@ class ProjectSyncTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source_home = cls.enterClassContext(public_source_copy(ROOT))
+
+    def test_checkout_preserves_modes_in_isolated_callers(self) -> None:
+        from tests.test_adapter_removal import _assert_publication_modes
+        _assert_publication_modes(self, 'update')
 
     def setUp(self) -> None:
         patcher = mock.patch.dict(os.environ, {**GIT_ENV, 'GETZILLA_AGENT': 'claude'})
@@ -118,6 +125,45 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(current['sha256'], hashlib.sha256(target.read_bytes()).hexdigest())
         self.assertEqual(target.read_bytes(), (ROOT / 'scripts/getzilla_route.py').read_bytes())
 
+    def test_generated_policy_requires_vendor_identity_independent_of_local_proof(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        path = '.codex/agents/general_implementer.toml'
+        (self.project / '.getzilla/runtime/.gitignore').chmod(0o644)
+        vendor = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        self.assertIn(b'sandbox_mode = "workspace-write"', vendor)
+        for canonical in ('.grok/agents/', '.getzilla/agents/'):
+            for customized in ('stock', 'read-only', 'mode'):
+                with self.subTest(canonical=canonical, customized=customized):
+                    manifest = self.select(('codex',))
+                    source = self.project / canonical / 'general_implementer.toml'
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(vendor)
+                    source.chmod(0o644)
+                    record_owned(manifest, source.relative_to(self.project).as_posix(), vendor, 0o644)
+                    target = self.project / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        target.chmod(0o644)  # reset only the preceding owned fixture case
+                    content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"') if customized == 'read-only' else vendor
+                    mode = 0o444 if customized == 'mode' else 0o644
+                    target.write_bytes(content)
+                    target.chmod(mode)
+                    observed_mode = target.stat().st_mode & 0o777
+                    record_owned(manifest, path, content, mode)
+                    (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                    self.commit('generated policy ' + customized)
+                    before = git(self.project, 'rev-parse', 'HEAD')
+                    if customized == 'stock':
+                        plan = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                        self.assertNotIn(path, [p for p, _, _ in plan])
+                    else:
+                        with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
+                            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                    self.assertEqual(target.read_bytes(), content)
+                    self.assertEqual(target.stat().st_mode & 0o777, observed_mode)
+                    self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                    self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+
     def test_ignored_uncommitted_selection_cannot_authorize_an_update(self) -> None:
         from getzilla.component_state import MANIFEST
         git(self.project, 'rm', '--cached', '--quiet', MANIFEST)
@@ -127,11 +173,28 @@ class ProjectSyncTests(unittest.TestCase):
             upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
 
+    def test_owned_read_only_grok_config_is_not_replaced_by_stock_policy(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('grok',))
+        path = '.grok/config.toml'
+        vendor = (ROOT / path).read_bytes()
+        content = vendor.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"')
+        self.assertNotEqual(content, vendor)
+        target = self.project / path
+        target.parent.mkdir()
+        target.write_bytes(content)
+        target.chmod(0o644)
+        record_owned(manifest, path, content, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
+            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+        self.assertEqual(target.read_bytes(), content)
+
     def test_codex_update_preserves_canonical_overlay_and_custom_enabled_configuration(self) -> None:
         self.select(('codex',))
         overlay = {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo user-stop'}]}]}}
-        (self.project / '.grok').mkdir()
-        overlay_path = self.project / '.grok/codex-hooks.json'
+        (self.project / '.getzilla/config').mkdir(parents=True, exist_ok=True)
+        overlay_path = self.project / '.getzilla/config/codex-hooks.json'
         overlay_path.write_text(json.dumps(overlay))
         (self.project / '.codex').mkdir()
         config = self.project / '.codex/config.toml'
@@ -144,6 +207,455 @@ class ProjectSyncTests(unittest.TestCase):
         hooks = json.loads((self.project / '.codex/hooks.json').read_text())['hooks']['Stop']
         self.assertIn('stop_gate.py', hooks[0]['hooks'][0]['command'])
         self.assertEqual(hooks[1:], overlay['hooks']['Stop'])
+
+    def test_neutral_upgrade_preserves_legacy_overlay_and_retires_only_proven_sources(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned, read_state
+        manifest = self.select(('codex',))
+        overlay = (ROOT / '.getzilla/config/codex-hooks.json').read_bytes()
+        sources = {'.grok/hooks/pre_tool_use.py': b'# previous managed guard\n',
+                   '.grok/agents/code_reviewer.toml': (ROOT / '.getzilla/agents/code_reviewer.toml').read_bytes(),
+                   '.grok/codex-hooks.json': overlay}
+        for path, content in sources.items():
+            target = self.project / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            target.chmod(0o644)
+            record_owned(manifest, path, content, 0o644)
+        # These files have no valid ownership proof and must survive the migration.
+        custom = self.project / '.grok/hooks/custom.py'
+        custom.write_bytes(b'# user hook\n')
+        # Pre-neutral installs classified these shared sources as Core.
+        old = manifest['components'].pop('agent:grok')
+        manifest['components']['core'] = old
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('legacy common sources with proof')
+        original = git(self.project, 'rev-parse', 'HEAD')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
+        migrated = read_state(self.project).manifest['components']['core']
+        self.assertIn('.getzilla/config/codex-hooks.json', migrated['files'])
+        self.assertIn('.getzilla/config/codex-hooks.json', migrated['owned'])
+        for path in sources:
+            self.assertFalse((self.project / path).exists(), path)
+        self.assertEqual(custom.read_bytes(), b'# user hook\n')
+        hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
+        self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
+        self.assertEqual(hooks[1:], json.loads(overlay)['hooks']['Stop'])
+        self.assertNotIn('.grok/hooks/pre_tool_use.py', read_state(self.project).manifest['components']['core']['files'])
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
+        current = git(self.project, 'rev-parse', 'HEAD')
+        planned = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+        self.assertEqual([path for path, _, _ in planned], [])
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), current)
+        git(self.project, 'switch', '--quiet', 'main')
+        self.assertEqual((self.project / '.grok/hooks/pre_tool_use.py').read_bytes(), sources['.grok/hooks/pre_tool_use.py'])
+        self.assertFalse((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    def test_custom_legacy_canonical_guard_refuses_without_publication(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest
+        relative = '.grok/hooks/pre_tool_use.py'
+        target = self.project / relative
+        for scenario in ('changed', 'unowned', 'kept'):
+            with self.subTest(scenario=scenario):
+                manifest = self.select(('codex',))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                current = b'# consumer-specific policy\n'
+                target.write_bytes(current)
+                target.chmod(0o644)
+                if scenario != 'unowned':
+                    baseline = b'# managed baseline\n' if scenario == 'changed' else current
+                    manifest['components']['core'] = {'files': [relative], 'owned': {
+                        relative: {'sha256': hashlib.sha256(baseline).hexdigest(), 'mode': 0o644}}}
+                if scenario == 'kept':
+                    (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                        'schema_version': 1, 'kept_local': [relative],
+                        'kept_local_sha256': {relative: hashlib.sha256(current).hexdigest()}}))
+                (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                self.commit('custom legacy guard ' + scenario)
+                original = git(self.project, 'rev-parse', 'HEAD')
+                with self.assertRaisesRegex(upgrade.UpdateError, 'legacy hook.*reconciled'):
+                    upgrade.sync_project(ROOT, self.project)
+                self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
+                self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
+                self.assertEqual(target.read_bytes(), current)
+                self.assertFalse((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    def test_unselected_custom_adapter_keeps_legacy_guard_dependency(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# baseline used by a custom unselected adapter\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        # A custom unselected adapter can still depend on the previous launcher.
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + relative}]}]}}).encode()
+        config.write_bytes(custom)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('custom adapter depends on legacy hook')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), custom)
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+        self.assertIn('.getzilla/hooks/pre_tool_use.py', (self.project / '.codex/hooks.json').read_text())
+
+    def _selected_kept_legacy_dependency(self, agent, config_path, *, legacy_record=False, keep_alias=None, command_path=None, config_transform=None):
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select((agent,))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# baseline used by a kept selected adapter\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        config = self.project / config_path
+        config.parent.mkdir(exist_ok=True, parents=True)
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': 'python3 ' + (command_path or relative)}]}]}}).encode()
+        if config_transform is not None:
+            custom = config_transform(custom)
+        config.write_bytes(custom)
+        record_path = '.grok-stack/AGBP_SYNC.json' if legacy_record else '.getzilla/AGBP_SYNC.json'
+        record = self.project / record_path
+        record.parent.mkdir(exist_ok=True, parents=True)
+        kept = keep_alias or config_path
+        record.write_text(json.dumps({'schema_version': 1, 'kept_local': [kept],
+                                      'kept_local_sha256': {kept: hashlib.sha256(custom).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('selected kept adapter depends on legacy hook')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), custom)
+        self.assertTrue(hook.is_file(), 'a kept selected adapter still references this guard')
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+        before = git(self.project, 'rev-parse', 'HEAD')
+        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+
+    def test_selected_kept_claude_retains_legacy_guard_dependency(self) -> None:
+        self._selected_kept_legacy_dependency('claude', '.claude/settings.json')
+
+    def test_selected_kept_adapter_aliases_retain_legacy_guard_dependencies(self) -> None:
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        from getzilla import component_state
+        original_project = self.project
+        original_match = component_state.match_kept_local
+        def windows_match(*args):
+            # Exercise the real Windows case matcher with the native host's I/O backend.
+            with mock.patch.object(component_state, 'fsx', SimpleNamespace(WINDOWS=True)):
+                return original_match(*args)
+        cases = [('qwen', '.qwen/settings.json', False, None),
+                 ('gemini', '.gemini/settings.json', False, None),
+                 ('copilot', '.github/hooks/getzilla.json', False, None),
+                 ('grok', '.grok/hooks.json', False, None),
+                 ('claude', '.claude/settings.json', True, None),
+                 ('claude', '.claude/settings.json', False, '.CLAUDE/SETTINGS.JSON')]
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, (agent, path, legacy, alias) in enumerate(cases):
+                    with self.subTest(agent=agent, legacy=legacy, alias=alias), ExitStack() as stack:
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        if alias is not None:
+                            installer = upgrade.load_installer(ROOT)
+                            stack.enter_context(mock.patch.object(upgrade, 'load_installer', return_value=installer))
+                            stack.enter_context(mock.patch.object(upgrade, 'match_kept_local', side_effect=windows_match))
+                            stack.enter_context(mock.patch.object(installer, 'match_kept_local', side_effect=windows_match))
+                        self._selected_kept_legacy_dependency(agent, path, legacy_record=legacy, keep_alias=alias)
+            finally:
+                self.project = original_project
+
+    def test_legacy_guard_command_aliases_retain_dependencies(self) -> None:
+        # Keep-file spelling stays canonical: these are command-path aliases.
+        commands = ('.GROK/HOOKS/pre_tool_use.py', '.gRoK/hOoKs/pre_tool_use.py',
+                    r'.GROK\HOOKS\pre_tool_use.py', r'.GrOk\HoOkS/pre_tool_use.py',
+                    r'.grok/hooks\pre_tool_use.py')
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, command in enumerate(commands):
+                    with self.subTest(command=command):
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        self._selected_kept_legacy_dependency('claude', '.claude/settings.json', command_path=command)
+            finally:
+                self.project = original_project
+
+    def test_custom_or_unsupported_hook_configs_conservatively_keep_legacy_engine(self) -> None:
+        from getzilla.spec import MAX_SPEC_BYTES, MAX_DEPTH, MAX_NODES, MAX_STRING_LENGTH
+        cases = {
+            'escaped-namespace': lambda raw: raw.replace(b'.grok', br'\u002egrok'),
+            'dynamic-command': lambda _raw: b'{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 dispatch_guard.py"}]}]}}',
+            'jsonc': lambda _raw: b'{"hooks":{}} // custom hook configuration\n',
+            'invalid-encoding': lambda _raw: b'\xff\xfe{\x00}\x00',
+            'unknown-format': lambda _raw: b'not a supported hook configuration\n',
+            'duplicate-key': lambda _raw: b'{"hooks":{},"hooks":{}}',
+            'unknown-root': lambda _raw: b'["custom hooks"]',
+            'size-bound': lambda _raw: b'{"padding":"' + b'x' * MAX_SPEC_BYTES + b'"}',
+            'depth-bound': lambda _raw: b'{"layers":' + b'[' * MAX_DEPTH + b'0' + b']' * MAX_DEPTH + b'}',
+            'node-bound': lambda _raw: b'{"nodes":[' + b','.join([b'0'] * MAX_NODES) + b']}',
+            'string-bound': lambda _raw: b'{"padding":"' + b'x' * (MAX_STRING_LENGTH + 1) + b'"}',
+        }
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for index, (label, transform) in enumerate(cases.items()):
+                    with self.subTest(label=label):
+                        target = Path(tmp) / str(index)
+                        git(original_project, 'clone', '--quiet', str(original_project), str(target))
+                        self.project = target
+                        self._selected_kept_legacy_dependency('claude', '.claude/settings.json', config_transform=transform)
+            finally:
+                self.project = original_project
+
+    def test_dormant_custom_codex_overlay_keeps_legacy_helpers(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        content = b'# dormant overlay may dispatch this guard indirectly\n'
+        hook.write_bytes(content)
+        hook.chmod(0o644)
+        record_owned(manifest, relative, content, 0o644)
+        overlay = b'{"hooks":{"Stop":[{"hooks":[{"command":"python3 dispatch_guard.py"}]}]}}'
+        (self.project / '.grok/codex-hooks.json').write_bytes(overlay)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('custom overlay for a currently unselected client')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
+        self.assertEqual(hook.read_bytes(), content)
+        self.assertFalse((self.project / '.codex/hooks.json').exists())
+
+    def test_exact_generated_neutral_kept_config_allows_proven_retirement(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        relative = '.grok/hooks/pre_tool_use.py'
+        hook = self.project / relative
+        hook.parent.mkdir(parents=True)
+        hook.write_bytes(b'# previous proven hook\n')
+        hook.chmod(0o644)
+        record_owned(manifest, relative, hook.read_bytes(), 0o644)
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        config.write_bytes(canonical)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': ['.claude/settings.json'],
+            'kept_local_sha256': {'.claude/settings.json': hashlib.sha256(canonical).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('exact generated neutral configuration')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(config.read_bytes(), canonical)
+        self.assertFalse(hook.exists())
+        self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'decoded-command execution uses a native POSIX fixture')
+    def test_decoded_escaped_posix_command_and_helper_still_deny_after_upgrade(self) -> None:
+        import shlex
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('claude',))
+        sources = {'.grok/hooks/pre_tool_use.py': b'from _lib import deny\ndeny()\n',
+                   '.grok/hooks/_lib.py': b'import json\ndef deny(): print(json.dumps({"decision":"deny"}))\n'}
+        for relative, content in sources.items():
+            target = self.project / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            target.chmod(0o644)
+            record_owned(manifest, relative, content, 0o644)
+        config = self.project / '.claude/settings.json'
+        config.parent.mkdir()
+        command = 'python3 -B .grok/hooks/pre_tool_use.py'
+        custom = json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'command': command}]}]}}).encode().replace(b'.grok', br'\u002egrok')
+        config.write_bytes(custom)
+        (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+            'schema_version': 1, 'kept_local': ['.claude/settings.json'],
+            'kept_local_sha256': {'.claude/settings.json': hashlib.sha256(custom).hexdigest()}}))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('decoded fixed fixture command depends on owned guard and helper')
+        decoded = json.loads(custom)['hooks']['PreToolUse'][0]['hooks'][0]['command']
+        before = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        self.assertEqual(json.loads(before.stdout), {'decision': 'deny'})
+        upgrade.sync_project(ROOT, self.project)
+        after = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertEqual(json.loads(after.stdout), {'decision': 'deny'})
+        self.assertEqual(config.read_bytes(), custom)
+        for relative, content in sources.items():
+            self.assertEqual((self.project / relative).read_bytes(), content)
+
+    def test_migrated_codex_overlay_retains_legacy_guard_dependency(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        path = '.grok/hooks/post_tool_use.py'
+        target = self.project / path
+        target.parent.mkdir(parents=True)
+        content = b'# baseline used by a retained overlay\n'
+        target.write_bytes(content)
+        target.chmod(0o644)
+        record_owned(manifest, path, content, 0o644)
+        overlay = {'hooks': {'Stop': [{'hooks': [{'command': 'python3 ' + path}]}]}}
+        (self.project / '.grok/codex-hooks.json').write_text(json.dumps(overlay))
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('overlay still calls a legacy guard')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(target.read_bytes(), content)
+        hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
+        self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
+        self.assertEqual(hooks[1]['hooks'][0]['command'], 'python3 ' + path)
+
+    def test_custom_relocated_agent_policy_refuses_before_generated_permissions_change(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for scenario in ('kept', 'divergent', 'unowned', 'mode-only', 'owned-custom'):
+                    with self.subTest(scenario=scenario):
+                        self.project = Path(tmp) / scenario
+                        git(original_project, 'clone', '--quiet', str(original_project), str(self.project))
+                        manifest = self.select(('codex',))
+                        legacy = '.grok/agents/general_implementer.toml'
+                        active = '.codex/agents/general_implementer.toml'
+                        baseline = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+                        custom = baseline.replace(b'sandbox_mode = "workspace-write"', b'sandbox_mode = "read-only"')
+                        if scenario == 'mode-only':
+                            custom = baseline
+                        else:
+                            self.assertNotEqual(custom, baseline)
+                        for relative in (legacy, active):
+                            target = self.project / relative
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(custom)
+                            target.chmod(0o644)
+                        if scenario == 'mode-only':
+                            (self.project / legacy).chmod(0o444)
+                        original_mode = (self.project / legacy).stat().st_mode
+                        if scenario != 'unowned':
+                            record_owned(manifest, legacy, custom if scenario == 'owned-custom' else baseline, 0o644)
+                        record_owned(manifest, active, custom, 0o644)
+                        if scenario == 'kept':
+                            (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
+                                'schema_version': 1, 'kept_local': [legacy],
+                                'kept_local_sha256': {legacy: hashlib.sha256(custom).hexdigest()}}))
+                        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                        self.commit('custom canonical read-only policy')
+                        before = git(self.project, 'rev-parse', 'HEAD')
+                        permissions = tomllib.loads((self.project / active).read_text())['sandbox_mode']
+                        if scenario != 'mode-only':
+                            self.assertEqual(permissions, 'read-only')
+                        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
+                            upgrade.sync_project(ROOT, self.project)
+                        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+                        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+                        self.assertEqual((self.project / legacy).read_bytes(), custom)
+                        self.assertEqual((self.project / legacy).stat().st_mode, original_mode)
+                        self.assertEqual((self.project / active).read_bytes(), custom)
+                        self.assertEqual(tomllib.loads((self.project / active).read_text())['sandbox_mode'], permissions)
+                        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+                        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+            finally:
+                self.project = original_project
+
+    def test_custom_relocated_cursor_source_refuses_before_publication(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        original_project = self.project
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                for scenario in ('divergent', 'owned-custom'):
+                    with self.subTest(scenario=scenario):
+                        self.project = Path(tmp) / scenario
+                        git(original_project, 'clone', '--quiet', str(original_project), str(self.project))
+                        manifest = self.select(('cursor',))
+                        legacy = '.grok/cursor-rules/00-core.toml'
+                        source = self.project / legacy
+                        source.parent.mkdir(parents=True)
+                        baseline = (ROOT / '.getzilla/cursor-rules/00-core.toml').read_bytes()
+                        custom = baseline.replace(b'# Getzilla engineering contract',
+                                                  b'# Local Cursor policy: keep this workspace read-only')
+                        self.assertNotEqual(custom, baseline)
+                        source.write_bytes(custom)
+                        source.chmod(0o644)
+                        original_mode = source.stat().st_mode
+                        record_owned(manifest, legacy, custom if scenario == 'owned-custom' else baseline, 0o644)
+                        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+                        self.commit('custom Cursor canonical policy')
+                        before = git(self.project, 'rev-parse', 'HEAD')
+                        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/cursor-rules/00-core\.toml'):
+                            upgrade.sync_project(ROOT, self.project)
+                        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+                        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+                        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+                        self.assertEqual(source.read_bytes(), custom)
+                        self.assertEqual(source.stat().st_mode, original_mode)
+                        self.assertFalse((self.project / '.getzilla/cursor-rules/00-core.toml').exists())
+                        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
+            finally:
+                self.project = original_project
+
+    def test_canonical_role_migrates_and_rolls_back_without_touching_grok_markdown(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        legacy = '.grok/agents/general_implementer.toml'
+        content = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        old = self.project / legacy
+        old.parent.mkdir(parents=True)
+        old.write_bytes(content)
+        old.chmod(0o644)
+        record_owned(manifest, legacy, content, 0o644)
+        extension = self.project / '.grok/agents/local-extension.md'
+        extension.write_bytes(b'# Local Grok-only adapter extension\n')
+        extension.chmod(0o600)
+        extension_mode = extension.stat().st_mode
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('ordinary canonical input and independent Grok brief')
+        original = git(self.project, 'rev-parse', 'HEAD')
+        upgrade.sync_project(ROOT, self.project)
+        self.assertFalse(old.exists())
+        self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), content)
+        self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+        self.assertEqual(extension.stat().st_mode, extension_mode)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
+        git(self.project, 'switch', '--quiet', 'main')
+        self.assertEqual(old.read_bytes(), content)
+        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+        self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
+        self.assertEqual(extension.stat().st_mode, extension_mode)
+
+    def test_owned_previous_canonical_bytes_require_reconciliation(self) -> None:
+        from getzilla.component_state import MANIFEST, encode_manifest, record_owned
+        manifest = self.select(('codex',))
+        current = (ROOT / '.getzilla/agents/general_implementer.toml').read_bytes()
+        previous = current.replace(b'description = "Default write owner for generic application changes."',
+                                   b'description = "Prior managed role description."')
+        self.assertNotEqual(previous, current)
+        for relative in ('.grok/agents/general_implementer.toml', '.codex/agents/general_implementer.toml'):
+            path = self.project / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(previous)
+            path.chmod(0o644)
+            record_owned(manifest, relative, previous, 0o644)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit('unchanged previous managed role baseline')
+        original = git(self.project, 'rev-parse', 'HEAD')
+        with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
+            upgrade.sync_project(ROOT, self.project)
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
+        self.assertEqual(git(self.project, 'branch', '--list'), '* main')
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual((self.project / '.grok/agents/general_implementer.toml').read_bytes(), previous)
+        self.assertEqual((self.project / '.codex/agents/general_implementer.toml').read_bytes(), previous)
+        self.assertFalse((self.project / '.getzilla/agents/general_implementer.toml').exists())
+        self.assertFalse((self.project / 'scripts/getzilla_route.py').exists())
 
     def test_head_change_during_planning_refuses_before_branch_publication(self) -> None:
         original = upgrade.planned_changes
@@ -158,13 +670,13 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / 'scripts').exists())
 
     def test_changed_files_after_checkout_report_the_retained_branch_as_incomplete(self) -> None:
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
                 (project / 'scripts/getzilla_route.py').write_text('# changed after checkout\n')
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT))
@@ -172,7 +684,7 @@ class ProjectSyncTests(unittest.TestCase):
 
     def test_manifest_changed_after_checkout_is_detected_even_when_git_status_is_clean(self) -> None:
         from getzilla.component_state import MANIFEST
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
@@ -181,20 +693,20 @@ class ProjectSyncTests(unittest.TestCase):
                 manifest['agents'] = []
                 (project / MANIFEST).write_text(json.dumps(manifest))
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
         self.assertEqual(json.loads((self.project / MANIFEST).read_bytes())['agents'], [])
 
     def test_branch_changed_after_checkout_is_detected_even_at_the_same_commit(self) -> None:
-        original = upgrade.git
+        original = publication.git
         def changed_after_switch(project, *args, **kwargs):
             result = original(project, *args, **kwargs)
             if args[0] == 'switch' and result.returncode == 0:
                 git(project, 'switch', '--quiet', '-c', 'post-checkout')
             return result
-        with mock.patch.object(upgrade, 'git', side_effect=changed_after_switch):
+        with mock.patch.object(publication, 'git', side_effect=changed_after_switch):
             with self.assertRaisesRegex(upgrade.UpdateError, 'retained.*incomplete'):
                 upgrade.sync_project(self.source_home, self.project)
         branch = upgrade.BRANCH_PREFIX + upgrade.version_of(ROOT)
@@ -492,14 +1004,14 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
 
     def test_a_failure_before_the_branch_leaves_the_project_unchanged(self) -> None:
-        real = upgrade._git_out
+        real = publication._git_out
 
         def failing(cwd, *args, **kwargs):
             if args[0] == 'commit-tree':
                 raise upgrade.UpdateError('simulated commit failure')
             return real(cwd, *args, **kwargs)
 
-        with mock.patch.object(upgrade, '_git_out', side_effect=failing):
+        with mock.patch.object(publication, '_git_out', side_effect=failing):
             with self.assertRaisesRegex(upgrade.UpdateError, 'simulated'):
                 upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
@@ -704,6 +1216,51 @@ class SelfUpdateTests(unittest.TestCase):
         (self.home / 'VERSION').write_text('mine\n', encoding='utf-8')
         self.assertIn('local changes', upgrade.update_self(self.home, None))
         self.assertEqual((self.home / 'VERSION').read_text(encoding='utf-8'), 'mine\n')
+
+
+class NeutralHookConfigurationTests(unittest.TestCase):
+    def classifier(self):
+        function = getattr(upgrade, '_neutral_hook_configuration', None)
+        self.assertIsNotNone(function, 'neutrality needs bounded decoded evidence, not a raw-byte search')
+        return function
+
+    def test_only_exact_generated_neutral_configuration_proves_neutrality(self):
+        classify = self.classifier()
+        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        self.assertTrue(classify(canonical, canonical))
+        self.assertFalse(classify(canonical + b' ', canonical))
+        self.assertFalse(classify(canonical, None))
+
+    def test_decoded_legacy_strings_disqualify_even_matching_artifacts(self):
+        classify = self.classifier()
+        for path in ('.grok/hooks/pre_tool_use.py', r'.GROK\HOOKS\pre_tool_use.py',
+                     '.gRoK//hOoKs/pre_tool_use.py'):
+            raw = json.dumps({'hooks': {'Nested': [{'command': 'python3 ' + path}]}}).encode()
+            for escaped in (raw, raw.replace(b'.grok', br'\u002egrok')):
+                with self.subTest(path=path, escaped=escaped != raw):
+                    self.assertFalse(classify(escaped, escaped))
+
+    def test_invalid_or_over_budget_json_cannot_prove_neutrality(self):
+        from getzilla.spec import MAX_SPEC_BYTES, MAX_DEPTH, MAX_NODES, MAX_STRING_LENGTH
+        classify = self.classifier()
+        cases = {
+            'jsonc': b'{"hooks":{}} // comment',
+            'encoding': b'\xff',
+            'bom': b'\xef\xbb\xbf{"hooks":{}}',
+            'duplicate': b'{"hooks":{},"hooks":{}}',
+            'surrogate': br'{"hooks":{},"value":"\ud800"}',
+            'non-finite': b'{"hooks":{},"value":NaN}',
+            'overflow-float': b'{"hooks":{},"value":1e999}',
+            'root': b'[]',
+            'unknown-hooks-shape': b'{"hooks":[]}',
+            'bytes': b'{"hooks":{},"padding":"' + b'x' * MAX_SPEC_BYTES + b'"}',
+            'depth': b'{"hooks":{},"layers":' + b'[' * MAX_DEPTH + b'0' + b']' * MAX_DEPTH + b'}',
+            'nodes': b'{"hooks":{},"nodes":[' + b','.join([b'0'] * MAX_NODES) + b']}',
+            'string': b'{"hooks":{},"padding":"' + b'x' * (MAX_STRING_LENGTH + 1) + b'"}',
+        }
+        for label, raw in cases.items():
+            with self.subTest(label=label):
+                self.assertFalse(classify(raw, raw))
 
 
 if __name__ == '__main__':

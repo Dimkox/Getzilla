@@ -21,7 +21,7 @@ from tests._support import project_copy
 PATTERNS = ('*', '**', '.grok/**', '.getzilla/*', 'AGENTS.m?', '[A]GENTS.md', 'trust-ci/**/api.py')
 CONTROL_PLANE_TARGETS = (
     'AGENTS.md',
-    '.grok/hooks/pre_tool_use.py',
+    '.getzilla/hooks/pre_tool_use.py',
     '.getzilla/config/policy.json',
     'trust-ci/src/adaptive_trust_ci/api.py',
 )
@@ -94,7 +94,7 @@ class ApprovalResourceTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Edit', 'tool_input': {'path': 'AGENTS.md'}})
             self.assertTrue(allowed, reason)
             allowed, _ = evaluate_pre_tool(
-                root, {'tool_name': 'Edit', 'tool_input': {'path': '.grok/hooks/pre_tool_use.py'}},
+                root, {'tool_name': 'Edit', 'tool_input': {'path': '.getzilla/hooks/pre_tool_use.py'}},
             )
             self.assertFalse(allowed)
 

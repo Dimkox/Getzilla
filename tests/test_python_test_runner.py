@@ -115,6 +115,265 @@ def windows_process_running(pid: int, recorded_ns: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+class CleanupMetadataTests(unittest.TestCase):
+    def test_readback_exception_keeps_prior_stop_fact_without_a_fabricated_result(self):
+        primary = ValueError('original readback failure')
+        original_file = tempfile.TemporaryFile
+        opened = 0
+
+        class Finished:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        def factory(*args, **kwargs):
+            nonlocal opened
+            first = opened == 0
+            opened += 1
+
+            @contextlib.contextmanager
+            def managed():
+                with original_file(*args, **kwargs) as handle:
+                    class Stream:
+                        def fileno(self):
+                            return handle.fileno()
+
+                        def seek(self, position):
+                            return handle.seek(position)
+
+                        def read(self, count):
+                            if first:
+                                raise primary
+                            return handle.read(count)
+                    yield Stream()
+            return managed()
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tempfile, 'TemporaryFile', side_effect=factory), \
+                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, '_stop', side_effect=OSError('PRIVATE_STOP_VALUE')), \
+                patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+            with self.assertRaises(ValueError) as caught:
+                python_test_runner.execute(['inert-owned-process'], Path(directory), {})
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(primary.args, ('original readback failure',))
+        public = python_test_runner.cleanup_details(primary)
+        self.assertEqual([fact['stage'] for fact in public['facts']], ['owned_stop_reap'])
+        self.assertNotIn('PRIVATE_STOP_VALUE', json.dumps(public))
+
+    def test_parallel_failure_and_combine_keep_each_cleanup_origin(self):
+        runner = python_test_runner
+
+        class Finished:
+            def __init__(self, command, code):
+                self.args = command
+                self.returncode = code
+
+            def poll(self):
+                return self.returncode
+
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls = []
+
+                def spawn(command, **kwargs):
+                    calls.append(command)
+                    return Finished(command, 7 if failed and len(calls) == 1 else 0)
+
+                def complete(result, path):
+                    result.cleanup_metadata = runner.CleanupMetadata((
+                        runner.CleanupFact('stdout_capture_file', 'os_error', 5),))
+                    return result
+
+                combine = runner.ProcessResult(['public-combine'], 0, cleanup_error='PRIVATE_COMBINE',
+                    cleanup_metadata=runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'permission', 13),)))
+                with patch.object(fsx, 'owned_popen', side_effect=spawn), \
+                        patch.object(fsx, 'owned_job', return_value=None), \
+                        patch.object(runner, '_unittest_result', side_effect=complete), \
+                        patch.object(runner, 'execute', return_value=combine) as combine_call, \
+                        patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+                    result = runner._parallel_coverage_unittest(root, root / 'public.cfg', root / '.coverage',
+                        2, {}, test_files=['test_public_a.py', 'test_public_b.py'])
+                self.assertEqual(result.returncode, 7 if failed else 0)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(combine_call.call_count, 0 if failed else 1)
+                origins = [fact['origin'] for fact in runner.cleanup_details(result)['facts']]
+                self.assertEqual(origins, ['parallel_shard', 'parallel_shard'] + ([] if failed else ['coverage_combine']))
+                self.assertEqual(result.cleanup_error, '' if failed else 'PRIVATE_COMBINE')
+
+    def test_cancelled_core_recovery_keeps_typed_cleanup_origins(self):
+        runner = python_test_runner
+        tests = runner.ProcessResult(['public-tests'], 7, stdout='valid completed output',
+            cleanup_metadata=runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other'),)))
+        exported = runner.ProcessResult(['public-export'], 143, terminal_state='cancelled',
+            cleanup_error='PRIVATE_CANCEL', cleanup_metadata=runner.CleanupMetadata((
+                runner.CleanupFact('stdout_capture_file', 'permission', 13),)))
+        cancelled = runner.RunCancelled(15, exported)
+        cancelled.core_run = runner.CoreTestRun(tests, exported, 2, {'engine': 'pytest-xdist'}, {}, None, exported)
+        with patch.object(verification, '_python_checks', side_effect=cancelled):
+            with self.assertRaises(runner.RunCancelled) as caught:
+                verification._python(Path('inert-public-fixture'), 'pr', keep_going=True)
+        self.assertIs(caught.exception, cancelled)
+        self.assertEqual([item.status for item in cancelled.checks], ['fail', 'cancelled'])
+        self.assertEqual(cancelled.checks[0].details[0]['cleanup']['facts'][0]['origin'], 'tests')
+        self.assertEqual(cancelled.checks[1].details[0]['cleanup']['facts'][0]['origin'], 'coverage_export')
+        self.assertNotIn('PRIVATE_CANCEL', json.dumps([item.to_dict() for item in cancelled.checks]))
+
+    def test_metadata_is_closed_bounded_ordered_and_revalidated(self):
+        runner = python_test_runner
+        result = runner.ProcessResult(['private-command'], 0, cleanup_error='PRIVATE_DIAGNOSTIC')
+        facts = [runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'os_error', n),))
+                 for n in range(20)]
+        result.cleanup_metadata = runner._merge_cleanup(*facts)
+        self.assertEqual([fact.errno for fact in result.cleanup_metadata.facts], list(range(16)))
+        self.assertTrue(result.cleanup_metadata.overflow)
+        self.assertLessEqual(len(runner.cleanup_details(result)['facts']), 16)
+        for sample in (
+                'PRIVATE_METADATA', runner.CleanupMetadata([runner.CleanupFact('owned_stop_reap', 'other')]),
+                runner.CleanupMetadata((runner.CleanupFact('PRIVATE_STAGE', 'other'),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'PRIVATE_CATEGORY'),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', True),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', -1),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', None, 'PRIVATE_ORIGIN'),))):
+            result.cleanup_metadata = sample
+            public = runner.cleanup_details(result)
+            self.assertEqual(public['status'], 'unavailable')
+            self.assertFalse(public['facts'])
+            self.assertNotIn('PRIVATE', json.dumps(public))
+
+    def test_exception_categories_and_unavailable_sidecars_never_replace_primary(self):
+        runner = python_test_runner
+        for error, expected in ((PermissionError(13, 'PRIVATE'), 'permission'),
+                                (FileNotFoundError(2, 'PRIVATE'), 'not_found'),
+                                (TimeoutError('PRIVATE'), 'timeout'), (RecursionError('PRIVATE'), 'recursion'),
+                                (OSError('PRIVATE'), 'os_error'), (ValueError('PRIVATE'), 'other')):
+            primary = ValueError('original primary')
+            runner._retain_cleanup(primary, runner._cleanup_failure('stdout_capture_file', error))
+            self.assertEqual(primary.args, ('original primary',))
+            public = runner.cleanup_details(primary)
+            self.assertEqual(public['facts'][0]['category'], expected)
+            self.assertNotIn('PRIVATE', json.dumps(public))
+
+        class RejectSidecar(ValueError):
+            def __setattr__(self, name, value):
+                if name == '_getzilla_cleanup_metadata':
+                    raise TypeError('PRIVATE_ATTACHMENT_FAILURE')
+                super().__setattr__(name, value)
+
+        primary = RejectSidecar('same primary')
+        runner._retain_cleanup(primary, runner._cleanup_failure('owned_stop_reap', OSError('PRIVATE')))
+        self.assertEqual(primary.args, ('same primary',))
+        self.assertEqual(runner.cleanup_details(primary)['status'], 'unavailable')
+
+    def test_replace_and_named_trust_wrappers_keep_facts_and_legacy_private_strings(self):
+        runner = python_test_runner
+        metadata = runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'permission', 13),))
+        original = runner.ProcessResult(['public-runner'], 0, cleanup_error='PRIVATE_LEGACY',
+                                        cleanup_metadata=metadata)
+        with tempfile.TemporaryDirectory() as directory:
+            replaced = runner._unittest_result(original, Path(directory) / 'missing.json')
+        self.assertEqual(replaced.returncode, 5)
+        self.assertEqual(replaced.cleanup_metadata, metadata)
+        self.assertEqual(replaced.cleanup_error, 'PRIVATE_LEGACY')
+        with fixture() as root:
+            (root / 'trust-ci/tests').mkdir(parents=True)
+            (root / 'trust-ci/tests/test_public.py').write_text('')
+            with patch.object(runner, 'execute', return_value=original), \
+                    patch.object(runner, '_unittest_result', side_effect=lambda result, path: result), \
+                    patch.object(runner, 'select_engine', return_value=(0, 'unittest')):
+                named = runner.run_named_tests(root, ['tests.test_sample'], budget=30)
+                trust = runner.run_trust_tests(root, 0)
+        self.assertIs(named, original)
+        self.assertIs(trust, original)
+        self.assertEqual(named.cleanup_metadata, metadata)
+        self.assertEqual(trust.cleanup_error, 'PRIVATE_LEGACY')
+
+    def test_owned_stop_records_closed_metadata_without_exporting_private_values(self):
+        class Finished:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, '_stop', side_effect=PermissionError(13, 'PRIVATE_STOP_CANARY')), \
+                patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+            result = execute(['inert-owned-process'], Path(directory), {}, timeout=900)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('PRIVATE_STOP_CANARY', result.cleanup_error)
+        metadata = getattr(result, 'cleanup_metadata', None)
+        self.assertIsNotNone(metadata, 'producer must retain closed cleanup provenance')
+        self.assertEqual([(fact.stage, fact.category, fact.errno) for fact in metadata.facts],
+                         [('owned_stop_reap', 'permission', 13)])
+        public = python_test_runner.cleanup_details(result)
+        self.assertNotIn('PRIVATE_STOP_CANARY', json.dumps(public))
+
+    def test_coverage_export_cleanup_refuses_only_coverage_with_primary_exits_preserved(self):
+        for failed in (False, True):
+            with self.subTest(export_cleanup=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'tests').mkdir()
+                (root / '.coveragerc').write_text('[run]\nbranch = False\n[report]\nfail_under = 100\n')
+                responses = []
+
+                class ExportResource:
+                    def __enter__(self):
+                        return object()
+
+                    def __exit__(self, *args):
+                        if failed:
+                            raise PermissionError(13, 'PRIVATE_EXPORT_CANARY')
+
+                def controlled(command, *args, **kwargs):
+                    result = python_test_runner.ProcessResult(list(command), 0, stdout='valid public output')
+                    if 'pytest' in command:
+                        Path(args[1]['COVERAGE_FILE']).write_bytes(b'public fixture coverage presence')
+                    if 'json' in command:
+                        Path(command[-1]).write_text(json.dumps({
+                            'meta': {'branch_coverage': False}, 'files': {'public.py': {}}, 'totals': {}}))
+                        with python_test_runner._output_resource(
+                                ExportResource(), {'result': result}, 'export fixture',
+                                python_test_runner.Cancellation(), stage='stdout_capture_file'):
+                            pass
+                    responses.append(result)
+                    return result
+
+                with patch.object(python_test_runner, 'select_engine', return_value=(2, 'pytest-xdist')), \
+                        patch.object(python_test_runner, '_tool_versions', return_value={'engine': 'pytest-xdist'}), \
+                        patch.object(python_test_runner, 'execute', side_effect=controlled), \
+                        patch.object(fsx, 'owned_popen', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+                    core = python_test_runner.run_core_tests(root, 'pr', 2)
+                self.assertEqual(len(responses), 3)
+                self.assertEqual([item.returncode for item in responses], [0, 0, 0])
+                self.assertIs(core.tests, responses[0])
+                self.assertIs(core.coverage, responses[1])
+                self.assertEqual(bool(responses[2].cleanup_error), failed)
+                with patch.object(verification, 'core_worker_selection', return_value=python_test_runner.WorkerSelection(2, 'configuration')), \
+                        patch.object(verification, 'run_core_tests', return_value=core), \
+                        patch.object(verification, 'execute', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(verification, 'run_named_tests', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(verification, '_command_check', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(python_test_runner, 'execute', side_effect=AssertionError('actual backend forbidden')):
+                    checks = verification._core_python_checks(root, 'pr', False, keep_going=True)
+                self.assertEqual(checks[0].status, 'pass')
+                self.assertEqual(checks[1].status, 'fail' if failed else 'pass')
+                self.assertIn('exit=0', checks[1].summary)
+                self.assertEqual(core.tests.returncode, 0)
+                self.assertEqual(core.coverage.returncode, 0)
+                self.assertIs(core.coverage_export, responses[2])
+                self.assertEqual(core.coverage.cleanup_error, '')
+                if failed:
+                    self.assertEqual(checks[1].details[0]['cleanup']['facts'], [{
+                        'stage': 'stdout_capture_file', 'category': 'permission',
+                        'origin': 'coverage_export', 'errno': 13}])
+                    self.assertIn('cleanup failed: details omitted', checks[1].stderr)
+                self.assertNotIn('PRIVATE_EXPORT_CANARY', json.dumps([item.to_dict() for item in checks]))
+
+
 class NamedSmokeTests(unittest.TestCase):
     def test_run_cleanup_retains_prior_capture_and_process_cleanup_errors(self):
         original_cleanup = tempfile.TemporaryDirectory.cleanup

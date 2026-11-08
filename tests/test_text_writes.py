@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = [*sorted((ROOT / '.getzilla/getzilla').rglob('*.py')), *sorted((ROOT / 'scripts').glob('*.py')),
-           *sorted((ROOT / '.grok/hooks').glob('*.py'))]
+           *sorted((ROOT / '.getzilla/hooks').glob('*.py'))]
 
 
 class TextWriteTests(unittest.TestCase):

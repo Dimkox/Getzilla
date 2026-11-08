@@ -259,7 +259,7 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
 
 
 def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
-    script = root / '.grok/hooks' / name
+    script = root / '.getzilla/hooks' / name
     # Use the fixture even when the parent runner exposes the intact source package.
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))

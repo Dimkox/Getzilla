@@ -31,7 +31,7 @@ def stop(root: Path, payload: dict, harness: str = 'claude', mode: str | None = 
     env = {key: value for key, value in os.environ.items() if key != 'GETZILLA_STOP_GATE_MODE'}
     if mode:
         env['GETZILLA_STOP_GATE_MODE'] = mode
-    proc = subprocess.run([sys.executable, str(root / '.grok/hooks/stop_gate.py'), '--harness', harness], cwd=root,
+    proc = subprocess.run([sys.executable, str(root / '.getzilla/hooks/stop_gate.py'), '--harness', harness], cwd=root,
                           input=json.dumps({'cwd': str(root), 'session_id': 's1', 'stop_hook_active': False, **payload}).encode('utf-8'),
                           capture_output=True, check=False, env=env)
     return json.loads(proc.stdout.decode('utf-8').strip() or '{}')

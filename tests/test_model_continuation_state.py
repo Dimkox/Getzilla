@@ -21,6 +21,33 @@ from getzilla import model_continuation_state as journal
 from tests.test_model_continuation import enabled_policy
 
 
+def _reservation_outcome(operation):
+    """Keep successful results separate from closed worker-fault metadata."""
+    try:
+        return operation(), 'ok'
+    except journal.JournalError as error:
+        arguments = BaseException.args.__get__(error, type(error))
+        code = arguments[0] if len(arguments) == 1 and type(arguments[0]) is str else None
+        fault = {'lock_busy': 'lock-busy', 'storage_unavailable': 'storage-unavailable'}.get(
+            code, 'journal-unknown')
+    except Exception:
+        fault = 'exception-unknown'
+    return None, fault
+
+
+def _assert_reservation_faults(case, faults):
+    for fault in faults:
+        if fault == 'ok':
+            continue
+        if fault == 'lock-busy':
+            case.fail('reservation fault=lock-busy')
+        if fault == 'storage-unavailable':
+            case.fail('reservation fault=storage-unavailable')
+        if fault == 'journal-unknown':
+            case.fail('reservation fault=journal-unknown')
+        case.fail('reservation fault=exception-unknown')
+
+
 def _race(root, binding, results):
     with patch.object(journal.time, 'time', return_value=1000), patch.object(journal, '_qualified_boundary', return_value=True):
         results.put(journal.reserve_next(Path(root), binding, 2, 'process-race', journal.Usage(1, '0.2')))
@@ -558,7 +585,9 @@ class ContinuationJournalTest(unittest.TestCase):
         self.create()
         self.terminal()
         with patch.object(journal, '_qualified_boundary', return_value=True), ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(lambda _: self.reserve(), range(2)))
+            outcomes = list(pool.map(lambda _: _reservation_outcome(self.reserve), range(2)))
+        _assert_reservation_faults(self, tuple(fault for _, fault in outcomes))
+        results = [result for result, _ in outcomes]
         self.assertEqual(results[0], results[1])
         self.assertEqual(len(journal.inspect_chain(self.root, self.binding)['attempts']), 2)
 
@@ -704,6 +733,54 @@ class ContinuationJournalTest(unittest.TestCase):
             with self.assertRaises(journal.JournalError):
                 journal.reserve_next(self.root, self.binding, 1, 'event', usage)
         self.assertNotIn(b'SECRET_SENTINEL', (self.root / '.getzilla/runtime/model-continuation/journal.json').read_bytes())
+
+
+class ReservationDiagnosticTests(unittest.TestCase):
+    def test_reservation_faults_are_closed_failures_not_private_errors(self):
+        class PrivateError(Exception):
+            def __str__(self):
+                raise AssertionError('PRIVATE_EXCEPTION_RENDER')
+
+        for error, label in (
+                (journal.JournalError('lock_busy'), 'lock-busy'),
+                (journal.JournalError('storage_unavailable'), 'storage-unavailable'),
+                (journal.JournalError('PRIVATE_JOURNAL_CANARY'), 'journal-unknown'),
+                (PrivateError('PRIVATE_EXCEPTION_CANARY'), 'exception-unknown')):
+            case = ContinuationJournalTest('test_concurrent_identical_events_reserve_once')
+            result = unittest.TestResult()
+            with patch.object(journal, 'reserve_next', side_effect=error):
+                case.run(result)
+            self.assertFalse(result.errors)
+            self.assertEqual(len(result.failures), 1)
+            rendered = ''.join(detail for _, detail in result.failures)
+            self.assertIn('reservation fault=' + label, rendered)
+            self.assertIn('case.fail(', rendered)
+            self.assertNotIn('PRIVATE_', rendered)
+
+    def test_reservation_interrupts_propagate_without_rendering(self):
+        class Stop(BaseException):
+            def __str__(self):
+                raise AssertionError('PRIVATE_INTERRUPT_RENDER')
+
+        def interrupt():
+            raise Stop('PRIVATE_INTERRUPT_CANARY')
+
+        with self.assertRaises(Stop):
+            _reservation_outcome(interrupt)
+        class PrivateJournalError(journal.JournalError):
+            def __str__(self):
+                raise AssertionError('PRIVATE_JOURNAL_RENDER')
+
+        def journal_fault():
+            raise PrivateJournalError('PRIVATE_JOURNAL_CANARY')
+
+        self.assertEqual(_reservation_outcome(journal_fault), (None, 'journal-unknown'))
+
+    def test_identical_reservation_replay_preserves_two_attempts(self):
+        case = ContinuationJournalTest('test_concurrent_identical_events_reserve_once')
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertTrue(result.wasSuccessful())
 
 
 if __name__ == '__main__':

@@ -20,6 +20,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / '.getzilla')]
 import getzilla_upgrade as upgrade  # noqa: E402
+from getzilla import adapter_removal as publication  # noqa: E402
 from getzilla.component_state import MANIFEST, encode_manifest, mode_matches, read_state, record_owned  # noqa: E402
 
 STABLE = '2bb417431f1e4b9494e4af71ebf27adb1d04d898'
@@ -296,19 +297,19 @@ class HistoricalUpgradeTests(unittest.TestCase):
     def test_ignored_anchor_commit_failure_and_cas_preserve_runtime(self):
         anchors, sentinel = self.stock_ignored_runtime()
         original = (self.project/anchors[0]).read_bytes()
-        with mock.patch.object(upgrade, 'commit_changes', side_effect=upgrade.UpdateError('private commit failed')):
+        with mock.patch.object(publication, 'commit_changes', side_effect=upgrade.UpdateError('private commit failed')):
             with self.assertRaisesRegex(upgrade.UpdateError, 'private commit failed'):
                 self.update()
         self.assertEqual(self.git('branch', '--list'), '* main')
         self.assertEqual((self.project/anchors[0]).read_bytes(), original)
-        real_commit = upgrade.commit_changes
+        real_commit = publication.commit_changes
 
         def changed_during_commit(*args, **kwargs):
             result = real_commit(*args, **kwargs)
             (self.project/anchors[0]).write_bytes(b'# concurrent user edit\n')
             return result
 
-        with mock.patch.object(upgrade, 'commit_changes', side_effect=changed_during_commit):
+        with mock.patch.object(publication, 'commit_changes', side_effect=changed_during_commit):
             with self.assertRaisesRegex(upgrade.UpdateError, 'changed during the update'):
                 self.update()
         self.assertEqual(self.git('branch', '--list'), '* main')
@@ -329,7 +330,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
             incoming.replace(target)
             replacements.append(target.stat())
 
-        real_plan, real_commit, real_git = upgrade.planned_changes, upgrade.commit_changes, upgrade.git
+        real_plan, real_commit, real_git = upgrade.planned_changes, publication.commit_changes, publication.git
 
         def planned(*args, **kwargs):
             result = real_plan(*args, **kwargs)
@@ -351,8 +352,8 @@ class HistoricalUpgradeTests(unittest.TestCase):
 
         message = 'retained.*update incomplete after checkout' if phase == 'checkout' else 'changed during the update'
         with mock.patch.object(upgrade, 'planned_changes', side_effect=planned), \
-                mock.patch.object(upgrade, 'commit_changes', side_effect=committed), \
-                mock.patch.object(upgrade, 'git', side_effect=switched):
+                mock.patch.object(publication, 'commit_changes', side_effect=committed), \
+                mock.patch.object(publication, 'git', side_effect=switched):
             with self.assertRaisesRegex(upgrade.UpdateError, message):
                 self.update()
         self.assertEqual(len(replacements), 1)
@@ -420,7 +421,14 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse', 'main'), self.before)
         self.assertEqual(read_state(self.project).require_selection(), ('qwen',))
         self.assertEqual((self.project / 'user.txt').read_text(), 'keep my work\n')
-        self.assertEqual((self.project / '.qwen/settings.json').read_bytes(), settings)
+        from getzilla import harnesses
+        from getzilla.component_state import BoundRoot
+        with BoundRoot(ROOT) as source:
+            expected = harnesses._render(source, ('qwen',))['.qwen/settings.json']
+        current = (self.project / '.qwen/settings.json').read_bytes()
+        self.assertEqual(current, expected)
+        self.assertIn(b'.getzilla/hooks/', current)
+        self.assertNotIn(b'.grok/hooks/', current)
         self.assertEqual((self.project / 'scripts/getzilla_route.py').read_bytes(),
                          (ROOT / 'scripts/getzilla_route.py').read_bytes())
         self.assertEqual((self.project / '.getzilla/config/install-baseline-v2.3.0.json').read_bytes(),
@@ -428,6 +436,50 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.git('switch', '--quiet', 'main')
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)
         self.assertEqual(self.git('status', '--porcelain'), '')
+        self.assertEqual((self.project / '.qwen/settings.json').read_bytes(), settings)
+
+    def test_exact_neutral_destination_keeps_custom_legacy_but_missing_or_changed_refuses(self):
+        legacy_path = '.grok/agents/general_implementer.toml'
+        old = (self.project / legacy_path).read_bytes()
+        self.update()
+        neutral = self.project / '.getzilla/agents/general_implementer.toml'
+        incoming = neutral.read_bytes()
+        legacy = self.project / legacy_path
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        custom = old.replace(b'workspace-write', b'read-only')
+        self.assertIn(b'read-only', custom)
+        legacy.write_bytes(custom)
+        legacy.chmod(0o444)
+        manifest = read_state(self.project).manifest
+        record_owned(manifest, legacy_path, custom, 0o444)
+        (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
+        self.commit()
+        before = self.git('rev-parse', 'HEAD')
+        saved = (self.project / MANIFEST).read_bytes()
+        result = upgrade.sync_project(ROOT, self.project)
+        self.assertIn('is up to date', result)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), before)
+        self.assertEqual((self.project / MANIFEST).read_bytes(), saved)
+        self.assertEqual(legacy.read_bytes(), custom)
+        self.assertTrue(mode_matches(legacy.stat().st_mode, 0o444))
+        for scenario in ('missing', 'changed'):
+            with self.subTest(scenario=scenario):
+                if scenario == 'missing':
+                    neutral.unlink()
+                else:
+                    neutral.write_bytes(incoming + b'\n# changed public neutral source\n')
+                self.commit()
+                head = self.git('rev-parse', 'HEAD')
+                with self.assertRaisesRegex(upgrade.UpdateError, 'custom legacy canonical source'):
+                    upgrade.sync_project(ROOT, self.project)
+                self.assertEqual(self.git('rev-parse', 'HEAD'), head)
+                self.assertEqual((self.project / MANIFEST).read_bytes(), saved)
+                self.assertEqual(legacy.read_bytes(), custom)
+                self.assertTrue(mode_matches(legacy.stat().st_mode, 0o444))
+                self.assertEqual(neutral.read_bytes() if neutral.exists() else None,
+                                 None if scenario == 'missing' else incoming + b'\n# changed public neutral source\n')
+                neutral.write_bytes(incoming)
+                self.commit()
 
     def test_candidate_bootstrap_commits_selection_before_existing_project_plan(self):
         from getzilla import platform_acceptance
@@ -594,7 +646,7 @@ class HistoricalUpgradeTests(unittest.TestCase):
         self.assertEqual(self.git('status', '--porcelain'), '')
 
     def test_failed_private_commit_leaves_original_tree_and_branch(self):
-        with mock.patch.object(upgrade, 'commit_changes', side_effect=upgrade.UpdateError('publication failed')):
+        with mock.patch.object(publication, 'commit_changes', side_effect=upgrade.UpdateError('publication failed')):
             with self.assertRaisesRegex(upgrade.UpdateError, 'publication failed'):
                 self.update()
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.before)

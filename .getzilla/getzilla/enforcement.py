@@ -58,7 +58,7 @@ def installed_hooks(root: Path) -> dict[str, dict[str, Any]]:
 
 
 def _run_hook(root: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
-    script = root / '.grok' / 'hooks' / 'pre_tool_use.py'
+    script = root / '.getzilla' / 'hooks' / 'pre_tool_use.py'
     result = subprocess.run([sys.executable, str(script)], cwd=root, input=json.dumps(payload).encode('utf-8'),
                             capture_output=True, check=False, timeout=60)
     try:
@@ -75,7 +75,7 @@ def _denied(verdict: Mapping[str, Any]) -> bool:
 def hook_self_test(root: Path) -> dict[str, Any]:
     """A harmless command must pass and a write into .git must be denied; otherwise policy is not in effect."""
     from .hook_health import degraded_events
-    if not (root / '.grok' / 'hooks' / 'pre_tool_use.py').is_file():
+    if not (root / '.getzilla' / 'hooks' / 'pre_tool_use.py').is_file():
         return {'status': 'absent', 'allows_harmless': False, 'denies_protected_write': False}
     before = len(degraded_events(root))
     harmless = _run_hook(root, {'cwd': str(root), 'tool_name': 'Bash', 'tool_input': {'command': 'echo getzilla-self-test'}})
