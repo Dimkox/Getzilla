@@ -68,6 +68,20 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.assertTrue(path.is_file(), 'explicit local design-reference artifact is missing')
         return load_file(path, 'public_design_reference')
 
+    def test_architecture_declares_only_the_exact_local_reference_source(self):
+        from getzilla import architecture
+        snapshot = architecture.load_architecture(ROOT)
+        source = '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        unrelated = '.getzilla/optional-modules/unregistered/0.1.0/reference.py'
+        inventory = (architecture._RepositoryArtifact(source, 'file', (ROOT / source).stat().st_size),
+                     architecture._RepositoryArtifact(unrelated, 'file', 0))
+        with patch.object(architecture, '_bounded_repository_inventory', return_value=inventory):
+            findings = architecture.validate_repository_drift(ROOT, snapshot)
+        self.assertEqual([(item.code, item.path) for item in findings],
+                         [('undeclared_source', unrelated)])
+        owners = [node['id'] for node in snapshot.system['nodes'] if source in node['repository_paths']]
+        self.assertEqual(owners, ['NODE-LOCAL-ROUTE-POLICY'])
+
     def capture(self, module, files, capture_id='capture-a'):
         return module.capture(self.root, files, capture_id=capture_id,
                               captured_at='2026-11-07T00:00:00Z')
