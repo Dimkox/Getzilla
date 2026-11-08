@@ -23,6 +23,45 @@ def run(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
 
 
 class GetzillaCliTests(unittest.TestCase):
+    def test_required_parallel_backend_refuses_failed_second_probe(self) -> None:
+        from unittest import mock
+        options = ['tests', '--max-worker-restart=0', '--durations=20']
+        with mock.patch.object(cli, 'project_python', return_value='fixture-python'), \
+                mock.patch.object(cli.subprocess, 'run', side_effect=[
+                    subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 2),
+                    subprocess.CompletedProcess([], 0)]) as calls:
+            # The workflow's first observation can succeed before the CLI's fails.
+            outer = cli.subprocess.run([cli.project_python(cli.HOME), '-c', 'import pytest, xdist'], check=True)
+            self.assertEqual(outer.returncode, 0)
+            self.assertEqual(cli.main(['test', '--require-parallel', *options]), 2)
+        self.assertEqual(calls.call_count, 2)
+        self.assertEqual([call.args[0] for call in calls.call_args_list],
+                         [['fixture-python', '-c', 'import pytest, xdist']] * 2)
+
+    def test_local_test_backend_keeps_default_serial_fallback(self) -> None:
+        from unittest import mock
+        with mock.patch.object(cli, 'project_python', return_value='fixture-python'), \
+                mock.patch.object(cli.subprocess, 'run', side_effect=[
+                    subprocess.CompletedProcess([], 2), subprocess.CompletedProcess([], 0)]) as calls:
+            self.assertEqual(cli.main(['test', 'tests']), 0)
+        self.assertEqual(calls.call_count, 2)
+        self.assertEqual(calls.call_args_list[1].args[0],
+                         ['fixture-python', '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.'])
+
+    def test_required_parallel_backend_preserves_bare_default_and_runner_status(self) -> None:
+        from unittest import mock
+        for options in ([], ['tests', '--max-worker-restart=0', '--durations=20']):
+            for status in (0, 1, 2, 3, 5):
+                with self.subTest(options=options, status=status), \
+                        mock.patch.object(cli, 'project_python', return_value='fixture-python'), \
+                        mock.patch.object(cli, 'test_workers', return_value=2), \
+                        mock.patch.object(cli.subprocess, 'run', side_effect=[
+                            subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], status)]) as calls:
+                    self.assertEqual(cli.main(['test', '--require-parallel', *options]), status)
+                self.assertEqual(calls.call_args_list[1].args[0],
+                    ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', '2',
+                     *(options or ['tests'])])
+
     def test_parallel_workers_use_measured_capacity_with_two_cpu_reserve(self) -> None:
         from unittest import mock
         from getzilla import startup_cpu

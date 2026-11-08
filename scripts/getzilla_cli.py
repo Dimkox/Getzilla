@@ -71,7 +71,8 @@ def usage() -> str:
     lines = ['usage: getzilla <command> [arguments]', '', 'commands:']
     lines += [f'  {name:<{width}}  {summary}' for name, (_, summary) in COMMANDS.items()]
     lines.append(f"  {'test':<{width}}  run the test suite on the measured CPU capacity")
-    lines += ['', "`getzilla <command> --help` shows a command's own options."]
+    lines += ['', '`getzilla test --require-parallel [targets/options]` refuses a missing parallel backend.',
+              "`getzilla <command> --help` shows a command's own options."]
     return '\n'.join(lines)
 
 
@@ -95,7 +96,7 @@ def test_workers() -> int:
         return max(1, (os.cpu_count() or 1) - 2)
 
 
-def run_tests(args: list[str]) -> int:
+def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
     targets = args or ['tests']
     python = project_python(HOME)
     # UTF-8 mode on Windows: tests decode CLI output and fixtures as UTF-8, as on POSIX; product
@@ -108,6 +109,9 @@ def run_tests(args: list[str]) -> int:
         print(f'getzilla test: {workers} parallel workers', flush=True)
         command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
     else:
+        if require_parallel:
+            print('getzilla test: required pytest-xdist backend is unavailable', file=sys.stderr)
+            return probe.returncode
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
         command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
@@ -120,7 +124,8 @@ def main(argv: list[str]) -> int:
         return 0
     command, rest = argv[0], argv[1:]
     if command == 'test':
-        return run_tests(rest)
+        require_parallel = bool(rest and rest[0] == '--require-parallel')
+        return run_tests(rest[1:] if require_parallel else rest, require_parallel=require_parallel)
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
