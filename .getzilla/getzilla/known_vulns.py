@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import io
 import os
 import re
 import subprocess
@@ -25,6 +26,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
@@ -349,51 +351,163 @@ def load_config(root: Path) -> dict[str, Any]:
     return {'exclude': exclude, 'accept': accept}
 
 
-def _version_key(version: str) -> tuple[Any, ...]:
-    parts = re.split(r'[.\-+_]', version.lstrip('vV'))
-    key: list[Any] = []
-    for part in parts:
-        match = re.match(r'^(\d+)(.*)$', part)
-        if match:
-            key.append((1, int(match.group(1)), match.group(2)))
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """SemVer2 precedence: prereleases precede final, builds do not order."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported SemVer version')
+    match = re.fullmatch(
+        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
+    if match is None:
+        raise VulnerabilityError('unsupported SemVer version')
+    prerelease = []
+    if match[4] is not None:
+        for part in match[4].split('.'):
+            if part.isdigit():
+                if len(part) > 1 and part[0] == '0':
+                    raise VulnerabilityError('unsupported SemVer prerelease')
+                prerelease.append((0, int(part)))
+            else:
+                prerelease.append((1, part))
+    return (int(match[1]), int(match[2]), int(match[3]),
+            (0, tuple(prerelease)) if match[4] is not None else (1, ()))
+
+
+def _pypi_key(version: str) -> tuple[Any, ...]:
+    """Qualified canonical PEP440 subset; other forms remain explicit unknown."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP440 subset)')
+    match = re.fullmatch(
+        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
+        r'(?:(?P<pre>a|b|rc|c)(?P<pre_n>[0-9]+))?'
+        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
+        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
+    if match is None:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP440 subset)')
+    release = [int(part) for part in match['release'].split('.')]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if match['pre']:
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2, 'c': 2}[match['pre']], int(match['pre_n']))
+    elif match['dev'] is not None and match['post'] is None:
+        pre = (-1, 0, 0)
+    else:
+        pre = (1, 0, 0)
+    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
+    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
+    local = (0, ()) if match['local'] is None else (1, tuple(
+        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
+    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+
+
+def _range_key(version: str, *, kind: str, ecosystem: str) -> tuple[Any, ...]:
+    if kind == 'SEMVER':
+        return _semver_key(version)
+    if kind == 'ECOSYSTEM' and ecosystem == 'PyPI':
+        return _pypi_key(version)
+    raise VulnerabilityError('unsupported OSV range comparator for ecosystem')
+
+
+def _range_contains(version: str, item: dict[str, Any], *, ecosystem: str) -> bool:
+    if not isinstance(item, dict):
+        raise VulnerabilityError('malformed OSV range')
+    kind = item.get('type')
+    target = _range_key(version, kind=kind, ecosystem=ecosystem)
+    events = item.get('events')
+    if not isinstance(events, list) or not events:
+        raise VulnerabilityError('malformed OSV range: nonempty events required')
+    timeline, limits, roles, previous = [], [], set(), None
+    for event in events:
+        if not isinstance(event, dict) or len(event) != 1:
+            raise VulnerabilityError('malformed OSV event: one role required')
+        role, value = next(iter(event.items()))
+        if role not in {'introduced', 'fixed', 'last_affected', 'limit'} or not isinstance(value, str) or not value:
+            raise VulnerabilityError('malformed OSV event')
+        roles.add(role)
+        if role == 'limit' and '*' in value:
+            key = (2, ())
+            limits.append(None)
+        elif role == 'introduced' and value == '0':
+            key = (0, ())
         else:
-            key.append((0, 0, part))
-    return tuple(key)
+            key = (1, _range_key(value, kind=kind, ecosystem=ecosystem))
+            if role == 'limit':
+                limits.append(key[1])
+        # OSV's general algorithm sorts input. This native qualified profile
+        # instead refuses unsorted/ambiguous data rather than guessing clean.
+        if previous is not None and key <= previous:
+            raise VulnerabilityError('unsupported unsorted or ambiguous OSV events')
+        previous = key
+        if role != 'limit':
+            timeline.append((key, role))
+    if 'introduced' not in roles or {'fixed', 'last_affected'} <= roles:
+        raise VulnerabilityError('malformed OSV range roles')
+    included = False
+    for key, role in timeline:
+        if role == 'introduced' and (key[0] == 0 or key[1] <= target):
+            included = True
+        elif role == 'fixed' and key[1] <= target:
+            included = False
+        elif role == 'last_affected' and key[1] < target:
+            included = False
+    return included and (not limits or any(limit is None or target < limit for limit in limits))
 
 
-def _in_ranges(version: str, affected: dict[str, Any]) -> bool:
-    if version in (affected.get('versions') or []):
+def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None = None) -> bool:
+    if not isinstance(affected, dict) or not isinstance(version, str) or not version:
+        raise VulnerabilityError('malformed OSV affected entry or target version')
+    versions = affected.get('versions', [])
+    if not isinstance(versions, list) or not all(isinstance(value, str) and value for value in versions):
+        raise VulnerabilityError('malformed OSV enumerated versions')
+    package = affected.get('package', {})
+    if not isinstance(package, dict):
+        raise VulnerabilityError('malformed OSV package')
+    ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
+    ranges = affected.get('ranges', [])
+    if not isinstance(ranges, list) or not ranges and not versions:
+        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    # Validate ALL coverage before matching: a positive or accepted finding
+    # must not erase an unsupported range in the same affected entry.
+    matches = [_range_contains(version, item, ecosystem=ecosystem) for item in ranges]
+    if version in versions:
         return True
-    target = _version_key(version)
-    for item in affected.get('ranges') or []:
-        if item.get('type') not in {'SEMVER', 'ECOSYSTEM'}:
-            continue
-        introduced = None
-        for event in item.get('events') or []:
-            if 'introduced' in event:
-                introduced = event['introduced']
-            elif introduced is not None and ('fixed' in event or 'last_affected' in event):
-                low = introduced == '0' or _version_key(str(introduced)) <= target
-                if 'fixed' in event:
-                    high = target < _version_key(str(event['fixed']))
-                else:
-                    high = target <= _version_key(str(event['last_affected']))
-                if low and high:
-                    return True
-                introduced = None
-        if introduced is not None and (introduced == '0' or _version_key(str(introduced)) <= target):
-            return True
-    return False
+    if versions:
+        if ecosystem == 'PyPI':
+            key = _pypi_key
+            target = key(version)
+            matches.extend(target == key(value) for value in versions)
+        # Other complete lists use literal identity; a miss needs no ordering.
+        # Declared ranges were validated above and do not broaden that identity.
+    return any(matches)
+
+
+def _aliases(record: dict[str, Any]) -> list[str]:
+    """Validate decision-relevant identifiers without coercion or mutation."""
+    if not isinstance(record, dict):
+        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+    aliases = record.get('aliases')
+    if aliases is None:
+        return []
+    if not isinstance(aliases, list) or not all(
+            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases):
+        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+    return list(aliases)
 
 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
+    aliases = _aliases(record)
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
         package = affected.get('package') or {}
         if package.get('ecosystem') != dependency.ecosystem:
             continue
-        if normalize_name(dependency.ecosystem, str(package.get('name', ''))) != normalize_name(dependency.ecosystem, dependency.name):
+        name = normalize_name(dependency.ecosystem, str(package.get('name', '')))
+        if name == '*':
+            if not _in_ranges(dependency.version, affected, ecosystem=dependency.ecosystem):
+                continue
+        elif name != normalize_name(dependency.ecosystem, dependency.name):
             continue
         specific = affected.get('database_specific') or {}
         severity = severity or str(specific.get('severity') or '')
@@ -411,7 +525,7 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(str(alias) for alias in record.get('aliases') or []),
+        aliases=sorted(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -459,6 +573,7 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
                 details[vuln_id] = json.loads(fetch(f'{OSV_API}/vulns/{vuln_id}', None))
             except (OSError, urllib.error.URLError, ValueError) as exc:
                 raise VulnerabilityError(f'OSV record {vuln_id} unavailable: {exc}') from exc
+            _aliases(details[vuln_id])
         findings.append(_describe(details.get(vuln_id, {'id': vuln_id}), dependency))
     return findings
 
@@ -477,14 +592,17 @@ def query_offline(dependencies: list[Dependency], database: Path) -> list[Findin
                 if not member.endswith('.json'):
                     continue
                 record = json.loads(bundle.read(member))
+                _aliases(record)
                 if record.get('withdrawn'):
                     continue
                 for affected in record.get('affected') or []:
                     package = affected.get('package') or {}
                     if package.get('ecosystem') != ecosystem:
                         continue
-                    for dependency in by_name.get(normalize_name(ecosystem, str(package.get('name', ''))), []):
-                        if _in_ranges(dependency.version, affected):
+                    name = normalize_name(ecosystem, str(package.get('name', '')))
+                    candidates = chain.from_iterable(by_name.values()) if name == '*' else by_name.get(name, ())
+                    for dependency in candidates:
+                        if _in_ranges(dependency.version, affected, ecosystem=ecosystem):
                             findings.append(_describe(record, dependency))
     unique = {(item.dependency, item.vuln_id): item for item in findings}
     return [unique[key] for key in sorted(unique)]
@@ -497,13 +615,17 @@ def download_database(destination: Path, ecosystems: Iterable[str] = ECOSYSTEMS,
         if ecosystem not in ECOSYSTEMS:
             raise VulnerabilityError(f'unsupported ecosystem: {ecosystem}')
         data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip', None)
+        # Admit every consumed JSON member before touching the prior cache.
+        with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+            if bundle.testzip() is not None:
+                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
+            for member in bundle.namelist():
+                if member.endswith('.json'):
+                    _aliases(json.loads(bundle.read(member)))
         target = destination / ecosystem / 'all.zip'
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix('.zip.partial')
         temporary.write_bytes(data)
-        with zipfile.ZipFile(temporary) as bundle:
-            if bundle.testzip() is not None:
-                raise VulnerabilityError(f'corrupt OSV archive for {ecosystem}')
         os.replace(temporary, target)
         written.append(str(target))
     return written

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,7 @@ def _test_directory() -> Iterator[str]:
 @contextlib.contextmanager
 def _scanner_environment(minimal_runtime: bool) -> Iterator[None]:
     """Synthetic verifier projects own their OSV inputs; the outer gate keeps its real configuration."""
-    keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE') if minimal_runtime else ()
+    keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE')
     previous = {key: os.environ.pop(key, None) for key in keys}
     try:
         yield
@@ -119,10 +120,97 @@ def activate_owned_route(root: Path, route: dict) -> None:
     state.set_active_route(root, route)
 
 
+def _public_modes(source: Path) -> dict[str, int]:
+    """Read logical checkout modes, not index blobs, for current working bytes."""
+    top = subprocess.check_output(
+        ['git', '--no-optional-locks', '-C', str(source), 'rev-parse', '--show-toplevel'])
+    if Path(os.fsdecode(top).strip()).resolve() != source.resolve():
+        raise ValueError('test source must be the Git worktree root')
+    raw = subprocess.check_output(
+        ['git', '--no-optional-locks', '-C', str(source), 'ls-files', '--stage', '-z'])
+    modes = {}
+    for row in raw.split(b'\0'):
+        if not row:
+            continue
+        metadata, name = row.split(b'\t', 1)
+        mode, _oid, stage = metadata.split()
+        relative = os.fsdecode(name)
+        if stage != b'0' or relative in modes:
+            raise ValueError('test source has an unresolved index')
+        modes[relative] = {b'100644': 0o644, b'100755': 0o755}.get(mode, 0)
+    return modes
+
+
+def _copy_public_file(source: str | Path, destination: str | Path,
+                      root: Path, modes: dict[str, int]) -> str:
+    source, destination = Path(source), Path(destination)
+    relative = source.relative_to(root).as_posix()
+    mode = modes.get(relative)
+    if mode == 0:
+        raise ValueError('test source is not a regular tracked file')
+    if mode is None:
+        # Existing project_copy also carries newly written untracked test inputs.
+        # Preserve their current mode; an absent Git mode cannot confer one.
+        return shutil.copy2(source, destination)
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(descriptor, 'rb') as incoming:
+        before = os.fstat(incoming.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('test source is not a regular working file')
+        with destination.open('xb') as outgoing:
+            shutil.copyfileobj(incoming, outgoing)
+            if hasattr(os, 'fchmod'):
+                os.fchmod(outgoing.fileno(), mode)
+            else:
+                os.chmod(destination, mode)
+        after = os.fstat(incoming.fileno())
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('test source changed during copying')
+    return str(destination)
+
+
+def copy_public_source(source: Path, destination: Path) -> None:
+    """Create a new test-only source from tracked WORKING bytes and Git modes.
+
+    No Git identity is invented. Real repository history stays at the caller's
+    original root. Private/untracked inputs are not part of this source fixture.
+    Existing targets and later custom modes are never normalized.
+    """
+    modes = _public_modes(source)
+    destination.mkdir(mode=0o700)
+    for relative in modes:
+        path = Path(relative)
+        if path.is_absolute() or '..' in path.parts or '.git' in path.parts:
+            raise ValueError('invalid test source path')
+        if not os.path.lexists(source / path):
+            continue  # A working-tree deletion is part of current TDD state.
+        target = destination / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _copy_public_file(source / path, target, source, modes)
+
+
+@contextlib.contextmanager
+def public_source_copy(source: Path | None = None) -> Iterator[Path]:
+    """An owned public source fixture; it is not a Git checkout or authority."""
+    with _test_directory() as temporary:
+        root = Path(temporary).resolve() / 'source'
+        copy_public_source(PROJECT if source is None else source, root)
+        yield root
+
+
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterator[Path]:
-    """Copy a full project, or a synthetic verifier project with isolated scanner inputs."""
+    """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
+        # Tests can explicitly substitute a Gitless synthetic PROJECT. Keep its
+        # original generic copy contract; never turn a real Git error into a fallback.
+        if PROJECT == Path(__file__).resolve().parents[1] or os.path.lexists(PROJECT / '.git'):
+            modes = _public_modes(PROJECT)
+            def copy_file(source, destination):
+                return _copy_public_file(source, destination, PROJECT, modes)
+        else:
+            copy_file = shutil.copy2
         root = Path(tmp).resolve() / 'project'  # macOS spells TMPDIR through /var -> /private/var
         root.mkdir()
         for rel in ('.grok', '.agents', '.getzilla', '.superpowers'):
@@ -141,7 +229,7 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
                 return omitted
-            shutil.copytree(src, root / rel, ignore=ignore)
+            shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
         if runtime.exists():
             for child in runtime.iterdir():
@@ -154,7 +242,7 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False) -> Iterato
         for rel in ('AGENTS.md', 'VERSION', 'ruff.toml', 'bandit.yaml', '.coveragerc'):
             src = PROJECT / rel
             if src.is_file():
-                shutil.copy2(src, root / rel)
+                copy_file(src, root / rel)
         for rel in ('engineering/changes', 'engineering/adr', 'engineering/runbooks', 'engineering/reviews'):
             (root / rel).mkdir(parents=True, exist_ok=True)
         if git:
