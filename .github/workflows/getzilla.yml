@@ -273,8 +273,15 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success' && steps.node_profile_admission.outcome == 'success'
         shell: bash
         run: |
-          set -o pipefail
-          python -m unittest discover -s tests 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          import sys
+          sys.path.insert(0, 'scripts')
+          import getzilla_cli as cli
+          subprocess.run([cli.project_python(cli.HOME), '-c', 'import pytest, xdist'], check=True)
+          PY
+          python scripts/getzilla_cli.py test --require-parallel tests --max-worker-restart=0 --durations=20 2>&1 | tee "$RUNNER_TEMP/core-tests.log"
       - name: Trust CI tests
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
