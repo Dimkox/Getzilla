@@ -720,6 +720,7 @@ class ComponentPreflightTests(unittest.TestCase):
         self.source = Path(tmp.name) / 'source'
         self.target = Path(tmp.name) / 'project'
         source_files = {
+            '.getzilla/config/toolchain.json': b'{"tools":[],"workflow_sources":{"components":[]}}\n',
             'scripts/install_into.py': (ROOT / 'scripts/install_into.py').read_bytes(),
             '.getzilla/templates/consumer-AGENTS.md.tmpl': b'Fixture project instructions\n',
             '.getzilla/templates/consumer-factory-README.md.tmpl': b'Factory notes\n',

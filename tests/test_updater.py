@@ -313,7 +313,11 @@ class OfflineMirrorTests(unittest.TestCase):
                          (self.mirror_dir / 'opengrep' / f'v{updater.OPENGREP_VERSION}' / asset).read_bytes())
         spec_kit = baseline.components()['spec-kit']
         source = (self.mirror_dir / 'git' / f"{spec_kit['repository']}.git").as_uri()
-        self.assertEqual(self.uv[0][-1], f"git+{source}@{spec_kit['upstream_tag']}")
+        self.assertEqual(self.uv, [])
+        checkout = baseline.pinned_checkout(self.root) / 'spec-kit'
+        self.assertEqual(subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip(),
+                         json.loads((self.mirror_dir / updater.MIRROR_MANIFEST).read_bytes())['baseline']['spec-kit'])
+        self.assertEqual(subprocess.check_output(['git', '-C', str(checkout), 'remote', 'get-url', 'origin'], text=True).strip(), source)
         again = self._update(self._mirror())
         self.assertIn('already installed, sha256 verified', again['tool:opengrep'].detail)
 

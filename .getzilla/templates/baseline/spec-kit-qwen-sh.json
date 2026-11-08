@@ -1,0 +1,223 @@
+{
+  "agent": "qwen",
+  "argv": [
+    "/usr/bin/prlimit",
+    "--core=0",
+    "--as=2147483648",
+    "--cpu=20",
+    "--nproc=1024",
+    "--nofile=256",
+    "--fsize=16777216",
+    "--",
+    "/usr/bin/python3",
+    "-c",
+    "from specify_cli import main; main()",
+    "init",
+    "--here",
+    "--integration",
+    "qwen",
+    "--non-interactive",
+    "--ignore-agent-tools",
+    "--script",
+    "sh"
+  ],
+  "binding": {
+    "dependency_lock_sha256": "465faa6ad8743a19e8acee80467e8376a4aebbe286853149c66f487c309d560a",
+    "source_archive_sha256": "33b3ee3f7c8dfb6ea5be60c6df31b97f44e7ca7a29a303eb3af7a882fdc62281",
+    "source_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175"
+  },
+  "component": "spec-kit",
+  "files": [
+    {
+      "bytes": 11520,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.analyze.md",
+      "sha256": "91fe16257ededdea9cc21d3cb27d539fcdd12d93ddcea52332cd4b68176b6a8d"
+    },
+    {
+      "bytes": 22133,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.checklist.md",
+      "sha256": "fa58b19e2604ce56ff5f5427061f6ee94fd44d7194e740b874824d9bf21ee15b"
+    },
+    {
+      "bytes": 19316,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.clarify.md",
+      "sha256": "dd11eb5b9759f7d3cd18c9d7f23a0ae2fe7973fc6ca2486dbfaf53a5569224b1"
+    },
+    {
+      "bytes": 10159,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.constitution.md",
+      "sha256": "9a7e9296f0878cdf4ed011b0de74cfb3656938680b64e43e808553fdfd054efc"
+    },
+    {
+      "bytes": 12938,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.converge.md",
+      "sha256": "3cb55244c9dc5b9bf52ee3127ba177c52cabd5e5e5197e1312497b3eaeb8b9a4"
+    },
+    {
+      "bytes": 12562,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.implement.md",
+      "sha256": "e036ce63702db93e656e1c91ee6c02a8dc3d4a4f8624f8ba4adc69027fe68983"
+    },
+    {
+      "bytes": 7952,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.plan.md",
+      "sha256": "3be8b011db9c6bb1cc77037f7d90756a6dbcbda1995cda2192818385732b27ff"
+    },
+    {
+      "bytes": 18377,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.specify.md",
+      "sha256": "21634a45dfcf642fddb1645f4ad2980f98c89778442e47663df8a6c3a1eaf8bc"
+    },
+    {
+      "bytes": 11323,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.tasks.md",
+      "sha256": "6754ae39649c8e73a5ed376ad5cfcf04422e321a10e07c5ccd92fd1b9bccf776"
+    },
+    {
+      "bytes": 7625,
+      "mode": 420,
+      "path": ".qwen/commands/speckit.taskstoissues.md",
+      "sha256": "3c7520a0294a435fa678520b695b11bd7575f0c15da89c418e50abd763677345"
+    },
+    {
+      "bytes": 384,
+      "mode": 420,
+      "path": ".specify/.gitignore",
+      "sha256": "8c908410d177a1ef3d0dee16d7ad55f2ac3333df3104c4d4adee1c9b82f1dbc1"
+    },
+    {
+      "bytes": 1060,
+      "mode": 420,
+      "path": ".specify/LICENSE",
+      "sha256": "2510b446bc1f0cf9702453075d20cd88631e20e5642658edb7325d9c1eb534f7"
+    },
+    {
+      "bytes": 145,
+      "mode": 420,
+      "path": ".specify/init-options.json",
+      "sha256": "1b7e0e578f5ececf46ae4f55d227ed71c1333998928f452a3595486dd22a3799"
+    },
+    {
+      "bytes": 267,
+      "mode": 420,
+      "path": ".specify/integration.json",
+      "sha256": "e9a78d2f58407efe179f7352fb55ca5d8d33addfae82f2f82b5aaaa6d1e6c182"
+    },
+    {
+      "bytes": 1222,
+      "mode": 420,
+      "path": ".specify/integrations/qwen.manifest.json",
+      "sha256": "568ac23a88b69447581c1c5910910c862b02c5b118c1982a3ce1797a48f7959f"
+    },
+    {
+      "bytes": 1474,
+      "mode": 420,
+      "path": ".specify/integrations/speckit.manifest.json",
+      "sha256": "63727ad5eb7affedd4c922f4a9bac223de4a99cb062f86386c1f6b7fb73ab316"
+    },
+    {
+      "bytes": 103,
+      "mode": 420,
+      "path": ".specify/memory/.constitution-template.json",
+      "sha256": "8fc4b39294bae0c10d59547ad7d415b6f0e890d656cbf7171dd567f4e9054711"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/memory/constitution.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 8193,
+      "mode": 493,
+      "path": ".specify/scripts/bash/check-prerequisites.sh",
+      "sha256": "39419d0d7100adee3eea8d6d578caea3617633013803b6b3872731c3af8f98b1"
+    },
+    {
+      "bytes": 39506,
+      "mode": 493,
+      "path": ".specify/scripts/bash/common.sh",
+      "sha256": "53cb1c23e349db4586c272436ce35c6e2f36a9c0b5351a85e0b216d9887a26b7"
+    },
+    {
+      "bytes": 19427,
+      "mode": 493,
+      "path": ".specify/scripts/bash/create-new-feature.sh",
+      "sha256": "972f03ed8ca5ee17b7baad6d56d821d46269d77abc337496beafb0fe85a725f2"
+    },
+    {
+      "bytes": 1547,
+      "mode": 493,
+      "path": ".specify/scripts/bash/resolve-template.sh",
+      "sha256": "829e227096abc8bf0889889ec9f792f503ca5d395b7836a8a7eb739ee75214e7"
+    },
+    {
+      "bytes": 2540,
+      "mode": 493,
+      "path": ".specify/scripts/bash/setup-plan.sh",
+      "sha256": "d0bd298c026446f3c63167130d65e49e4aa4485de6bef18bcdfd57b19aa0de96"
+    },
+    {
+      "bytes": 3549,
+      "mode": 493,
+      "path": ".specify/scripts/bash/setup-tasks.sh",
+      "sha256": "cf6e99575a24b64ac01ffa3a50a40971ba95e3c1ec269b9a6dc3e35bbbb09191"
+    },
+    {
+      "bytes": 2033,
+      "mode": 420,
+      "path": ".specify/templates/checklist-template.md",
+      "sha256": "3f4124a13ffbc0c2d8e979d9a08248f29ce53cc6c324a8303a6ae0d231b78836"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/templates/constitution-template.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 3682,
+      "mode": 420,
+      "path": ".specify/templates/plan-template.md",
+      "sha256": "5ef0e4c97b36e9f91372dc6eb8e5a7e515af8958cf1a9286e43a1ebd9bd48540"
+    },
+    {
+      "bytes": 4556,
+      "mode": 420,
+      "path": ".specify/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "bytes": 9171,
+      "mode": 420,
+      "path": ".specify/templates/tasks-template.md",
+      "sha256": "c731575d8099b3f871861186fbd1a592b51b2ba57fb99e1a0dab439ff6d5608f"
+    },
+    {
+      "bytes": 2118,
+      "mode": 420,
+      "path": ".specify/workflows/speckit/workflow.yml",
+      "sha256": "177761c5e7df28126beea043b5cb45aeaf7958090c022dc11ac71399422fcfbc"
+    },
+    {
+      "bytes": 369,
+      "mode": 420,
+      "path": ".specify/workflows/workflow-registry.json",
+      "sha256": "d5b48791529d83554f5b2146d784288727c104f5865583dec8dab4509e0410c0"
+    }
+  ],
+  "generator": "linux-bubblewrap-offline-v1",
+  "permissions_granted": false,
+  "schema_version": 1,
+  "script": "sh",
+  "semantic_safety": "unqualified"
+}
