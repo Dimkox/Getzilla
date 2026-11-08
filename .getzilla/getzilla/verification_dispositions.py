@@ -1,4 +1,4 @@
-"""Narrow, source-bound review records for two verification observations.
+"""Narrow, source-bound review records for exact verification observations.
 
 These records classify findings. They are not authenticated approvals.
 """
@@ -187,6 +187,8 @@ class Dispositions:
         self.entries: list[dict] = []
         self.sources: dict[str, tuple[bytes, int, str]] = {}
         self._total = 0
+        self._vendor_sources: set[str] = set()
+        self._archived: set[str] = set()
         if _regular_path(root, CONFIG_PATH, optional=True) is None:
             return
         raw = self._read(CONFIG_PATH, limit=MAX_CONFIG_BYTES, nonexecutable=True)
@@ -213,12 +215,22 @@ class Dispositions:
 
     def _read(self, relative: str, *, limit: int = MAX_FILE_BYTES, nonexecutable: bool = False) -> bytes:
         relative = canonical_path(relative)
+        if relative in self._archived:
+            raw = self._vendor_read(relative)
+            if len(raw) > limit:
+                raise DispositionError('disposition source exceeds the size limit')
+            return raw
+        return self._read_file(relative, limit=limit, nonexecutable=nonexecutable)
+
+    def _read_file(self, relative: str, *, limit: int = MAX_FILE_BYTES, nonexecutable: bool = False) -> bytes:
         path = _regular_path(self.root, relative)
         assert path is not None
         index_mode, _oid = _index(self.root, relative)
         before = path.stat()
         if nonexecutable and (before.st_mode & 0o111 or index_mode != '100644'):
             raise DispositionError('review evidence, configuration and immutable Markdown cannot be executable')
+        if before.st_nlink != 1:
+            raise DispositionError('disposition sources cannot have foreign hard links')
         if before.st_size > limit:
             raise DispositionError('disposition source exceeds the size limit')
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
@@ -243,14 +255,49 @@ class Dispositions:
             self.sources[relative] = value
         return raw
 
+    def _vendor_read(self, relative: str) -> bytes:
+        """Only immutable vendor blobs can derive bytes from a separately proved container."""
+        from .baseline_assets import ENGINE_ARCHIVE, ARCHIVE_LIMIT, archive_entries, validate_resources
+        if (not re.fullmatch(r'\.getzilla/templates/baseline/blobs/[a-f0-9]{64}\.txt', relative)
+                or _regular_path(self.root, ENGINE_ARCHIVE, optional=True) is None):
+            return self._read(relative, nonexecutable=True)
+        container = self._read(ENGINE_ARCHIVE, limit=ARCHIVE_LIMIT, nonexecutable=True)
+        members = archive_entries(container)
+        validate_resources(members, lambda path: self._read(path, nonexecutable=True))
+        member = members.get(relative)
+        if member is None:
+            if relative in self._archived:
+                raise DispositionError('archived disposition source disappeared')
+            return self._read(relative, nonexecutable=True)
+        raw, mode = member
+        if len(raw) > MAX_FILE_BYTES or mode != 0o644:
+            raise DispositionError('disposition source exceeds the size or mode limit')
+        loose = _regular_path(self.root, relative, optional=True)
+        if loose is not None:
+            if self._read_file(relative, nonexecutable=True) != raw:
+                raise DispositionError('conflicting loose/archive disposition source')
+        previous = self.sources.get(relative)
+        value = (raw, mode, '100644')  # Logical member mode; backing Git identity is separate below.
+        if previous is not None and previous != value:
+            raise DispositionError('archived disposition source changed')
+        if previous is None:
+            self._total += len(raw)
+            if self._total > MAX_TOTAL_BYTES:
+                raise DispositionError('disposition sources exceed the total size limit')
+        self.sources[relative] = value
+        self._archived.add(relative)
+        self._vendor_sources.add(ENGINE_ARCHIVE)
+        return raw
+
     def _validate_entry(self, entry: object) -> None:
         secret = isinstance(entry, dict) and entry.get('kind') == 'public-token-address'
-        _fields(entry, _COMMON_FIELDS | ({'column', 'match_sha256'} if secret else set()))
+        vendor = isinstance(entry, dict) and entry.get('kind') == 'immutable-vendored-whitespace'
+        _fields(entry, _COMMON_FIELDS | ({'column', 'match_sha256'} if secret else {'mode', 'catalog'} if vendor else set()))
         if not isinstance(entry['id'], str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', entry['id']):
             raise DispositionError('invalid disposition ID')
         expected = ('secret-scan', 'generic-secret', 'public-token-address') if secret else (
             'git-diff-check', 'new-blank-line-at-eof', 'immutable-markdown-whitespace')
-        if (entry['check'], entry['rule'], entry['kind']) != expected:
+        if not vendor and (entry['check'], entry['rule'], entry['kind']) != expected:
             raise DispositionError('unsupported disposition check, rule or kind')
         reason = entry['reason']
         if (not isinstance(reason, str) or not 1 <= len(reason) <= 2000 or reason.strip() != reason
@@ -259,6 +306,30 @@ class Dispositions:
         _positive(entry['line'])
         path = canonical_path(entry['path'])
         _hash(entry['sha256'])
+        if vendor:
+            from . import vendored_whitespace
+            if (entry['check'] != 'git-diff-check' or entry['rule'] not in vendored_whitespace.KINDS
+                    or entry['mode'] != '100644'):
+                raise DispositionError('unsupported vendored whitespace observation')
+
+            def read_source(relative):
+                previous = self.sources.get(relative)
+                raw = previous[0] if previous is not None else self._vendor_read(relative)
+                from .component_state import mode_matches
+                if not mode_matches(self.sources[relative][1], 0o644) or self.sources[relative][2] != '100644':
+                    raise DispositionError('vendored custody sources require exact nonexecutable modes')
+                self._vendor_sources.add(relative)
+                return raw
+
+            try:
+                raw = read_source(path)
+                if sha256(raw) != entry['sha256']:
+                    raise DispositionError('disposition file hash is stale')
+                vendored_whitespace.validate(entry, raw, read_source, canonical_path)
+            except (ValueError, TypeError, KeyError, RecursionError) as exc:
+                raise DispositionError('invalid exact vendored whitespace proof') from exc
+            self._vendor_sources.add(CONFIG_PATH)
+            return
         evidence = _fields(entry['evidence'], {'path', 'sha256'})
         evidence_path = canonical_path(evidence['path'])
         _hash(evidence['sha256'])
@@ -293,7 +364,10 @@ class Dispositions:
                 raise DispositionError('disposition configuration appeared during verification')
             return
         for relative in tuple(self.sources):
-            self._read(relative, limit=MAX_CONFIG_BYTES if relative == CONFIG_PATH else MAX_FILE_BYTES)
+            from .baseline_assets import ENGINE_ARCHIVE, ARCHIVE_LIMIT
+            limit = ARCHIVE_LIMIT if relative == ENGINE_ARCHIVE and self._archived else (
+                MAX_CONFIG_BYTES if relative == CONFIG_PATH else MAX_FILE_BYTES)
+            self._read(relative, limit=limit)
 
     def secret(self, path: str, file_hash: str, text: str, match: re.Match) -> dict | None:
         line, column = location(text, match.start())
@@ -304,38 +378,61 @@ class Dispositions:
 
     def snapshots(self, layer: str) -> dict[str, tuple[bytes, str]]:
         result = {}
-        for entry in self.entries:
-            if entry['check'] != 'git-diff-check':
-                continue
-            path = entry['path']
+        paths = {entry['path'] for entry in self.entries if entry['check'] == 'git-diff-check'}
+        paths.update(self._vendor_sources)
+        for path in sorted(paths):
+            from .baseline_assets import ENGINE_ARCHIVE, ARCHIVE_LIMIT, archive_entries
+            backing = ENGINE_ARCHIVE if path in self._archived else path
             if layer == 'worktree':
-                raw = self._read(path, nonexecutable=True)
+                raw = self._read(path, limit=ARCHIVE_LIMIT if path == ENGINE_ARCHIVE and self._archived else MAX_FILE_BYTES,
+                                 nonexecutable=True)
                 result[path] = (raw, '100644')
                 continue
             if layer == 'index':
-                mode, oid = _index(self.root, path)
+                mode, oid = _index(self.root, backing)
             else:
-                record = _git(self.root, 'ls-tree', '-z', 'HEAD', '--', path)
-                found = re.fullmatch(rb'(100644|100755) blob ([0-9a-f]{40,64})\t' + re.escape(path.encode()) + b'\0', record)
+                record = _git(self.root, 'ls-tree', '-z', 'HEAD', '--', backing)
+                found = re.fullmatch(rb'(100644|100755) blob ([0-9a-f]{40,64})\t' + re.escape(backing.encode()) + b'\0', record)
                 if not found:
                     # A new worktree/index file has no HEAD blob and grants no HEAD coverage.
                     result[path] = (b'', 'missing')
                     continue
                 mode, oid = found[1].decode(), found[2].decode()
             size = _git(self.root, 'cat-file', '-s', oid).strip()
-            if not size.isdigit() or int(size) > MAX_FILE_BYTES:
+            limit = ARCHIVE_LIMIT if backing == ENGINE_ARCHIVE and self._archived else MAX_FILE_BYTES
+            if not size.isdigit() or int(size) > limit:
                 raise DispositionError('disposition Git blob exceeds the size limit')
             raw = _git(self.root, 'cat-file', 'blob', oid)
             if len(raw) != int(size):
                 raise DispositionError('disposition Git blob size is inconsistent')
+            if path in self._archived:
+                member = archive_entries(raw).get(path)
+                if member is None:
+                    result[path] = (b'', 'missing')
+                    continue
+                raw = member[0]
+                if len(raw) > MAX_FILE_BYTES:
+                    raise DispositionError('disposition Git member exceeds the size limit')
             result[path] = (raw, mode)
         return result
 
-    def whitespace(self, path: str, line: int, snapshots: dict) -> dict | None:
+    def whitespace(self, path: str, line: int, snapshots: dict, rule='new-blank-line-at-eof') -> dict | None:
         raw, mode = snapshots.get(path, (b'', 'missing'))
-        return next((entry for entry in self.entries if entry['check'] == 'git-diff-check'
-                     and (entry['path'], entry['line'], entry['sha256']) == (path, line, sha256(raw))
-                     and mode == '100644' and eof_blank_line(raw) == line), None)
+        for entry in self.entries:
+            if (entry['check'] != 'git-diff-check' or entry['rule'] != rule
+                    or (entry['path'], entry['line'], entry['sha256']) != (path, line, sha256(raw))
+                    or mode != '100644'):
+                continue
+            if entry['kind'] == 'immutable-vendored-whitespace':
+                # Every proof/configuration byte must exist unchanged in the exact
+                # layer being classified. Worktree claims never cover absent HEAD
+                # or stale staged evidence/catalog/consumer inventory bytes.
+                if all(snapshots.get(source) == (self.sources[source][0], self.sources[source][2])
+                       for source in self._vendor_sources):
+                    return entry
+            elif rule == 'new-blank-line-at-eof' and eof_blank_line(raw) == line:
+                return entry
+        return None
 
     def apply(self, finding: dict, entry: dict | None) -> None:
         finding['effective_severity'] = finding['severity']
@@ -356,7 +453,7 @@ def invalid_finding() -> dict:
 
 
 def diff_findings(stdout: str, policy: Dispositions | None, snapshots: dict, label: str) -> tuple[list[dict], bool]:
-    """Only an exact EOF diagnostic can be covered; retain all other observations."""
+    """Classify only exact supported diagnostics; retain every raw observation."""
     if not stdout or not stdout.endswith('\n') or len(stdout) > MAX_FILE_BYTES:
         return [], False
     lines = stdout[:-1].split('\n')
@@ -374,7 +471,11 @@ def diff_findings(stdout: str, policy: Dispositions | None, snapshots: dict, lab
         finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
                    'code': 'new-blank-line-at-eof' if eof else 'diff-whitespace',
                    'path': path, 'line': line, 'layer': label, 'message': diagnostic}
-        entry = policy.whitespace(path, line, snapshots) if eof and policy else None
+        rule = {'new blank line at EOF.': 'new-blank-line-at-eof',
+                'trailing whitespace.': 'trailing-whitespace',
+                'space before tab in indent.': 'space-before-tab',
+                'trailing whitespace, space before tab in indent.': 'trailing-whitespace-and-space-before-tab'}.get(diagnostic)
+        entry = policy.whitespace(path, line, snapshots, rule) if rule and policy else None
         if policy:
             policy.apply(finding, entry)
         findings.append(finding)

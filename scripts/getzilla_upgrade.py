@@ -36,6 +36,7 @@ HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla import fsx
+from getzilla.baseline_assets import archive_entries, read_archive
 from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
@@ -157,6 +158,10 @@ def blob_id(content: bytes, object_format: str) -> str:
     return digest.hexdigest()
 
 
+def _published_mode(git_mode: str) -> int:
+    return 0o755 if git_mode == '100755' else 0o644
+
+
 def accept_local(installer, project: Path, ref: str = 'HEAD') -> tuple[dict[str, str], bytes | None, list[str]]:
     """Digests of the kept paths as committed now: (digests, new sync record or None, accepted paths).
 
@@ -189,18 +194,27 @@ HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[
 
 
 def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
-                  incoming: set[str], ref: str = 'HEAD') -> tuple[list[str], list[str], list[str]]:
+                  incoming: set[str], ref: str = 'HEAD', *,
+                  incoming_archive: bytes | None = None) -> tuple[list[str], list[str], list[str]]:
     """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
 
     Only a pre-rename file whose Getzilla replacement is committed or arrives with this update is
     retired; one without a replacement (a vendored factory the update does not install) stays.
     """
     present = set(tree) | incoming
+    try:
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in present:
+            with BoundRoot(project) as binding:
+                current_archive = read_archive(binding)
+                incoming_archive = current_archive[0].content if current_archive else None
+        members = archive_entries(incoming_archive) if incoming_archive is not None else {}
+    except ValueError as exc:
+        raise UpdateError('cannot prove legacy replacement archive members') from exc
 
     def replaced(path: str) -> bool:
         current = installer.legacy_to_current_path(path)
-        # The engine may ship as one archive instead of a folder of modules.
-        return current in present or (current.startswith(installer.ENGINE_DIR) and installer.ENGINE_ARCHIVE in present)
+        # The physical archive name alone proves no logical replacement.
+        return current in present or current in members
 
     retire = sorted(item['path'] for item in installer._legacy_migration(project)
                     if item['path'] in tree and replaced(item['path']))
@@ -277,6 +291,8 @@ def planned_changes(installer, home: Path, project: Path,
     object_format = git(project, 'rev-parse', '--show-object-format').stdout.strip() or 'sha1'
     changes = []
     by_path = {entry.path: entry for entry in payload}
+    incoming_archive = by_path.get(installer.ENGINE_ARCHIVE)
+    archive_members = installer.archive_entries(incoming_archive.content) if incoming_archive else {}
     known = set(by_path) | {path for record in manifest['components'].values() for path in record['files']}
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, digests if digests is not None else kept_digests, known)
@@ -295,6 +311,19 @@ def planned_changes(installer, home: Path, project: Path,
             raise installer.UnsafeInstallTarget(str(exc)) from exc
         for record in manifest['components'].values():
             record.get('owned', {}).pop(path, None)
+    # Retire only actual incoming members whose old physical bytes are positively owned.
+    # A .py suffix or a resource prefix is not proof that the archive replaces a file.
+    for path, (body, mode) in sorted(archive_members.items()):
+        if path in by_path or path not in tree or path in kept:
+            continue
+        current = binding.read(path)
+        if observations is not None:
+            observations[path] = current
+        if not matches_owned(current, owned_proof(state.manifest, path)):
+            raise UpdateError(f'ownership conflict for archived member: {path}')
+        if current.content != body or not mode_matches(current.mode, mode):
+            raise UpdateError(f'archived member differs from its owned legacy file: {path}')
+        changes.append((path, None, ''))
     retained_overlay = binding.read('.grok/codex-hooks.json')
     if observations is not None:
         observations['.grok/codex-hooks.json'] = retained_overlay
@@ -361,8 +390,13 @@ def planned_changes(installer, home: Path, project: Path,
                 and not matches_owned(current, owned_proof(manifest, entry.path))
                 and not historical_match and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
-        record_owned(manifest, entry.path, content, entry.mode)
-        if tree.get(entry.path) != (mode, blob_id(content, object_format)):
+        changed = tree.get(entry.path) != (mode, blob_id(content, object_format))
+        owned_mode = _published_mode(mode)
+        if not changed and current is not None and not mode_matches(current.mode, owned_mode):
+            # No Git publication will change an unchanged file's physical mode.
+            owned_mode = current.mode
+        record_owned(manifest, entry.path, content, owned_mode)
+        if changed:
             changes.append((entry.path, content, mode))
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
     try:
@@ -492,7 +526,15 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
             if log.returncode != 0:
                 raise UpdateError(f'cannot read {old_log} from HEAD')
             changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
-        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes}, expected_head)
+        incoming_archive = next((content for path, content, _mode in changes
+                                 if path == installer.ENGINE_ARCHIVE), None)
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in tree:
+            current_archive = read_archive(transaction)
+            observations[installer.ENGINE_ARCHIVE] = current_archive[0] if current_archive else None
+            incoming_archive = current_archive[0].content if current_archive else None
+        legacy, importers, legacy_kept = legacy_report(
+            installer, project, tree, {path for path, content, _mode in changes if content is not None},
+            expected_head, incoming_archive=incoming_archive)
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
@@ -553,7 +595,7 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 if path in component['files']:
                     component['files'].remove(path)
         else:
-            record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
+            record_owned(pending_manifest, path, content, _published_mode(mode))
     changes = permitted
     encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None
     validate_manifest_publication(original_manifest, encoded, kept, kept_digests)

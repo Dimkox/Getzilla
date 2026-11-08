@@ -461,6 +461,9 @@ class OptionalModuleTests(unittest.TestCase):
             target = source / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((ROOT / relative).read_bytes())
+        config = source / '.getzilla/config/toolchain.json'
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_bytes(b'{"tools":[],"workflow_sources":{"components":[]}}\n')
         (source / '.getzilla/modules').mkdir()
         (source / '.getzilla/modules/jira').mkdir()
         (source / '.getzilla/modules/jira/provider.py').write_bytes(b'raise RuntimeError("never import")\n')

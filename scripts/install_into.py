@@ -19,12 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.skill_inventory import inspect_payload as inspect_skill_payload
+from getzilla.baseline_assets import archive_entries, validate_resources, BLOB_PREFIX
 from getzilla.component_state import (
     AGENT_COMPONENT_PATHS as AGENT_COMPONENT_PATHS, KNOWN_AGENTS,
     EXTRA_COMPONENT_PATHS as EXTRA_COMPONENT_PATHS, KNOWN_EXTRAS,
     FACTORY_SUPPORT_FILES,
     COMPLIANCE_COMPONENT_PATHS as COMPLIANCE_COMPONENT_PATHS, KNOWN_COMPLIANCE, ComponentStateError,
-    MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest,
+    MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest, decode_manifest,
     agent_of as _agent_of, component_of, parse_agents, validate_agents,
     STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, MAX_SYNC_RECORD_BYTES,
     LEGACY_PATH_RULES as LEGACY_PATH_RULES, legacy_to_current_path as legacy_to_current_path,
@@ -62,6 +64,7 @@ MANAGED_FILES = (
     "scripts/getzilla_governance.py",
     "scripts/getzilla_history.py",
     "scripts/getzilla_harness.py",
+    "scripts/getzilla_skill_preflight.py",
     "scripts/getzilla_route.py",
     "scripts/getzilla_change.py",
     "scripts/getzilla_spec.py",
@@ -114,6 +117,11 @@ MANAGED_FILES = (
     "schemas/workflow-source-v1.schema.json",
     "schemas/workflow-task-graph-v1.schema.json",
     "schemas/workflow-convergence-report-v1.schema.json",
+    "schemas/skill-preflight.v1.schema.json",
+    "docs/skill-preflight.md",
+    "engineering/verification-dispositions.json",
+    "engineering/vendor-custody/bmad-whitespace.json",
+    "engineering/vendor-custody/bmad-whitespace.md",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {
@@ -257,6 +265,8 @@ class PayloadSelection:
         if path == ENGINE_ARCHIVE:
             return self.engine_archive
         if self.engine_archive and path.startswith(ENGINE_DIR) and path != ENGINE_INIT:
+            return False
+        if self.engine_archive and path.startswith(BLOB_PREFIX):
             return False
         component = component_of(path)
         if component.startswith("extra:"):
@@ -750,7 +760,8 @@ class _SourceTree:
         relative: str,
         limit: int,
         expected_identity: tuple[int, int, int, int, int, int] | None = None,
-    ) -> tuple[bytes, int]:
+        *, missing_ok: bool = False,
+    ) -> tuple[bytes, int] | None:
         _check_directory_binding(self.binding)
         nofollow, _directory = _require_descriptor_primitives()
         parts = _path_parts(relative)
@@ -791,6 +802,10 @@ class _SourceTree:
             return content, stat.S_IMODE(opened.st_mode)
         except UnsafeInstallTarget:
             raise
+        except FileNotFoundError as exc:
+            if missing_ok and expected_identity is None:
+                return None
+            raise UnsafeInstallTarget(f"managed source disappeared: {relative}") from exc
         except OSError as exc:
             raise UnsafeInstallTarget(f"cannot read managed source {relative}: {exc}") from exc
         finally:
@@ -888,7 +903,7 @@ def build_payload(
         engine_selection = PayloadSelection(selection.agents, factory=selection.factory, full=selection.full,
                                             compliance=selection.compliance, extras=selection.extras,
                                             root_shims=selection.root_shims, engine_archive=False)
-        engine = [entry for entry in payload if engine_selection.includes(entry.path) and entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+        engine = [entry for entry in payload if engine_selection.includes(entry.path) and (entry.path.startswith(ENGINE_DIR) or entry.path.startswith(BLOB_PREFIX)) and entry.path != ENGINE_INIT
                   and "/__pycache__/" not in entry.path]
         chosen += (engine_archive_entry(engine),)
     if selection.compliance:
@@ -908,14 +923,51 @@ def _build_full_payload(
         raise UnsafeInstallTarget(f"unsupported explicit profile kind: {profile_kind}")
     with _SourceTree(source) as tree:
         inventory = tree.inventory()
-        entries = [
-            _source_entry(relative, tree, expected_identity)
-            for relative, expected_identity in inventory
-            if relative not in ROOT_HOOK_SHIMS
-        ]
+        # A Core installation is a source for its installed components, not for
+        # absent Factory files. Its inventoried manifest declares that boundary.
+        installed = None
+        installed_components = {'core'}
+        manifest_identity = next((identity for path, identity in inventory
+                                  if path == COMPONENT_MANIFEST), None)
+        if manifest_identity is not None:
+            try:
+                manifest = decode_manifest(tree.read(COMPONENT_MANIFEST, MAX_SOURCE_FILE_BYTES,
+                                                     manifest_identity)[0])
+            except ComponentStateError as exc:
+                raise UnsafeInstallTarget('invalid installed source manifest') from exc
+            installed = {path for record in manifest['components'].values() for path in record['files']}
+            installed_components.update(manifest['components'])
+        entries = []
+        for relative, expected_identity in inventory:
+            if relative in ROOT_HOOK_SHIMS:
+                continue
+            if (installed is not None and expected_identity is None and relative not in installed
+                    and component_of(relative) not in installed_components):
+                optional = tree.read(relative, MAX_SOURCE_FILE_BYTES, missing_ok=True)
+                if optional is not None:
+                    entries.append(InstallEntry(relative, *optional))
+            else:
+                entries.append(_source_entry(relative, tree, expected_identity))
         # Render from the descriptor-validated inventory bytes, so the shipped
         # templates and generated documents belong to the same source snapshot.
         by_path = {entry.path: entry for entry in entries}
+        packed = by_path.pop(ENGINE_ARCHIVE, None)
+        if packed is not None:
+            try:
+                virtual = archive_entries(packed.content)
+                for path, (body, mode) in virtual.items():
+                    if path in by_path and (by_path[path].content, by_path[path].mode) != (body, mode):
+                        raise ValueError('conflicting loose/archive source')
+                    by_path[path] = InstallEntry(path, body, mode)
+                validate_resources(virtual, lambda path: by_path[path].content)
+                entries = list(by_path.values())
+            except (ValueError, KeyError) as exc:
+                raise UnsafeInstallTarget('invalid or incomplete source archive') from exc
+        try:
+            validate_resources({path: (entry.content, entry.mode) for path, entry in by_path.items()
+                                if path.startswith(BLOB_PREFIX)}, lambda path: by_path[path].content)
+        except (ValueError, KeyError) as exc:
+            raise UnsafeInstallTarget('invalid or incomplete baseline source resources') from exc
         try:
             aliases = [relative for relative, _ in inventory if relative in ROOT_HOOK_SHIMS]
             if aliases:
@@ -955,6 +1007,7 @@ def _build_full_payload(
         for length in range(1, len(parts)):
             if PurePosixPath(*parts[:length]).as_posix() in seen:
                 raise UnsafeInstallTarget(f"managed file/directory collision: {path}")
+    inspect_skill_payload((entry.path, entry.content) for entry in entries)
     return tuple(entries)
 
 

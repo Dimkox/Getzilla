@@ -210,9 +210,11 @@ class CollectedArtifactTests(unittest.TestCase):
             (folder/'result.json').write_text(json.dumps(record))
         self.folder = self.root/'linux-x64'
 
-    def run_aggregate(self):
-        result = subprocess.run([sys.executable, str(ROOT/'scripts/getzilla_platform_install.py'),
-                    '--aggregate', str(self.root), '--head', self.head, '--job-result', 'success'],
+    def run_aggregate(self, profile=None):
+        arguments = ['--aggregate', str(self.root), '--head', self.head, '--job-result', 'success']
+        if profile is not None:
+            arguments += ['--profile', profile]
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/getzilla_platform_install.py'), *arguments],
                     cwd=ROOT, env=self.environment, capture_output=True, text=True, timeout=10)
         self.assertNotIn('Traceback', result.stderr + result.stdout)
         self.assertEqual(json.loads(result.stdout)['authority'], 'observations-only')
@@ -240,7 +242,7 @@ class CollectedArtifactTests(unittest.TestCase):
         installer = next(s for s in steps if s.get('name') == 'Retain actual install and upgrade observations')
         witness = next((s for s in steps if s.get('name') == 'Retain canonical public fixture startup observations'), None)
         download = next(s for s in document['jobs']['platform-install-results']['steps']
-                        if s.get('name') == "Download only this run and attempt's platform observations")
+                        if s.get('name') == "Download only this run and attempt's Linux platform observations")
         with tempfile.TemporaryDirectory() as temporary:
             runner = Path(temporary)
 
@@ -282,20 +284,20 @@ class CollectedArtifactTests(unittest.TestCase):
             original = self.root
             self.root = collected
             try:
-                result = self.run_aggregate()
+                result = self.run_aggregate('linux')
                 self.assertEqual(result.returncode, 0, result.stdout)
                 self.assertIsNotNone(witness)
                 self.assertEqual(witness['if'], "${{ always() && matrix.os == 'macos' }}")
                 self.assertEqual(witness['uses'], installer['uses'])
                 self.assertEqual(witness['with']['retention-days'], 30)
                 self.assertEqual(witness['with']['if-no-files-found'], 'error')
-                self.assertEqual(len(list(collected.iterdir())), 5)
+                self.assertEqual(len(list(collected.iterdir())), 2)
                 for cell in ('macos-x64', 'macos-arm64'):
                     name = expand(witness['with']['name'], cell)
                     self.assertFalse(fnmatch.fnmatchcase(name, pattern))
                     self.assertEqual((artifacts / name / 'public-fixture-startup.log').read_bytes(),
                                      b'public synthetic fixture witness\n')
-                folder = collected / expand(installer['with']['name'], 'macos-x64')
+                folder = collected / expand(installer['with']['name'], 'linux-x64')
                 log = folder / '001.log'
                 raw = log.read_bytes()
                 for mutation in ('missing', 'corrupt', 'extra', 'nested', 'old-co-location'):
@@ -309,7 +311,7 @@ class CollectedArtifactTests(unittest.TestCase):
                             (folder / 'nested/extra.log').write_bytes(b'x')
                         else:
                             (folder / ('public-fixture-startup.log' if mutation == 'old-co-location' else 'extra.log')).write_bytes(b'x')
-                        refused = self.run_aggregate()
+                        refused = self.run_aggregate('linux')
                         self.assertEqual(refused.returncode, 1, refused.stdout)
                         self.assertIn('platform', json.loads(refused.stdout)['error'])
                         for extra in ('extra.log', 'public-fixture-startup.log'):
@@ -417,3 +419,100 @@ class CollectedArtifactTests(unittest.TestCase):
             result = self.run_aggregate()
             self.assertEqual(result.returncode, 1)
             self.assertIn(message, result.stdout)
+
+
+class LinuxProfileTests(unittest.TestCase):
+    """Pure synthetic observations; never launch a native acceptance cell."""
+    setUp = CollectedArtifactTests.setUp
+
+    def invoke(self, *arguments):
+        return subprocess.run([sys.executable, str(ROOT/'scripts/getzilla_platform_install.py'),
+                               *arguments], cwd=ROOT, env=self.environment,
+                              capture_output=True, text=True, timeout=5)
+
+    def test_profile_is_closed_and_default_matrix_stays_all(self):
+        default = self.invoke('--matrix')
+        self.assertEqual(default.returncode, 0)
+        self.assertEqual({c['id'] for c in json.loads(default.stdout)['include']},
+                         {'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64', 'windows-x64'})
+        linux = self.invoke('--matrix', '--profile', 'linux')
+        self.assertEqual(linux.returncode, 0)
+        self.assertEqual({c['id'] for c in json.loads(linux.stdout)['include']},
+                         {'linux-x64', 'linux-arm64'})
+        for arguments in (('--matrix','--profile',''), ('--matrix','--profile','unknown'),
+                          ('--check-platform','linux-x64','--profile','all'),
+                          ('--cell','linux-x64','--profile','linux'),
+                          ('--restore-stable-payload','absent','--profile','linux')):
+            with self.subTest(arguments=arguments):
+                self.assertNotEqual(self.invoke(*arguments).returncode, 0)
+
+    def test_linux_aggregate_requires_real_complete_current_records_and_success(self):
+        for cell in ('macos-x64', 'macos-arm64', 'windows-x64'):
+            shutil.rmtree(self.root/cell)
+        arguments = ('--aggregate',str(self.root),'--head',self.head,'--profile','linux')
+        good = self.invoke(*arguments, '--job-result','success')
+        self.assertEqual(good.returncode, 0)
+        report = json.loads(good.stdout)
+        self.assertEqual(report['profile'], 'linux')
+        self.assertEqual(report['required_cells'], 2)
+        self.assertEqual(set(report['required_platforms']), {'linux-x64','linux-arm64'})
+        self.assertNotEqual(self.invoke('--aggregate',str(self.root),'--head',self.head,
+                                        '--job-result','success').returncode, 0)
+        for state in ('failure','skipped','cancelled','missing'):
+            self.assertNotEqual(self.invoke(*arguments,'--job-result',state).returncode, 0)
+        path = self.folder/'result.json'
+        original = path.read_bytes()
+        record = json.loads(original)
+        record['head'] = 'd'*40
+        path.write_text(json.dumps(record))
+        self.assertNotEqual(self.invoke(*arguments,'--job-result','success').returncode, 0)
+        path.write_bytes(original)
+        shutil.copytree(self.folder, self.root/'unrequested-os')
+        self.assertNotEqual(self.invoke(*arguments,'--job-result','success').returncode, 0)
+        shutil.rmtree(self.root/'unrequested-os')
+        shutil.rmtree(self.folder)
+        self.assertNotEqual(self.invoke(*arguments,'--job-result','success').returncode, 0)
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'requires YAML')
+    def test_workflow_binds_the_same_linux_profile_to_matrix_and_aggregate(self):
+        import ast
+        import fnmatch
+        import shlex
+        import yaml
+        def contract(raw):
+            jobs = yaml.safe_load(raw)['jobs']
+            steps = jobs['platform-plan']['steps']
+            run = next(step['run'] for step in steps if step.get('id') == 'inventory')
+            matrix_line = next(line.strip() for line in run.splitlines() if line.strip().startswith('matrix=$('))
+            argv = shlex.split(matrix_line[len('matrix=$('):-1])
+            self.assertEqual(argv, ['python','scripts/getzilla_platform_install.py','--matrix','--profile','linux'])
+            self.assertIn('needs.platform-plan.outputs.matrix', jobs['platform-install']['strategy']['matrix'])
+            aggregate = jobs['platform-install-results']
+            download = next(step for step in aggregate['steps'] if 'download-artifact@' in step.get('uses',''))
+            pattern = download['with']['pattern']
+            self.assertTrue(fnmatch.fnmatchcase('getzilla-platform-linux-x64-123-2',
+                pattern.replace('${{ github.run_id }}','123').replace('${{ github.run_attempt }}','2')))
+            self.assertFalse(fnmatch.fnmatchcase('getzilla-platform-macos-x64-123-2',
+                pattern.replace('${{ github.run_id }}','123').replace('${{ github.run_attempt }}','2')))
+            step = next(step for step in aggregate['steps'] if '--aggregate' in step.get('run',''))
+            calls = [node for node in ast.walk(ast.parse(step['run'])) if isinstance(node,ast.Call)
+                     and isinstance(node.func,ast.Attribute) and node.func.attr=='call']
+            self.assertEqual(len(calls),1)
+            arguments = calls[0].args[0].elts
+            constants = [node.value if isinstance(node,ast.Constant) else None for node in arguments]
+            offset = constants.index('--profile')
+            self.assertEqual(constants[offset+1],'linux')
+            self.assertIn('--job-result', constants)
+            self.assertEqual(step['env']['GETZILLA_PLATFORM_JOB_RESULT'], '${{ needs.platform-install.result }}')
+            self.assertEqual(jobs['linux']['needs'], 'platform-install-results')
+            gate = next(step for step in jobs['linux']['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env',{}))
+            self.assertEqual(gate['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
+            return argv
+        # Frozen pre-refinement workflow is a concrete negative consumer contrast.
+        old = subprocess.check_output(['git','show','d29da63f4de9dedd986e40cfc1b5554950a8749a:.github/workflows/getzilla.yml'],cwd=ROOT)
+        with self.assertRaises(AssertionError):
+            contract(old)
+        argv = contract((ROOT/'.github/workflows/getzilla.yml').read_bytes())
+        produced = self.invoke(*argv[2:])
+        self.assertEqual(produced.returncode,0)
+        self.assertEqual({item['id'] for item in json.loads(produced.stdout)['include']}, {'linux-x64','linux-arm64'})

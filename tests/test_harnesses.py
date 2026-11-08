@@ -802,7 +802,8 @@ class CursorRuleTests(unittest.TestCase):
     def test_cli_checks_read_only_repairs_on_write_and_reports_source_errors(self) -> None:
         root = self.fixture()
         for rel in ('scripts/getzilla_harness.py', '.getzilla/getzilla/__init__.py',
-                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py', '.getzilla/getzilla/component_state.py'):
+                    '.getzilla/getzilla/harnesses.py', '.getzilla/getzilla/fsx.py', '.getzilla/getzilla/component_state.py',
+                    '.getzilla/getzilla/skill_inventory.py', '.getzilla/getzilla/skill_preflight.py'):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / rel, root / rel)
         def run(*args: str) -> subprocess.CompletedProcess:
