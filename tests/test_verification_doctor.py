@@ -392,6 +392,35 @@ class VerificationTests(unittest.TestCase):
                 self.assertIn('cleanup failed:', checks[0].stderr)
                 self.assertLessEqual(len(checks[0].stderr), 12000)
 
+    def test_core_cleanup_details_disclose_missing_provenance_without_private_values(self) -> None:
+        process, checks = self._public_core_cleanup_checks(0)
+        self.assertIn('SYNTHETIC_CLEANUP_VALUE', process.cleanup_error)
+        metadata = checks[0].details[0].get('cleanup')
+        self.assertIsNotNone(metadata, 'Core must disclose cleanup provenance availability')
+        self.assertEqual(metadata['status'], 'unavailable')
+        self.assertNotIn('SYNTHETIC_CLEANUP_VALUE', json.dumps(metadata))
+
+    def test_handled_runner_cleanup_sidecar_keeps_exception_private(self) -> None:
+        from getzilla import python_test_runner as runner
+        primary = runner.RunnerError('PRIVATE_PRIMARY_CANARY')
+        runner._retain_cleanup(primary, runner._cleanup_failure(
+            'stdout_capture_file', PermissionError(13, 'PRIVATE_CLEANUP_CANARY')))
+
+        def blocked(*args, **kwargs):
+            raise AssertionError('actual backend forbidden')
+
+        with patch.object(verification_module, 'core_worker_selection',
+                          return_value=WorkerSelection(0, 'configuration')), \
+                patch.object(verification_module, 'run_core_tests', side_effect=primary), \
+                patch.object(verification_module, 'execute', side_effect=blocked), \
+                patch.object(verification_module, 'run_named_tests', side_effect=blocked), \
+                patch.object(verification_module, '_command_check', side_effect=blocked):
+            checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+        self.assertEqual(primary.args, ('PRIVATE_PRIMARY_CANARY',))
+        self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+        self.assertEqual(checks[0].details[0]['cleanup']['facts'][0]['category'], 'permission')
+        self.assertNotIn('PRIVATE_', json.dumps([item.to_dict() for item in checks]))
+
     def test_producer_cleanup_keeps_clean_and_nonpytest_stream_contracts(self) -> None:
         process, clean = self._public_core_cleanup_checks(0, cleanup_fails=False)
         self.assertEqual(process.returncode, 0)
@@ -2925,7 +2954,7 @@ class DoctorTests(unittest.TestCase):
 
     def test_unmanaged_agent_does_not_break_harness_doctor(self) -> None:
         with project_copy() as root:
-            custom = root / '.grok/agents/custom-user-agent.toml'
+            custom = root / '.getzilla/agents/custom-user-agent.toml'
             custom.write_text('this is not adaptive grok managed config', encoding='utf-8')
             items = run_doctor(root)
             failures = [item for item in items if item.status == 'fail']

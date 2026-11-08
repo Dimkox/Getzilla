@@ -4,7 +4,7 @@ globs: .github/workflows/**,scripts/**,**/Dockerfile*,**/compose*.yml,**/compose
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/70-delivery.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/70-delivery.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Delivery, CI and operations
 

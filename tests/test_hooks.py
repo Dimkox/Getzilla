@@ -27,14 +27,14 @@ class HookTests(unittest.TestCase):
             target = root / '.getzilla/runtime/worktrees/linked-edit'
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(target, 'protected-path', actions=['protected-path-write'],
-                        resources=['.grok/hooks/pre_tool_use.py'])
-            file = target / '.grok/hooks/pre_tool_use.py'
+                        resources=['.getzilla/hooks/pre_tool_use.py'])
+            file = target / '.getzilla/hooks/pre_tool_use.py'
             patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
             payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
                        'tool_input': {'input': patch}}
             _, data, error = run_hook(root, 'pre_tool_use.py', payload)
             self.assertEqual(data['decision'], 'allow', (data, error))
-            other = target / '.grok/hooks/post_tool_use.py'
+            other = target / '.getzilla/hooks/post_tool_use.py'
             mixed = patch.replace('*** End Patch', f'*** Update File: {other}\n@@\n-a\n+b\n*** End Patch')
             _, denied, _ = run_hook(root, 'pre_tool_use.py', {**payload, 'tool_input': {'input': mixed}})
             self.assertEqual(denied['decision'], 'deny', denied)
@@ -59,8 +59,8 @@ class HookTests(unittest.TestCase):
             target = root / '.getzilla/runtime/worktrees/linked-edit'
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(root, 'protected-path', actions=['protected-path-write'],
-                        resources=['.getzilla/runtime/worktrees/linked-edit/.grok/hooks/pre_tool_use.py'])
-            file = target / '.grok/hooks/pre_tool_use.py'
+                        resources=['.getzilla/runtime/worktrees/linked-edit/.getzilla/hooks/pre_tool_use.py'])
+            file = target / '.getzilla/hooks/pre_tool_use.py'
             patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
             _, data, _ = run_hook(root, 'pre_tool_use.py', {
                 'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
@@ -90,9 +90,9 @@ class HookTests(unittest.TestCase):
             target = root / '.getzilla/runtime/worktrees/linked-edit'
             subprocess.run(['git', 'worktree', 'add', '-qb', 'feature', str(target)], cwd=root, check=True)
             self._grant(target, 'protected-path', actions=['protected-path-write'],
-                        resources=['.grok/hooks/pre_tool_use.py', '.grok/hooks/post_tool_use.py'])
-            patch = (f'*** Begin Patch\n*** Update File: {target / ".grok/hooks/pre_tool_use.py"}\n@@\n-a\n+b\n'
-                     f'*** Update File: {target / ".grok/hooks/post_tool_use.py"}\n@@\n-a\n+b\n*** End Patch\n')
+                        resources=['.getzilla/hooks/pre_tool_use.py', '.getzilla/hooks/post_tool_use.py'])
+            patch = (f'*** Begin Patch\n*** Update File: {target / ".getzilla/hooks/pre_tool_use.py"}\n@@\n-a\n+b\n'
+                     f'*** Update File: {target / ".getzilla/hooks/post_tool_use.py"}\n@@\n-a\n+b\n*** End Patch\n')
             _, data, error = run_hook(root, 'pre_tool_use.py', {
                 'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
                 'tool_input': {'input': patch},
@@ -106,19 +106,19 @@ class HookTests(unittest.TestCase):
             subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:Dimkox/Getzilla.git'],
                            cwd=target, check=True)
             activate_owned_route(target, build_route(target, 'Review exact local operation', 'root-test').to_dict())
-            file = target / '.grok/hooks/pre_tool_use.py'
+            file = target / '.getzilla/hooks/pre_tool_use.py'
             patch = f'*** Begin Patch\n*** Update File: {file}\n@@\n-a\n+b\n*** End Patch\n'
             payload = {'cwd': str(root), 'session_id': 'root-test', 'tool_name': 'apply_patch',
                        'tool_input': {'input': patch}}
             _, before, _ = run_hook(root, 'pre_tool_use.py', payload)
             self.assertEqual(before['decision'], 'deny', before)
             add_approval(target, 'protected-path', 'fixture', 5, actions=['protected-path-write'],
-                         resources=['.grok/hooks/pre_tool_use.py'])
+                         resources=['.getzilla/hooks/pre_tool_use.py'])
             _, after, error = run_hook(root, 'pre_tool_use.py', payload)
             self.assertEqual(after['decision'], 'allow', (after, error))
 
     def test_linked_worktree_registration_uses_native_path_semantics(self) -> None:
-        spec = importlib.util.spec_from_file_location('hook_path_regression', ROOT / '.grok/hooks/_lib.py')
+        spec = importlib.util.spec_from_file_location('hook_path_regression', ROOT / '.getzilla/hooks/_lib.py')
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         try:
@@ -614,11 +614,11 @@ class HookTests(unittest.TestCase):
             decision = data.get('decision') or data.get('hookSpecificOutput', {}).get('permissionDecision')
             self.assertEqual(decision, 'allow')
 
-    def test_root_shim_fail_open_when_canonical_missing(self) -> None:
+    def test_root_shim_denies_when_canonical_missing(self) -> None:
         with project_copy() as root:
             shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
             (root / 'pre_tool_use.py').write_text(shim, encoding='utf-8')
-            (root / '.grok/hooks/pre_tool_use.py').unlink()
+            (root / '.getzilla/hooks/pre_tool_use.py').unlink()
             proc = subprocess.run(
                 [sys.executable, 'pre_tool_use.py'],
                 cwd=root,
@@ -628,7 +628,7 @@ class HookTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn('allow', proc.stdout)
+            self.assertIn('deny', proc.stdout)
 
     def test_user_prompt_submit_creates_route(self) -> None:
         with project_copy(git=True) as root:

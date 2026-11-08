@@ -125,7 +125,7 @@
         },
         ".claude/settings.json": {
           "mode": 420,
-          "sha256": "7d75e63ec8205a05d6d2df5b6ee2919ff9ac4d2fb1c1b847a730ac4806bb6840"
+          "sha256": "7417a597a60f89346c194096c7575269405776e470fe688e9a793b98df6883c7"
         },
         ".claude/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
@@ -287,7 +287,7 @@
         },
         ".codex/hooks.json": {
           "mode": 420,
-          "sha256": "a89284c06ecd511560cb4b9ab34169da97730ff36d7f2204ac10e4bf63e6f337"
+          "sha256": "1a1f8d71741cc887a4ec4d5b2c87a19a3e11c7aa396272b3a00db283fba7ad92"
         }
       }
     },
@@ -388,7 +388,7 @@
         },
         ".github/hooks/getzilla.json": {
           "mode": 420,
-          "sha256": "fea025e06e3e8b83185c83403334a815834d22686af4f9892b8285c226cf69bc"
+          "sha256": "0b5749f90437a4af164c7a1f075ec74850b63b72b02b8435944f51af6043d1c2"
         }
       }
     },
@@ -406,35 +406,35 @@
       "owned": {
         ".cursor/rules/getzilla/00-core.mdc": {
           "mode": 420,
-          "sha256": "0cfe52e708d966873f5474c8658b13364de4ba794d2aca46e71aef8bc8312769"
+          "sha256": "882cfc515161119cb58b94abcd6967270aa56ad4c2d016a51b03f2fd8c8c19e3"
         },
         ".cursor/rules/getzilla/10-security.mdc": {
           "mode": 420,
-          "sha256": "c7bdaa0b3a2eceb8ea3ff41a358956cb3d5d3e0f3b581fe7d8027f6f1feb263f"
+          "sha256": "2dd71440207a631b62aa62b446929665ca85cf9963d8eefac17467c42349ccf0"
         },
         ".cursor/rules/getzilla/20-python.mdc": {
           "mode": 420,
-          "sha256": "9a511a365654265de6dfef4e90648050f3e6d2baa8c721382cb052712d5f7069"
+          "sha256": "1bc5e718809c3a54eab53490f908da8454f9c9c69cf50baaad17d1fc8c6dcfb4"
         },
         ".cursor/rules/getzilla/30-contracts-data.mdc": {
           "mode": 420,
-          "sha256": "3eeb0ba6c72df166d69bf1b7608914daced63c9bab7893847b9b5fe5bb799c6f"
+          "sha256": "2403f986efb662d479be91d986542e0813b5e3069f74849aebd7c814f40cc8d4"
         },
         ".cursor/rules/getzilla/40-tests.mdc": {
           "mode": 420,
-          "sha256": "aab55089c26c110863e8ce417750d9c298ddcc8a2deca24c1cbad148b4d294da"
+          "sha256": "acad161aa37d008cb57746c2fd761c2672146a9a21a22d54e09ec46f0984b265"
         },
         ".cursor/rules/getzilla/50-agent-runtime.mdc": {
           "mode": 420,
-          "sha256": "1ef4ce5bdabdb3659cad2cbc0bc67795ade04676f3a1c55b5917178d37ef4ed0"
+          "sha256": "86650ff72d945b377ba0e8e81db7a03109e28d314ce0d2e0113972c4aea1a139"
         },
         ".cursor/rules/getzilla/60-frontend.mdc": {
           "mode": 420,
-          "sha256": "3157c6d97eb032b77a8f1c1023b7b2b149ffa018d298bb7e64f2b2eca8322553"
+          "sha256": "5fedea0e6ac3a4a5dcd73761dad0f1cfe94f950db3a44765d33a8a6688c8090d"
         },
         ".cursor/rules/getzilla/70-delivery.mdc": {
           "mode": 420,
-          "sha256": "870c0e501efc64820ebe49f08f5b1a291ee94f25f63d39d3de83429be83e3330"
+          "sha256": "0082f1bc91b128197164dc2c88886e25986c6bd365160776778d27a56280f2a5"
         }
       }
     },
@@ -549,7 +549,7 @@
         },
         ".gemini/settings.json": {
           "mode": 420,
-          "sha256": "b0114e0d71345df73cd9c011ac8726e4a72702c20aa9baff8d7f6557117a5cf8"
+          "sha256": "999f179275cda39ee301f3364542c7bb7d024477e65ed25068204014f49e07cb"
         },
         ".gemini/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
@@ -611,6 +611,7 @@
     },
     "agent:grok": {
       "files": [
+        ".grok/hooks.json",
         ".grok/skills/ai-rag-change/SKILL.md",
         ".grok/skills/api-event-change/SKILL.md",
         ".grok/skills/bugfix-workflow/SKILL.md",
@@ -627,6 +628,10 @@
         ".grok/skills/verification-evidence/SKILL.md"
       ],
       "owned": {
+        ".grok/hooks.json": {
+          "mode": 420,
+          "sha256": "07bbcddfd9f0e6c1d7e2af6d1336d47148465def62929699f824b34c8b24594c"
+        },
         ".grok/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
           "sha256": "1c44c05e651288cee0700adeb66fc094c13756e3c7e8161648d2951153d57262"
@@ -796,7 +801,7 @@
         },
         ".qwen/settings.json": {
           "mode": 420,
-          "sha256": "23e65af7609afd38fb310fb1b331727bc653fe9cc3035326992ea9ee9272f58b"
+          "sha256": "f3131f3853b9ff1db31e84c5dca4f64cea170455656a16050f32a9e8edb8ba50"
         },
         ".qwen/skills/ai-rag-change/SKILL.md": {
           "mode": 420,

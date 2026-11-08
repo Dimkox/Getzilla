@@ -42,9 +42,9 @@ LEGACY_PATH_RULES = (
 )
 AGENT_COMPONENT_PATHS = {
     'claude': ('.claude/',), 'codex': ('.codex/',), 'qwen': ('.qwen/',),
-    'gemini': ('.gemini/',), 'grok': ('.grok/skills/',),
+    'gemini': ('.gemini/',), 'grok': ('.grok/',),
     'copilot': ('.github/hooks/', '.github/agents/'),
-    'cursor': ('.cursor/', '.grok/cursor-rules/'),
+    'cursor': ('.cursor/', '.getzilla/cursor-rules/', '.grok/cursor-rules/'),
 }
 KNOWN_AGENTS = tuple(AGENT_COMPONENT_PATHS)
 EXTRA_COMPONENT_PATHS = {
@@ -70,6 +70,8 @@ COMPONENTS = frozenset({'core', 'factory', *(f'agent:{name}' for name in KNOWN_A
 
 
 def agent_of(path: str) -> str | None:
+    if path.startswith('.grok/cursor-rules/'):
+        return 'cursor'
     if path.startswith('.grok/agents/') and path.endswith('.md'):
         return 'grok'
     return next((name for name, prefixes in AGENT_COMPONENT_PATHS.items() if path.startswith(prefixes)), None)
@@ -85,6 +87,16 @@ FACTORY_SUPPORT_FILES = frozenset({
     'delivery/src/getzilla_delivery/landing_publication.py',
     'delivery/src/getzilla_delivery/landing_publication_contracts.py',
 })
+
+
+def _legacy_hook_component(path: str) -> str | None:
+    """Read the pre-neutral v2 ledger without granting ownership to new paths."""
+    if path.startswith('.grok/cursor-rules/'):
+        return 'agent:cursor'
+    if path.startswith('.grok/') and not path.startswith('.grok/skills/') and not (
+            path.startswith('.grok/agents/') and path.endswith('.md')):
+        return 'core'
+    return None
 
 
 def module_name(value: object) -> bool:
@@ -240,7 +252,7 @@ def decode_manifest(content: bytes) -> dict[str, Any]:
         if type(owned) is not dict or not set(owned) <= set(files):
             raise ComponentStateError(f'invalid ownership ledger for {name}')
         for path, proof in owned.items():
-            if component_of(path) != name or type(proof) is not dict or set(proof) != {'sha256', 'mode'}:
+            if name not in {component_of(path), _legacy_hook_component(path)} or type(proof) is not dict or set(proof) != {'sha256', 'mode'}:
                 raise ComponentStateError(f'invalid ownership record: {path}')
             if type(proof['sha256']) is not str or not re.fullmatch('[0-9a-f]{64}', proof['sha256']):
                 raise ComponentStateError(f'invalid ownership digest: {path}')
@@ -634,13 +646,18 @@ def record_owned(manifest: dict[str, Any], path: str, content: bytes, mode: int)
     """Record only bytes actually published or positively matched to a baseline."""
     _ledger_path(path)
     name = component_of(path)
+    for previous_name, previous in manifest['components'].items():
+        if previous_name != name and path in previous['files']:
+            previous['files'].remove(path)
+            previous.get('owned', {}).pop(path, None)
     record = manifest['components'].setdefault(name, {'files': [], 'owned': {}})
     record['files'] = sorted(set(record['files']) | {path})
     record.setdefault('owned', {})[path] = {'sha256': hashlib.sha256(content).hexdigest(), 'mode': mode}
 
 
 def owned_proof(manifest: dict[str, Any], path: str) -> dict[str, Any] | None:
-    return manifest['components'].get(component_of(path), {}).get('owned', {}).get(path)
+    return next((record.get('owned', {})[path] for record in manifest['components'].values()
+                 if path in record.get('owned', {})), None)
 
 
 def matches_owned(snapshot: FileSnapshot | None, proof: dict[str, Any] | None) -> bool:
