@@ -285,6 +285,28 @@ class LocalDesignReferenceTests(unittest.TestCase):
                     self.assertEqual(result['coverage']['status'], 'complete' if complete else 'partial')
                     self.assertEqual(result['coverage']['reasons'], [] if complete else ['unsupported-css'])
 
+    def test_context_reserved_names_exclude_ascii_case_variants_without_normalizing_user_names(self):
+        module = self.extractor()
+        path = self.root / 'theme.css'
+        supported = ('@layer Theme', '@layer theme.CARD', '@layer INHERITance',
+                     '@container Card (width: 3px)', '@container NONEtheme (width: 3px)')
+        reserved = ('initial', 'inherit', 'unset', 'revert', 'revert-layer', 'default',
+                    'none', 'normal', 'and', 'or', 'not')
+        unqualified = ['@layer K', '@container K (width: 3px)']
+        for word in reserved:
+            for variant in (word.upper(), word.title()):
+                unqualified.extend(('@layer ' + variant, '@layer theme.' + variant,
+                                    '@container ' + variant + ' (width: 3px)'))
+        for complete, headers in ((True, supported), (False, unqualified)):
+            for header in headers:
+                with self.subTest(complete=complete, header=header):
+                    path.write_text(header + ' { :root { --gap: 2px; } }')
+                    result = self.capture(module, ['theme.css'])['content']
+                    self.assertEqual(result['tokens'][0]['context'], [header, ':root'])
+                    self.assertEqual(result['tokens'][0]['raw_value'], '2px')
+                    self.assertEqual(result['coverage']['status'], 'complete' if complete else 'partial')
+                    self.assertEqual(result['coverage']['reasons'], [] if complete else ['unsupported-css'])
+
     def test_explicit_selection_caps_and_changed_source_refuse(self):
         module = self.extractor()
         (self.root / 'tokens.json').write_text('{"x":"1px","y":"2px"}')

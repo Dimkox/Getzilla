@@ -138,7 +138,7 @@ def _context_supported(header):
     supports = r'\(' + space + '*display' + space + '*:' + space
     supports += r'*(?:grid|flex|block)' + space + r'*\)'
     # Exclude CSS-wide keywords and reserved container/layer names.
-    name = r'(?!(?:initial|inherit|unset|revert|revert-layer|default|none|normal|and|or|not)(?![A-Za-z0-9_-]))' + identifier
+    name = r'(?!(?ai:initial|inherit|unset|revert|revert-layer|default|none|normal|and|or|not)(?![A-Za-z0-9_-]))' + identifier
     container = '(?:' + name + space + '+)?' + features
     layer = name + r'(?:\.' + name + ')*'
     patterns = {'media': media, 'supports': supports, 'container': container, 'layer': layer}
