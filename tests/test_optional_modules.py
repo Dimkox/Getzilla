@@ -14,6 +14,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from tests._support import public_source_copy
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 from getzilla.component_state import (  # noqa: E402
@@ -659,16 +661,8 @@ if __name__ == '__main__':
 class Low336ManagedSchemaTests(unittest.TestCase):
     def test_public_minimal_payload_ships_exact_runtime_schema(self):
         install = installer()
-        with tempfile.TemporaryDirectory() as raw:
-            source = Path(raw) / 'public-source'
+        with public_source_copy(ROOT) as source:
             schema = 'schemas/module-runtime-v1.schema.json'
-            for relative in {*install.MANAGED_FILES, install.CONSUMER_AGENTS_TEMPLATE,
-                             install.CONSUMER_FACTORY_README_TEMPLATE, install.ROOT_HOOK_SHIM_TEMPLATE, schema}:
-                if relative in install.ROOT_HOOK_SHIMS:
-                    continue
-                target = source / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes((ROOT / relative).read_bytes())
             payload = {entry.path: entry for entry in install.build_payload(source, selection=install.PayloadSelection(()))}
             self.assertIn(schema, payload)
             self.assertEqual(payload[schema].content, (ROOT / schema).read_bytes())
