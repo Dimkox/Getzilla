@@ -49,6 +49,8 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_design_reference.py",
+    "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
     "scripts/getzilla_duplicates.py",
     "factory/.env.example",
@@ -136,6 +138,10 @@ ROOT_HOOK_SHIMS = frozenset(
 )
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
 SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
+DESIGN_REFERENCE_ARTIFACTS = tuple(
+    '.getzilla/optional-modules/design-reference/0.1.0/' + name
+    for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE')
+)
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -223,7 +229,10 @@ class PayloadSelection:
 
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
                  compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
-                 root_shims: bool = False, engine_archive: bool = False) -> None:
+                 root_shims: bool = False, engine_archive: bool = False,
+                 design_reference: bool = False) -> None:
+        if type(design_reference) is not bool:
+            raise UnsafeInstallTarget('design-reference selection must be boolean')
         try:
             agents = validate_agents(agents)
         except ComponentStateError as exc:
@@ -240,12 +249,15 @@ class PayloadSelection:
         # Root hook shims serve hook configs from before .grok/hooks; only upgrades keep them.
         self.root_shims = root_shims
         self.engine_archive = engine_archive
+        self.design_reference = design_reference
 
     @classmethod
     def full_layout(cls) -> "PayloadSelection":
         return cls(KNOWN_AGENTS, factory=True, full=True)
 
     def includes(self, path: str) -> bool:
+        if path in DESIGN_REFERENCE_ARTIFACTS:
+            return self.design_reference
         if self.full:
             return True
         if path in ROOT_HOOK_SHIMS:
@@ -275,6 +287,8 @@ class PayloadSelection:
             shape["compliance"] = list(self.compliance)
         if self.extras:
             shape["extras"] = list(self.extras)
+        if self.design_reference:
+            shape['design_reference'] = True
         return shape
 
 
@@ -879,6 +893,9 @@ def build_payload(
     # a complete source for the same payload).
     payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
                     if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, COMPONENT_MANIFEST})
+    if selection is not None and selection.design_reference:
+        with _SourceTree(source) as tree:
+            payload += tuple(_source_entry(path, tree) for path in DESIGN_REFERENCE_ARTIFACTS)
     if selection is None or selection.full:
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
@@ -1901,6 +1918,8 @@ def main() -> None:
              "manifest; a fresh target defaults to GETZILLA_AGENT or qwen.",
     )
     parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
+    parser.add_argument('--design-reference-artifacts', action='store_true',
+                        help='Copy the passive local design-reference artifact bundle; does not install or enable it.')
     parser.add_argument(
         "--compliance",
         help="Comma-separated opt-in compliance layers (eu-ai-act). Off by default.",
@@ -1939,6 +1958,7 @@ def main() -> None:
     target = Path(args.target)
     if args.full_layout:
         selection = PayloadSelection.full_layout()
+        selection.design_reference = args.design_reference_artifacts
     else:
         compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
         try:
@@ -1947,7 +1967,8 @@ def main() -> None:
             selection = PayloadSelection(agents, compliance=compliance,
                                          extras=extras or detect_extras(target),
                                          root_shims=has_root_shims(target),
-                                         engine_archive=wants_engine_archive(target))
+                                         engine_archive=wants_engine_archive(target),
+                                         design_reference=args.design_reference_artifacts)
         except (UnsafeInstallTarget, ComponentStateError) as exc:
             parser.error(str(exc))
     if args.materialize_new:
