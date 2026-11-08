@@ -2396,6 +2396,7 @@
         ".getzilla/getzilla/model_data_admission.py",
         ".getzilla/hooks",
         ".getzilla/managed-components.json",
+        ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
         ".getzilla/templates",
         ".grok",
         ".qwen"
