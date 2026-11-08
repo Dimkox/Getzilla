@@ -60,7 +60,8 @@ def _load(root, admission):
         _need(source is not None and source.sha256 == entry['sha256'] and entry['mutable'] is False)
         _need(admit_module(root, NAME, permission=PERMISSION) == admission)
         module = types.ModuleType('_getzilla_admitted_design_reference')
-        exec(compile(source.content, '<admitted-design-reference>', 'exec'), module.__dict__)
+        # Fixed reviewed manifest pins these held immutable source bytes.
+        exec(compile(source.content, '<admitted-design-reference>', 'exec'), module.__dict__)  # nosec B102
         _need(binding.read(prefix + 'reference.py', limit=256 * 1024) == source)
         return module
 
