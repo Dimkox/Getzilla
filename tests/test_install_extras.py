@@ -169,7 +169,7 @@ class InstallExtrasTests(unittest.TestCase):
                  ({'getzilla/policy.py': b'def broken('}, 'fail'),
                  ({'getzilla/policy.py': b''}, 'fail'),
                  ({'getzilla/other.py': b'value = 1\n'}, 'fail'),
-                 ({'getzilla/policy.pyc': pyc}, 'pass'),
+                 ({'getzilla/policy.pyc': pyc}, 'warn'),
                  ({'getzilla/policy.pyc': pyc[:4]}, 'fail'),
                  ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:], 'getzilla/policy.py': b'value = 42\n'}, 'warn'),
                  ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:]}, 'fail'),
@@ -263,3 +263,20 @@ print(json.dumps({'module': runner.__file__, 'rows': rows}))
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336LegacyDoctorTests(unittest.TestCase):
+    def test_header_only_is_explicitly_unqualified_without_executing_bytecode(self):
+        import importlib.util
+        import zipfile
+        from getzilla.doctor import _engine_archive_item
+        with tempfile.TemporaryDirectory() as raw:
+            archive = Path(raw) / 'public-engine.zip'
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                bundle.writestr('getzilla/policy.pyc', importlib.util.MAGIC_NUMBER + bytes(12))
+            result = _engine_archive_item(archive)
+            self.assertEqual(result.status, 'warn')
+            self.assertIn('header-only', result.message)
+            self.assertIn('importability unverified', result.message)
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                bundle.writestr('getzilla/policy.py', b'value = 42\n')
+            self.assertEqual(_engine_archive_item(archive).status, 'pass')

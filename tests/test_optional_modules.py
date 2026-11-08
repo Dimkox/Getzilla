@@ -655,3 +655,21 @@ class OptionalModuleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336ManagedSchemaTests(unittest.TestCase):
+    def test_public_minimal_payload_ships_exact_runtime_schema(self):
+        install = installer()
+        with tempfile.TemporaryDirectory() as raw:
+            source = Path(raw) / 'public-source'
+            schema = 'schemas/module-runtime-v1.schema.json'
+            for relative in {*install.MANAGED_FILES, install.CONSUMER_AGENTS_TEMPLATE,
+                             install.CONSUMER_FACTORY_README_TEMPLATE, install.ROOT_HOOK_SHIM_TEMPLATE, schema}:
+                if relative in install.ROOT_HOOK_SHIMS:
+                    continue
+                target = source / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            payload = {entry.path: entry for entry in install.build_payload(source, selection=install.PayloadSelection(()))}
+            self.assertIn(schema, payload)
+            self.assertEqual(payload[schema].content, (ROOT / schema).read_bytes())
+            self.assertEqual(payload[schema].mode, 0o644)

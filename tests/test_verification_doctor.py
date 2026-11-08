@@ -3062,3 +3062,242 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336FailureRenderTests(unittest.TestCase):
+    def progress(self):
+        import hashlib
+        name = 'tests/test_public.py::Probe::test_one'
+        return {'status': 'unavailable', 'selected_workers': 1, 'observed_workers': 0, 'omitted_workers': 1, 'slots': [],
+                'failure_events': {'version': 1, 'status': 'observed', 'workers': [
+                    {'worker': 0, 'sequence': 1, 'overflow': False, 'dropped': False, 'partial_tail': False,
+                     'events': [{'ordinal': 1, 'phase': 'call', 'path': 'tests/test_public.py',
+                                 'key': hashlib.sha256(name.encode()).hexdigest()}]}]}}
+
+    def test_render_rederives_source_identity_and_preserves_unknown_partial_semantics(self):
+        progress = self.progress()
+        trusted = {'tests/test_public.py': (200, {'Probe::test_one'})}
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted) as metadata:
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIn('failure_events', result)
+        events = result['failure_events']
+        self.assertEqual(events['events'][0]['identity'], 'tests/test_public.py::Probe::test_one')
+        self.assertTrue(events['prefix_only'])
+        self.assertEqual(metadata.call_count, 1)
+        self.assertNotIn('failed_tests', events)
+        self.assertNotIn('completed_tests', events)
+        progress['failure_events']['workers'][0]['events'][0]['path'] = 'tests/UNTRACKED_CANARY.py'
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIsNone(result['failure_events']['events'][0]['identity'])
+        self.assertNotIn('UNTRACKED_CANARY', json.dumps(result))
+        self.assertEqual(result['failure_events']['status'], 'partial')
+
+    def test_closed_render_shape_and_shared_byte_bound_never_echo_values(self):
+        import copy
+        progress = self.progress()
+        progress['failure_events']['workers'][0]['payload'] = 'PAYLOAD_CANARY'
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertIn('failure_events', result)
+        self.assertNotIn('PAYLOAD_CANARY', json.dumps(result))
+        self.assertEqual(result['failure_events']['status'], 'unavailable')
+        progress = self.progress()
+        progress['selected_workers'] = 64
+        progress['failure_events']['workers'] = []
+        nodes = set()
+        for worker in range(64):
+            item = copy.deepcopy(self.progress()['failure_events']['workers'][0])
+            item['worker'] = worker
+            item['sequence'] = 4
+            item['events'] = []
+            for ordinal in range(1, 5):
+                node = 'Class' + str(worker) + '::test_' + str(ordinal) + '_' + 'x' * 110
+                nodes.add(node)
+                identity = 'tests/test_public.py::' + node
+                item['events'].append({'ordinal': ordinal, 'phase': 'call', 'path': 'tests/test_public.py',
+                    'key': hashlib.sha256(identity.encode()).hexdigest()})
+            progress['failure_events']['workers'].append(item)
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value={'tests/test_public.py': (200, nodes)}):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        self.assertLessEqual(len(json.dumps(result).encode()), 16000)
+        self.assertLessEqual(len(json.dumps(result['failure_events']).encode()), 8192)
+        self.assertTrue(result['failure_events']['render_truncated'])
+        self.assertLess(len(result['failure_events']['events']), 256)
+
+    def _actual_failure_prefix(self, *, workers=1, torn=False, facts=False):
+        from types import SimpleNamespace
+        from getzilla import pytest_progress
+        temporary = tempfile.TemporaryDirectory(prefix='public-certainty-')
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name) / 'progress'
+        directory.mkdir(mode=0o700)
+        nodes = set()
+        nonce = 'c' * 32
+        for worker in range(workers):
+            writer = pytest_progress._WorkerProgress(directory, nonce, worker)
+            self.addCleanup(writer.pytest_unconfigure, None)
+            if facts and worker == 0:
+                writer.pytest_runtest_logreport(SimpleNamespace(failed=True, when='call', nodeid='/unmapped-public'))
+            count = 4 if workers > 1 or torn or facts else 1
+            for ordinal in range(count):
+                node = 'C' + str(worker) + 'X' * 100 + '::test_' + str(ordinal) + '_' + 'y' * 100
+                nodes.add(node)
+                report = SimpleNamespace(failed=True, when='call', nodeid='tests/test_public.py::' + node)
+                writer.pytest_runtest_logreport(report)
+            if torn and worker == 0:
+                original = os.write
+                with patch.object(pytest_progress.os, 'write', side_effect=lambda fd, content: original(fd, content[:12])):
+                    writer.pytest_runtest_logreport(report)
+            elif facts and worker == 0:
+                writer.pytest_runtest_logreport(report)
+        return pytest_progress.read_progress(directory, nonce, workers), {'tests/test_public.py': (500, nodes)}
+
+    def _render_failure_prefix(self, progress, trusted):
+        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted):
+            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
+        return result['failure_events']
+
+    def test_actual_torn_overflow_fact_keeps_unproved_losses_unknown(self):
+        progress, trusted = self._actual_failure_prefix(torn=True)
+        row = progress['failure_events']['workers'][0]
+        self.assertEqual(len(row['events']), 4)
+        self.assertTrue(row['partial_tail'])
+        public = self._render_failure_prefix(progress, trusted)
+        self.assertEqual(public['status'], 'partial')
+        self.assertEqual(len(public['events']), 4)
+        self.assertTrue(public['partial_tail'])
+        self.assertIsNone(public['overflow'])
+        self.assertIsNone(public['dropped'])
+
+    def test_actual_prefix_without_source_proof_keeps_all_negative_losses_unknown(self):
+        progress, _trusted = self._actual_failure_prefix()
+        public = self._render_failure_prefix(progress, {})
+        self.assertEqual(public['status'], 'partial')
+        self.assertIsNone(public['events'][0]['identity'])
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            with self.subTest(flag=name):
+                self.assertIsNone(public[name])
+
+    def test_actual_source_bound_prefix_render_cap_invalidates_negative_losses(self):
+        progress, trusted = self._actual_failure_prefix(workers=16)
+        self.assertEqual(progress['failure_events']['status'], 'observed')
+        public = self._render_failure_prefix(progress, trusted)
+        self.assertTrue(public['render_truncated'])
+        self.assertEqual(public['status'], 'partial')
+        self.assertLessEqual(len(json.dumps(public).encode()), 8192)
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            with self.subTest(flag=name):
+                self.assertIsNone(public[name])
+
+    def test_complete_negatives_and_proven_true_facts_remain_distinct(self):
+        complete, trusted = self._actual_failure_prefix()
+        public = self._render_failure_prefix(complete, trusted)
+        self.assertEqual(public['status'], 'observed')
+        for name in ('overflow', 'dropped', 'partial_tail'):
+            self.assertIs(public[name], False)
+        lossy, _trusted = self._actual_failure_prefix(facts=True)
+        public = self._render_failure_prefix(lossy, {})
+        self.assertIs(public['overflow'], True)
+        self.assertIs(public['dropped'], True)
+        self.assertIsNone(public['partial_tail'])
+        self.assertEqual(public['status'], 'partial')
+
+
+class Low336ScannerOwnershipTests(unittest.TestCase):
+    def test_full_and_minimal_copies_own_both_selectors_and_restore_outer_values(self):
+        ambient = {'GETZILLA_OSV_DB': '/public-fixture-ambient', 'GETZILLA_OSV_ONLINE': '1'}
+        for minimal in (False, True):
+            with self.subTest(minimal=minimal), patch.dict(os.environ, ambient):
+                with full_project_copy(minimal_runtime=minimal) as root:
+                    for key in ambient:
+                        self.assertNotIn(key, os.environ)
+                    runtime = root / '.getzilla/getzilla/verification.py'
+                    rules = root / '.getzilla/sast/rules'
+                    self.assertEqual(runtime.is_file(), not minimal)
+                    self.assertEqual(rules.is_dir(), not minimal)
+                    if not minimal:
+                        self.assertEqual(runtime.read_bytes(), (ROOT / '.getzilla/getzilla/verification.py').read_bytes())
+                    os.environ.update({key: 'owned-inner-value' for key in ambient})
+                self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)
+
+    def test_nested_normal_and_exceptional_exits_restore_the_immediate_environment(self):
+        from tests._support import _scanner_environment
+
+        keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE')
+        for present in (False, True):
+            for outer_minimal in (False, True):
+                for inner_minimal in (False, True):
+                    with self.subTest(present=present, outer=outer_minimal, inner=inner_minimal):
+                        with patch.dict(os.environ):
+                            for key in keys:
+                                os.environ.pop(key, None)
+                            original = {key: 'owned-outer-value' for key in keys} if present else {}
+                            os.environ.update(original)
+                            with self.assertRaisesRegex(RuntimeError, 'owned exceptional exit'):
+                                with _scanner_environment(outer_minimal):
+                                    self.assertTrue(all(key not in os.environ for key in keys))
+                                    inner_values = {key: 'owned-middle-value' for key in keys}
+                                    os.environ.update(inner_values)
+                                    with self.assertRaisesRegex(RuntimeError, 'owned inner exit'):
+                                        with _scanner_environment(inner_minimal):
+                                            self.assertTrue(all(key not in os.environ for key in keys))
+                                            os.environ.update({key: 'owned-deep-value' for key in keys})
+                                            raise RuntimeError('owned inner exit')
+                                    self.assertEqual({key: os.environ.get(key) for key in keys}, inner_values)
+                                    with _scanner_environment(inner_minimal):
+                                        self.assertTrue(all(key not in os.environ for key in keys))
+                                        os.environ.update({key: 'owned-normal-inner' for key in keys})
+                                    self.assertEqual({key: os.environ.get(key) for key in keys}, inner_values)
+                                    raise RuntimeError('owned exceptional exit')
+                            self.assertEqual({key: os.environ[key] for key in keys if key in os.environ}, original)
+
+    def test_default_scan_cannot_borrow_ambient_but_inner_owned_sources_work(self):
+        import zipfile
+        from getzilla import known_vulns
+
+        for minimal in (False, True):
+            with self.subTest(minimal=minimal), tempfile.TemporaryDirectory() as directory:
+                ambient_mirror = Path(directory) / 'ambient'
+                (ambient_mirror / 'PyPI').mkdir(parents=True)
+                with zipfile.ZipFile(ambient_mirror / 'PyPI/all.zip', 'w'):
+                    pass
+                ambient = {'GETZILLA_OSV_DB': str(ambient_mirror), 'GETZILLA_OSV_ONLINE': '1'}
+                with patch.dict(os.environ, ambient):
+                    with full_project_copy(minimal_runtime=minimal) as root:
+                        (root / 'requirements.txt').write_text('owned-fixture==1.0\n', encoding='utf-8')
+                        with patch.object(known_vulns, '_tracked_files', return_value=['requirements.txt']), \
+                                patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
+                                patch.object(known_vulns, 'query_online', wraps=known_vulns.query_online) as online:
+                            def forbidden_fetch(_url, _body):
+                                self.fail('default synthetic scan attempted online access')
+
+                            report = known_vulns.scan(root, fetch=forbidden_fetch)
+                            self.assertEqual((report['status'], report['dependencies']), ('skip', 1))
+                            offline.assert_not_called()
+                            online.assert_not_called()
+                            owned_mirror = root / 'owned-mirror'
+                            (owned_mirror / 'PyPI').mkdir(parents=True)
+                            record = {'id': 'OWNED-2026-1', 'aliases': [], 'affected': [{
+                                'package': {'ecosystem': 'PyPI', 'name': 'owned-fixture'}, 'versions': ['1.0']}]}
+                            with zipfile.ZipFile(owned_mirror / 'PyPI/all.zip', 'w') as archive:
+                                archive.writestr('OWNED-2026-1.json', json.dumps(record))
+                            os.environ['GETZILLA_OSV_DB'] = str(owned_mirror)
+                            report = known_vulns.scan(root, fetch=forbidden_fetch)
+                            self.assertEqual(report['status'], 'fail')
+                            self.assertEqual([item['id'] for item in report['findings']], ['OWNED-2026-1'])
+                            offline.assert_called_once()
+                            self.assertEqual(offline.call_args.args[1], owned_mirror)
+                            online.assert_not_called()
+                            os.environ.pop('GETZILLA_OSV_DB')
+                            os.environ['GETZILLA_OSV_ONLINE'] = '1'
+                            requests = []
+
+                            def fetch(_url, body):
+                                requests.append(json.loads(body))
+                                return json.dumps({'results': [{}]}).encode('utf-8')
+
+                            self.assertEqual(known_vulns.scan(root, fetch=fetch)['status'], 'pass')
+                            online.assert_called_once()
+                            self.assertEqual(len(requests), 1)
+                            self.assertEqual(requests[0]['queries'][0]['package']['name'], 'owned-fixture')
+                    self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)
