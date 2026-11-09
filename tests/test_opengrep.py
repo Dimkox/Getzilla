@@ -121,7 +121,7 @@ class OpengrepCheckTests(unittest.TestCase):
         errored = self._run({'results': [], 'errors': [{'level': 'error', 'message': 'rule parse error'}]})
         self.assertEqual(errored.status, 'fail')
         warned = self._run({'results': [], 'errors': [{'level': 'warn', 'message': 'partial parse'}]})
-        self.assertEqual(warned.status, 'pass')
+        self.assertEqual(warned.status, 'fail')
 
     def test_missing_binary_is_refused_and_opengrep_is_mandatory_in_pr_and_release(self) -> None:
         # A machine without OpenGrep must not pass a PR/release gate with SAST silently skipped (#40).
@@ -141,6 +141,89 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertTrue(required_check_refused(result('opengrep not available'), mode='pr'))
         self.assertFalse(required_check_refused(result('no OpenGrep rules installed'), mode='pr'))
         self.assertTrue(required_check_refused(result('opengrep timed out'), mode='pr'))
+
+
+class NativeOpengrepReportTests(unittest.TestCase):
+    def check_report(self, report, exit_code=0, refusal=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / V.OPENGREP_RULES).mkdir(parents=True)
+            executable = root / 'owned-pinned-opengrep'
+            response = SimpleNamespace(returncode=exit_code, stdout=json.dumps(report), stderr='')
+            with mock.patch.object(V, 'find_tool', return_value=str(executable)), \
+                    mock.patch.object(V, '_unpinned_opengrep', return_value=refusal) as pin, \
+                    mock.patch.object(V, 'run', return_value=response) as runner, \
+                    mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('unexpected process')):
+                result = V._opengrep(root)
+            pin.assert_called_once_with(executable)
+            return result, runner.call_args, runner.call_count
+
+    def test_complete_clean_report_uses_strict_pinned_command_and_existing_scope(self):
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code):
+                result, call, count = self.check_report({'results': [], 'errors': []}, exit_code)
+                self.assertEqual(result.status, 'pass')
+                self.assertEqual(count, 1)
+                expected = [result.command[0], 'scan', '--config', V.OPENGREP_RULES,
+                            '--taint-intrafile', '--json', '--quiet', '--strict',
+                            '--disable-version-check', '--timeout', '30']
+                for pattern in V.OPENGREP_EXCLUDES:
+                    expected.extend(('--exclude', pattern))
+                expected.append('.')
+                self.assertEqual(result.command, expected)
+                self.assertEqual(call.args[0], expected)
+                self.assertEqual(call.kwargs['timeout'], 900)
+                self.assertEqual(call.kwargs['encoding'], 'utf-8')
+                self.assertEqual(call.kwargs['errors'], 'replace')
+
+    def test_any_analysis_diagnostic_blocks_clean_regardless_of_level_or_exit(self):
+        diagnostics = [{'level': level, 'message': 'PUBLIC-FIXTURE-NOTE'}
+                       for level in ('warn', 'warning', 'info', 'unknown', 'error', '')]
+        diagnostics.extend(({}, None, 'PUBLIC-FIXTURE-NOTE', 17))
+        for diagnostic in diagnostics:
+            for exit_code in (0, 1):
+                with self.subTest(kind=type(diagnostic).__name__, exit_code=exit_code):
+                    result, _, count = self.check_report({'results': [], 'errors': [diagnostic]}, exit_code)
+                    self.assertEqual(result.status, 'fail')
+                    self.assertEqual(count, 1)
+                    self.assertNotIn('PUBLIC-FIXTURE-NOTE', result.summary + result.stderr + repr(result.details))
+
+    def test_missing_or_malformed_report_collections_never_pass_or_crash(self):
+        reports = [None, [], 17, 'not an object', {}, {'results': []}, {'errors': []}]
+        for value in (None, {}, '', 0, 'diagnostic'):
+            reports.extend(({'results': [], 'errors': value}, {'results': value, 'errors': []}))
+        for report in reports:
+            with self.subTest(kind=type(report).__name__):
+                result, _, _ = self.check_report(report)
+                self.assertEqual(result.status, 'fail')
+
+    def test_malformed_finding_entries_return_structured_failure(self):
+        findings = [None, [], 'finding', 17, {'start': []}, {'extra': []}, {'start': None}, {'extra': None}]
+        for finding in findings:
+            with self.subTest(kind=type(finding).__name__):
+                result, _, _ = self.check_report({'results': [finding], 'errors': []})
+                self.assertEqual(result.status, 'fail')
+
+    def test_complete_findings_preserve_details(self):
+        finding = {'check_id': 'fixture.rule', 'path': 'owned.py', 'start': {'line': 12},
+                   'extra': {'severity': 'ERROR', 'message': 'public finding'}}
+        result, _, _ = self.check_report({'results': [finding], 'errors': []}, 1)
+        self.assertEqual(result.status, 'fail')
+        self.assertEqual(result.details, [{'rule': 'fixture.rule', 'path': 'owned.py', 'line': '12',
+                                          'severity': 'ERROR', 'message': 'public finding'}])
+
+    def test_pin_refusal_never_calls_runner(self):
+        result, call, count = self.check_report({'results': [], 'errors': []}, refusal='pin mismatch; not run')
+        self.assertEqual(result.status, 'fail')
+        self.assertEqual(result.summary, 'pin mismatch; not run')
+        self.assertEqual(count, 0)
+        self.assertIsNone(call)
+
+    def test_non_scan_exit_codes_still_fail(self):
+        for exit_code in (2, 7, 124):
+            with self.subTest(exit_code=exit_code):
+                result, _, _ = self.check_report({'results': [], 'errors': []}, exit_code)
+                self.assertEqual(result.status, 'fail')
 
 
 class OpengrepPinTests(unittest.TestCase):
