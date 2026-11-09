@@ -605,8 +605,9 @@ class TaskIntentTests(unittest.TestCase):
                     self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected=expected)
 
     def test_native_nested_patch_checks_intent_and_pending_amendment(self):
+        import os
+        import subprocess
         from getzilla.hook_health import route_degraded_events
-        from tests._support import run_hook
         with project_copy(git=True) as root:
             self.task(root)
             self.ask(root, paths=['src/a.py', 'src/new.py'])
@@ -617,10 +618,16 @@ class TaskIntentTests(unittest.TestCase):
                 inputs = event['tool_input']
                 if event['tool_name'] == 'apply_patch':
                     inputs = {'input': inputs['patch']}
-                code, result, stderr = run_hook(root, 'pre_tool_use.py', {
+                payload = {
                     'cwd': str(root / 'src'), 'session_id': 'intent-owner',
                     'tool_name': event['tool_name'], 'tool_input': inputs,
-                }, harness='codex')
+                }
+                process = subprocess.run(
+                    [sys.executable, str(root / '.getzilla/hooks/pre_tool_use.py'), '--harness', 'codex'],
+                    cwd=root, env={**os.environ, 'PYTHONPATH': os.pathsep.join((str(root), str(root / '.getzilla')))},
+                    input=json.dumps(payload).encode('utf-8'), capture_output=True, check=False,
+                )
+                code, result, stderr = process.returncode, json.loads(process.stdout.decode('utf-8').strip() or '{}'), process.stderr.decode('utf-8')
                 self.assertEqual(code, 0, stderr)
                 self.assertEqual(stderr, '')
                 if expected is None:
@@ -662,6 +669,7 @@ class TaskIntentTests(unittest.TestCase):
         from getzilla.completion import observe_remaining
         with project_copy(git=True) as root:
             self.task(root)
+            legacy = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
             self.ask(root)
             self.answer(root)
             before = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
@@ -672,6 +680,13 @@ class TaskIntentTests(unittest.TestCase):
             self.api()(root, self.request(root, {'kind': 'answer', 'id': 'Q-001', 'answer': answer}, 'revised-answer'))
             after = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
             self.assertNotEqual(before['fingerprint'], after['fingerprint'])
+            without_intent = copy.deepcopy(state.get_active_route(root))
+            without_intent.pop('intent_state')
+            self.assertEqual(legacy['fingerprint'], observe_remaining(without_intent, None, [], ['verification: missing receipt'])['fingerprint'])
+            invalid = copy.deepcopy(state.get_active_route(root))
+            invalid['intent_state']['schema_version'] = 2
+            with self.assertRaisesRegex(ValueError, 'intent'):
+                observe_remaining(invalid, None, [], ['verification: missing receipt'])
 
 
 if __name__ == '__main__':
