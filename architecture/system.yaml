@@ -2149,6 +2149,52 @@
       "sync_or_async": "synchronous",
       "to": "NODE-PYPI-REGISTRY",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 15000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 15000
+      },
+      "from": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "id": "EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -3384,6 +3430,40 @@
       },
       "secrets": [],
       "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "owner": "repository engineering; explicit optional fixture capture only",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/optional-modules/design-reference/0.1.0/preview.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "owner": "caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
       "type": "external_system"
     }
   ],

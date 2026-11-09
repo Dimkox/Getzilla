@@ -705,7 +705,7 @@ class DesignReferenceModuleTests(unittest.TestCase):
         install._materialize_new(ROOT, selected, include_dependencies=False,
                                  include_optional=False, selection=selection)
         prefix = '.getzilla/optional-modules/design-reference/0.1.0/'
-        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
+        for name in ('module.json', 'reference.py', 'preview.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
             self.assertEqual((selected / prefix / name).read_bytes(), (ROOT / prefix / name).read_bytes())
         self.assertFalse((selected / '.getzilla/modules').exists())
         observed = subprocess.run([sys.executable, str(selected / 'scripts/getzilla_design_reference.py'), '--help'],

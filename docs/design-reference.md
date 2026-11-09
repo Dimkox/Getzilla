@@ -81,7 +81,7 @@ credentials, fragments and redirects refuse. Do not point this command at an
 internal or production server. Even GET can have server effects. Caller ownership
 of the fixture is a precondition; the command does not establish source rights.
 
-The adapter starts a new sandboxed Chrome context without user cookies. Before
+The separately admitted optional `preview.py` adapter starts a new sandboxed Chrome context without user cookies. Before
 page creation, it blocks service workers and WebSockets and installs interception.
 It permits only declared GET document, stylesheet, font, image and script reads.
 It denies fetch/XHR/beacon, unsafe methods, redirects, frames with another URL,
@@ -130,3 +130,8 @@ and [response fulfillment](https://playwright.dev/python/docs/api/class-route#ro
 The command pins the reviewed0.1.0 manifest. A different self-consistent passive
 artifact is not executable authority, even with matching local ownership. New
 code needs a new reviewed artifact and command pin; ownership alone is insufficient.
+
+The architecture keeps `reference.py` in the existing no-network local policy
+component. Only explicit preview requests load `preview.py`, which has a separate
+optional node and a declared local TCP/HTTP edge to a caller-owned synthetic fixture.
+The Core node, network rules and global budgets are unchanged.

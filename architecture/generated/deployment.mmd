@@ -1,5 +1,6 @@
 flowchart LR
   node_662c15ead8b897ee["NODE-CISA-SECURITY-FEED | external_system | public CISA feed endpoints"]
+  node_2083f4d7618a5715["NODE-CONTROLLED-DESIGN-FIXTURE | external_system | caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source"]
   node_4e78270f61d78ed8["NODE-DOCKER-ENGINE | service | Trust CI operators; compose-described TCP/2375 local executor"]
   node_0456afc65ddefc44["NODE-ENTIRE | external_system | Entire"]
   node_57e24ded05c6433e["NODE-EPSS-SECURITY-FEED | external_system | public EPSS feed endpoint"]
@@ -31,6 +32,7 @@ flowchart LR
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
+  node_11778b266a5a56fd["NODE-OPTIONAL-DESIGN-PREVIEW | local_component | repository engineering; explicit optional fixture capture only"]
   node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
   node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
   node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
@@ -50,6 +52,7 @@ flowchart LR
   node_d0e570b2fbe52f98 -->|"EDGE-API-POSTGRES | data_flow | postgresql"| node_1a6c7efb2d08591b
   node_3703dbb382efdb0f -->|"EDGE-DEMO-TEST-CLIENT-LOOPBACK | dependency | https"| node_9f1df3a916fb955a
   node_9f1df3a916fb955a -->|"EDGE-DEMO-UI-READS-LOCAL-PREFLIGHT | dependency | python_import"| node_770cf3a1783e8525
+  node_11778b266a5a56fd -->|"EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP | dependency | tcp"| node_2083f4d7618a5715
   node_4e78270f61d78ed8 -->|"EDGE-DOCKER-ISOLATED-RUNNER | deployment | docker_api"| node_1c3a10ba26a8e80d
   node_fdafbab352587936 -->|"EDGE-ENTIRE-LOCAL-CORE | dependency | filesystem"| node_770cf3a1783e8525
   node_fdafbab352587936 -->|"EDGE-ENTIRE-PROVIDER-READ | dependency | https"| node_0456afc65ddefc44
@@ -77,6 +80,7 @@ flowchart LR
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
+  node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-CISA | dependency | https"| node_662c15ead8b897ee

@@ -10,6 +10,7 @@ flowchart LR
   domain_7f80d82d053144ab["TD-TRUST-CI-CONTROL | trust_ci_control | Trust CI operators"]
   domain_65e7aeb3bb37c460["TD-TRUST-CI-EXECUTION | trust_ci_execution | Trust CI operators"]
   domain_734c10023f9857a2 -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"dependency"| domain_734c10023f9857a2
   domain_fa5ae843eb45e375 -->|"dependency"| domain_96fb748595c57dce
   domain_fa5ae843eb45e375 -->|"publication"| domain_96fb748595c57dce
   domain_96fb748595c57dce -->|"data_flow"| domain_7f80d82d053144ab

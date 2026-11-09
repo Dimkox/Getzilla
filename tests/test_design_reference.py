@@ -419,7 +419,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         source = self.root / 'public-source'
         artifact = source / '.getzilla/optional-modules/design-reference/0.1.0'
         artifact.mkdir(parents=True)
-        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
+        for name in ('module.json', 'reference.py', 'preview.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
             shutil.copyfile(ROOT / '.getzilla/optional-modules/design-reference/0.1.0' / name, artifact / name)
         reference = artifact / 'reference.py'
         reference.write_bytes(reference.read_bytes() + b'\n# different inert public artifact\n')
@@ -497,8 +497,28 @@ if __name__ == '__main__':
 
 class PreviewDesignReferenceTests(unittest.TestCase):
     def extractor(self):
-        return load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py',
-                         'preview_design_reference')
+        from functools import partial
+        reference = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py',
+                              'preview_design_reference')
+        preview = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/preview.py',
+                            'preview_design_adapter')
+        reference.capture_preview = partial(preview.capture_preview, reference)
+        return reference
+
+    def test_optional_transport_has_separate_source_and_architecture_boundary(self):
+        import ast
+        from getzilla import architecture
+        preview = '.getzilla/optional-modules/design-reference/0.1.0/preview.py'
+        self.assertTrue((ROOT / preview).is_file(), 'separate optional preview adapter is missing')
+        reference = ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        imports = {item.name for node in ast.walk(ast.parse(reference.read_text()))
+                   if isinstance(node, ast.Import) for item in node.names}
+        self.assertFalse(imports & {'subprocess','http.client','playwright','socket'})
+        snapshot = architecture.load_architecture(ROOT)
+        owners = [node['id'] for node in snapshot.system['nodes'] if preview in node['repository_paths']]
+        self.assertEqual(owners, ['NODE-OPTIONAL-DESIGN-PREVIEW'])
+        policy = next(n for n in snapshot.system['nodes'] if n['id'] == 'NODE-LOCAL-ROUTE-POLICY')
+        self.assertEqual(policy['runtime']['network'], 'none')
 
     def test_live_and_unbounded_scope_refused_before_browser_import(self):
         module = self.extractor()
@@ -515,7 +535,7 @@ class PreviewDesignReferenceTests(unittest.TestCase):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         hits = []
         body = b'''<!doctype html><style>button { color: rgb(1, 2, 3); border-radius: 7px }</style>
-<button onclick="fetch('/click',{method:'POST'})">Go</button><a href='/click'>Link</a>
+<button onclick="this.style.color='rgb(9, 9, 9)';fetch('/click',{method:'POST'})">Go</button><a href='/click' onclick="document.querySelector('button').style.color='rgb(9, 9, 9)'">Link</a>
 <script>fetch('/write',{method:'POST'}); navigator.sendBeacon('/beacon','x');
 new WebSocket('ws://127.0.0.1:PORT/socket'); fetch('/read');
 setTimeout(()=>document.body.setAttribute('data-dynamic','yes'),20);</script>'''

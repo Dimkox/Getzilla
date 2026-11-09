@@ -14,7 +14,7 @@
       "versions": {
         "0.1.0": {
           "manifest": ".getzilla/optional-modules/design-reference/0.1.0/module.json",
-          "sha256": "4c7442d84621722ca0b25341e45e77a703c9c8c19e1fa165fd8eed1ee1ba068f"
+          "sha256": "507c2fb3647e33a00198f267cfc71e446038bd88906ccbf16bb62846e59bd204"
         }
       }
     }

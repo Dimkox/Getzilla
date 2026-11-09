@@ -27,7 +27,7 @@ from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '4c7442d84621722ca0b25341e45e77a703c9c8c19e1fa165fd8eed1ee1ba068f'
+EXPECTED_MANIFEST_SHA256 = '507c2fb3647e33a00198f267cfc71e446038bd88906ccbf16bb62846e59bd204'
 # Read-only compatibility for immutable v1 records from accepted PR368.
 HISTORICAL_V1_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
 MAX_HISTORY = 32
@@ -48,8 +48,9 @@ def _encode(value):
                       allow_nan=False).encode('utf-8', 'strict')
 
 
-def _load(root, admission):
+def _load(root, admission, *, entrypoint='reference.py'):
     """Load only admitted, hash-checked installed bytes, never project imports."""
+    _need(entrypoint in ('reference.py', 'preview.py'))
     prefix = '.getzilla/modules/design-reference/'
     with ReadOnlyBoundRoot(root) as binding:
         descriptor = binding.read(prefix + 'module.json', limit=65536)
@@ -57,14 +58,14 @@ def _load(root, admission):
         manifest = json.loads(descriptor.content)
         _need(manifest['version'] == '0.1.0' and manifest['publisher'] == 'getzilla'
               and manifest['license'] == 'MIT' and manifest['hooks'] == 'declarative-v1')
-        entry = next(item for item in manifest['files'] if item['path'] == 'reference.py')
-        source = binding.read(prefix + 'reference.py', limit=256 * 1024)
+        entry = next(item for item in manifest['files'] if item['path'] == entrypoint)
+        source = binding.read(prefix + entrypoint, limit=256 * 1024)
         _need(source is not None and source.sha256 == entry['sha256'] and entry['mutable'] is False)
         _need(admit_module(root, NAME, permission=PERMISSION) == admission)
         module = types.ModuleType('_getzilla_admitted_design_reference')
         # Fixed reviewed manifest pins these held immutable source bytes.
         exec(compile(source.content, '<admitted-design-reference>', 'exec'), module.__dict__)  # nosec B102
-        _need(binding.read(prefix + 'reference.py', limit=256 * 1024) == source)
+        _need(binding.read(prefix + entrypoint, limit=256 * 1024) == source)
         return module
 
 
@@ -229,7 +230,8 @@ def capture_preview(root, url, resources, *, capture_id, captured_at, viewport=N
         admission = _admitted(root)
         _task(root)
         module = _load(root, admission)
-        pack = module.capture_preview(url, resources, capture_id=capture_id, captured_at=captured_at,
+        adapter = _load(root, admission, entrypoint='preview.py')
+        pack = adapter.capture_preview(module, url, resources, capture_id=capture_id, captured_at=captured_at,
                                       viewport=viewport, theme=theme, locale=locale)
         _need(_admitted(root) == admission)
         return _publish(root, module, pack, admission)
