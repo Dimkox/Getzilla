@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 
 from . import fsx
 
@@ -14,6 +15,8 @@ MAX_WORKERS = 64
 MAX_SLOT_BYTES = 2048
 MAX_FAILURE_BYTES = 2048
 MAX_FAILURE_EVENTS = 4
+MAX_PHASE_BYTES = 1024
+_PHASES = ('configured', 'collection_finished', 'first_test_start')
 _FIELDS = {'version', 'nonce', 'worker', 'sequence', 'state', 'path', 'key'}
 
 
@@ -52,6 +55,64 @@ def _regular(info: os.stat_result) -> bool:
             and (os.name == 'nt' or (info.st_uid == os.getuid() and not info.st_mode & 0o077)))
 
 
+class _PhaseWitness:
+    """At most three actor-local observations on one exclusive held inode."""
+    def __init__(self, handle, nonce, worker):
+        self.handle, self.nonce, self.worker = handle, nonce, worker
+        self.name = ('controller' if worker is None else f'worker-{worker}') + '.phases.jsonl'
+        self.fd = None
+        self.identity = None
+        self.written = 0
+        self.marks = []
+        self.started = self.previous = None
+        self.disabled = False
+
+    def _append(self, row):
+        content = json.dumps(row, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
+        held, named = os.fstat(self.fd), fsx.lstat_at(self.handle, self.name)
+        if (not _regular(held) or not _regular(named)
+                or (held.st_dev, held.st_ino) != self.identity
+                or (named.st_dev, named.st_ino) != self.identity
+                or held.st_size != self.written or named.st_size != self.written
+                or self.written + len(content) > MAX_PHASE_BYTES):
+            raise OSError('unavailable phase witness')
+        if os.write(self.fd, content) != len(content):
+            raise OSError('incomplete phase witness')
+        self.written += len(content)
+
+    def mark(self, phase):
+        if self.disabled or phase in self.marks:
+            return
+        try:
+            if len(self.marks) >= 3 or phase != _PHASES[len(self.marks)]:
+                raise ValueError('unordered phase witness')
+            current = time.monotonic_ns()
+            if (type(current) is not int or not 0 <= current <= 2**63 - 1
+                    or self.previous is not None and current < self.previous):
+                raise ValueError('invalid phase clock')
+            if self.fd is None:
+                self.started = current
+                self.fd = fsx.open_at(self.handle, self.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | fsx.O_NOFOLLOW, 0o600)
+                info = os.fstat(self.fd)
+                self.identity = (info.st_dev, info.st_ino)
+                self._append({'version': 1, 'kind': 'core-phase-witness', 'nonce': self.nonce, 'worker': self.worker})
+            self._append({'phase': phase, 'elapsed_ns': current - self.started})
+            self.marks.append(phase)
+            self.previous = current
+        except Exception:
+            self.disabled = True
+            self.close()
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+
+
 class _WorkerProgress:
     def __init__(self, directory: Path, nonce: str, worker: int):
         self.handle = _private_directory(directory)
@@ -68,6 +129,15 @@ class _WorkerProgress:
         self.failure_dropped = False
         self.failure_overflow = False
         self.failure_disabled = False
+        self.phases = None
+
+    def configure_phases(self):
+        self.phases = _PhaseWitness(self.handle, self.nonce, self.worker)
+        self.phases.mark('configured')
+
+    def pytest_collection_finish(self, session):
+        if self.phases is not None:
+            self.phases.mark('collection_finished')
 
     def _publish(self, nodeid: str, state: str) -> None:
         if self.disabled:
@@ -158,12 +228,16 @@ class _WorkerProgress:
                 self.failure_fd = None
 
     def pytest_runtest_logstart(self, nodeid, location):
+        if self.phases is not None:
+            self.phases.mark('first_test_start')
         self._publish(nodeid, 'active')
 
     def pytest_runtest_logfinish(self, nodeid, location):
         self._publish(nodeid, 'idle')
 
     def pytest_unconfigure(self, config):
+        if self.phases is not None:
+            self.phases.close()
         if self.failure_fd is not None:
             try:
                 os.close(self.failure_fd)
@@ -193,6 +267,18 @@ def pytest_configure(config):
             or not isinstance(workers, str) or not re.fullmatch('[1-9][0-9]?', workers)
             or not 1 <= int(workers) <= MAX_WORKERS):
         raise ValueError('invalid closed Core progress options')
+    if not hasattr(config, 'workerinput'):
+        handle = None
+        try:
+            handle = _private_directory(Path(directory))
+            phase = _PhaseWitness(handle, nonce, None)
+            phase.mark('configured')
+            phase.close()
+        except OSError:
+            pass
+        finally:
+            fsx.close_dir(handle)
+        return
     worker = getattr(config, 'workerinput', {}).get('workerid')
     if not isinstance(worker, str) or not re.fullmatch(r'gw(?:0|[1-9][0-9]?)', worker):
         return
@@ -204,6 +290,7 @@ def pytest_configure(config):
     except OSError:
         return  # Observation IO must never change the primary test verdict.
     config.pluginmanager.register(writer, 'getzilla-core-progress-slot')
+    writer.configure_phases()
 
 
 def _read_slot(handle, ordinal: int, nonce: str) -> dict[str, object]:
@@ -316,6 +403,73 @@ def _read_failure_prefix(handle, ordinal, nonce):
             'partial_tail': bool(tail), 'events': events}
 
 
+def phase_witness_details(value, workers):
+    """Closed revalidation at both the file reader and report consumer."""
+    unknown = {'version': 1, 'status': 'unavailable', 'observation': 'REPORTED_ACTOR_PHASES_ONLY', 'actors': []}
+    if (type(workers) is not int or not 1 <= workers <= MAX_WORKERS or type(value) is not dict
+            or set(value) != {'version', 'actors'} or type(value['version']) is not int or value['version'] != 1
+            or type(value['actors']) is not list or len(value['actors']) > workers + 1):
+        return unknown
+    actors, seen = [], set()
+    for row in value['actors']:
+        if type(row) is not dict or set(row) != {'worker', 'elapsed_ns'}:
+            return unknown
+        worker, elapsed = row['worker'], row['elapsed_ns']
+        if (worker is not None and (type(worker) is not int or not 0 <= worker < workers)
+                or worker in seen or type(elapsed) is not dict or set(elapsed) != set(_PHASES)):
+            return unknown
+        values = [elapsed[name] for name in _PHASES]
+        if (type(values[0]) is not int or values[0] != 0
+                or any(number is not None and (type(number) is not int or not 0 <= number <= 2**63 - 1) for number in values)
+                or values[1] is None and values[2] is not None
+                or values[1] is not None and values[2] is not None and values[2] < values[1]
+                or worker is None and values[1:] != [None, None]):
+            return unknown
+        seen.add(worker)
+        actors.append({'worker': worker, 'elapsed_ns': dict(zip(_PHASES, values))})
+    return {**unknown, 'status': 'reported' if actors else 'unavailable', 'actors': actors}
+
+
+def _read_phase(handle, worker, nonce):
+    name = ('controller' if worker is None else f'worker-{worker}') + '.phases.jsonl'
+    before = fsx.lstat_at(handle, name)
+    if not _regular(before) or before.st_size > MAX_PHASE_BYTES:
+        raise ValueError('unavailable phase witness')
+    fd = fsx.open_at(handle, name, os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        held = os.fstat(source.fileno())
+        if not _regular(held) or (held.st_dev, held.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError('changed phase witness')
+        content = source.read(MAX_PHASE_BYTES + 1)
+        after = os.fstat(source.fileno())
+    named = fsx.lstat_at(handle, name)
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_uid,
+                info.st_nlink, info.st_mtime_ns, info.st_ctime_ns)
+    if (not _regular(named) or identity(before) != identity(after) or identity(after) != identity(named)
+            or len(content) != after.st_size or len(content) > MAX_PHASE_BYTES or not content.endswith(b'\n')):
+        raise ValueError('changed phase witness')
+    lines = content.splitlines()
+    if not 2 <= len(lines) <= 4:
+        raise ValueError('invalid phase prefix')
+    header = _failure_json(lines[0])
+    if (set(header) != {'version', 'kind', 'nonce', 'worker'} or type(header['version']) is not int
+            or header['version'] != 1 or header['kind'] != 'core-phase-witness' or header['nonce'] != nonce
+            or type(header['nonce']) is not str or not re.fullmatch('[0-9a-f]{32}', header['nonce'])
+            or type(header['worker']) is not type(worker) or header['worker'] != worker):
+        raise ValueError('invalid phase identity')
+    elapsed = dict.fromkeys(_PHASES)
+    for index, line in enumerate(lines[1:]):
+        row = _failure_json(line)
+        if set(row) != {'phase', 'elapsed_ns'} or row['phase'] != _PHASES[index]:
+            raise ValueError('invalid phase order')
+        elapsed[row['phase']] = row['elapsed_ns']
+    result = {'worker': worker, 'elapsed_ns': elapsed}
+    if phase_witness_details({'version': 1, 'actors': [result]}, MAX_WORKERS)['status'] != 'reported':
+        raise ValueError('invalid phase values')
+    return result
+
+
 def read_progress(directory: Path, nonce: str, workers: int) -> dict[str, object]:
     report: dict[str, object] = {'status': 'not_supported', 'selected_workers': workers,
                                  'observed_workers': 0, 'omitted_workers': workers, 'slots': [],
@@ -324,9 +478,14 @@ def read_progress(directory: Path, nonce: str, workers: int) -> dict[str, object
         return report
     report['status'] = 'unavailable'
     handle = None
-    slots, failures = [], []
+    slots, failures, phases = [], [], []
     try:
         handle = _private_directory(directory)
+        for actor in [None, *range(workers)]:
+            try:
+                phases.append(_read_phase(handle, actor, nonce))
+            except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
+                pass
         for ordinal in range(workers):
             try:
                 slots.append(_read_slot(handle, ordinal, nonce))
@@ -346,4 +505,6 @@ def read_progress(directory: Path, nonce: str, workers: int) -> dict[str, object
         row['overflow'] or row['dropped'] or row['partial_tail'] for row in failures)
     report['failure_events'] = {'version': 1, 'status': 'observed' if complete else 'partial' if failures else 'unavailable',
                                 'workers': failures}
+    if phases:
+        report['phase_witness'] = {'version': 1, 'actors': phases}
     return report
