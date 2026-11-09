@@ -137,69 +137,88 @@ def capture_preview(reference, url, resources, *, capture_id, captured_at,
     process = subprocess.Popen([sys.executable, '-I', '-c', _PREVIEW_WORKER],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                start_new_session=True)
-    root_fields = Path('/proc', str(process.pid), 'stat').read_text().rsplit(')', 1)[1].split()
-    observed = {process.pid: root_fields[19]}
-    stopped = threading.Event()
-    supervision_failed = threading.Event()
-    def observe():
-        rows = {}
-        from itertools import islice
-        entries = list(islice(Path('/proc').iterdir(), 8193))
-        _need(len(entries) <= 8192)
-        for entry in entries:
-            if entry.name.isdigit():
+    setup_complete = False
+    try:
+        root_fields = Path('/proc', str(process.pid), 'stat').read_text().rsplit(')', 1)[1].split()
+        observed = {process.pid: root_fields[19]}
+        stopped = threading.Event()
+        supervision_failed = threading.Event()
+        def observe():
+            rows = {}
+            from itertools import islice
+            entries = list(islice(Path('/proc').iterdir(), 8193))
+            _need(len(entries) <= 8192)
+            for entry in entries:
+                if entry.name.isdigit():
+                    try:
+                        fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                        rows[int(entry.name)] = (int(fields[1]), fields[19])
+                    except (OSError, ValueError, IndexError):
+                        pass
+            family = {pid for pid, birth in observed.items()
+                      if pid in rows and rows[pid][1] == birth}
+            for _ in range(32):
+                family.update(pid for pid, row in rows.items() if row[0] in family)
+            for pid in family:
+                if pid in rows:
+                    observed[pid] = rows[pid][1]
+            _need(len(observed) <= 256)
+        def monitor():
+            while not stopped.wait(.02):
                 try:
-                    fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
-                    rows[int(entry.name)] = (int(fields[1]), fields[19])
-                except (OSError, ValueError, IndexError):
-                    pass
-        family = {pid for pid, birth in observed.items()
-                  if pid in rows and rows[pid][1] == birth}
-        for _ in range(32):
-            family.update(pid for pid, row in rows.items() if row[0] in family)
-        for pid in family:
-            if pid in rows:
-                observed[pid] = rows[pid][1]
-        _need(len(observed) <= 256)
-    def monitor():
-        while not stopped.wait(.02):
+                    observe()
+                except (OSError, ValueError):
+                    supervision_failed.set()
+                    stopped.set()
+        watcher = threading.Thread(target=monitor, daemon=True)
+        watcher.start()
+        setup_complete = True
+        try:
+            try:
+                raw, _ = process.communicate(encode(parameters), timeout=15)
+            except subprocess.TimeoutExpired:
+                raise ReferenceError('design_reference_preview_timeout') from None
+            _need(process.returncode == 0 and len(raw) <= MAX_PACK_BYTES
+                  and not supervision_failed.is_set())
+            data = json.loads(raw)
+        finally:
+            stopped.set()
+            watcher.join(timeout=1)
             try:
                 observe()
             except (OSError, ValueError):
-                supervision_failed.set()
-                stopped.set()
-    watcher = threading.Thread(target=monitor, daemon=True)
-    watcher.start()
-    try:
-        try:
-            raw, _ = process.communicate(encode(parameters), timeout=15)
-        except subprocess.TimeoutExpired:
-            raise ReferenceError('design_reference_preview_timeout') from None
-        _need(process.returncode == 0 and len(raw) <= MAX_PACK_BYTES
-              and not supervision_failed.is_set())
-        data = json.loads(raw)
-    finally:
-        stopped.set()
-        watcher.join(timeout=1)
-        try:
-            observe()
-        except (OSError, ValueError):
-            pass
-        # Playwright can place Chrome in another process group. Kill only
-        # observed descendants whose Linux birth identity still matches.
-        for pid, birth in list(observed.items()):
-            descriptor = None
-            try:
-                descriptor = os.pidfd_open(pid)
-                fields = Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()
-                if fields[19] == birth:
-                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
-            except (OSError, ValueError, IndexError):
                 pass
+            # Playwright can place Chrome in another process group. Kill only
+            # observed descendants whose Linux birth identity still matches.
+            for pid, birth in list(observed.items()):
+                descriptor = None
+                try:
+                    descriptor = os.pidfd_open(pid)
+                    fields = Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()
+                    if fields[19] == birth:
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                except (OSError, ValueError, IndexError):
+                    pass
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+            process.wait(timeout=2)
+    finally:
+        try:
+            if not setup_complete:
+                # The returned Popen still owns this direct child; kill/wait do
+                # not need a /proc identity and never target another process.
+                try:
+                    process.kill()
+                finally:
+                    process.wait(timeout=2)
+        finally:
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
             finally:
-                if descriptor is not None:
-                    os.close(descriptor)
-        process.wait(timeout=2)
+                if process.stdout is not None:
+                    process.stdout.close()
     tokens = []
     for row in data['rows']:
         origin = {'kind':'computed','source':url,'name':row['property'],

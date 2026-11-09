@@ -28,7 +28,7 @@ from getzilla.workflow_storage import change_directory  # noqa: E402
 NAME = 'design-reference'
 CURRENT_VERSION = '0.2.0'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '50609bf8c4137682d170fe0811797089a3dfba5339d94aed196cd4219d82c3e4'
+EXPECTED_MANIFEST_SHA256 = 'fde8d37bafacb0b932d89f821eed7a5e68fc250f8fb26503cccfca07c18b2e9b'
 # Read-only compatibility for immutable v1 records from accepted PR368.
 HISTORICAL_V1_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
 TRUSTED_MANIFESTS = {'0.1.0': HISTORICAL_V1_MANIFEST_SHA256, CURRENT_VERSION: EXPECTED_MANIFEST_SHA256}

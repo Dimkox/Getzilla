@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -687,6 +687,35 @@ class PreviewDesignReferenceTests(unittest.TestCase):
                             'preview_design_adapter')
         reference.capture_preview = partial(preview.capture_preview, reference)
         return reference
+
+    def test_preview_owned_streams_close_on_timeout_reap_error_and_setup_failure(self):
+        module = self.extractor()
+        for case in ('timeout-reap-timeout', 'initial-procstat-failure'):
+            with self.subTest(case=case):
+                process = Mock(pid=4321, returncode=-9)
+                process.stdin, process.stdout = Mock(), Mock()
+                process.communicate.side_effect = subprocess.TimeoutExpired('owned-worker', 15)
+                process.wait.side_effect = (subprocess.TimeoutExpired('owned-worker', 2)
+                                            if case == 'timeout-reap-timeout' else None)
+                fields = ['S','1'] + ['0'] * 17 + ['12345']
+                with patch.object(subprocess, 'Popen', return_value=process), \
+                     patch('pathlib.Path') as paths, patch('threading.Thread'), \
+                     patch('os.pidfd_open', return_value=90), patch('os.close'), \
+                     patch('signal.pidfd_send_signal') as signal_mock:
+                    paths.return_value.iterdir.return_value = []
+                    if case == 'initial-procstat-failure':
+                        paths.return_value.read_text.side_effect = OSError('owned fixture procstat unavailable')
+                    else:
+                        paths.return_value.read_text.return_value = '4321 (worker) ' + ' '.join(fields)
+                    with self.assertRaises((ValueError, OSError, subprocess.TimeoutExpired)):
+                        module.capture_preview('http://127.0.0.1:8000/', ['http://127.0.0.1:8000/'],
+                                               capture_id='stream-unit', captured_at='2026-11-09T00:00:00Z')
+                    process.stdin.close.assert_called_once_with()
+                    process.stdout.close.assert_called_once_with()
+                    process.wait.assert_called_once_with(timeout=2)
+                    if case == 'initial-procstat-failure':
+                        process.kill.assert_called_once_with()
+                        signal_mock.assert_not_called()
 
     def test_optional_transport_has_separate_source_and_architecture_boundary(self):
         import ast

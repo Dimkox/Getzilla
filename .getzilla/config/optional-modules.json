@@ -18,7 +18,7 @@
         },
         "0.2.0": {
           "manifest": ".getzilla/optional-modules/design-reference/0.2.0/module.json",
-          "sha256": "50609bf8c4137682d170fe0811797089a3dfba5339d94aed196cd4219d82c3e4"
+          "sha256": "fde8d37bafacb0b932d89f821eed7a5e68fc250f8fb26503cccfca07c18b2e9b"
         }
       }
     }

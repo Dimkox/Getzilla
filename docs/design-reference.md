@@ -119,7 +119,9 @@ other active state is induced. No screenshots are captured.
 Bounds are16 declared URLs,32 reads,256KiB per response,1MiB total response bytes,
 128 elements,1536 observations,4096 characters/value,1MiB pack,1 second per network
 operation,4 seconds for navigation,8 seconds for accepting reads, and15 seconds
-for the whole worker. After the deadline, Linux pidfds stop the worker and observed descendants.
+for the whole worker. Owned worker stdin/stdout pipes close after the bounded reap attempt, including
+timeout, cleanup error and early setup failure. No unbounded process-context
+manager wait is used. After the deadline, Linux pidfds stop the worker and observed descendants.
 A bounded monitor records parent chains and process birth identities before any
 signal. Controlled-fixture tests check that no observed browser descendant keeps
 running; this does not provide OS process confinement or universal supervision
