@@ -110,7 +110,7 @@ def policy_binding(root: Path) -> dict:
     implementation = {}
     for name in ('verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
-                 'stack_versions.py', 'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
+                 'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
                  'expanded_security.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
                  'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py'):

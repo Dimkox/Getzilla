@@ -210,6 +210,19 @@ class RequiredPlanTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 api._module_source(module)
 
+    def test_actual_known_engine_source_closure_has_no_missing_or_null_owner(self):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                binding = api.policy_binding(Path(directory))
+            except (ImportError, OSError, ValueError) as error:
+                self.fail('actual declared policy source owner is unavailable: ' + type(error).__name__)
+        implementation = binding['implementation']
+        self.assertIn('stack_toolchains.py', implementation)
+        self.assertIn('factory_tests.py', implementation)
+        self.assertIn('python_test_runner.py', implementation)
+        self.assertTrue(all(isinstance(value, str) and len(value) == 64 for value in implementation.values()))
+
 
 class CriterionOwnershipTests(unittest.TestCase):
     def api(self):
