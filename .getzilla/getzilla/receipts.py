@@ -1067,6 +1067,10 @@ def validate_evidence(
             missing.append(f'{kind}: status={receipt.get("status")}')
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
+        if kind == 'verification' and receipt.get('status') == 'pass':
+            from .verification_plan import report_gaps
+            if report_gaps(root, receipt.get('details')):
+                missing.append('verification: current required plan or individual evidence is unavailable or stale')
         plan_digest = (route.get('review_plan') or {}).get('digest')
         if plan_digest and receipt.get('review_plan_digest') != plan_digest:
             missing.append(f'{kind}: review plan binding stale')

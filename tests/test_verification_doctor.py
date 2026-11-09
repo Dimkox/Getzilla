@@ -1042,7 +1042,8 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context'},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract',
+                 'source-stability', 'task-context', 'quality-gate'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:

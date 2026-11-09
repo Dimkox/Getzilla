@@ -129,10 +129,23 @@ def evaluate_quality_gate(
     mode: str,
     checks: Iterable[object],
     docs_scope: dict[str, object] | None = None,
+    required_plan: dict | None = None,
+    current_binding: dict | None = None,
+    now_utc=None,
+    data_source_validator=None,
 ) -> QualityGateDecision:
     """Return the QG-01 admission decision for already executed checks."""
+    checks = list(checks)
     check_map = _by_name(checks)
     details: list[dict[str, str]] = []
+    if (not isinstance(required_plan, dict) or not isinstance(current_binding, dict)
+            or now_utc is None or not callable(data_source_validator)):
+        details.append(_detail('required-plan-unavailable', 'required_plan',
+                               'current plan, binding, aware clock and trusted validator are required'))
+    else:
+        from .verification_plan import plan_gaps
+        details.extend(plan_gaps(required_plan, checks, current_binding=current_binding,
+                                 now_utc=now_utc, data_source_validator=data_source_validator))
 
     if mode in {"pr", "release"}:
         required = set(MANDATORY_PR_CHECKS)

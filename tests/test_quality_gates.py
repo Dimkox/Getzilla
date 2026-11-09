@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 import unittest
+import copy
+from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
-from getzilla.quality_gates import evaluate_quality_gate
+from getzilla.quality_gates import evaluate_quality_gate as _evaluate_quality_gate
+from getzilla.verification_plan import bind_result, build_required_plan, obligation
+
+
+def evaluate_quality_gate(*, mode, checks, docs_scope=None):
+    """These admission unit fixtures declare their own source world, not a real verification."""
+    checks = copy.deepcopy(checks)
+    allowed = {'no non-test python paths', 'no python quality paths', '0 specs checked; exempt=True',
+               'architecture authority inputs are absent; not executed',
+               'pytest runner owns tests; measure unittest trees only',
+               'repository-sandbox has no nested-container/database capability'}
+    excluded = set((docs_scope or {}).get('skipped_checks', [])) if (docs_scope or {}).get('eligible') else set()
+    rows = [obligation(item.name, required=not (item.name in excluded or item.summary in allowed),
+                       evidence={'kind': 'unit-source-applicability', 'name': item.name}) for item in checks]
+    with mock.patch('getzilla.verification_plan.policy_binding', return_value={'digest': 'a' * 64}):
+        plan = build_required_plan(Path('.'), mode=mode, context={}, source={}, inventory={}, risk={},
+                                   selection={}, extra_obligations=rows)
+    for item in checks:
+        item.details = []
+        bind_result(plan, item)
+    return _evaluate_quality_gate(mode=mode, checks=checks, docs_scope=docs_scope, required_plan=plan,
+        current_binding=plan['binding'], now_utc=datetime(2026, 11, 9, tzinfo=timezone.utc),
+        data_source_validator=lambda source, **options: True)
 
 
 def check(name: str, status: str = "pass", summary: str = "ok") -> SimpleNamespace:
@@ -88,9 +114,8 @@ class QualityGateTests(unittest.TestCase):
                         if status is not None:
                             checks.append(check(runner, status, 'architecture input preflight failed; not started' if status == 'skip' else 'result'))
                         decision = evaluate_quality_gate(mode=mode, checks=checks, docs_scope=scope)
-                        # A failed executed run has complete admission evidence; the
-                        # verifier's aggregate result still rejects the failing check.
-                        self.assertEqual(decision.status, 'pass' if status in {'pass', 'fail'} else 'fail')
+                        # Execution alone does not qualify a failed required result.
+                        self.assertEqual(decision.status, 'pass' if status == 'pass' else 'fail')
                         if status not in {'pass', 'fail'}:
                             self.assertIn('python-discovery', {item['path'] for item in decision.details})
 
