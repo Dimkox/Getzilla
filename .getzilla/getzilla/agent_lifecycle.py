@@ -124,10 +124,14 @@ def _owned_route(root: Path) -> dict:
 
 @serialized_task
 def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | None = None,
-                generation: str | None = None) -> dict:
+                generation: str | None = None, requirement_ids: tuple[str, ...] | None = None) -> dict:
     from .policy import write_roles
 
     agent_id, agent_type = _identity(agent_id), _identity(agent_type)
+    if requirement_ids is not None and (not isinstance(requirement_ids, tuple) or
+            not 0 < len(requirement_ids) <= 2000 or any(not isinstance(item, str) or not item for item in requirement_ids) or
+            len(set(requirement_ids)) != len(requirement_ids)):
+        raise ValueError('invalid implementation requirement scope')
     current = _now(now)
     route = _owned_route(root)
     from .continuity import task_identity, _active_workers
@@ -144,10 +148,16 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
                     existing.get('task_id', task_id) != task_id or
                     existing.get('workspace') != str(root.resolve()) or
                     existing.get('authority_epoch', 0) != route.get('authority_epoch', 0) or
-                    (generation is not None and existing.get('generation') != generation)):
+                    (generation is not None and existing.get('generation') != generation) or
+                    (requirement_ids is not None and existing.get('requirement_ids') != list(requirement_ids))):
                 raise ValueError('instance-conflict')
             return copy.deepcopy(existing)
         roles = write_roles(root) | {route.get('write_agent')}
+        if agent_type in roles:
+            from .task_intent import write_scope_gaps
+            gaps = write_scope_gaps(root, route, requirement_ids=requirement_ids)
+            if gaps:
+                raise ValueError('; '.join(gaps))
         if agent_type in roles and route.get('write_agent') and route['write_agent'] != agent_type:
             raise ValueError('writer-outside-route')
         if agent_type in roles and any(item.get('agent_type') in roles for item in active.values()):
@@ -166,6 +176,8 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
             'last_progress_at': current.isoformat(timespec='seconds'),
             'last_activity_at': current.isoformat(timespec='seconds'),
         }
+        if requirement_ids is not None:
+            record['requirement_ids'] = list(requirement_ids)
         active[agent_id] = record
         return _save(root, state, 'start', agent_id, record, current)
 

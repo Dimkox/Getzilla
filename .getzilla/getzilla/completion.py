@@ -6,7 +6,7 @@ import html
 import json
 from typing import Any
 
-from .continuity import TERMINAL
+from .continuity import TERMINAL, digest
 
 STOP_ATTEMPT_LIMIT = 2
 
@@ -53,6 +53,10 @@ def observe_remaining(route: dict[str, Any], package: dict[str, Any] | None,
     remaining = list(dict.fromkeys(remaining))
     identity = {'task': route.get('logical_task_id', route['route_id']), 'epoch': route.get('authority_epoch'),
                 'context': route.get('context'), 'remaining': remaining}
+    if 'intent_state' in route:
+        from .task_intent import validate_intent
+        validate_intent(route['intent_state'])
+        identity['intent_digest'] = digest(route['intent_state'])
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=True).encode('utf-8')).hexdigest()
     return {'remaining': remaining, 'blocked_reason': blocked, 'fingerprint': fingerprint}
 

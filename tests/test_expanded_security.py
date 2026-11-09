@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -18,8 +19,23 @@ from tests.test_security_intelligence import epss_payload, kev_payload
 NOW = datetime(2026, 11, 3, 0, tzinfo=timezone.utc)
 
 
+@contextmanager
+def _fixture_database_environment():
+    previous = {key: os.environ.pop(key, None) for key in
+                ('GETZILLA_SECURITY_DB', 'GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE')}
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 class ExpandedSecurityTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(_fixture_database_environment())
         directory = tempfile.TemporaryDirectory(prefix='expanded-security-')
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
@@ -159,6 +175,30 @@ class ExpandedSecurityTests(unittest.TestCase):
         known = next(item for item in report['checks'] if item['name'] == 'known-vulnerabilities')
         self.assertEqual(known['status'], 'fail')
         self.assertEqual(known['details'][0]['outcome'], 'blocked')
+
+
+class ExpandedSecurityEnvironmentTests(unittest.TestCase):
+    def test_fixture_setup_isolates_selector_paths_and_restores_environment(self):
+        from getzilla.expanded_security import _database
+        with tempfile.TemporaryDirectory(prefix='expanded-owned-selectors-') as directory:
+            outer = {
+                'GETZILLA_SECURITY_DB': str(Path(directory) / 'security-db'),
+                'GETZILLA_OSV_DB': str(Path(directory) / 'osv-db'),
+                'GETZILLA_OSV_ONLINE': '1',
+            }
+            with mock.patch.dict(os.environ, outer):
+                fixture = ExpandedSecurityTests('test_configured_database_alias_does_not_erase_the_snapshot_boundary')
+                try:
+                    fixture.setUp()
+                    self.assertEqual(_database(fixture.root), fixture.db)
+                    self.assertTrue(all(key not in os.environ for key in outer))
+                    explicit = {'GETZILLA_SECURITY_DB': outer['GETZILLA_SECURITY_DB'],
+                                'GETZILLA_OSV_DB': str(fixture.db)}
+                    self.assertEqual(_database(fixture.root, explicit), Path(outer['GETZILLA_SECURITY_DB']))
+                    self.assertEqual(_database(fixture.root, {'GETZILLA_OSV_DB': str(fixture.db)}), fixture.db)
+                finally:
+                    self.assertTrue(fixture.doCleanups())
+                self.assertEqual({key: os.environ.get(key) for key in outer}, outer)
 
 
 if __name__ == '__main__':
