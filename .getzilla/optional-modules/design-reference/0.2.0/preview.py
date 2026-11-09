@@ -236,5 +236,3 @@ def capture_preview(reference, url, resources, *, capture_id, captured_at,
             'capture':{'id':capture_id,'timestamp':captured_at}}
     validate_pack(pack)
     return pack
-
-
