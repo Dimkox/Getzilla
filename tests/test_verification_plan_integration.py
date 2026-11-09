@@ -216,4 +216,3 @@ class NativeSecurityProjectionTests(unittest.TestCase):
         wrong = copy.deepcopy(results)
         wrong[0]['details'][0]['family'] = 'wrong-family'
         self.assertTrue(plan_gaps(plan, wrong, **kwargs))
-

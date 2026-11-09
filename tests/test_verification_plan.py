@@ -287,4 +287,3 @@ class CriterionOwnershipTests(unittest.TestCase):
             self.addCleanup(sys.modules.pop, 'test_rebound_criterion_pure', None)
             with self.assertRaises(ValueError):
                 api._execute_references(root, ['test_rebound_criterion_pure.py::Owned::test_ok'])
-
