@@ -300,3 +300,53 @@ class CriterionOwnershipTests(unittest.TestCase):
             self.addCleanup(sys.modules.pop, 'test_rebound_criterion_pure', None)
             with self.assertRaises(ValueError):
                 api._execute_references(root, ['test_rebound_criterion_pure.py::Owned::test_ok'])
+
+
+class CollectedLifecycleRepairTests(unittest.TestCase):
+    def test_plain_declared_method_executes_once_for_overlapping_references(self):
+        from getzilla import criterion_tests as api
+        name = 'test_collected_plain_method'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / (name + '.py')).write_text('import unittest\nCALLS=0\nclass Owned(unittest.TestCase):\n'
+                ' def test_required(self):\n  global CALLS\n  CALLS+=1\n  self.assertEqual(CALLS,1)\n')
+            self.addCleanup(sys.modules.pop, name, None)
+            refs = [name + '.py::Owned', name + '.py::Owned::test_required']
+            report = api._execute_references(root, refs)
+            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['verified_references'], sorted(refs))
+            self.assertEqual(len(report['tests']), 1)
+            self.assertEqual(sys.modules[name].CALLS, 1)
+
+    def test_run_override_cannot_credit_a_body_that_never_executed(self):
+        from getzilla import criterion_tests as api
+        name = 'test_collected_fake_lifecycle'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / (name + '.py')).write_text('import unittest\nBODY_CALLED=False\nclass Owned(unittest.TestCase):\n'
+                ' def test_required(self):\n  global BODY_CALLED\n  BODY_CALLED=True\n  self.fail("owned failing body")\n'
+                ' def run(self,result=None):\n  result.startTest(self)\n  result.addSuccess(self)\n  result.stopTest(self)\n  return result\n')
+            self.addCleanup(sys.modules.pop, name, None)
+            try:
+                report = api._execute_references(root, [name + '.py::Owned::test_required'])
+            except ValueError:
+                self.assertFalse(sys.modules[name].BODY_CALLED)
+            else:
+                self.assertNotEqual(report['status'], 'pass')
+                self.assertEqual(report['verified_references'], [])
+
+    def test_skip_expected_failure_and_missing_method_remain_unverified(self):
+        from getzilla import criterion_tests as api
+        for case, decorator, body in (('skip', '@unittest.skip("owned")\n ', 'self.assertTrue(True)'),
+                                      ('expected', '@unittest.expectedFailure\n ', 'self.fail("owned")'),
+                                      ('missing', '', 'self.assertTrue(True)')):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                name = 'test_collected_unverified_' + case
+                (root / (name + '.py')).write_text('import unittest\nclass Owned(unittest.TestCase):\n '+decorator+
+                    'def test_required(self):\n  '+body+'\n')
+                self.addCleanup(sys.modules.pop, name, None)
+                method = 'test_absent' if case == 'missing' else 'test_required'
+                report = api._execute_references(root, [name + '.py::Owned::' + method])
+                self.assertEqual(report['status'], 'fail')
+                self.assertEqual(report['verified_references'], [])

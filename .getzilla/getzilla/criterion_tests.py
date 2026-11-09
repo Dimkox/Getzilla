@@ -158,12 +158,26 @@ class _Discard:
         pass
 
 
+def _trusted_lifecycle(case):
+    """Only the canonical unittest lifecycle can earn this driver's execution credit.
+
+    Owned setUp/tearDown/test bodies remain ordinary test code, not confined code.
+    Custom lifecycle adapters need a separate supported execution contract.
+    """
+    names = ('run', '__call__', '__getattribute__', '_callTestMethod', '_callSetUp',
+             '_callTearDown', '_callCleanup', 'doCleanups')
+    return all(inspect.getattr_static(case, name) is inspect.getattr_static(unittest.TestCase, name)
+               for name in names)
+
+
 class _ObservedResult(unittest.TestResult):
     def __init__(self, identities):
         super().__init__()
         self.identities, self.observed, self.outcomes = identities, [], {}
 
     def startTest(self, test):
+        if not _trusted_lifecycle(test):
+            raise ValueError('typed case lifecycle is unsupported or changed')
         super().startTest(test)
         name = self.identities[id(test)]
         self.observed.append(name)
@@ -226,6 +240,8 @@ def _execute_references(root, references):
                           (len(selector) == 1 or getattr(case, '_testMethodName', None) == selector[1])]
                 selected = []
                 for case in chosen:
+                    if not _trusted_lifecycle(case):
+                        raise ValueError('typed case lifecycle is unsupported')
                     cls, method = type(case), getattr(case, '_testMethodName', None)
                     if (cls.__module__ != source['module'] or method not in source['classes'].get(cls.__name__, [])
                             or not isinstance(case, unittest.TestCase)):
