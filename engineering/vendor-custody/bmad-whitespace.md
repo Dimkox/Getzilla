@@ -1,3 +1,26 @@
+# BMAD 6.12.4 exact-byte custody facts
+
+The four retained raw files match the exact BMAD Git blobs at
+bab9082c3e884e0d72c759bcd1a6d90bcc01be84 (v6.12.4). The full official source
+archive was compared against the complete exact Git tree. The generated codex
+manifest binds each target SHA256, size and mode; the closed catalog carries the
+actual commit and directory tree entries for each upstream path/blob proof.
+All four file contents and their 120 raw whitespace diagnostics are unchanged
+from the previous source. Their current source, inventory and catalog witnesses
+were recomputed; old witnesses were not relabeled as current evidence.
+
+Generation used the existing offline read-only Linux sandbox with locked inputs.
+The separate JSON binds the current catalog and the observed exact diagnostics.
+No raw source bytes, newlines, modes or scanner limits were changed. This is
+byte-custody evidence only, not semantic safety, a legal/security approval,
+independent review, qualification PASS or merge permission. Fresh independent
+review and ordinary exact-head gates remain required.
+
+## Retained historical custody and failed review facts
+
+The following original record belongs to BMAD 6.12.1 and its old reviewed source.
+It does not qualify this update.
+
 # BMAD exact-byte custody facts
 
 This record preserves actual independent custody observations from the four failed

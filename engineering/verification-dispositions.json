@@ -3,12 +3,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-1",
       "kind": "immutable-vendored-whitespace",
@@ -22,12 +22,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-2",
       "kind": "immutable-vendored-whitespace",
@@ -41,12 +41,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-3",
       "kind": "immutable-vendored-whitespace",
@@ -60,12 +60,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-4",
       "kind": "immutable-vendored-whitespace",
@@ -79,12 +79,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-5",
       "kind": "immutable-vendored-whitespace",
@@ -98,12 +98,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-6",
       "kind": "immutable-vendored-whitespace",
@@ -117,12 +117,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-7",
       "kind": "immutable-vendored-whitespace",
@@ -136,12 +136,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-8",
       "kind": "immutable-vendored-whitespace",
@@ -155,12 +155,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-9",
       "kind": "immutable-vendored-whitespace",
@@ -174,12 +174,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-10",
       "kind": "immutable-vendored-whitespace",
@@ -193,12 +193,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-11",
       "kind": "immutable-vendored-whitespace",
@@ -212,12 +212,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-12",
       "kind": "immutable-vendored-whitespace",
@@ -231,12 +231,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-13",
       "kind": "immutable-vendored-whitespace",
@@ -250,12 +250,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-14",
       "kind": "immutable-vendored-whitespace",
@@ -269,12 +269,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-15",
       "kind": "immutable-vendored-whitespace",
@@ -288,12 +288,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-16",
       "kind": "immutable-vendored-whitespace",
@@ -307,12 +307,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-17",
       "kind": "immutable-vendored-whitespace",
@@ -326,12 +326,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-18",
       "kind": "immutable-vendored-whitespace",
@@ -345,12 +345,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-19",
       "kind": "immutable-vendored-whitespace",
@@ -364,12 +364,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-20",
       "kind": "immutable-vendored-whitespace",
@@ -383,12 +383,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-21",
       "kind": "immutable-vendored-whitespace",
@@ -402,12 +402,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-22",
       "kind": "immutable-vendored-whitespace",
@@ -421,12 +421,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-23",
       "kind": "immutable-vendored-whitespace",
@@ -440,12 +440,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-24",
       "kind": "immutable-vendored-whitespace",
@@ -459,12 +459,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-25",
       "kind": "immutable-vendored-whitespace",
@@ -478,12 +478,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-26",
       "kind": "immutable-vendored-whitespace",
@@ -497,12 +497,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-27",
       "kind": "immutable-vendored-whitespace",
@@ -516,12 +516,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-28",
       "kind": "immutable-vendored-whitespace",
@@ -535,12 +535,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-29",
       "kind": "immutable-vendored-whitespace",
@@ -554,12 +554,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-30",
       "kind": "immutable-vendored-whitespace",
@@ -573,12 +573,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-31",
       "kind": "immutable-vendored-whitespace",
@@ -592,12 +592,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-32",
       "kind": "immutable-vendored-whitespace",
@@ -611,12 +611,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-33",
       "kind": "immutable-vendored-whitespace",
@@ -630,12 +630,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-34",
       "kind": "immutable-vendored-whitespace",
@@ -649,12 +649,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-35",
       "kind": "immutable-vendored-whitespace",
@@ -668,12 +668,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-36",
       "kind": "immutable-vendored-whitespace",
@@ -687,12 +687,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-37",
       "kind": "immutable-vendored-whitespace",
@@ -706,12 +706,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-38",
       "kind": "immutable-vendored-whitespace",
@@ -725,12 +725,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-39",
       "kind": "immutable-vendored-whitespace",
@@ -744,12 +744,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-40",
       "kind": "immutable-vendored-whitespace",
@@ -763,12 +763,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-41",
       "kind": "immutable-vendored-whitespace",
@@ -782,12 +782,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-42",
       "kind": "immutable-vendored-whitespace",
@@ -801,12 +801,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-43",
       "kind": "immutable-vendored-whitespace",
@@ -820,12 +820,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-44",
       "kind": "immutable-vendored-whitespace",
@@ -839,12 +839,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-45",
       "kind": "immutable-vendored-whitespace",
@@ -858,12 +858,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-46",
       "kind": "immutable-vendored-whitespace",
@@ -877,12 +877,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-47",
       "kind": "immutable-vendored-whitespace",
@@ -896,12 +896,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-48",
       "kind": "immutable-vendored-whitespace",
@@ -915,12 +915,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-49",
       "kind": "immutable-vendored-whitespace",
@@ -934,12 +934,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-50",
       "kind": "immutable-vendored-whitespace",
@@ -953,12 +953,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-51",
       "kind": "immutable-vendored-whitespace",
@@ -972,12 +972,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-52",
       "kind": "immutable-vendored-whitespace",
@@ -991,12 +991,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-53",
       "kind": "immutable-vendored-whitespace",
@@ -1010,12 +1010,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-54",
       "kind": "immutable-vendored-whitespace",
@@ -1029,12 +1029,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-55",
       "kind": "immutable-vendored-whitespace",
@@ -1048,12 +1048,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-56",
       "kind": "immutable-vendored-whitespace",
@@ -1067,12 +1067,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-57",
       "kind": "immutable-vendored-whitespace",
@@ -1086,12 +1086,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-58",
       "kind": "immutable-vendored-whitespace",
@@ -1105,12 +1105,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-59",
       "kind": "immutable-vendored-whitespace",
@@ -1124,12 +1124,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-60",
       "kind": "immutable-vendored-whitespace",
@@ -1143,12 +1143,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-61",
       "kind": "immutable-vendored-whitespace",
@@ -1162,12 +1162,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-62",
       "kind": "immutable-vendored-whitespace",
@@ -1181,12 +1181,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-63",
       "kind": "immutable-vendored-whitespace",
@@ -1200,12 +1200,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-64",
       "kind": "immutable-vendored-whitespace",
@@ -1219,12 +1219,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-65",
       "kind": "immutable-vendored-whitespace",
@@ -1238,12 +1238,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-66",
       "kind": "immutable-vendored-whitespace",
@@ -1257,12 +1257,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-67",
       "kind": "immutable-vendored-whitespace",
@@ -1276,12 +1276,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-68",
       "kind": "immutable-vendored-whitespace",
@@ -1295,12 +1295,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-69",
       "kind": "immutable-vendored-whitespace",
@@ -1314,12 +1314,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-70",
       "kind": "immutable-vendored-whitespace",
@@ -1333,12 +1333,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-71",
       "kind": "immutable-vendored-whitespace",
@@ -1352,12 +1352,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-72",
       "kind": "immutable-vendored-whitespace",
@@ -1371,12 +1371,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-73",
       "kind": "immutable-vendored-whitespace",
@@ -1390,12 +1390,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-74",
       "kind": "immutable-vendored-whitespace",
@@ -1409,12 +1409,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-75",
       "kind": "immutable-vendored-whitespace",
@@ -1428,12 +1428,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-76",
       "kind": "immutable-vendored-whitespace",
@@ -1447,12 +1447,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-77",
       "kind": "immutable-vendored-whitespace",
@@ -1466,12 +1466,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-78",
       "kind": "immutable-vendored-whitespace",
@@ -1485,12 +1485,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-79",
       "kind": "immutable-vendored-whitespace",
@@ -1504,12 +1504,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-80",
       "kind": "immutable-vendored-whitespace",
@@ -1523,12 +1523,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-81",
       "kind": "immutable-vendored-whitespace",
@@ -1542,12 +1542,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-82",
       "kind": "immutable-vendored-whitespace",
@@ -1561,12 +1561,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-83",
       "kind": "immutable-vendored-whitespace",
@@ -1580,12 +1580,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-84",
       "kind": "immutable-vendored-whitespace",
@@ -1599,12 +1599,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-85",
       "kind": "immutable-vendored-whitespace",
@@ -1618,12 +1618,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-86",
       "kind": "immutable-vendored-whitespace",
@@ -1637,12 +1637,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-87",
       "kind": "immutable-vendored-whitespace",
@@ -1656,12 +1656,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-88",
       "kind": "immutable-vendored-whitespace",
@@ -1675,12 +1675,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-89",
       "kind": "immutable-vendored-whitespace",
@@ -1694,12 +1694,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-90",
       "kind": "immutable-vendored-whitespace",
@@ -1713,12 +1713,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-91",
       "kind": "immutable-vendored-whitespace",
@@ -1732,12 +1732,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-92",
       "kind": "immutable-vendored-whitespace",
@@ -1751,12 +1751,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-93",
       "kind": "immutable-vendored-whitespace",
@@ -1770,12 +1770,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-94",
       "kind": "immutable-vendored-whitespace",
@@ -1789,12 +1789,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-95",
       "kind": "immutable-vendored-whitespace",
@@ -1808,12 +1808,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-96",
       "kind": "immutable-vendored-whitespace",
@@ -1827,12 +1827,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-97",
       "kind": "immutable-vendored-whitespace",
@@ -1846,12 +1846,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-98",
       "kind": "immutable-vendored-whitespace",
@@ -1865,12 +1865,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-99",
       "kind": "immutable-vendored-whitespace",
@@ -1884,12 +1884,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-100",
       "kind": "immutable-vendored-whitespace",
@@ -1903,12 +1903,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-101",
       "kind": "immutable-vendored-whitespace",
@@ -1922,12 +1922,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-102",
       "kind": "immutable-vendored-whitespace",
@@ -1941,12 +1941,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-103",
       "kind": "immutable-vendored-whitespace",
@@ -1960,12 +1960,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-104",
       "kind": "immutable-vendored-whitespace",
@@ -1979,12 +1979,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-105",
       "kind": "immutable-vendored-whitespace",
@@ -1998,12 +1998,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-106",
       "kind": "immutable-vendored-whitespace",
@@ -2017,12 +2017,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-107",
       "kind": "immutable-vendored-whitespace",
@@ -2036,12 +2036,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-108",
       "kind": "immutable-vendored-whitespace",
@@ -2055,12 +2055,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-109",
       "kind": "immutable-vendored-whitespace",
@@ -2074,12 +2074,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-110",
       "kind": "immutable-vendored-whitespace",
@@ -2093,12 +2093,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-111",
       "kind": "immutable-vendored-whitespace",
@@ -2112,12 +2112,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-112",
       "kind": "immutable-vendored-whitespace",
@@ -2131,12 +2131,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-113",
       "kind": "immutable-vendored-whitespace",
@@ -2150,12 +2150,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-114",
       "kind": "immutable-vendored-whitespace",
@@ -2169,12 +2169,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-115",
       "kind": "immutable-vendored-whitespace",
@@ -2188,12 +2188,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-116",
       "kind": "immutable-vendored-whitespace",
@@ -2207,12 +2207,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-117",
       "kind": "immutable-vendored-whitespace",
@@ -2226,12 +2226,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-118",
       "kind": "immutable-vendored-whitespace",
@@ -2245,12 +2245,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-119",
       "kind": "immutable-vendored-whitespace",
@@ -2264,12 +2264,12 @@
     {
       "catalog": {
         "path": ".getzilla/config/vendored-source-catalog.json",
-        "sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8"
+        "sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de"
       },
       "check": "git-diff-check",
       "evidence": {
         "path": "engineering/vendor-custody/bmad-whitespace.json",
-        "sha256": "0cdc6cdcdcd8630bac6218599c95aa89c0aacebb2da83f2493ded11c1fd49f0c"
+        "sha256": "e81ddd037e93ad852955825352e6b29821a73d8ccf784bf47b96529a0fb3a567"
       },
       "id": "bmad-raw-120",
       "kind": "immutable-vendored-whitespace",

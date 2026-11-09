@@ -754,6 +754,57 @@ class CurrentUpstreamFormatTests(unittest.TestCase):
             tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
             self.assertEqual([task["key"] for task in tasks], ["story-1-1-1-001", "story-1-1-2-001"])
 
+    def test_bmad_v6124_plan_status_does_not_authorize_work(self) -> None:
+        """v6.12.4 epics-template.md retains this exact planning front matter."""
+        content = (
+            "---\nstatus: draft\nstepsCompleted: []\ninputDocuments: []\n---\n"
+            "# Auth System - Epic Breakdown\n"
+            "### Story 1.1: Loader bootstraps\n"
+            "- [ ] Implement AC-001 in src/loader.py\n"
+        )
+        for status in ("draft", "final"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest = self._docs(root, [("bmad", "epics", "_bmad-output/epics.md",
+                                             content.replace("status: draft", "status: " + status))], "6.12.4")
+                bundle = self.artifacts.load_source_manifest(root, manifest)
+                tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+                self.assertEqual([task["key"] for task in tasks], ["story-1-1-001"])
+                self.assertEqual(tasks[0]["status"], "pending")
+                self.assertEqual(self.artifacts._advanced_status_hints(bundle), set())
+
+    def test_spec_kit_v132_tasks_keep_phase_and_parallel_dependencies(self) -> None:
+        """Exact v1.3.2 tasks-template rows, with the next phase preserved."""
+        content = (
+            "## Phase 1: Setup (Shared Infrastructure)\n"
+            "- [ ] T001 Create project structure per implementation plan\n"
+            "- [ ] T002 Initialize [language] project with [framework] dependencies\n"
+            "- [ ] T003 [P] Configure linting and formatting tools\n"
+            "## Phase 2: Foundational (Blocking Prerequisites)\n"
+            "- [ ] T004 Setup database schema and migrations framework\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(root, [("spec-kit", "tasks", "specs/001-feature/tasks.md", content)], "1.3.2")
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+            self.assertEqual([task["key"] for task in tasks], ["t001", "t002", "t003", "t004"])
+            self.assertEqual([task["depends_on"] for task in tasks], [[], ["t001"], [], ["t001", "t002", "t003"]])
+            self.assertTrue(all(task["status"] == "pending" for task in tasks))
+
+    def test_superpowers_v702_workspace_prose_remains_advisory(self) -> None:
+        """v7.0.2 still places its per-plan progress under .superpowers/sdd/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(root, [
+                ("superpowers", "plan", "docs/superpowers/plans/update.md", "# Update\n1. Retain safety\n"),
+                ("superpowers", "sdd-evidence", ".superpowers/sdd/update/plan-path", "docs/superpowers/plans/update.md\n"),
+                ("superpowers", "sdd-evidence", ".superpowers/sdd/update/progress.md", "Final: clean\n"),
+            ], "7.0.2")
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            self.assertEqual(len(bundle.sources), 3)
+            self.assertEqual(self.artifacts._advanced_status_hints(bundle), set())
+
     def test_bmad_v6121_epics_front_matter_status_does_not_advance_imported_work(self) -> None:
         """BMAD v6.12.1 epics front matter (2026-10-06, exact tag).
 

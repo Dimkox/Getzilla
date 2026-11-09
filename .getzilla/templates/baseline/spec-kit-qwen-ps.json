@@ -22,9 +22,9 @@
     "ps"
   ],
   "binding": {
-    "dependency_lock_sha256": "465faa6ad8743a19e8acee80467e8376a4aebbe286853149c66f487c309d560a",
-    "source_archive_sha256": "33b3ee3f7c8dfb6ea5be60c6df31b97f44e7ca7a29a303eb3af7a882fdc62281",
-    "source_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175"
+    "dependency_lock_sha256": "cc93d484da0a09a4134d212e7a4a33e8353a3f4223b13f6a4dd463414fed1fd0",
+    "source_archive_sha256": "15192dfc3770ac170e6b026f495ec157e42d31c96bd1cf9e19ebe5c68527bab4",
+    "source_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342"
   },
   "component": "spec-kit",
   "files": [
@@ -71,10 +71,10 @@
       "sha256": "e1c843928eac1aa842d0f157de321ccd5bc2359858514b9b648bfe6db15d7a5f"
     },
     {
-      "bytes": 18377,
+      "bytes": 18756,
       "mode": 420,
       "path": ".qwen/commands/speckit.specify.md",
-      "sha256": "21634a45dfcf642fddb1645f4ad2980f98c89778442e47663df8a6c3a1eaf8bc"
+      "sha256": "61591ee91d4f9008deb501aa33c160b8710688f73db165d6f3712210fb07fdcb"
     },
     {
       "bytes": 11329,
@@ -83,46 +83,34 @@
       "sha256": "ce1bac03e7bfe8bff675a5fb87e74f052da173146f202bf0a72d0a828d87d801"
     },
     {
-      "bytes": 7627,
-      "mode": 420,
-      "path": ".qwen/commands/speckit.taskstoissues.md",
-      "sha256": "f6999cc277873de0fbde91180d25fee44fc22bf4a1a7db888d74a74805ae2bea"
-    },
-    {
-      "bytes": 384,
+      "bytes": 586,
       "mode": 420,
       "path": ".specify/.gitignore",
-      "sha256": "8c908410d177a1ef3d0dee16d7ad55f2ac3333df3104c4d4adee1c9b82f1dbc1"
+      "sha256": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
     },
     {
-      "bytes": 1060,
-      "mode": 420,
-      "path": ".specify/LICENSE",
-      "sha256": "2510b446bc1f0cf9702453075d20cd88631e20e5642658edb7325d9c1eb534f7"
-    },
-    {
-      "bytes": 145,
+      "bytes": 172,
       "mode": 420,
       "path": ".specify/init-options.json",
-      "sha256": "beaaa2f02f5f4fb3fa5a4d44c74a87eaa17849e670e5188de1a8a4bc79b2858e"
+      "sha256": "8cc5b1ebf313f316700b426767cf8fe930d1d051ff09c67d417c56af5d408da2"
     },
     {
       "bytes": 267,
       "mode": 420,
       "path": ".specify/integration.json",
-      "sha256": "d9d67a1539bb75306491fddc3d816201805c093bc796fa01e7ea4836c8c785e4"
+      "sha256": "be518f58ab089894504aebd6938076cfd331a2131dc7a2a1dcb14d2b9b0d00b4"
     },
     {
-      "bytes": 1222,
+      "bytes": 1107,
       "mode": 420,
       "path": ".specify/integrations/qwen.manifest.json",
-      "sha256": "8ba1a6986115a4b36a06cf0872540388026c3873e5372ac7295065478d081f4a"
+      "sha256": "f6729ca7fa4141aa7a0f421c720a8a113baf3021b7fda3423070fc72bcb36eac"
     },
     {
       "bytes": 1516,
       "mode": 420,
       "path": ".specify/integrations/speckit.manifest.json",
-      "sha256": "0873747e57a1f1f52b34a632e25c62325df12f9553da55ea22a20da66dcc9bdb"
+      "sha256": "12963d4fbc030259d621c97d8b341a34f6a66f3b8fb46740f62bb9ef40f861a1"
     },
     {
       "bytes": 103,
@@ -137,16 +125,16 @@
       "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
     },
     {
-      "bytes": 6631,
+      "bytes": 7085,
       "mode": 420,
       "path": ".specify/scripts/powershell/check-prerequisites.ps1",
-      "sha256": "95c43b2c210004be4e2e6da8d6b0e293fb95bc6a54bb7bcb0d92edbd55539d9b"
+      "sha256": "1c01b9ca6e71f1044e799da30bde484866c896ae76fe8aa34f66facf5a3519ed"
     },
     {
-      "bytes": 35295,
+      "bytes": 35316,
       "mode": 420,
       "path": ".specify/scripts/powershell/common.ps1",
-      "sha256": "9837a02a1ca9e61a16a1ff7ec7429c95d8e1c87ec49400cc2807133bb89a5317"
+      "sha256": "c4816519ffb0b930427559b3ec729ef04a56162f4ef334958c8c50a3f92def9d"
     },
     {
       "bytes": 14876,
@@ -161,16 +149,16 @@
       "sha256": "e49c565a09902e4ebd4b5a51c4e014d5067fdee5b1592f15cb44ef31f430d745"
     },
     {
-      "bytes": 3058,
+      "bytes": 3062,
       "mode": 420,
       "path": ".specify/scripts/powershell/setup-plan.ps1",
-      "sha256": "3b8173f1553bbf67ae021af949a29e2d3e3bb35805be95e4ba8d0ab83173c66f"
+      "sha256": "5939ef98418e8dc8cc722ef53ba359fc814f3d2a9fd7620f04e8d145a7041f1a"
     },
     {
-      "bytes": 3892,
+      "bytes": 3977,
       "mode": 420,
       "path": ".specify/scripts/powershell/setup-tasks.ps1",
-      "sha256": "5aebeff2b84d6e369ec9bb3b5b73a9a1195ec4b927274f6a2df95aa9eba7e949"
+      "sha256": "01f1898ee31a1ef6317e6e290e8bba2acdb49a61d43f017f3d879dad6bf46efd"
     },
     {
       "bytes": 2033,
@@ -212,7 +200,7 @@
       "bytes": 369,
       "mode": 420,
       "path": ".specify/workflows/workflow-registry.json",
-      "sha256": "a25657cdbe90c48452e9e22e523aa98c57dba81965089062c4d70f3204f31a25"
+      "sha256": "bda0cef34c864d2689f098de24e10784d3d1657f7110afe5f8651aa704459877"
     }
   ],
   "generator": "linux-bubblewrap-offline-v1",

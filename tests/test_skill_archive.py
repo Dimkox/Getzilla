@@ -18,6 +18,22 @@ from getzilla import baseline_assets as assets
 BLOBS = '.getzilla/templates/baseline/blobs/'
 
 
+def configured_blob_identities():
+    """The configured manifest references are the independent archive contract."""
+    config = json.loads((ROOT/'.getzilla/config/toolchain.json').read_bytes())
+    declared = {}
+    for component in config['workflow_sources']['components']:
+        for variant in component['generated_assets'].values():
+            manifest = json.loads((ROOT/variant['path']).read_bytes())
+            for item in manifest['files']:
+                path = BLOBS+item['sha256']+'.txt'
+                identity = item['sha256'], item['bytes']
+                if path in declared and declared[path] != identity:
+                    raise AssertionError('configured resource identities disagree')
+                declared[path] = identity
+    return declared
+
+
 def archive(items):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as output:
@@ -106,7 +122,11 @@ class ResourceArchiveTests(unittest.TestCase):
         packed = next(entry for entry in payload if entry.path == INSTALL.ENGINE_ARCHIVE)
         members = self.decode(packed.content)
         source = {BLOBS+p.name: p.read_bytes() for p in (ROOT/BLOBS).glob('*.txt')}
-        self.assertEqual(len(source), 522)
+        expected = configured_blob_identities()
+        self.assertTrue(expected)
+        self.assertEqual(set(source), set(expected))
+        for path, body in source.items():
+            self.assertEqual((hashlib.sha256(body).hexdigest(), len(body)), expected[path])
         self.assertEqual({p: body for p,(body,_mode) in members.items() if p.startswith(BLOBS)}, source)
 
     def test_lean_load_and_installed_source_roundtrip_are_complete(self):
@@ -306,7 +326,8 @@ class ResourceModeContractTests(unittest.TestCase):
                     path = BLOBS+item['sha256']+'.txt'
                     if path not in entries:
                         entries[path] = ((ROOT/path).read_bytes(),0o644)
-        self.assertEqual(len(entries),522)
+        self.assertTrue(entries)
+        self.assertEqual(set(entries), {BLOBS+p.name for p in (ROOT/BLOBS).glob('*.txt')})
         return entries,metadata.__getitem__
 
     def test_resource_modes_preserve_posix_strictness(self):
