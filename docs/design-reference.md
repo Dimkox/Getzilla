@@ -121,8 +121,25 @@ Screenshots and style observations cannot prove functionality or accessibility.
 This feature adds no private/native authority and does not enable private previews.
 Current MIT terms remain unchanged. No upstream implementation code was copied.
 
-Browser tests are optional and explicit:
-`GETZILLA_DESIGN_BROWSER_TESTS=1 python3 -m unittest tests.test_design_reference`.
+Browser tests are optional and explicit. Set `GETZILLA_DESIGN_BROWSER_TESTS=1`
+and `GETZILLA_DESIGN_BROWSER_TEMP_ROOT` to an existing private direct child of the
+canonical repository's `.getzilla/runtime`, then run
+`python3 -m unittest tests.test_design_reference`. The selected root must be owned
+by the current user, have mode0700, contain no symlink in its held directory chain,
+and fit within48 filesystem bytes. A short root name such as `b` can fit; a long
+canonical repository path can make this optional qualification unsupported.
+There is no shared-directory, `/tmp`, symlink or outside-repository fallback.
+
+Only the exact optional browser worker receives a short unique mode0700 child
+through its own subprocess environment. Ordinary test/artifact temporary storage
+stays in the normal runner directory. The fixture helper holds directory
+identities, checks them before launch and after capture, and removes only its own
+child through the held parent. It does not change product capture APIs or write
+temporary paths into packs/content digests. The worker uses the invoking Python
+interpreter; the controlled Linux observation used `/usr/bin/python3`, Chrome
+`156.0.8078.79` and Playwright`1.60.0`. Those are observed versions, not universal
+capability guarantees. An unsupported product temporary path still refuses
+safely; the fixture flag adds no automatic dependency install or sandbox fallback.
 The default suite runs browser-independent controls and skips fixture launches.
 The adapter uses [Playwright routing and isolation](https://playwright.dev/python/docs/api/class-browsercontext)
 and [response fulfillment](https://playwright.dev/python/docs/api/class-route#route-fulfill).

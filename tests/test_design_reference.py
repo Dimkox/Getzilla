@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager
 import hashlib
 import json
 import os
+import secrets
+import stat
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,6 +26,79 @@ def load_file(path, name):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@contextmanager
+def browser_fixture_temp(worker_script):
+    """Explicit test capability; only the exact optional worker gets this temp root."""
+    def need(condition):
+        if not condition:
+            raise ValueError('browser_fixture_temp_unavailable')
+    selected = os.environ.get('GETZILLA_DESIGN_BROWSER_TEMP_ROOT', '')
+    need(bool(selected) and os.name == 'posix' and hasattr(os, 'O_NOFOLLOW')
+         and shutil.rmtree.avoids_symlink_attacks)
+    common = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                     cwd=ROOT, text=True, timeout=5).strip()
+    runtime = Path(common).parent / '.getzilla/runtime'
+    root = Path(selected)
+    need(root.is_absolute() and root.parent == runtime and len(os.fsencode(root)) <= 48)
+    held = []
+    child = None
+    child_fd = None
+    def identity(info):
+        return info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode)
+    def check():
+        for parent, name, descriptor in held[1:]:
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            need(stat.S_ISDIR(current.st_mode) and identity(current) == identity(os.fstat(descriptor)))
+        if child_fd is not None:
+            current = os.stat(child, dir_fd=held[-1][2], follow_symlinks=False)
+            need(stat.S_ISDIR(current.st_mode) and identity(current) == identity(os.fstat(child_fd)))
+    try:
+        descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        held.append((None, '/', descriptor))
+        for name in root.parts[1:]:
+            parent = held[-1][2]
+            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            held.append((parent, name, descriptor))
+        info = os.fstat(descriptor)
+        need(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700)
+        check()
+        for _ in range(8):
+            candidate = secrets.token_hex(3)
+            try:
+                os.mkdir(candidate, 0o700, dir_fd=descriptor)
+                child = candidate
+                break
+            except FileExistsError:
+                pass
+        need(child is not None)
+        child_fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+        child_info = os.fstat(child_fd)
+        need(child_info.st_uid == os.geteuid() and stat.S_IMODE(child_info.st_mode) == 0o700)
+        check()
+        native_popen = subprocess.Popen
+        expected = [sys.executable, '-I', '-c', worker_script]
+        def launch(command, *args, **kwargs):
+            if command == expected:
+                check()
+                environment = dict(os.environ if kwargs.get('env') is None else kwargs['env'])
+                environment.update({name: str(root / child) for name in ('TMPDIR','TEMP','TMP')})
+                kwargs['env'] = environment
+            return native_popen(command, *args, **kwargs)
+        with patch.object(subprocess, 'Popen', side_effect=launch):
+            yield
+        check()
+    finally:
+        try:
+            if child is not None and child_fd is not None:
+                check()
+                shutil.rmtree(child, dir_fd=held[-1][2])
+        finally:
+            if child_fd is not None:
+                os.close(child_fd)
+            for _parent, _name, descriptor in reversed(held):
+                os.close(descriptor)
 
 
 def create_public_task(root, session):
@@ -496,6 +572,13 @@ if __name__ == '__main__':
     unittest.main()
 
 class PreviewDesignReferenceTests(unittest.TestCase):
+    def setUp(self):
+        if (os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1'
+                and self._testMethodName.startswith(('test_controlled_preview', 'test_fixture_'))):
+            adapter = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/preview.py',
+                                'explicit_browser_fixture_adapter')
+            self.enterContext(browser_fixture_temp(adapter._PREVIEW_WORKER))
+
     def extractor(self):
         from functools import partial
         reference = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py',
@@ -519,6 +602,30 @@ class PreviewDesignReferenceTests(unittest.TestCase):
         self.assertEqual(owners, ['NODE-OPTIONAL-DESIGN-PREVIEW'])
         policy = next(n for n in snapshot.system['nodes'] if n['id'] == 'NODE-LOCAL-ROUTE-POLICY')
         self.assertEqual(policy['runtime']['network'], 'none')
+
+    def test_browser_fixture_temp_root_is_explicit_and_worker_only(self):
+        helper = globals().get('browser_fixture_temp')
+        self.assertTrue(callable(helper), 'explicit browser fixture temp capability is missing')
+        for value in ('', '/tmp', '/outside-canonical-runtime'):
+            with self.subTest(value=value), patch.dict(os.environ, {'GETZILLA_DESIGN_BROWSER_TEMP_ROOT': value}):
+                with self.assertRaisesRegex(ValueError, 'browser_fixture_temp_unavailable'):
+                    with helper('controlled-worker'):
+                        pass
+        if os.environ.get('GETZILLA_DESIGN_BROWSER_TEMP_ROOT'):
+            original = {key: os.environ.get(key) for key in ('TMPDIR','TEMP','TMP')}
+            common = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                             cwd=ROOT, text=True, timeout=5)
+            with patch.object(subprocess, 'Popen') as native, \
+                 patch.object(subprocess, 'check_output', return_value=common):
+                with helper('controlled-worker'):
+                    subprocess.Popen([sys.executable, '-I', '-c', 'controlled-worker'])
+                    child = Path(native.call_args.kwargs['env']['TMPDIR'])
+                    self.assertEqual(child.parent, Path(os.environ['GETZILLA_DESIGN_BROWSER_TEMP_ROOT']))
+                    self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o700)
+                    self.assertEqual({key: os.environ.get(key) for key in original}, original)
+                    subprocess.Popen([sys.executable, '-c', 'ordinary-unlaunched-fixture'])
+                    self.assertNotIn('env', native.call_args.kwargs)
+                self.assertFalse(child.exists())
 
     def test_live_and_unbounded_scope_refused_before_browser_import(self):
         module = self.extractor()
@@ -595,7 +702,8 @@ setTimeout(()=>document.body.setAttribute('data-dynamic','yes'),20);</script>'''
         self.assertEqual(len(list(directory.iterdir())), 2)
         self.assertEqual(command.compare(self.root, published['sha256'], replay['sha256'])['changed'], [])
         print(json.dumps({'fixture_requests': hits, 'browser': pack['content']['browser'],
-                          'affinity': sorted(os.sched_getaffinity(0)), 'immutable_history_records': 2}, sort_keys=True))
+                          'affinity': sorted(os.sched_getaffinity(0)), 'immutable_history_records': 2, 'worker_interpreter': sys.executable,
+                          'browser_temp_policy': 'explicit-owned-short-canonical-runtime'}, sort_keys=True))
         pack['content']['parameters']['theme'] = 'invalid'
         with self.assertRaises(ValueError):
             module.validate_pack(pack)
