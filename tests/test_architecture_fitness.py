@@ -15,6 +15,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.test_architecture_model import _json_schema, _rules, _system
@@ -9045,6 +9046,116 @@ class ArchitectureFitnessTests(unittest.TestCase):
         payload = json.loads(exact_fitness.stdout)
         self.assertEqual(payload["head_kind"], "commit")
         self.assertEqual(payload["fitness_status"], "pass")
+
+
+class QueueDiagnosticProvenanceTests(unittest.TestCase):
+    def observe(self, signals, *, paths=('src/jobs.py',), reader=None, tree=None):
+        snapshot = SimpleNamespace(rules={'background_job_policies': [{'id': 'TOY-JOBS'}]},
+                                   system={'nodes': [], 'edges': []})
+        python = SimpleNamespace(tree=tree or (lambda path: ast.parse('pass')))
+        read = reader or (lambda root, diff, path, side: b'import celery\n')
+        with patch.object(FIT, '_python_paths', return_value=paths), \
+                patch.object(FIT, '_queue_module_inventory', return_value=SimpleNamespace(paths=())), \
+                patch.object(FIT, '_module_package', return_value=''), \
+                patch.object(FIT, 'read_diff_file', side_effect=read), \
+                patch.object(FIT, '_queue_signals', side_effect=signals), \
+                patch.object(FIT, '_model_changed', return_value=False):
+            provenance = FIT._new_queue_sources(ROOT, None, python, ())
+            result = FIT._background_jobs(ROOT, snapshot, None, python, provenance)
+        return provenance, result
+
+    def test_nonlimit_error_preserves_head_and_base_classification_stage(self):
+        for side in ('head', 'base'):
+            with self.subTest(side=side):
+                def classify(*args, **kwargs):
+                    if args[3] == side:
+                        raise ARCHITECTURE.ArchitectureError('PRIVATE-DIAGNOSTIC-CANARY', code='fitness')
+                    return FIT._QueueProvenanceResult('not_queue', 'no_queue_signal', ())
+                provenance, result = self.observe(classify)
+                self.assertEqual(provenance.state, 'unsupported')
+                self.assertTrue(provenance.signals)
+                self.assertEqual(result.status, 'unsupported')
+                self.assertEqual(result.applicability.reason_code, 'queue_provenance_unresolved')
+                self.assertIn(f'queue analysis diagnostic ({side}/classify/architecture_error/fitness): src/jobs.py',
+                              result.findings)
+                self.assertIn('unsupported changed-source background job semantics: src/jobs.py', result.findings)
+                self.assertNotIn('PRIVATE-DIAGNOSTIC-CANARY', json.dumps(FIT._result_payload(result)))
+
+    def test_unknown_error_code_and_message_never_enter_diagnostics(self):
+        for side in ('head', 'base'):
+            for code in ('PRIVATE-CODE-CANARY', ['PRIVATE-CODE-CANARY'], None):
+                with self.subTest(side=side, code_type=type(code).__name__):
+                    def classify(*args, **kwargs):
+                        if args[3] == side:
+                            raise ARCHITECTURE.ArchitectureError('PRIVATE-MESSAGE-CANARY', code=code)
+                        return FIT._QueueProvenanceResult('not_queue', 'no_queue_signal', ())
+                    provenance, result = self.observe(classify)
+                    self.assertEqual(result.status, 'unsupported')
+                    self.assertIn(f'queue analysis diagnostic ({side}/classify/architecture_error/unknown): src/jobs.py',
+                                  result.findings)
+                    self.assertNotIn('PRIVATE-', json.dumps(FIT._result_payload(result)))
+                    self.assertNotIn('PRIVATE-', repr(provenance.signals))
+
+    def test_read_parse_and_syntax_failures_keep_their_actual_stage(self):
+        def no_queue(*args, **kwargs):
+            return FIT._QueueProvenanceResult('not_queue', 'no_queue_signal', ())
+        for side in ('head', 'base'):
+            with self.subTest(stage='read', side=side):
+                def read(root, diff, path, observed_side):
+                    if observed_side == side:
+                        raise ARCHITECTURE.ArchitectureError('PRIVATE-READ-CANARY', code='io')
+                    return b'import celery\n'
+                _, result = self.observe(no_queue, reader=read)
+                self.assertIn(f'queue analysis diagnostic ({side}/read/architecture_error/io): src/jobs.py',
+                              result.findings)
+        def parse(path):
+            raise ARCHITECTURE.ArchitectureError('PRIVATE-PARSE-CANARY', code='fitness')
+        _, result = self.observe(no_queue, tree=parse)
+        self.assertIn('queue analysis diagnostic (head/parse/architecture_error/fitness): src/jobs.py', result.findings)
+        _, result = self.observe(no_queue,
+            reader=lambda root, diff, path, side: b'import celery\n' if side == 'head' else b'import ???')
+        self.assertIn('queue analysis diagnostic (base/parse/syntax_error/syntax): src/jobs.py', result.findings)
+
+    def test_returned_queue_signal_is_distinct_from_an_exception(self):
+        for state in ('resolved', 'unsupported'):
+            with self.subTest(state=state):
+                def classify(*args, **kwargs):
+                    return (FIT._QueueProvenanceResult(state, 'toy', ('celery:app',)) if args[3] == 'head'
+                            else FIT._QueueProvenanceResult('not_queue', 'no_queue_signal', ()))
+                provenance, result = self.observe(classify)
+                self.assertEqual(provenance.state, state)
+                self.assertEqual(result.status, 'unsupported')
+                self.assertIn(f'queue analysis diagnostic (head/classify/returned_queue_signal/{state}): src/jobs.py',
+                              result.findings)
+                self.assertFalse(any('/architecture_error/' in value for value in result.findings))
+
+    def test_earlier_cause_survives_a_later_limit_refusal(self):
+        def classify(*args, **kwargs):
+            if kwargs['source_path'] == 'src/first.py':
+                raise ARCHITECTURE.ArchitectureError('PRIVATE-FIRST-CANARY', code='fitness')
+            raise ARCHITECTURE.ArchitectureError('bounded public toy limit', code='limit')
+        provenance, result = self.observe(classify, paths=('src/first.py', 'src/second.py'))
+        self.assertEqual(provenance.state, 'unsupported')
+        self.assertEqual(result.status, 'unsupported')
+        self.assertEqual(result.applicability.reason_code, 'analysis_limit_exceeded')
+        self.assertIn('analysis limit exceeded (head): src/second.py: bounded public toy limit', result.findings)
+        self.assertIn('queue analysis diagnostic (head/classify/architecture_error/fitness): src/first.py',
+                      result.findings)
+        self.assertNotIn('PRIVATE-', json.dumps(FIT._result_payload(result)))
+
+    def test_equal_signals_and_default_constructor_keep_prior_disposition(self):
+        provenance, result = self.observe(
+            lambda *args, **kwargs: FIT._QueueProvenanceResult('resolved', 'toy', ('celery:app',)))
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertEqual(provenance.paths, ())
+        self.assertEqual(result.status, 'not_applicable')
+        self.assertEqual(result.findings, ())
+
+    def test_plain_value_error_still_propagates_without_a_synthetic_result(self):
+        def classify(*args, **kwargs):
+            raise ValueError('closed public exception')
+        with self.assertRaisesRegex(ValueError, '^closed public exception$'):
+            self.observe(classify)
 
 
 if __name__ == "__main__":
