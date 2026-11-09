@@ -1,7 +1,7 @@
 # Local design reference (optional)
 
-This child of issue306 provides local D1/D3 observations. D2 browser capture remains
-mandatory and open. These artifacts do not prove functionality, accessibility,
+This child of issue306 provides local D1/D3 observations and D2 computed styles
+from caller-owned controlled loopback fixtures. Live preview capture is unsupported. These artifacts do not prove functionality, accessibility,
 legal compliance or acceptance.
 
 The existing installer can copy the exact passive artifact bundle with
@@ -10,8 +10,10 @@ This only distributes bytes. The default Core install copies no optional payload
 Inside an owned Getzilla project, use `getzilla design-reference install --source
 <source-install>`, then `getzilla design-reference enable`. Update, disable and
 uninstall use the same optional-module ownership transaction as other passive
-modules. Foreign files and settings remain owned by the user. No browser adapter
-or service is installed. Disabled/missing modules load no addon code, start no
+modules. Foreign files and settings remain owned by the user. No browser dependency
+or service is installed. An explicit fixture request uses an existing optional
+Python Playwright installation and `/usr/bin/google-chrome`; missing capabilities
+refuse. Core never installs or imports these dependencies. Disabled/missing modules load no addon code, start no
 workers, make no requests and spend no provider tokens.
 
 Use an actual owned active task with an incorporated change package:
@@ -63,12 +65,67 @@ reads only that task's immutable records. It compares token values and logical
 origins separately from changed source-table hashes. A one-token edit does not
 classify unrelated tokens as changed due to a shared file digest or line offset.
 
-D2 still needs a separately scoped disposable browser adapter, pre-navigation
-destination/method/transport enforcement, controlled click/mutation counters,
-bounded DOM/responses, viewport/theme/locale/version and font/CSS/coverage facts.
-Screenshots cannot prove functionality or accessibility. This local feature adds
-no private/native authority and does not enable private previews. Current MIT
-terms remain unchanged; draft legal decisions are not final legal approval.
+For a caller-owned synthetic HTTP fixture, use an explicit request:
+
+```bash
+getzilla design-reference capture-preview-fixture \
+  --url http://127.0.0.1:8080/ \
+  --resource http://127.0.0.1:8080/ \
+  --resource http://127.0.0.1:8080/style.css \
+  --width 1280 --height 720 --theme light --locale en-US
+```
+
+Each exact resource URL must be selected. Only literal `127.0.0.1` HTTP origins
+with an explicit nonprivileged port are accepted; alternate destinations,
+credentials, fragments and redirects refuse. Do not point this command at an
+internal or production server. Even GET can have server effects. Caller ownership
+of the fixture is a precondition; the command does not establish source rights.
+
+The adapter starts a new sandboxed Chrome context without user cookies. Before
+page creation, it blocks service workers and WebSockets and installs interception.
+It permits only declared GET document, stylesheet, font, image and script reads.
+It denies fetch/XHR/beacon, unsafe methods, redirects, frames with another URL,
+and unselected resources. It never clicks, submits or authenticates. A standard
+library client reads each permitted resource without forwarding browser headers,
+cookies or authentication. It supplies bounded bytes to the browser; it never
+continues a browser request to the network. Only content type is retained from
+response headers. This is an application policy, not OS network confinement.
+Browser routing does not cover every background/UDP transport. Live capture
+therefore remains unsupported; this is no universal read-only guarantee.
+
+Version2 packs record viewport/theme/locale, browser and Playwright versions,
+response hashes, computed values and document-order element locators, CSS/font
+loading state, capture ID/time, and coverage reasons. Stable IDs use the page URL,
+element position and property. DOM insertion can change positional identities;
+these are observations, not inferred semantic roles. The twelve observed
+properties cover colors, type, selected spacing, radius and shadow. No hover or
+other active state is induced. No screenshots are captured.
+
+Bounds are16 declared URLs,32 reads,256KiB per response,1MiB total response bytes,
+128 elements,1536 observations,4096 characters/value,1MiB pack,1 second per network
+operation,4 seconds for navigation,8 seconds for accepting reads, and15 seconds
+for the whole worker. After the deadline, Linux pidfds stop the worker and observed descendants.
+A bounded monitor records parent chains and process birth identities before any
+signal. Controlled-fixture tests check that no observed browser descendant keeps
+running; this does not provide OS process confinement or universal supervision
+of an adversarial process that escapes before observation. Failure to launch with the sandbox enabled refuses;
+there is no no-sandbox fallback. Other platforms are unsupported.
+
+Missing CSS/fonts, blocked transport, dynamic content and exceeded budgets report
+partial coverage or refuse. Every fixture pack is partial with `fixture-only` and
+`dynamic-unproven`: a short observation cannot prove no later DOM changes. The
+content digest excludes capture ID/time. Version1 local packs keep their schema.
+Both variants use the same task-bound immutable history and diff command. URL
+source hashes describe captured response bytes and are not reread as local files.
+Screenshots and style observations cannot prove functionality or accessibility.
+This feature adds no private/native authority and does not enable private previews.
+Current MIT terms remain unchanged. No upstream implementation code was copied.
+
+Browser tests are optional and explicit:
+`GETZILLA_DESIGN_BROWSER_TESTS=1 python3 -m unittest tests.test_design_reference`.
+The default suite runs browser-independent controls and skips fixture launches.
+The adapter uses [Playwright routing and isolation](https://playwright.dev/python/docs/api/class-browsercontext)
+and [response fulfillment](https://playwright.dev/python/docs/api/class-route#route-fulfill).
 
 The command pins the reviewed0.1.0 manifest. A different self-consistent passive
 artifact is not executable authority, even with matching local ownership. New

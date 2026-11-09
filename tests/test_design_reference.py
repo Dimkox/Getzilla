@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -102,6 +103,22 @@ class LocalDesignReferenceTests(unittest.TestCase):
         (self.root / 'tokens.json').write_text('{"x":"1px"}')
         first = command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
         return command, directory / 'evidence/design-reference', first
+
+    def test_v1_history_from_previous_reviewed_bundle_survives_module_update(self):
+        command, directory, first = self.record_fixture()
+        path = self.root / first['artifact']
+        record = json.loads(path.read_bytes())
+        record['module_manifest_sha256'] = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
+        raw = command._encode(record)
+        previous = directory / (hashlib.sha256(raw).hexdigest() + '.json')
+        path.rename(previous)
+        previous.write_bytes(raw)
+        before = previous.read_bytes()
+        current = command.capture(self.root, ['tokens.json'], capture_id='after-update',
+                                  captured_at='2026-11-09T00:00:00Z')
+        self.assertEqual(previous.read_bytes(), before)
+        delta = command.compare(self.root, previous.stem, current['sha256'])
+        self.assertEqual(delta['changed'], [])
 
     def test_full32_history_keeps_exact_replay_and_refuses_the_next_event(self):
         command, directory, first = self.record_fixture()
@@ -402,7 +419,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         source = self.root / 'public-source'
         artifact = source / '.getzilla/optional-modules/design-reference/0.1.0'
         artifact.mkdir(parents=True)
-        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE'):
+        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
             shutil.copyfile(ROOT / '.getzilla/optional-modules/design-reference/0.1.0' / name, artifact / name)
         reference = artifact / 'reference.py'
         reference.write_bytes(reference.read_bytes() + b'\n# different inert public artifact\n')
@@ -477,3 +494,274 @@ class LocalDesignReferenceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class PreviewDesignReferenceTests(unittest.TestCase):
+    def extractor(self):
+        return load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py',
+                         'preview_design_reference')
+
+    def test_live_and_unbounded_scope_refused_before_browser_import(self):
+        module = self.extractor()
+        self.assertTrue(callable(getattr(module, 'capture_preview', None)), 'preview capture is missing')
+        for url in ('https://example.com/', 'http://localhost:8000/', 'http://127.0.0.1:8000/#x'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                module.capture_preview(url, [url], capture_id='preview',
+                                       captured_at='2026-11-09T00:00:00Z')
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_controlled_preview_blocks_mutations_and_preserves_observations(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        hits = []
+        body = b'''<!doctype html><style>button { color: rgb(1, 2, 3); border-radius: 7px }</style>
+<button onclick="fetch('/click',{method:'POST'})">Go</button><a href='/click'>Link</a>
+<script>fetch('/write',{method:'POST'}); navigator.sendBeacon('/beacon','x');
+new WebSocket('ws://127.0.0.1:PORT/socket'); fetch('/read');
+setTimeout(()=>document.body.setAttribute('data-dynamic','yes'),20);</script>'''
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                hits.append(('GET', self.path))
+                value = body.replace(b'PORT', str(self.server.server_port).encode())
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+            def do_POST(self):
+                hits.append(('POST', self.path))
+                self.send_response(204)
+                self.end_headers()
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def stop_server():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_server)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        self.assertTrue(callable(getattr(module, 'capture_preview', None)), 'preview capture is missing')
+        pack = module.capture_preview(url, [url], capture_id='preview',
+                                      captured_at='2026-11-09T00:00:00Z')
+        self.assertEqual(hits, [('GET', '/')])
+        self.assertEqual(pack['content']['coverage']['status'], 'partial')
+        self.assertIn('blocked-transport', pack['content']['coverage']['reasons'])
+        self.assertIn('dynamic-content', pack['content']['coverage']['reasons'])
+        self.assertTrue(any(t['raw_value'] == 'rgb(1, 2, 3)' for t in pack['content']['tokens']))
+        module.validate_pack(pack)
+        import jsonschema
+        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.1.0/pack-v2.schema.json').read_text())
+        jsonschema.Draft202012Validator(schema).validate(pack)
+        again = module.capture_preview(url, [url], capture_id='preview2',
+                                       captured_at='2026-11-09T01:00:00Z')
+        self.assertEqual(pack['content_digest'], again['content_digest'])
+        self.assertEqual(module.diff(pack, again)['changed'], [])
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        command, directory, local = LocalDesignReferenceTests.record_fixture(self)
+        local_bytes = (self.root / local['artifact']).read_bytes()
+        published = command.capture_preview(self.root, url, [url], capture_id='published-preview',
+                                            captured_at='2026-11-09T00:00:00Z')
+        replay = command.capture_preview(self.root, url, [url], capture_id='published-preview',
+                                         captured_at='2026-11-09T00:00:00Z')
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(published['artifact'], replay['artifact'])
+        self.assertEqual((self.root / local['artifact']).read_bytes(), local_bytes)
+        self.assertEqual(len(list(directory.iterdir())), 2)
+        self.assertEqual(command.compare(self.root, published['sha256'], replay['sha256'])['changed'], [])
+        print(json.dumps({'fixture_requests': hits, 'browser': pack['content']['browser'],
+                          'affinity': sorted(os.sched_getaffinity(0)), 'immutable_history_records': 2}, sort_keys=True))
+        pack['content']['parameters']['theme'] = 'invalid'
+        with self.assertRaises(ValueError):
+            module.validate_pack(pack)
+
+    def test_preview_parameters_are_closed_and_bounded(self):
+        module = self.extractor()
+        url = 'http://127.0.0.1:8000/'
+        for resources, viewport, theme, locale in (
+                ([url, 'http://127.0.0.1:8001/style'], {'width':800,'height':600}, 'light', 'en'),
+                ([url], {'width':True,'height':600}, 'light', 'en'),
+                ([url], {'width':800,'height':600}, 'system', 'en'),
+                ([url], {'width':800,'height':600}, 'light', '../en'),
+                ([url + '?q=\n'], {'width':800,'height':600}, 'light', 'en')):
+            with self.subTest(resources=resources, viewport=viewport, theme=theme, locale=locale):
+                with self.assertRaises(ValueError):
+                    module._preview_parameters(url, resources, viewport, theme, locale)
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_resource_refusals_and_loading_limits(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        hits = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                hits.append(self.path)
+                if self.path == '/':
+                    value = (b'<link rel="stylesheet" href="/missing.css">'
+                             b'<link rel="stylesheet" href="/redirect.css">'
+                             b'<link rel="stylesheet" href="/large.css">'
+                             b'<img src="http://127.0.0.1:1/outside">'
+                             b'<img src="/denied">' + b'<div>x</div>' * 150)
+                    status = 200
+                elif self.path == '/redirect.css':
+                    self.send_response(302)
+                    self.send_header('Location', '/mutation')
+                    self.end_headers()
+                    return
+                elif self.path == '/large.css':
+                    value, status = b'x' * 262145, 200
+                else:
+                    value, status = b'', 404
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def stop_server():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_server)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        resources = sorted([url, url + 'missing.css', url + 'redirect.css', url + 'large.css'])
+        module = self.extractor()
+        pack = module.capture_preview(url, resources, capture_id='limited',
+                                      captured_at='2026-11-09T00:00:00Z')
+        reasons = pack['content']['coverage']['reasons']
+        self.assertTrue({'blocked-transport','resource-unavailable','response-budget',
+                         'dom-budget','loading-incomplete'} <= set(reasons), reasons)
+        self.assertNotIn('/denied', hits)
+        self.assertNotIn('/mutation', hits)
+        self.assertEqual(len(pack['content']['tokens']), 1536)
+
+    def test_disabled_preview_never_loads_adapter(self):
+        command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'preview_command')
+        with patch.object(command, '_admitted', side_effect=command.DesignReferenceError('disabled')), \
+             patch.object(command, '_load') as load:
+            with self.assertRaises(command.DesignReferenceError):
+                command.capture_preview(ROOT, 'http://127.0.0.1:8000/', [],
+                                        capture_id='disabled', captured_at='2026-11-09T00:00:00Z')
+            load.assert_not_called()
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_font_failure_and_single_property_diff(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        version = [3]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                if self.path == '/font':
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                value = ("<style>@font-face{font-family:Missing;src:url('/font')}"
+                         "button{font-family:Missing;color:rgb(1,2," + str(version[0])
+                         + ")}</style><button>x</button>").encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        packs = []
+        for index in (3,4):
+            version[0] = index
+            packs.append(module.capture_preview(url, [url, url + 'font'], capture_id='font' + str(index),
+                                                captured_at='2026-11-09T00:00:00Z'))
+        self.assertIn('fonts-incomplete', packs[0]['content']['coverage']['reasons'])
+        delta = module.diff(*packs)
+        self.assertEqual(len(delta['changed']), 1)
+        self.assertEqual(delta['sources_changed'], [url])
+        self.assertFalse(delta['added'] or delta['removed'])
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_infinite_script_hits_hard_deadline_and_stops_worker_group(self):
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                value = b'<script>setTimeout(()=>{while(true){}},50)</script>'
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        spawned = []
+        observed = {}
+        finished = threading.Event()
+        def process_rows():
+            rows = {}
+            for entry in list(Path('/proc').iterdir())[:8192]:
+                if entry.name.isdigit():
+                    try:
+                        fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                        rows[int(entry.name)] = (int(fields[1]), fields[0], fields[19])
+                    except (FileNotFoundError, ProcessLookupError, PermissionError):
+                        pass
+            return rows
+        def monitor():
+            while not finished.wait(.05):
+                rows = process_rows()
+                family = {spawned[0].pid}
+                for _ in range(16):
+                    family.update(pid for pid, row in rows.items() if row[0] in family)
+                observed.update({pid:rows[pid][2] for pid in family if pid in rows})
+        real = subprocess.Popen
+        def observe(*args, **kwargs):
+            proc = real(*args, **kwargs)
+            spawned.append(proc)
+            threading.Thread(target=monitor, daemon=True).start()
+            return proc
+        started = time.monotonic()
+        with patch.object(subprocess, 'Popen', side_effect=observe):
+            with self.assertRaisesRegex(module.ReferenceError, 'preview_timeout'):
+                module.capture_preview(url, [url], capture_id='timeout',
+                                       captured_at='2026-11-09T00:00:00Z')
+        finished.set()
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertIsNotNone(spawned[0].poll())
+        self.assertGreater(len(observed), 2, 'browser descendants were not observed')
+        remaining = process_rows()
+        for pid, birth in observed.items():
+            if pid in remaining and remaining[pid][2] == birth:
+                self.assertEqual(remaining[pid][1], 'Z', 'observed browser descendant survived')
+        # Child zombies may await PID1 reaping; no running group member may remain.
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                status = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            if int(status[2]) == spawned[0].pid:
+                self.assertEqual(status[0], 'Z', 'running browser descendant survived deadline')
+        print(json.dumps({'preview_deadline_seconds': round(time.monotonic() - started, 2),
+                          'worker_reaped': True, 'observed_family_pids': len(observed), 'running_observed_descendants': 0,
+                          'running_group_members': 0}))

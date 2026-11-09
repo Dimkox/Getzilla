@@ -27,7 +27,9 @@ from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
+EXPECTED_MANIFEST_SHA256 = '4c7442d84621722ca0b25341e45e77a703c9c8c19e1fa165fd8eed1ee1ba068f'
+# Read-only compatibility for immutable v1 records from accepted PR368.
+HISTORICAL_V1_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
 MAX_HISTORY = 32
 MAX_RECORD_BYTES = 1024 * 1024
 
@@ -85,6 +87,15 @@ def _task(root):
 
 
 def _record(context, pack, admission):
+    if pack['content']['schema_version'] == 2:
+        return {'schema_version': 1, 'advisory': True, 'task': context,
+                'module_manifest_sha256': admission['manifest_sha256'], 'pack': pack,
+                'summary': {'coverage': 'partial', 'tokens': len(pack['content']['tokens']),
+                            'sources': [row['path'] for row in pack['content']['sources']],
+                            'text': 'Controlled fixture computed styles; partial coverage.\n'
+                            + '\n'.join('[Fixture source](' + quote(row['path'], safe='/:?=&%') + ')'
+                                        for row in pack['content']['sources'])
+                            + '\nAdvisory only; no functionality, a11y, acceptance or live passivity claim.'}}
     return {'schema_version': 1, 'advisory': True, 'task': context,
               'module_manifest_sha256': admission['manifest_sha256'], 'pack': pack,
               'summary': {'coverage': pack['content']['coverage']['status'],
@@ -146,7 +157,11 @@ def _history(binding, directory, module, context, admission):
                       for key in ('spec_digest', 'requirements_digest', 'digest'))
               and task['digest'] == hashlib.sha256(_encode({key: value for key, value in task.items() if key != 'digest'})).hexdigest())
         module.validate_pack(record['pack'])
-        _need(_encode(record) == observed.content == _encode(_record(task, record['pack'], admission)))
+        historical = record['module_manifest_sha256']
+        _need(historical == admission['manifest_sha256'] or
+              (historical == HISTORICAL_V1_MANIFEST_SHA256 and record['pack']['content']['schema_version'] == 1))
+        historical_admission = dict(admission, manifest_sha256=historical)
+        _need(_encode(record) == observed.content == _encode(_record(task, record['pack'], historical_admission)))
         identity = record['pack']['capture']['id']
         _need(identity not in ids)
         ids.add(identity)
@@ -179,7 +194,7 @@ def _publish(root, module, pack, admission):
             if identity is not None:
                 existing = binding.read(relative, limit=MAX_RECORD_BYTES)
                 _need(existing is not None and existing.identity == identity and existing.content == raw)
-            for source in pack['content']['sources']:
+            for source in (pack['content']['sources'] if pack['content']['schema_version'] == 1 else []):
                 observed = binding.read(source['path'], limit=256 * 1024)
                 _need(observed is not None and observed.sha256 == source['sha256'])
             binding.check()
@@ -201,6 +216,21 @@ def capture(root, files, *, capture_id, captured_at):
         _task(root)  # No source extraction without the actual owned task package.
         module = _load(root, admission)
         pack = module.capture(root, files, capture_id=capture_id, captured_at=captured_at)
+        _need(_admitted(root) == admission)
+        return _publish(root, module, pack, admission)
+    except DesignReferenceError:
+        raise
+    except (ValueError, OSError, TypeError, KeyError, StopIteration, UnicodeError):
+        raise DesignReferenceError('design_reference_unavailable') from None
+
+
+def capture_preview(root, url, resources, *, capture_id, captured_at, viewport=None, theme='light', locale='en-US'):
+    try:
+        admission = _admitted(root)
+        _task(root)
+        module = _load(root, admission)
+        pack = module.capture_preview(url, resources, capture_id=capture_id, captured_at=captured_at,
+                                      viewport=viewport, theme=theme, locale=locale)
         _need(_admitted(root) == admission)
         return _publish(root, module, pack, admission)
     except DesignReferenceError:
@@ -242,6 +272,15 @@ def main(argv=None):
     command.add_argument('--file', action='append', required=True)
     command.add_argument('--capture-id')
     command.add_argument('--timestamp')
+    command = commands.add_parser('capture-preview-fixture')
+    command.add_argument('--url', required=True)
+    command.add_argument('--resource', action='append', required=True)
+    command.add_argument('--width', type=int, default=1280)
+    command.add_argument('--height', type=int, default=720)
+    command.add_argument('--theme', choices=('light', 'dark'), default='light')
+    command.add_argument('--locale', default='en-US')
+    command.add_argument('--capture-id')
+    command.add_argument('--timestamp')
     command = commands.add_parser('diff')
     command.add_argument('previous')
     command.add_argument('current')
@@ -251,6 +290,12 @@ def main(argv=None):
         if args.operation == 'capture':
             result = capture(root, args.file, capture_id=args.capture_id or uuid.uuid4().hex,
                              captured_at=args.timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        elif args.operation == 'capture-preview-fixture':
+            result = capture_preview(root, args.url, sorted(set(args.resource)),
+                                     capture_id=args.capture_id or uuid.uuid4().hex,
+                                     captured_at=args.timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                     viewport={'width': args.width, 'height': args.height},
+                                     theme=args.theme, locale=args.locale)
         elif args.operation == 'diff':
             result = compare(root, args.previous, args.current)
         elif args.operation == 'status':
