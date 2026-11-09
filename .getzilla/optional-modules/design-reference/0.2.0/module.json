@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "design-reference",
+  "version": "0.2.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {},
+  "permissions": [
+    "design.reference.read"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "reference.py",
+      "sha256": "1548c2153400299b6f012a3ad0ce4427ca594ae716d0d93d3da4c9bdc9544dce",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "preview.py",
+      "sha256": "b7f47b1da4b3ae8252d469a0a8595e956f2e9be12416849e1cade7f07d96d2d3",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "pack-v1.schema.json",
+      "sha256": "06514f7ce2ad1aa33ac85b562dc6f0f5a187f6af3a10a3913c80a2ece990b95c",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "pack-v2.schema.json",
+      "sha256": "54d177fb0d425ca2257ca51530e818479dc8347d9e1cd0cefe4235ab5de99f7a",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

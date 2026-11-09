@@ -140,9 +140,14 @@ ROOT_HOOK_SHIMS = frozenset(
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
 SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
 DESIGN_REFERENCE_ARTIFACTS = tuple(
-    '.getzilla/optional-modules/design-reference/0.1.0/' + name
-    for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE')
+    '.getzilla/optional-modules/design-reference/' + version + '/' + name
+    for version, names in (
+        ('0.1.0', ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE')),
+        ('0.2.0', ('module.json', 'reference.py', 'preview.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE')),
+    )
+    for name in names
 )
+
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
