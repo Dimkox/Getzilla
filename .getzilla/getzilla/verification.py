@@ -1863,7 +1863,7 @@ def _opengrep(root: Path) -> CheckResult:
     refusal = _unpinned_opengrep(Path(executable))
     if refusal:
         return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet',
+    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
                '--disable-version-check', '--timeout', '30']
     for pattern in OPENGREP_EXCLUDES:
         command.extend(('--exclude', pattern))
@@ -1877,8 +1877,19 @@ def _opengrep(root: Path) -> CheckResult:
     if result.returncode not in {0, 1}:
         return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
                            stderr=result.stderr[-4000:])
-    findings = report.get('results') or []
-    errors = [item for item in report.get('errors') or [] if str(item.get('level', 'error')).lower() == 'error']
+    if not isinstance(report, dict):
+        return CheckResult('opengrep', 'fail', 'opengrep returned a malformed report object', command=command)
+    findings = report.get('results')
+    errors = report.get('errors')
+    if not isinstance(findings, list) or not isinstance(errors, list):
+        return CheckResult('opengrep', 'fail', 'opengrep returned incomplete result/error collections', command=command)
+    # Warning-level partial parsing and unknown diagnostics cannot prove a clean scan.
+    if errors:
+        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} incomplete analysis diagnostics',
+                           command=command)
+    if any(not isinstance(item, dict) or not isinstance(item.get('start', {}), dict)
+           or not isinstance(item.get('extra', {}), dict) for item in findings):
+        return CheckResult('opengrep', 'fail', 'opengrep returned malformed finding records', command=command)
     details = [
         {
             'rule': str(item.get('check_id', '')),
@@ -1892,9 +1903,6 @@ def _opengrep(root: Path) -> CheckResult:
     if findings:
         return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
                            command=command, details=details)
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} errors', command=command,
-                           stderr=json.dumps(errors[:20])[-4000:])
     return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
 
 
