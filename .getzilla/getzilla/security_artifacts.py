@@ -230,8 +230,18 @@ def _saved_proof(root: Path, path: str, digest: str) -> tuple[bytes, dict]:
     return raw, value
 
 
+def _check_git_namespace(rows: dict[str, dict]) -> None:
+    """No regular Git blob can also be a directory containing another blob."""
+    files = set(rows)
+    for path in rows:
+        parts = safe_parts(path)
+        if any('/'.join(parts[:depth]) in files for depth in range(1, len(parts))):
+            raise ArtifactError('artifact-origin', 'Git source has contradictory file/directory paths')
+
+
 def _git_tree(rows: dict[str, dict]) -> str:
     """Recompute Git SHA-1 tree identity, not a substitute for publisher authority."""
+    _check_git_namespace(rows)
     directories = {}
     for path, row in rows.items():
         parent, _, name = path.rpartition('/')

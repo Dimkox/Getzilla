@@ -180,6 +180,15 @@ def _logical_requirements(text: str):
         raise ValueError('truncated requirements continuation')
 
 
+def _closed_download_tail(lines: list[str], target: str) -> bool:
+    """Only these complete endings preserve the proved checked artifact state.
+
+    Unknown subsequent statements remain unresolved, even after a valid digest
+    prefix. This is a closed declaration grammar, not a shell interpreter.
+    """
+    return not lines or lines == [f'chmod 0755 "{target}"']
+
+
 def workflow_downloads(command: str, manifest: str, line: int, source: bytes, read_declared,
                        *, platform: str | None = None) -> tuple[list[dict], list[dict]]:
     """Return source declarations only; artifact evidence never changes this set."""
@@ -217,6 +226,8 @@ def workflow_downloads(command: str, manifest: str, line: int, source: bytes, re
             check = re.fullmatch(r'echo "\$\{([a-z][a-z0-9_]*)\}  ' + re.escape(target) + r'" \| sha256sum -c -', lines[offset + 1])
             if not check or not re.fullmatch('[0-9a-f]{64}', values.get(check[1], '')):
                 raise ValueError('exact download must be checked before any next operation')
+            if not _closed_download_tail(lines[offset + 2:], target):
+                raise ValueError('post-check flow is unclassified; artifact replacement/use remains unknown')
             for variable in re.findall(r'\$\{([a-z][a-z0-9_]*)\}', url):
                 if variable not in values or not re.fullmatch('[A-Za-z0-9_.-]+', values[variable]):
                     raise ValueError('unbound release URL')

@@ -462,3 +462,72 @@ class PublicFamilyLicenseTests(unittest.TestCase):
                 (directory / 'manifest.json').write_bytes(encoded(bundle))
                 report = licenses.evaluate_artifacts(inventory, directory, POLICY, now=NOW)
                 self.assertEqual(report['status'], 'fail')
+
+
+def collected_namespace_fixture(directory, variant):
+    _inventory, record, _bundle = action_fixture(directory)
+    committed = {'LICENSE': MIT, 'action.yml': b'name: owned\nruns:\n  using: composite\n  steps: []\n',
+                 'entry': b'owned source A\n'}
+    body = b''.join(b'100644 ' + name.encode() + b'\0' + bytes.fromhex(git_blob(raw))
+                    for name, raw in sorted(committed.items()))
+    tree_id = hashlib.sha1(b'tree ' + str(len(body)).encode() + b'\0' + body, usedforsecurity=False).hexdigest()
+    rows = [{'path': name, 'mode': '100644', 'type': 'blob', 'sha': git_blob(raw), 'size': len(raw)}
+            for name, raw in sorted(committed.items())]
+    files = dict(committed)
+    if variant == 'collision':
+        files['entry/extra.txt'] = b'owned uncommitted descendant\n'
+        rows.append({'path': 'entry/extra.txt', 'mode': '100644', 'type': 'blob',
+                     'sha': git_blob(files['entry/extra.txt']), 'size': len(files['entry/extra.txt'])})
+    elif variant == 'changed':
+        files['entry'] = b'owned source B\n'
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w') as archive:
+        for name, raw in sorted(files.items()):
+            item = zipfile.ZipInfo('src/' + name)
+            item.external_attr = 0o100644 << 16
+            archive.writestr(item, raw)
+    payload = output.getvalue()
+    commit = encoded({'sha': 'b' * 40, 'tree': {'sha': tree_id}})
+    tree = encoded({'sha': tree_id, 'truncated': False, 'tree': rows})
+    proof = encoded({'schema_version': 1, 'kind': 'artifact-component-inventory', 'artifact_sha256': sha(payload),
+        'complete': True, 'unresolved': [], 'components': [{'id': 'owned', 'expression': 'MIT', 'requires': [],
+            'license_paths': ['src/LICENSE'], 'notice_paths': [],
+            'files': [{'path': 'src/' + name, 'sha256': sha(raw), 'bytes': len(raw)} for name, raw in sorted(files.items())]}]})
+    record.update(sha256=sha(payload), bytes=len(payload))
+    record['origin'].update(index_sha256=sha(commit), tree_sha256=sha(tree))
+    record['components']['sha256'] = sha(proof)
+    for relative, raw in ((record['path'], payload), (record['origin']['index_path'], commit),
+                          (record['origin']['tree_path'], tree), (record['components']['path'], proof)):
+        (directory / relative).write_bytes(raw)
+    return record, tree_id
+
+
+class CollectedDeclarationAndNamespaceTests(unittest.TestCase):
+    def test_opaque_postcheck_flow_retains_unresolved_declaration(self):
+        pins = b'ARG TOOL_VERSION=1.2.3\nARG TOOL_SHA256=' + b'a' * 64 + b'\n'
+        command = SourceWorkflowDeclarationTests.command
+        def parse(text):
+            return security_inventory.workflow_downloads(text, '.github/workflows/public.yml', 4,
+                b'owned workflow', lambda name: pins, platform='linux/amd64')
+        tools, gaps = parse(command)
+        self.assertEqual(gaps, [])
+        self.assertEqual(tools[0]['kind'], 'release-tool')
+        opaque = command + 'printf replacement > "$RUNNER_TEMP/tool/public"\n"$RUNNER_TEMP/tool/public" --version\n'
+        tools, gaps = parse(opaque)
+        self.assertTrue(gaps)
+        self.assertEqual(tools[0]['kind'], 'script-download')
+
+    def test_file_descendant_cannot_borrow_an_unchanged_git_root(self):
+        roots = []
+        for variant in ('normal', 'changed', 'collision'):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                record, root_id = collected_namespace_fixture(directory, variant)
+                roots.append(root_id)
+                if variant == 'normal':
+                    evidence = artifacts.family_evidence(directory, record)
+                    self.assertEqual(len(evidence['members']), 3)
+                else:
+                    with self.assertRaises(artifacts.ArtifactError):
+                        artifacts.family_evidence(directory, record)
+        self.assertEqual(len(set(roots)), 1)
