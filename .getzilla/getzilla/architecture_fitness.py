@@ -251,6 +251,19 @@ class _QueueProvenanceResult(NamedTuple):
     signals: tuple[str, ...]
     paths: tuple[str, ...] = ()
     limits: tuple[tuple[str, str, str], ...] = ()
+    causes: tuple[tuple[str, str, str, str, str], ...] = ()
+
+
+def _queue_diagnostic_code(code: object) -> str:
+    known = {"fitness", "git", "invalid", "io", "missing", "path", "schema", "usage"}
+    return code if isinstance(code, str) and code in known else "unknown"
+
+
+def _queue_diagnostic_findings(provenance: _QueueProvenanceResult) -> tuple[str, ...]:
+    return tuple(
+        f"queue analysis diagnostic ({side}/{stage}/{outcome}/{code}): {path}"
+        for path, side, stage, outcome, code in provenance.causes
+    )
 
 
 class _QueueSourceFootprint(NamedTuple):
@@ -3567,21 +3580,28 @@ def _new_queue_sources(
     unsupported: list[str] = []
     changed_signals: set[str] = set()
     limits: list[tuple[str, str, str]] = []
+    causes: list[tuple[str, str, str, str, str]] = []
     head_cache = _queue_module_inventory(root, diff, "head", source_roots)
     base_cache = _queue_module_inventory(root, diff, "base", source_roots)
     for path in _python_paths(diff):
         side = "head"
+        stage = "resolve_package"
         try:
             current_package = _module_package(path, source_roots, head_cache.paths)
+            stage = 'read'
             head_value = read_diff_file(root, diff, path, 'head') or b''
             head_budget = _QueueBudget('head')
+            stage = 'admit'
             head_budget.source(path, head_value)
             # These two boundaries retain complete parsed source scopes.
             # Synthetic export/return consumers do not grant module provenance.
+            stage = 'parse'
+            head_tree = python.tree(path)
+            stage = 'classify'
             head = _queue_signals(
                 root,
                 diff,
-                python.tree(path),
+                head_tree,
                 "head",
                 head_cache,
                 current_package,
@@ -3589,14 +3609,18 @@ def _new_queue_sources(
                 source_path=path, source=head_value, budget=head_budget, complete_module=True,
             )
             side = "base"
+            stage = "read"
             base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
                 base_budget = _QueueBudget('base')
+                stage = 'admit'
                 base_budget.source(path, base_value)
+                stage = 'parse'
                 base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
                 if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
                     raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
+                stage = 'classify'
                 base = _queue_signals(
                     root,
                     diff,
@@ -3607,9 +3631,12 @@ def _new_queue_sources(
                     source_roots,
                     source_path=path, source=base_value, budget=base_budget, complete_module=True,
                 )
+            stage = 'compare'
             delta = set(head.signals) - set(base.signals)
             if delta:
                 changed_signals.update(f"{path}:{signal}" for signal in delta)
+                outcome = head.state if head.state in {"unsupported", "resolved", "not_queue"} else "unknown"
+                causes.append((path, "head", "classify", "returned_queue_signal", outcome))
                 if head.state == "unsupported":
                     unsupported.append(path)
                 else:
@@ -3619,7 +3646,9 @@ def _new_queue_sources(
                 limits.append((path, side, str(exc)))
             else:
                 unsupported.append(path)
-                changed_signals.add(f"{path}:unsupported:{exc.code}")
+                code = _queue_diagnostic_code(exc.code)
+                changed_signals.add(f"{path}:unsupported:{code}")
+                causes.append((path, side, stage, "architecture_error", code))
         except (SyntaxError, UnicodeDecodeError):
             value = read_diff_file(root, diff, path, "head") or b""
             if re.search(
@@ -3628,6 +3657,7 @@ def _new_queue_sources(
             ):
                 unsupported.append(path)
                 changed_signals.add(f"{path}:unsupported:syntax")
+                causes.append((path, side, stage, "syntax_error", "syntax"))
     if unsupported or limits:
         return _QueueProvenanceResult(
             "unsupported",
@@ -3635,6 +3665,7 @@ def _new_queue_sources(
             tuple(sorted(changed_signals)),
             tuple(sorted(set((*applicable, *unsupported)))),
             tuple(sorted(limits)),
+            tuple(sorted(causes)),
         )
     if applicable:
         return _QueueProvenanceResult(
@@ -3642,6 +3673,7 @@ def _new_queue_sources(
             "new_queue_signal",
             tuple(sorted(changed_signals)),
             tuple(sorted(set(applicable))),
+            causes=tuple(sorted(causes)),
         )
     return _QueueProvenanceResult("not_queue", "no_queue_signal", ())
 
@@ -3660,8 +3692,8 @@ def _background_jobs(
         return _result(
             "background_job", status="unsupported",
             rules=(rule["id"] for rule in rules),
-            findings=(f"analysis limit exceeded ({side}): {path}: {message}"
-                      for path, side, message in queue_provenance.limits),
+            findings=tuple(f"analysis limit exceeded ({side}): {path}: {message}"
+                           for path, side, message in queue_provenance.limits) + _queue_diagnostic_findings(queue_provenance),
             predicate=predicate,
             scope=(*source_scope, *(item[0] for item in queue_provenance.limits)),
             reason="analysis_limit_exceeded",
@@ -3671,10 +3703,10 @@ def _background_jobs(
             return _result(
                 "background_job",
                 status="unsupported",
-                findings=(
+                findings=tuple(
                     f"unsupported changed-source background job semantics: {path}"
                     for path in source_scope
-                ),
+                ) + _queue_diagnostic_findings(queue_provenance),
                 predicate=predicate,
                 scope=source_scope,
                 reason="source_signal_without_policy",
@@ -3693,6 +3725,7 @@ def _background_jobs(
             f"unsupported changed-source background job semantics: {path}"
             for path in source_scope
         )
+        findings.extend(_queue_diagnostic_findings(queue_provenance))
     for rule in rules:
         for edge in snapshot.system["edges"]:
             node = nodes[edge["from"]]
