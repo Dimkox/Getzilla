@@ -239,8 +239,36 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
     return {'package_count': packages, 'findings': findings, 'image_id': metadata['ImageID']}
 
 
-def refresh_images(inventory: dict, tools: Path, *, now=None) -> list[dict]:
+def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
+    """Require finite aggregate bounds before selecting any image transport."""
+    keys = {'images', 'max_images', 'max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes',
+            'max_manifest_bytes', 'max_layers', 'deadline_seconds', 'platform'}
+    if not isinstance(profile, dict) or set(profile) != keys or profile.get('platform') not in {'linux/amd64', 'linux/arm64'}:
+        raise SecurityDataError('image acquisition needs a complete explicit bounded profile')
+    limits = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
+              'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
+              'max_manifest_bytes': MAX_REPORT, 'max_layers': 10000, 'deadline_seconds': 900}
+    if any(type(profile[key]) is not int or not 0 < profile[key] <= limit for key, limit in limits.items()):
+        raise SecurityDataError('image acquisition profile exceeds existing finite ceilings')
+    images = inventory.get('images')
+    if not isinstance(images, list) or not all(isinstance(item, dict) for item in images):
+        raise SecurityDataError('image inventory is malformed')
+    references = sorted({item.get('reference', '') for item in images})
+    if (profile['images'] != references or len(references) > profile['max_images']
+            or any(not _DIGEST_IMAGE.fullmatch(reference) for reference in references)):
+        raise SecurityDataError('image profile differs from complete immutable source identities')
+    return profile
+
+
+def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None) -> list[dict]:
     """Explicit acquisition for the isolated runner; never starts an image."""
+    if not isinstance(inventory.get('images'), list):
+        raise SecurityDataError('image acquisition requires a complete declared image list')
+    if inventory.get('images'):
+        image_acquisition_profile(inventory, profile)
+        # The daemon writes outside this process's byte budget. Descriptor
+        # estimates do not enforce compressed/unpacked/storage ceilings.
+        raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
     trivy = pinned_tool('trivy', tools)
     results = []
     tools.mkdir(parents=True, exist_ok=True)
@@ -255,16 +283,6 @@ def refresh_images(inventory: dict, tools: Path, *, now=None) -> list[dict]:
             results.append({'source_id': 'trivy-db', 'status': 'pass', 'snapshot': trivy_database_source(tools, now=now)})
         except (OSError, ValueError, RuntimeError) as exc:
             results.append({'source_id': 'trivy-db', 'status': 'fail', 'reason': str(exc)})
-        for reference in sorted({item['reference'] for item in inventory['images']}):
-            try:
-                if not _DIGEST_IMAGE.fullmatch(reference):
-                    raise SecurityDataError('unresolved image reference; no mutable tag is acquired')
-                result = _process(['docker', 'pull', '--platform', 'linux/amd64', reference], scratch, scratch)
-                if result.returncode != 0:
-                    raise SecurityDataError('immutable image acquisition failed')
-                results.append({'image': reference, 'status': 'pass'})
-            except (OSError, ValueError, RuntimeError) as exc:
-                results.append({'image': reference, 'status': 'fail', 'reason': str(exc)})
     return results
 
 
