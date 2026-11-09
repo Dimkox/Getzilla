@@ -122,7 +122,7 @@ def capture_preview(reference, url, resources, *, capture_id, captured_at,
     ReferenceError = reference.ReferenceError
     _need, encode = reference._need, reference.encode
     _digest, _unit = reference._digest, reference._unit
-    VERSION, MAX_PACK_BYTES = reference.VERSION, reference.MAX_PACK_BYTES
+    VERSION, MAX_PACK_BYTES = reference.PREVIEW_EXTRACTOR_VERSION, reference.MAX_PACK_BYTES
     validate_pack = reference.validate_pack
     parameters = reference._preview_parameters(url, resources, {'width':1280,'height':720} if viewport is None else viewport, theme, locale)
     import json

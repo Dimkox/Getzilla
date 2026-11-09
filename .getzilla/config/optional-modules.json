@@ -14,7 +14,11 @@
       "versions": {
         "0.1.0": {
           "manifest": ".getzilla/optional-modules/design-reference/0.1.0/module.json",
-          "sha256": "507c2fb3647e33a00198f267cfc71e446038bd88906ccbf16bb62846e59bd204"
+          "sha256": "2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452"
+        },
+        "0.2.0": {
+          "manifest": ".getzilla/optional-modules/design-reference/0.2.0/module.json",
+          "sha256": "50609bf8c4137682d170fe0811797089a3dfba5339d94aed196cd4219d82c3e4"
         }
       }
     }

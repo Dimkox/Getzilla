@@ -28,6 +28,39 @@ def load_file(path, name):
     return module
 
 
+ACCEPTED_DESIGN_BASE = '7dbeb45af030fab67bd49cf2261cf288d1ceeb7c'
+DESIGN_FILES = {
+    '0.1.0': ('module.json','reference.py','pack-v1.schema.json','LICENSE'),
+    '0.2.0': ('module.json','reference.py','preview.py','pack-v1.schema.json','pack-v2.schema.json','LICENSE'),
+}
+
+
+def sealed_design_source(destination, versions):
+    """Only named public artifacts; never load the repository's default catalogue."""
+    destination.mkdir(mode=0o700)
+    catalogue = {'schema_version':1,'core_api':1,
+                 'publishers':{'getzilla':{'licenses':['MIT']}},
+                 'modules':{'design-reference':{'publisher':'getzilla','versions':{}}}}
+    for version in versions:
+        if version not in DESIGN_FILES:
+            raise ValueError('public_design_fixture_version')
+        relative = '.getzilla/optional-modules/design-reference/' + version + '/'
+        target = destination / relative
+        target.mkdir(parents=True)
+        for name in DESIGN_FILES[version]:
+            raw = (subprocess.check_output(['git','show',ACCEPTED_DESIGN_BASE + ':' + relative + name],
+                                           cwd=ROOT, timeout=10) if version == '0.1.0'
+                   else (ROOT / relative / name).read_bytes())
+            (target / name).write_bytes(raw)
+        catalogue['modules']['design-reference']['versions'][version] = {
+            'manifest':relative + 'module.json',
+            'sha256':hashlib.sha256((target / 'module.json').read_bytes()).hexdigest()}
+    folder = destination / '.getzilla/config'
+    folder.mkdir(parents=True)
+    (folder / 'optional-modules.json').write_text(json.dumps(catalogue))
+    return destination
+
+
 @contextmanager
 def browser_fixture_temp(worker_script):
     """Explicit test capability; only the exact optional worker gets this temp root."""
@@ -141,14 +174,29 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def extractor(self):
-        path = ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        path = ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
         self.assertTrue(path.is_file(), 'explicit local design-reference artifact is missing')
         return load_file(path, 'public_design_reference')
+
+    def test_accepted_v010_is_exact_and_v020_is_a_distinct_immutable_bundle(self):
+        base = '7dbeb45af030fab67bd49cf2261cf288d1ceeb7c'
+        old = ROOT / '.getzilla/optional-modules/design-reference/0.1.0'
+        for name in ('module.json','reference.py','pack-v1.schema.json','LICENSE'):
+            expected = subprocess.check_output(['git','show',base + ':' +
+                '.getzilla/optional-modules/design-reference/0.1.0/' + name], cwd=ROOT, timeout=10)
+            self.assertTrue((old / name).read_bytes() == expected,
+                            'accepted immutable0.1.0 artifact changed: ' + name)
+        self.assertEqual({p.name for p in old.iterdir() if p.is_file()},
+                         {'module.json','reference.py','pack-v1.schema.json','LICENSE'})
+        new = ROOT / '.getzilla/optional-modules/design-reference/0.2.0'
+        self.assertTrue((new / 'module.json').is_file(), 'new immutable0.2.0 bundle missing')
+        self.assertEqual(json.loads((new / 'module.json').read_bytes())['version'], '0.2.0')
+        self.assertEqual((old / 'pack-v1.schema.json').read_bytes(), (new / 'pack-v1.schema.json').read_bytes())
 
     def test_architecture_declares_only_the_exact_local_reference_source(self):
         from getzilla import architecture
         snapshot = architecture.load_architecture(ROOT)
-        source = '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        source = '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
         unrelated = '.getzilla/optional-modules/unregistered/0.1.0/reference.py'
         inventory = (architecture._RepositoryArtifact(source, 'file', (ROOT / source).stat().st_size),
                      architecture._RepositoryArtifact(unrelated, 'file', 0))
@@ -172,7 +220,8 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous)
         OptionalModuleTests.install_core(self, self.root)
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'},
+                       source=sealed_design_source(self.root / 'sealed-v020-source', ('0.2.0',)))
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         _route, directory = create_public_task(self.root, session)
         command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
@@ -180,21 +229,75 @@ class LocalDesignReferenceTests(unittest.TestCase):
         first = command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
         return command, directory / 'evidence/design-reference', first
 
-    def test_v1_history_from_previous_reviewed_bundle_survives_module_update(self):
-        command, directory, first = self.record_fixture()
-        path = self.root / first['artifact']
-        record = json.loads(path.read_bytes())
-        record['module_manifest_sha256'] = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
-        raw = command._encode(record)
-        previous = directory / (hashlib.sha256(raw).hexdigest() + '.json')
-        path.rename(previous)
-        previous.write_bytes(raw)
-        before = previous.read_bytes()
-        current = command.capture(self.root, ['tokens.json'], capture_id='after-update',
-                                  captured_at='2026-11-09T00:00:00Z')
-        self.assertEqual(previous.read_bytes(), before)
-        delta = command.compare(self.root, previous.stem, current['sha256'])
-        self.assertEqual(delta['changed'], [])
+    def test_real_public_v010_to_v020_upgrade_preserves_history(self):
+        from getzilla.optional_modules import admit_module, manage_modules
+        from getzilla.state import bind_session, current_session
+        from tests.test_optional_modules import OptionalModuleTests
+        previous = current_session()
+        session = previous or 'public-design-version-fixture'
+        bind_session(session)
+        self.addCleanup(bind_session, previous)
+        OptionalModuleTests.install_core(self, self.root)  # Only this seven-line public seed helper.
+        old_source = sealed_design_source(self.root / 'sealed-old-source', ('0.1.0',))
+        new_source = sealed_design_source(self.root / 'sealed-new-source', ('0.1.0','0.2.0'))
+        old_folder = old_source / '.getzilla/optional-modules/design-reference/0.1.0'
+        old_bytes = {name:(old_folder / name).read_bytes() for name in DESIGN_FILES['0.1.0']}
+        old_sha = hashlib.sha256(old_bytes['module.json']).hexdigest()
+        old_script = subprocess.check_output(['git','show',ACCEPTED_DESIGN_BASE +
+                                               ':scripts/getzilla_design_reference.py'], cwd=ROOT, timeout=10)
+        script = old_source / 'scripts/getzilla_design_reference.py'
+        script.parent.mkdir()
+        script.write_bytes(old_script)
+        manage_modules(self.root, 'install', {'design-reference':'0.1.0'}, source=old_source)
+        manage_modules(self.root, 'enable', {'design-reference':None}, grants=['design.reference.read'])
+        self.assertEqual(admit_module(self.root, 'design-reference', permission='design.reference.read')['manifest_sha256'], old_sha)
+        create_public_task(self.root, session)
+        (self.root / 'tokens.json').write_text('{"x":"1px"}')
+        old_cli = load_file(script, 'actual_accepted_v010_design_cli')
+        first = old_cli.capture(self.root, ['tokens.json'], capture_id='actual-old',
+                                captured_at='2026-11-09T00:00:00Z')
+        original_path = self.root / first['artifact']
+        original_bytes = original_path.read_bytes()
+        original_record = json.loads(original_bytes)
+        self.assertEqual(original_record['module_manifest_sha256'], old_sha)
+        new_cli = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'new_v020_design_cli')
+        self.assertEqual(new_cli._admitted(self.root)['version'], '0.1.0')
+        compatible = new_cli.capture(self.root, ['tokens.json'], capture_id='still-old-compatible',
+                                     captured_at='2026-11-09T00:00:01Z')
+        self.assertEqual(new_cli.compare(self.root, first['sha256'], compatible['sha256'])['changed'], [])
+        installed = self.root / '.getzilla/modules/design-reference'
+        for name, raw in old_bytes.items():
+            self.assertTrue((installed / name).read_bytes() == raw)
+        foreign = installed / 'user.css'
+        foreign.write_bytes(b'/* owned public fixture sentinel */')
+        foreign_bytes = foreign.read_bytes()
+        settings = self.root / '.mcp.json'
+        settings.write_bytes(b'{"mcpServers":{}}\n')
+        settings_bytes = settings.read_bytes()
+        manage_modules(self.root, 'update', {'design-reference':'0.2.0'}, source=new_source)
+        self.assertFalse(admit_module(self.root, 'design-reference')['allowed'])
+        self.assertEqual(json.loads((installed / 'module.json').read_bytes())['version'], '0.2.0')
+        self.assertEqual(original_path.read_bytes(), original_bytes)
+        self.assertEqual(foreign.read_bytes(), foreign_bytes)
+        self.assertEqual(settings.read_bytes(), settings_bytes)
+        manage_modules(self.root, 'enable', {'design-reference':None}, grants=['design.reference.read'])
+        new_admission = new_cli._admitted(self.root)
+        self.assertEqual(new_admission['version'], '0.2.0')
+        self.assertNotEqual(new_admission['manifest_sha256'], old_sha)
+        current = new_cli.capture(self.root, ['tokens.json'], capture_id='actual-new',
+                                  captured_at='2026-11-09T00:00:02Z')
+        delta = new_cli.compare(self.root, first['sha256'], current['sha256'])
+        self.assertEqual(delta, {'added':[],'removed':[],'changed':[],'sources_changed':[]})
+        self.assertEqual(json.loads((self.root / current['artifact']).read_bytes())['pack']['content_digest'],
+                         original_record['pack']['content_digest'])
+        self.assertEqual(original_path.read_bytes(), original_bytes)
+        for name, raw in old_bytes.items():
+            self.assertTrue((old_folder / name).read_bytes() == raw)
+            self.assertTrue((new_source / '.getzilla/optional-modules/design-reference/0.1.0' / name).read_bytes() == raw)
+        print(json.dumps({'public306_upgrade':{'from':'0.1.0','to':'0.2.0','actual_old_record':True,
+                          'old_d1_supported':True,'history_unchanged':True,'foreign_unchanged':True,
+                          'old_manifest':old_sha,'new_manifest':new_admission['manifest_sha256']},
+                          'lifecycle166_acceptance':False}, sort_keys=True))
 
     def test_full32_history_keeps_exact_replay_and_refuses_the_next_event(self):
         command, directory, first = self.record_fixture()
@@ -480,7 +583,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.assertEqual(rows['--gap']['context'], ['@media (min-width: 3px)', ':root'])
         self.assertEqual(rows['--gap']['locator']['line'], 3)
         import jsonschema
-        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.1.0/pack-v1.schema.json').read_text())
+        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.2.0/pack-v1.schema.json').read_text())
         jsonschema.Draft202012Validator(schema).validate(result)
 
     def test_self_consistent_passive_ownership_cannot_admit_different_addon_code(self):
@@ -492,11 +595,8 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous)
         OptionalModuleTests.install_core(self, self.root)
-        source = self.root / 'public-source'
-        artifact = source / '.getzilla/optional-modules/design-reference/0.1.0'
-        artifact.mkdir(parents=True)
-        for name in ('module.json', 'reference.py', 'preview.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE'):
-            shutil.copyfile(ROOT / '.getzilla/optional-modules/design-reference/0.1.0' / name, artifact / name)
+        source = sealed_design_source(self.root / 'public-source', ('0.2.0',))
+        artifact = source / '.getzilla/optional-modules/design-reference/0.2.0'
         reference = artifact / 'reference.py'
         reference.write_bytes(reference.read_bytes() + b'\n# different inert public artifact\n')
         descriptor = json.loads((artifact / 'module.json').read_text())
@@ -504,12 +604,11 @@ class LocalDesignReferenceTests(unittest.TestCase):
             if entry['path'] == 'reference.py':
                 entry['sha256'] = hashlib.sha256(reference.read_bytes()).hexdigest()
         (artifact / 'module.json').write_text(json.dumps(descriptor))
-        registry = json.loads((ROOT / '.getzilla/config/optional-modules.json').read_text())
-        registry['modules']['design-reference']['versions']['0.1.0']['sha256'] = hashlib.sha256(
+        registry = json.loads((source / '.getzilla/config/optional-modules.json').read_text())
+        registry['modules']['design-reference']['versions']['0.2.0']['sha256'] = hashlib.sha256(
             (artifact / 'module.json').read_bytes()).hexdigest()
-        (source / '.getzilla/config').mkdir()
         (source / '.getzilla/config/optional-modules.json').write_text(json.dumps(registry))
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=source)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'}, source=source)
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         self.assertTrue(admit_module(self.root, 'design-reference', permission='design.reference.read')['allowed'])
         create_public_task(self.root, session)
@@ -528,7 +627,8 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous_session)
         OptionalModuleTests.install_core(self, self.root)
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'},
+                       source=sealed_design_source(self.root / 'sealed-v020-source', ('0.2.0',)))
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
         (self.root / 'tokens.json').write_text('{"x":"1px","y":"2px"}')
@@ -575,15 +675,15 @@ class PreviewDesignReferenceTests(unittest.TestCase):
     def setUp(self):
         if (os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1'
                 and self._testMethodName.startswith(('test_controlled_preview', 'test_fixture_'))):
-            adapter = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/preview.py',
+            adapter = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/preview.py',
                                 'explicit_browser_fixture_adapter')
             self.enterContext(browser_fixture_temp(adapter._PREVIEW_WORKER))
 
     def extractor(self):
         from functools import partial
-        reference = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py',
+        reference = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py',
                               'preview_design_reference')
-        preview = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.1.0/preview.py',
+        preview = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/preview.py',
                             'preview_design_adapter')
         reference.capture_preview = partial(preview.capture_preview, reference)
         return reference
@@ -591,9 +691,9 @@ class PreviewDesignReferenceTests(unittest.TestCase):
     def test_optional_transport_has_separate_source_and_architecture_boundary(self):
         import ast
         from getzilla import architecture
-        preview = '.getzilla/optional-modules/design-reference/0.1.0/preview.py'
+        preview = '.getzilla/optional-modules/design-reference/0.2.0/preview.py'
         self.assertTrue((ROOT / preview).is_file(), 'separate optional preview adapter is missing')
-        reference = ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        reference = ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
         imports = {item.name for node in ast.walk(ast.parse(reference.read_text()))
                    if isinstance(node, ast.Import) for item in node.names}
         self.assertFalse(imports & {'subprocess','http.client','playwright','socket'})
@@ -681,7 +781,7 @@ setTimeout(()=>document.body.setAttribute('data-dynamic','yes'),20);</script>'''
         self.assertTrue(any(t['raw_value'] == 'rgb(1, 2, 3)' for t in pack['content']['tokens']))
         module.validate_pack(pack)
         import jsonschema
-        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.1.0/pack-v2.schema.json').read_text())
+        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.2.0/pack-v2.schema.json').read_text())
         jsonschema.Draft202012Validator(schema).validate(pack)
         again = module.capture_preview(url, [url], capture_id='preview2',
                                        captured_at='2026-11-09T01:00:00Z')

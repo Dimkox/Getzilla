@@ -1,4 +1,4 @@
-"""Optional bounded local assets and explicit controlled-fixture browser observations."""
+"""Bounded local observations only. No browser, network, models or source execution."""
 from __future__ import annotations
 
 import hashlib
@@ -310,9 +310,6 @@ def capture(root, files, *, capture_id, captured_at):
 
 def validate_pack(pack):
     try:
-        if type(pack) is dict and type(pack.get('content')) is dict and pack['content'].get('schema_version') == 2:
-            _validate_preview(pack)
-            return
         _need(type(pack) is dict and set(pack) == {'content', 'content_digest', 'capture'})
         envelope, content = pack['capture'], pack['content']
         _need(type(envelope) is dict and set(envelope) == {'id', 'timestamp'}
@@ -381,83 +378,3 @@ def diff(previous, current):
     return {'added': sorted(new.keys() - old.keys()), 'removed': sorted(old.keys() - new.keys()),
             'changed': changed,
             'sources_changed': sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))}
-
-def _preview_parameters(url, resources, viewport, theme, locale):
-    from urllib.parse import urlsplit
-    _need(type(url) is str and type(resources) is list and 1 <= len(resources) <= 16
-          and all(type(x) is str and len(x) <= 512 for x in resources)
-          and resources == sorted(set(resources)) and url in resources)
-    origin = None
-    for value in resources:
-        parts = urlsplit(value)
-        _need(parts.scheme == 'http' and parts.hostname == '127.0.0.1'
-              and parts.port is not None and 1024 <= parts.port <= 65535
-              and parts.netloc == '127.0.0.1:' + str(parts.port)
-              and not parts.fragment and parts.path.startswith('/')
-              and not any(ord(c) <= 32 or ord(c) >= 127 or c == '\\' for c in value))
-        _need(origin is None or origin == parts.netloc)
-        origin = parts.netloc
-    _need(type(viewport) is dict and set(viewport) == {'width','height'}
-          and all(type(x) is int and 240 <= x <= 1920 for x in viewport.values())
-          and theme in ('light', 'dark') and type(locale) is str
-          and re.fullmatch('[a-z]{2}(?:-[A-Z]{2})?', locale))
-    return {'url':url,'resources':resources,'viewport':viewport,'theme':theme,'locale':locale,
-            'scope':'controlled-loopback-fixture', 'live_capture':'unsupported'}
-
-
-def _validate_preview(pack):
-    _need(type(pack) is dict and set(pack) == {'content','content_digest','capture'})
-    content = pack['content']
-    _need(set(content) == {'schema_version','extractor_version','parameters','sources','tokens','browser','coverage'}
-          and content['schema_version'] == 2 and content['extractor_version'] == VERSION
-          and pack['content_digest'] == _digest(content))
-    envelope = pack['capture']
-    _need(type(envelope) is dict and set(envelope) == {'id','timestamp'}
-          and type(envelope['id']) is str and re.fullmatch('[A-Za-z0-9_-]{1,64}',envelope['id'])
-          and type(envelope['timestamp']) is str
-          and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ',envelope['timestamp']))
-    datetime.strptime(envelope['timestamp'],'%Y-%m-%dT%H:%M:%SZ')
-    p = content['parameters']
-    _need(type(p) is dict and p == _preview_parameters(p['url'],p['resources'],p['viewport'],p['theme'],p['locale']))
-    sources = content['sources']
-    _need(type(sources) is list and 1 <= len(sources) <= 16)
-    paths = []
-    for row in sources:
-        _need(type(row) is dict and set(row) == {'path','sha256'} and row['path'] in p['resources']
-              and type(row['sha256']) is str and re.fullmatch('[0-9a-f]{64}',row['sha256']))
-        paths.append(row['path'])
-    _need(paths == sorted(set(paths)) and p['url'] in paths)
-    tokens = content['tokens']
-    _need(type(tokens) is list and len(tokens) <= 1536)
-    ids = []
-    properties = {'color','background-color','font-family','font-size','font-weight','line-height',
-                  'letter-spacing','margin-top','padding-top','gap','border-radius','box-shadow'}
-    for row in tokens:
-        _need(type(row) is dict and set(row) == {'id','kind','source','name','context','raw_value','unit','locator'}
-              and row['kind'] == 'computed' and row['source'] == p['url'] and row['name'] in properties
-              and type(row['raw_value']) is str and len(row['raw_value']) <= 4096
-              and row['unit'] == _unit(row['raw_value'])
-              and type(row['locator']) is dict and set(row['locator']) == {'element'}
-              and type(row['locator']['element']) is int and 0 <= row['locator']['element'] < 128
-              and row['context'] == ['element:' + str(row['locator']['element'])]
-              and row['id'] == _digest({k:row[k] for k in ('kind','source','name','context')}))
-        ids.append(row['id'])
-    _need(ids == sorted(set(ids)))
-    b = content['browser']
-    _need(type(b) is dict and set(b) == {'version','adapter','adapter_version','sandbox','loading'}
-          and b['adapter'] == 'playwright' and b['sandbox'] is True
-          and type(b['adapter_version']) is str and re.fullmatch(r'[0-9.]{1,64}',b['adapter_version'])
-          and type(b['version']) is str and re.fullmatch(r'[0-9.]{1,64}',b['version']))
-    loading = b['loading']
-    _need(type(loading) is dict and set(loading) == {'fonts','fontErrors','css','ready'}
-          and loading['fonts'] in ('loaded','loading') and type(loading['fontErrors']) is bool
-          and type(loading['css']) is bool and loading['ready'] in ('loading','interactive','complete'))
-    c = content['coverage']
-    allowed = {'fixture-only','dynamic-unproven','dynamic-content','blocked-transport','request-budget',
-               'resource-unavailable','response-budget','dom-budget','fonts-incomplete','loading-incomplete'}
-    _need(type(c) is dict and set(c) == {'status','reasons','files','tokens'} and c['status'] == 'partial'
-          and type(c['reasons']) is list and c['reasons'] == sorted(set(c['reasons']))
-          and {'fixture-only','dynamic-unproven'} <= set(c['reasons']) <= allowed
-          and type(c['files']) is int and c['files'] == len(sources)
-          and type(c['tokens']) is int and c['tokens'] == len(tokens)
-          and len(encode(pack)) <= MAX_PACK_BYTES)

@@ -17,25 +17,13 @@
   "files": [
     {
       "path": "reference.py",
-      "sha256": "6ca57109619a9827de6bd589c2da5678419ee4c23e9dfb894b963ac872c3401f",
-      "mode": 420,
-      "mutable": false
-    },
-    {
-      "path": "preview.py",
-      "sha256": "7abff63eaa462d9bf2b68ca428bbb4b70cf1037648428246580ef02486c18b54",
+      "sha256": "d8bed874f6de1f0aa3cb938399207cb013aea87bb9a5c6c4c9e3f13dcc8940d4",
       "mode": 420,
       "mutable": false
     },
     {
       "path": "pack-v1.schema.json",
       "sha256": "06514f7ce2ad1aa33ac85b562dc6f0f5a187f6af3a10a3913c80a2ece990b95c",
-      "mode": 420,
-      "mutable": false
-    },
-    {
-      "path": "pack-v2.schema.json",
-      "sha256": "d6fa8bccfe5bfb799d682e3c2fea4619637292585c80335631af72cacd0bb45f",
       "mode": 420,
       "mutable": false
     },

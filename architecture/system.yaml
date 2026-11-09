@@ -2443,6 +2443,7 @@
         ".getzilla/hooks",
         ".getzilla/managed-components.json",
         ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
+        ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/templates",
         ".grok",
         ".qwen"
@@ -3438,7 +3439,7 @@
       "owner": "repository engineering; explicit optional fixture capture only",
       "public_contracts": [],
       "repository_paths": [
-        ".getzilla/optional-modules/design-reference/0.1.0/preview.py"
+        ".getzilla/optional-modules/design-reference/0.2.0/preview.py"
       ],
       "runtime": {
         "evidence": "source_described",

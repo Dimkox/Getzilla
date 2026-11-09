@@ -16,6 +16,21 @@ Python Playwright installation and `/usr/bin/google-chrome`; missing capabilitie
 refuse. Core never installs or imports these dependencies. Disabled/missing modules load no addon code, start no
 workers, make no requests and spend no provider tokens.
 
+The new feature is immutable module version`0.2.0`. The accepted`0.1.0` bundle
+remains byte-for-byte unchanged. The explicit installer artifact selection includes
+both public versions; it does not load a catalogue of unrelated modules. An
+already-installed accepted`0.1.0` keeps local capture/history support through its
+exact trusted descriptor pin. It cannot perform browser capture. To add preview,
+run `getzilla design-reference update --source <source-install>`, then explicitly
+`getzilla design-reference enable`; the existing update transaction installs
+`0.2.0` disabled. Foreign files/settings and immutable task snapshots remain.
+This is a versioned addon update, not a new installer or general166 qualification.
+
+Local version1 packs retain extractor version`0.1.0` and their original schema and
+content-digest semantics. Version2 preview packs use extractor version`0.2.0`.
+The module version and pack/extractor versions describe different contracts;
+upgrading the bundle does not rewrite historical captures or rename observations.
+
 Use an actual owned active task with an incorporated change package:
 `getzilla design-reference capture --file tokens.json --file theme.css`.
 Selection is explicit and project-relative. JSON scalar values and CSS custom
@@ -144,9 +159,11 @@ The default suite runs browser-independent controls and skips fixture launches.
 The adapter uses [Playwright routing and isolation](https://playwright.dev/python/docs/api/class-browsercontext)
 and [response fulfillment](https://playwright.dev/python/docs/api/class-route#route-fulfill).
 
-The command pins the reviewed0.1.0 manifest. A different self-consistent passive
-artifact is not executable authority, even with matching local ownership. New
-code needs a new reviewed artifact and command pin; ownership alone is insufficient.
+The command accepts only the exact trusted version/descriptor pairs for accepted
+`0.1.0` local capture and new`0.2.0`. New preview requires`0.2.0`. A different
+self-consistent artifact is not executable authority, even with matching local
+ownership. New code requires a new immutable version and reviewed pin; the
+existing same-version immutability guard remains unchanged.
 
 The architecture keeps `reference.py` in the existing no-network local policy
 component. Only explicit preview requests load `preview.py`, which has a separate

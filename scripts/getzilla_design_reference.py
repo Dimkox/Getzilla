@@ -26,10 +26,12 @@ from getzilla.util import find_root  # noqa: E402
 from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
+CURRENT_VERSION = '0.2.0'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '507c2fb3647e33a00198f267cfc71e446038bd88906ccbf16bb62846e59bd204'
+EXPECTED_MANIFEST_SHA256 = '50609bf8c4137682d170fe0811797089a3dfba5339d94aed196cd4219d82c3e4'
 # Read-only compatibility for immutable v1 records from accepted PR368.
 HISTORICAL_V1_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
+TRUSTED_MANIFESTS = {'0.1.0': HISTORICAL_V1_MANIFEST_SHA256, CURRENT_VERSION: EXPECTED_MANIFEST_SHA256}
 MAX_HISTORY = 32
 MAX_RECORD_BYTES = 1024 * 1024
 
@@ -50,13 +52,14 @@ def _encode(value):
 
 def _load(root, admission, *, entrypoint='reference.py'):
     """Load only admitted, hash-checked installed bytes, never project imports."""
-    _need(entrypoint in ('reference.py', 'preview.py'))
+    _need(entrypoint in ('reference.py', 'preview.py')
+          and (entrypoint == 'reference.py' or admission['version'] == CURRENT_VERSION))
     prefix = '.getzilla/modules/design-reference/'
     with ReadOnlyBoundRoot(root) as binding:
         descriptor = binding.read(prefix + 'module.json', limit=65536)
         _need(descriptor is not None and descriptor.sha256 == admission['manifest_sha256'])
         manifest = json.loads(descriptor.content)
-        _need(manifest['version'] == '0.1.0' and manifest['publisher'] == 'getzilla'
+        _need(manifest['version'] == admission['version'] and manifest['publisher'] == 'getzilla'
               and manifest['license'] == 'MIT' and manifest['hooks'] == 'declarative-v1')
         entry = next(item for item in manifest['files'] if item['path'] == entrypoint)
         source = binding.read(prefix + entrypoint, limit=256 * 1024)
@@ -72,8 +75,8 @@ def _load(root, admission, *, entrypoint='reference.py'):
 def _admitted(root):
     admission = admit_module(root, NAME, permission=PERMISSION)
     _need(admission.get('allowed') is True and admission.get('external_authority') is False
-          and admission.get('workers') == 0 and admission.get('version') == '0.1.0'
-          and admission.get('manifest_sha256') == EXPECTED_MANIFEST_SHA256)
+          and admission.get('workers') == 0 and admission.get('version') in TRUSTED_MANIFESTS
+          and admission.get('manifest_sha256') == TRUSTED_MANIFESTS[admission['version']])
     return admission
 
 
@@ -228,6 +231,7 @@ def capture(root, files, *, capture_id, captured_at):
 def capture_preview(root, url, resources, *, capture_id, captured_at, viewport=None, theme='light', locale='en-US'):
     try:
         admission = _admitted(root)
+        _need(admission['version'] == CURRENT_VERSION)  # Legacy local authority never enables preview.
         _task(root)
         module = _load(root, admission)
         adapter = _load(root, admission, entrypoint='preview.py')
@@ -304,7 +308,7 @@ def main(argv=None):
             result = module_status(root)
         else:
             result = manage_modules(root, args.operation,
-                                    {NAME: '0.1.0'} if args.operation in ('install', 'update') else {NAME: None},
+                                    {NAME: CURRENT_VERSION} if args.operation in ('install', 'update') else {NAME: None},
                                     source=getattr(args, 'source', None),
                                     grants=[PERMISSION] if args.operation == 'enable' else ())
         print(json.dumps(result, sort_keys=True))
