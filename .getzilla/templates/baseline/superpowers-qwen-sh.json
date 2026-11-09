@@ -3,8 +3,8 @@
   "argv": [],
   "binding": {
     "dependency_lock_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "source_archive_sha256": "29714b2c4c727ecc6600f9e5982a0dcbb829860ba79626f1941a0f233e85331a",
-    "source_commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d"
+    "source_archive_sha256": "5f15e6bfa1b628ebabc84f88508b9652f5c7b8cb4529731e266006ba8f798976",
+    "source_commit": "22f0b463e7a5e579904dd6211a520321035526f7"
   },
   "component": "superpowers",
   "files": [
@@ -15,10 +15,16 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 17548,
+      "bytes": 15190,
       "mode": 420,
       "path": ".agents/skills/brainstorming/SKILL.md",
-      "sha256": "a32d2255354775aa124855aa7100cf276bea096fff4ebb3a0edf57be216e6c72"
+      "sha256": "2c9ca71f94886f9ca9f4aef055f7cafb3e1a9bdf3aeebf8f4cb547c69405d207"
+    },
+    {
+      "bytes": 881,
+      "mode": 420,
+      "path": ".agents/skills/brainstorming/builder-check-prompt.md",
+      "sha256": "36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e"
     },
     {
       "bytes": 8094,
@@ -33,28 +39,22 @@
       "sha256": "43c6d69954a46ec34a2a262bcc62a9a7e83e839c739f199cb72646d397c686e3"
     },
     {
-      "bytes": 25693,
+      "bytes": 25699,
       "mode": 420,
       "path": ".agents/skills/brainstorming/scripts/server.cjs",
-      "sha256": "2d2961ea8d11f56c5f4c3a1a68d22709efa5d7601a2246d8c880774e7e9e8412"
+      "sha256": "763abf96510e0b892a1141397b31aa82ef900cf87ed34dde94bc8782baf4a7ca"
     },
     {
-      "bytes": 6908,
+      "bytes": 7315,
       "mode": 493,
       "path": ".agents/skills/brainstorming/scripts/start-server.sh",
-      "sha256": "a4e5ae84275bcaacd2f84345afeabe59cf7b00ba080e123da7cc1fb226f12847"
+      "sha256": "314dd68dc00e8dd94c7491aca8a5f004c7fddffc161e2b07482f29f48d13659a"
     },
     {
       "bytes": 3263,
       "mode": 493,
       "path": ".agents/skills/brainstorming/scripts/stop-server.sh",
       "sha256": "0b5ccbbd57f62d3ed88993f7940b5ee0e5c0fc9b21c550c623da4f6292e47daf"
-    },
-    {
-      "bytes": 1747,
-      "mode": 420,
-      "path": ".agents/skills/brainstorming/spec-document-reviewer-prompt.md",
-      "sha256": "95a0a195de9d984be2fffa95bab16fc8c563bc296a9cfc5e9c29cb3ece0d7457"
     },
     {
       "bytes": 13413,
@@ -69,10 +69,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 6904,
+      "bytes": 6941,
       "mode": 420,
       "path": ".agents/skills/diagnosing-superpowers/SKILL.md",
-      "sha256": "5a652f8132cc901eb5ca61f89157839f87a2f20aed037fc7a2b51051bc37cd19"
+      "sha256": "3143de8695c5a2d63e8b1675f33837578076f464deb127c2ebdd0b46fceef886"
     },
     {
       "bytes": 1582,
@@ -147,10 +147,10 @@
       "sha256": "e6be2bd3495f454d4bedee9484d728d245d1fa656e11fc4ceec5693c16e4730a"
     },
     {
-      "bytes": 1644,
+      "bytes": 1636,
       "mode": 420,
       "path": ".agents/skills/diagnosing-superpowers/references/github-issues.md",
-      "sha256": "a656f5e15b21c7a200c39c038f5ede74b9d6ea3ceeb90f39af7e930c8d8424d6"
+      "sha256": "d26ef9197b4a6ae5159ae6d11abd162bcc624d95fc7ccf508e07b68f916a1b19"
     },
     {
       "bytes": 2243,
@@ -177,10 +177,10 @@
       "sha256": "597892462be83bc478536ec91f7c285f6dd25d119c560734a3a180fe8471301d"
     },
     {
-      "bytes": 1851,
+      "bytes": 2680,
       "mode": 420,
       "path": ".agents/skills/diagnosing-superpowers/templates/issue.md",
-      "sha256": "8f28dbfe60602f77dda76d81815cb4e2dce7d3e2a93348890e1581be8310ac1f"
+      "sha256": "afd21779e5de5bc5adfe2f5a50a04e44ab8d50d9ad0f829243de248d6f023eed"
     },
     {
       "bytes": 2359,
@@ -207,22 +207,22 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 20405,
+      "bytes": 18364,
       "mode": 420,
       "path": ".agents/skills/executing-plans/SKILL.md",
-      "sha256": "f38e8f2ddcf079f65493adc713c1fed78421dfaf5f4dbf6b3a6b2b1d95466e71"
+      "sha256": "deaf176fa179827e80f2ea3101db3ea90fdf562ebef340eba761e4687940f5f5"
     },
     {
-      "bytes": 1670,
+      "bytes": 1900,
       "mode": 493,
       "path": ".agents/skills/executing-plans/scripts/task-done",
-      "sha256": "f704dc216e0602f95c601b9ee1113c9a55cc1c5f6e4d149dddfba0fd3ad1c314"
+      "sha256": "ac0b5ebafc7d471507b7e94d88da77a11f187ba277c8d48fefaf8ff3e4fee50e"
     },
     {
-      "bytes": 963,
+      "bytes": 1185,
       "mode": 493,
       "path": ".agents/skills/executing-plans/scripts/task-start",
-      "sha256": "f833693c8fce3700fc9f841562d80f8015cd40f652c168a3405ac3e46947a1fe"
+      "sha256": "4ae7ce3b6777c3240af786197836a6b4bbf3b0ee831c25f147c149ea8db54a21"
     },
     {
       "bytes": 1070,
@@ -255,10 +255,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 2977,
+      "bytes": 2974,
       "mode": 420,
       "path": ".agents/skills/requesting-code-review/SKILL.md",
-      "sha256": "cfcee1b06774e7c0517f1e09be1a11f2d5680257072723e709ddbcf7e08b795a"
+      "sha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc"
     },
     {
       "bytes": 6449,
@@ -273,10 +273,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 32577,
+      "bytes": 19740,
       "mode": 420,
       "path": ".agents/skills/subagent-driven-development/SKILL.md",
-      "sha256": "8dde5589ee083fb4999106d116f01c8fdaf3116a8a9813fdedeb80329de49046"
+      "sha256": "1baf70e307bde682c462513c86116333f1f066168c6710f45145bf5f0b00828d"
     },
     {
       "bytes": 6335,
@@ -285,40 +285,82 @@
       "sha256": "81dd9d5a3fb0b09b96b5829f03b9796842f3199ef7591d1ba1c2db2a515f64d0"
     },
     {
-      "bytes": 4761,
+      "bytes": 4833,
       "mode": 420,
       "path": ".agents/skills/subagent-driven-development/re-review-prompt.md",
-      "sha256": "0828a5e9cbb12ba49f14621dd8c3953c48c0fc383e75bb5494f055ed0d6d824f"
+      "sha256": "ad54d0a10f1c2c8e656456e0a46e654af5dfe5ee6bcef63428cfd69b8dcd9311"
     },
     {
-      "bytes": 2029,
+      "bytes": 583,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/batching.md",
+      "sha256": "b54dc7e23dbfb90db89bcb2fb3af591aabf6a271a165fbc0da4c6f9439980eac"
+    },
+    {
+      "bytes": 513,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/cannot-verify.md",
+      "sha256": "e698713a15e0eabf1a2ab26ffe1bb04bf70c9d6d2e2060d44a0f9a1bdd4408bf"
+    },
+    {
+      "bytes": 2576,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/final-review.md",
+      "sha256": "6c9e12093e46c4ad0a203bc07709c17e3470f855f1b78e55c5e7b722a012a32c"
+    },
+    {
+      "bytes": 4314,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/fix-loop.md",
+      "sha256": "1938ce707915efc44021e563ebc29666329e20ad861b6c50b89f305b8f4e8d8b"
+    },
+    {
+      "bytes": 1062,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/handling-reports.md",
+      "sha256": "8f759cdd4936220c38aab05b6d6c48c6df8ac8f146b0f37a6d2facbf87133c67"
+    },
+    {
+      "bytes": 1353,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/preflight.md",
+      "sha256": "3ea21c5fc1af1a190ac8a9d19ceb0849b47bf2ffe27b87dffcc21b6a0539776c"
+    },
+    {
+      "bytes": 614,
+      "mode": 420,
+      "path": ".agents/skills/subagent-driven-development/references/resuming.md",
+      "sha256": "ff6e38bde2276faa2a7e93513086caded0ea10edbf2ec7f349a7e3b0d7c668c4"
+    },
+    {
+      "bytes": 2444,
       "mode": 493,
       "path": ".agents/skills/subagent-driven-development/scripts/review-package",
-      "sha256": "f9275175b2276b1d5fdb1bae0bedaadd2a950659b7c6f311ea37ff85e1861b1f"
+      "sha256": "aed7c6e09fc660417d28898ed975e84651cb9f18f4675141cd475edfb7037f3d"
     },
     {
-      "bytes": 3265,
+      "bytes": 2356,
+      "mode": 493,
+      "path": ".agents/skills/subagent-driven-development/scripts/sdd-repo",
+      "sha256": "6f8256a776968d394bae679572e41ce572fd45c72074b98f9a8eb8b4f160e06f"
+    },
+    {
+      "bytes": 4823,
       "mode": 493,
       "path": ".agents/skills/subagent-driven-development/scripts/sdd-workspace",
-      "sha256": "75ca46c756ba4209ca36e0d3d65567257ceb33bc7a6775b9dad946707cb3bd7b"
+      "sha256": "de3af5252fa595fc2000ba05cf69e06187d5c8aae9d283cced4c167ad1813061"
     },
     {
-      "bytes": 1322,
+      "bytes": 4769,
       "mode": 493,
       "path": ".agents/skills/subagent-driven-development/scripts/task-brief",
-      "sha256": "cc563538e09abf719b34ddf4b2fa7a65cf3b301729039dbfa923cb060f729146"
+      "sha256": "0f244a12e146393c552ba62069d3eedcc85cb3f76de67b01f4e11219e5ebbcd8"
     },
     {
-      "bytes": 9031,
+      "bytes": 9175,
       "mode": 420,
       "path": ".agents/skills/subagent-driven-development/task-reviewer-prompt.md",
-      "sha256": "bfed55c8f19d0ff6ed57b0fe09127c92890e9311c6c73917129598826bf9ebe8"
-    },
-    {
-      "bytes": 4257,
-      "mode": 420,
-      "path": ".agents/skills/systematic-debugging/CREATION-LOG.md",
-      "sha256": "c24733a5b1821bd6bed1fc950261f0b9f4e90097e0bbb96459d8179713730789"
+      "sha256": "61a04c2fb29907887d8babee1594f5e35ae26d461e7e584f5b7c283215165e08"
     },
     {
       "bytes": 1070,
@@ -327,10 +369,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 9465,
+      "bytes": 9530,
       "mode": 420,
       "path": ".agents/skills/systematic-debugging/SKILL.md",
-      "sha256": "808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787"
+      "sha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202"
     },
     {
       "bytes": 5054,
@@ -361,30 +403,6 @@
       "mode": 420,
       "path": ".agents/skills/systematic-debugging/root-cause-tracing.md",
       "sha256": "75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8"
-    },
-    {
-      "bytes": 653,
-      "mode": 420,
-      "path": ".agents/skills/systematic-debugging/test-academic.md",
-      "sha256": "fe2ba480d78ac0d686dc025f41c2a32a43d642bf533f91b0c6053a04d35d6486"
-    },
-    {
-      "bytes": 1900,
-      "mode": 420,
-      "path": ".agents/skills/systematic-debugging/test-pressure-1.md",
-      "sha256": "0b6a915db0054577819834c79be9eb614e97bddba10d73768e1fbe91cfed048a"
-    },
-    {
-      "bytes": 2283,
-      "mode": 420,
-      "path": ".agents/skills/systematic-debugging/test-pressure-2.md",
-      "sha256": "b2030aeffba07050e8ad573ddf87486457c4a016a786bb326235bebd856f2016"
-    },
-    {
-      "bytes": 2692,
-      "mode": 420,
-      "path": ".agents/skills/systematic-debugging/test-pressure-3.md",
-      "sha256": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708"
     },
     {
       "bytes": 1070,
@@ -501,34 +519,58 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 26623,
+      "bytes": 16738,
       "mode": 420,
       "path": ".agents/skills/writing-skills/SKILL.md",
-      "sha256": "bbdfe742f853562e643a3d40d64476359d47881e39cef80a189283fa26d11ab9"
-    },
-    {
-      "bytes": 46197,
-      "mode": 420,
-      "path": ".agents/skills/writing-skills/anthropic-best-practices.md",
-      "sha256": "217629b356c09c9bd11017c9788e8fc654ca1b32c92d4a51cd490e16dd65e59a"
+      "sha256": "8cb3ac68c6d8c4bb46886b998b09af7989643cab8bd0e46ee86dd62e64546bbe"
     },
     {
       "bytes": 5423,
       "mode": 420,
-      "path": ".agents/skills/writing-skills/examples/CLAUDE_MD_TESTING.md",
+      "path": ".agents/skills/writing-skills/references/CLAUDE_MD_TESTING.md",
       "sha256": "0b379a3415e185d3c434b3ad283d8aa132f3022c2a4f210f168865b5986bcef0"
+    },
+    {
+      "bytes": 46197,
+      "mode": 420,
+      "path": ".agents/skills/writing-skills/references/anthropic-best-practices.md",
+      "sha256": "217629b356c09c9bd11017c9788e8fc654ca1b32c92d4a51cd490e16dd65e59a"
+    },
+    {
+      "bytes": 2577,
+      "mode": 420,
+      "path": ".agents/skills/writing-skills/references/bulletproofing.md",
+      "sha256": "9397023e6bc85b556a57f3097371363bf03e28e755c57f403f470bcda90e0a23"
+    },
+    {
+      "bytes": 7616,
+      "mode": 420,
+      "path": ".agents/skills/writing-skills/references/discovery.md",
+      "sha256": "c6bbc74af3be90f693f7cbc986af6fa94e8df75f65109b52e96032587f5b92af"
+    },
+    {
+      "bytes": 1262,
+      "mode": 420,
+      "path": ".agents/skills/writing-skills/references/flowcharts.md",
+      "sha256": "8b1f542391f274f0d33f3457ac099a3d317d6877eaa3b8d3b1ebef151b55fda7"
     },
     {
       "bytes": 5970,
       "mode": 420,
-      "path": ".agents/skills/writing-skills/graphviz-conventions.dot",
+      "path": ".agents/skills/writing-skills/references/graphviz-conventions.dot",
       "sha256": "e2890a593c91370e384b42f2f67b1a6232c9e69dddea7891a0c1c46d7b20b694"
     },
     {
       "bytes": 5901,
       "mode": 420,
-      "path": ".agents/skills/writing-skills/persuasion-principles.md",
+      "path": ".agents/skills/writing-skills/references/persuasion-principles.md",
       "sha256": "a51bc9bf75189ea73a27b3fb504a2fdfdb966fb1f7f1cdf03203230a216ccc03"
+    },
+    {
+      "bytes": 12557,
+      "mode": 420,
+      "path": ".agents/skills/writing-skills/references/testing-skills-with-subagents.md",
+      "sha256": "ed8a6862c085900135962390530d9dc7637ad6d650b4324ce3b051287a5c3f22"
     },
     {
       "bytes": 4968,
@@ -537,22 +579,22 @@
       "sha256": "c7f412cc629461c4d10287e668731874c0497707023e3e3f74a5355eb2cee196"
     },
     {
-      "bytes": 12558,
-      "mode": 420,
-      "path": ".agents/skills/writing-skills/testing-skills-with-subagents.md",
-      "sha256": "c711346852c911b24a84aa161e0cff06a4cd7f4e2fa9e9c0a266cead5afcbade"
-    },
-    {
       "bytes": 1070,
       "mode": 420,
       "path": ".qwen/skills/brainstorming/LICENSE",
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 17548,
+      "bytes": 15190,
       "mode": 420,
       "path": ".qwen/skills/brainstorming/SKILL.md",
-      "sha256": "a32d2255354775aa124855aa7100cf276bea096fff4ebb3a0edf57be216e6c72"
+      "sha256": "2c9ca71f94886f9ca9f4aef055f7cafb3e1a9bdf3aeebf8f4cb547c69405d207"
+    },
+    {
+      "bytes": 881,
+      "mode": 420,
+      "path": ".qwen/skills/brainstorming/builder-check-prompt.md",
+      "sha256": "36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e"
     },
     {
       "bytes": 8094,
@@ -567,28 +609,22 @@
       "sha256": "43c6d69954a46ec34a2a262bcc62a9a7e83e839c739f199cb72646d397c686e3"
     },
     {
-      "bytes": 25693,
+      "bytes": 25699,
       "mode": 420,
       "path": ".qwen/skills/brainstorming/scripts/server.cjs",
-      "sha256": "2d2961ea8d11f56c5f4c3a1a68d22709efa5d7601a2246d8c880774e7e9e8412"
+      "sha256": "763abf96510e0b892a1141397b31aa82ef900cf87ed34dde94bc8782baf4a7ca"
     },
     {
-      "bytes": 6908,
+      "bytes": 7315,
       "mode": 493,
       "path": ".qwen/skills/brainstorming/scripts/start-server.sh",
-      "sha256": "a4e5ae84275bcaacd2f84345afeabe59cf7b00ba080e123da7cc1fb226f12847"
+      "sha256": "314dd68dc00e8dd94c7491aca8a5f004c7fddffc161e2b07482f29f48d13659a"
     },
     {
       "bytes": 3263,
       "mode": 493,
       "path": ".qwen/skills/brainstorming/scripts/stop-server.sh",
       "sha256": "0b5ccbbd57f62d3ed88993f7940b5ee0e5c0fc9b21c550c623da4f6292e47daf"
-    },
-    {
-      "bytes": 1747,
-      "mode": 420,
-      "path": ".qwen/skills/brainstorming/spec-document-reviewer-prompt.md",
-      "sha256": "95a0a195de9d984be2fffa95bab16fc8c563bc296a9cfc5e9c29cb3ece0d7457"
     },
     {
       "bytes": 13413,
@@ -603,10 +639,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 6904,
+      "bytes": 6941,
       "mode": 420,
       "path": ".qwen/skills/diagnosing-superpowers/SKILL.md",
-      "sha256": "5a652f8132cc901eb5ca61f89157839f87a2f20aed037fc7a2b51051bc37cd19"
+      "sha256": "3143de8695c5a2d63e8b1675f33837578076f464deb127c2ebdd0b46fceef886"
     },
     {
       "bytes": 1582,
@@ -681,10 +717,10 @@
       "sha256": "e6be2bd3495f454d4bedee9484d728d245d1fa656e11fc4ceec5693c16e4730a"
     },
     {
-      "bytes": 1644,
+      "bytes": 1636,
       "mode": 420,
       "path": ".qwen/skills/diagnosing-superpowers/references/github-issues.md",
-      "sha256": "a656f5e15b21c7a200c39c038f5ede74b9d6ea3ceeb90f39af7e930c8d8424d6"
+      "sha256": "d26ef9197b4a6ae5159ae6d11abd162bcc624d95fc7ccf508e07b68f916a1b19"
     },
     {
       "bytes": 2243,
@@ -711,10 +747,10 @@
       "sha256": "597892462be83bc478536ec91f7c285f6dd25d119c560734a3a180fe8471301d"
     },
     {
-      "bytes": 1851,
+      "bytes": 2680,
       "mode": 420,
       "path": ".qwen/skills/diagnosing-superpowers/templates/issue.md",
-      "sha256": "8f28dbfe60602f77dda76d81815cb4e2dce7d3e2a93348890e1581be8310ac1f"
+      "sha256": "afd21779e5de5bc5adfe2f5a50a04e44ab8d50d9ad0f829243de248d6f023eed"
     },
     {
       "bytes": 2359,
@@ -741,22 +777,22 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 20405,
+      "bytes": 18364,
       "mode": 420,
       "path": ".qwen/skills/executing-plans/SKILL.md",
-      "sha256": "f38e8f2ddcf079f65493adc713c1fed78421dfaf5f4dbf6b3a6b2b1d95466e71"
+      "sha256": "deaf176fa179827e80f2ea3101db3ea90fdf562ebef340eba761e4687940f5f5"
     },
     {
-      "bytes": 1670,
+      "bytes": 1900,
       "mode": 493,
       "path": ".qwen/skills/executing-plans/scripts/task-done",
-      "sha256": "f704dc216e0602f95c601b9ee1113c9a55cc1c5f6e4d149dddfba0fd3ad1c314"
+      "sha256": "ac0b5ebafc7d471507b7e94d88da77a11f187ba277c8d48fefaf8ff3e4fee50e"
     },
     {
-      "bytes": 963,
+      "bytes": 1185,
       "mode": 493,
       "path": ".qwen/skills/executing-plans/scripts/task-start",
-      "sha256": "f833693c8fce3700fc9f841562d80f8015cd40f652c168a3405ac3e46947a1fe"
+      "sha256": "4ae7ce3b6777c3240af786197836a6b4bbf3b0ee831c25f147c149ea8db54a21"
     },
     {
       "bytes": 1070,
@@ -789,10 +825,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 2977,
+      "bytes": 2974,
       "mode": 420,
       "path": ".qwen/skills/requesting-code-review/SKILL.md",
-      "sha256": "cfcee1b06774e7c0517f1e09be1a11f2d5680257072723e709ddbcf7e08b795a"
+      "sha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc"
     },
     {
       "bytes": 6449,
@@ -807,10 +843,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 32577,
+      "bytes": 19740,
       "mode": 420,
       "path": ".qwen/skills/subagent-driven-development/SKILL.md",
-      "sha256": "8dde5589ee083fb4999106d116f01c8fdaf3116a8a9813fdedeb80329de49046"
+      "sha256": "1baf70e307bde682c462513c86116333f1f066168c6710f45145bf5f0b00828d"
     },
     {
       "bytes": 6335,
@@ -819,40 +855,82 @@
       "sha256": "81dd9d5a3fb0b09b96b5829f03b9796842f3199ef7591d1ba1c2db2a515f64d0"
     },
     {
-      "bytes": 4761,
+      "bytes": 4833,
       "mode": 420,
       "path": ".qwen/skills/subagent-driven-development/re-review-prompt.md",
-      "sha256": "0828a5e9cbb12ba49f14621dd8c3953c48c0fc383e75bb5494f055ed0d6d824f"
+      "sha256": "ad54d0a10f1c2c8e656456e0a46e654af5dfe5ee6bcef63428cfd69b8dcd9311"
     },
     {
-      "bytes": 2029,
+      "bytes": 583,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/batching.md",
+      "sha256": "b54dc7e23dbfb90db89bcb2fb3af591aabf6a271a165fbc0da4c6f9439980eac"
+    },
+    {
+      "bytes": 513,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/cannot-verify.md",
+      "sha256": "e698713a15e0eabf1a2ab26ffe1bb04bf70c9d6d2e2060d44a0f9a1bdd4408bf"
+    },
+    {
+      "bytes": 2576,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/final-review.md",
+      "sha256": "6c9e12093e46c4ad0a203bc07709c17e3470f855f1b78e55c5e7b722a012a32c"
+    },
+    {
+      "bytes": 4314,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/fix-loop.md",
+      "sha256": "1938ce707915efc44021e563ebc29666329e20ad861b6c50b89f305b8f4e8d8b"
+    },
+    {
+      "bytes": 1062,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/handling-reports.md",
+      "sha256": "8f759cdd4936220c38aab05b6d6c48c6df8ac8f146b0f37a6d2facbf87133c67"
+    },
+    {
+      "bytes": 1353,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/preflight.md",
+      "sha256": "3ea21c5fc1af1a190ac8a9d19ceb0849b47bf2ffe27b87dffcc21b6a0539776c"
+    },
+    {
+      "bytes": 614,
+      "mode": 420,
+      "path": ".qwen/skills/subagent-driven-development/references/resuming.md",
+      "sha256": "ff6e38bde2276faa2a7e93513086caded0ea10edbf2ec7f349a7e3b0d7c668c4"
+    },
+    {
+      "bytes": 2444,
       "mode": 493,
       "path": ".qwen/skills/subagent-driven-development/scripts/review-package",
-      "sha256": "f9275175b2276b1d5fdb1bae0bedaadd2a950659b7c6f311ea37ff85e1861b1f"
+      "sha256": "aed7c6e09fc660417d28898ed975e84651cb9f18f4675141cd475edfb7037f3d"
     },
     {
-      "bytes": 3265,
+      "bytes": 2356,
+      "mode": 493,
+      "path": ".qwen/skills/subagent-driven-development/scripts/sdd-repo",
+      "sha256": "6f8256a776968d394bae679572e41ce572fd45c72074b98f9a8eb8b4f160e06f"
+    },
+    {
+      "bytes": 4823,
       "mode": 493,
       "path": ".qwen/skills/subagent-driven-development/scripts/sdd-workspace",
-      "sha256": "75ca46c756ba4209ca36e0d3d65567257ceb33bc7a6775b9dad946707cb3bd7b"
+      "sha256": "de3af5252fa595fc2000ba05cf69e06187d5c8aae9d283cced4c167ad1813061"
     },
     {
-      "bytes": 1322,
+      "bytes": 4769,
       "mode": 493,
       "path": ".qwen/skills/subagent-driven-development/scripts/task-brief",
-      "sha256": "cc563538e09abf719b34ddf4b2fa7a65cf3b301729039dbfa923cb060f729146"
+      "sha256": "0f244a12e146393c552ba62069d3eedcc85cb3f76de67b01f4e11219e5ebbcd8"
     },
     {
-      "bytes": 9031,
+      "bytes": 9175,
       "mode": 420,
       "path": ".qwen/skills/subagent-driven-development/task-reviewer-prompt.md",
-      "sha256": "bfed55c8f19d0ff6ed57b0fe09127c92890e9311c6c73917129598826bf9ebe8"
-    },
-    {
-      "bytes": 4257,
-      "mode": 420,
-      "path": ".qwen/skills/systematic-debugging/CREATION-LOG.md",
-      "sha256": "c24733a5b1821bd6bed1fc950261f0b9f4e90097e0bbb96459d8179713730789"
+      "sha256": "61a04c2fb29907887d8babee1594f5e35ae26d461e7e584f5b7c283215165e08"
     },
     {
       "bytes": 1070,
@@ -861,10 +939,10 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 9465,
+      "bytes": 9530,
       "mode": 420,
       "path": ".qwen/skills/systematic-debugging/SKILL.md",
-      "sha256": "808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787"
+      "sha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202"
     },
     {
       "bytes": 5054,
@@ -895,30 +973,6 @@
       "mode": 420,
       "path": ".qwen/skills/systematic-debugging/root-cause-tracing.md",
       "sha256": "75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8"
-    },
-    {
-      "bytes": 653,
-      "mode": 420,
-      "path": ".qwen/skills/systematic-debugging/test-academic.md",
-      "sha256": "fe2ba480d78ac0d686dc025f41c2a32a43d642bf533f91b0c6053a04d35d6486"
-    },
-    {
-      "bytes": 1900,
-      "mode": 420,
-      "path": ".qwen/skills/systematic-debugging/test-pressure-1.md",
-      "sha256": "0b6a915db0054577819834c79be9eb614e97bddba10d73768e1fbe91cfed048a"
-    },
-    {
-      "bytes": 2283,
-      "mode": 420,
-      "path": ".qwen/skills/systematic-debugging/test-pressure-2.md",
-      "sha256": "b2030aeffba07050e8ad573ddf87486457c4a016a786bb326235bebd856f2016"
-    },
-    {
-      "bytes": 2692,
-      "mode": 420,
-      "path": ".qwen/skills/systematic-debugging/test-pressure-3.md",
-      "sha256": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708"
     },
     {
       "bytes": 1070,
@@ -1035,46 +1089,64 @@
       "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
     },
     {
-      "bytes": 26623,
+      "bytes": 16738,
       "mode": 420,
       "path": ".qwen/skills/writing-skills/SKILL.md",
-      "sha256": "bbdfe742f853562e643a3d40d64476359d47881e39cef80a189283fa26d11ab9"
-    },
-    {
-      "bytes": 46197,
-      "mode": 420,
-      "path": ".qwen/skills/writing-skills/anthropic-best-practices.md",
-      "sha256": "217629b356c09c9bd11017c9788e8fc654ca1b32c92d4a51cd490e16dd65e59a"
+      "sha256": "8cb3ac68c6d8c4bb46886b998b09af7989643cab8bd0e46ee86dd62e64546bbe"
     },
     {
       "bytes": 5423,
       "mode": 420,
-      "path": ".qwen/skills/writing-skills/examples/CLAUDE_MD_TESTING.md",
+      "path": ".qwen/skills/writing-skills/references/CLAUDE_MD_TESTING.md",
       "sha256": "0b379a3415e185d3c434b3ad283d8aa132f3022c2a4f210f168865b5986bcef0"
+    },
+    {
+      "bytes": 46197,
+      "mode": 420,
+      "path": ".qwen/skills/writing-skills/references/anthropic-best-practices.md",
+      "sha256": "217629b356c09c9bd11017c9788e8fc654ca1b32c92d4a51cd490e16dd65e59a"
+    },
+    {
+      "bytes": 2577,
+      "mode": 420,
+      "path": ".qwen/skills/writing-skills/references/bulletproofing.md",
+      "sha256": "9397023e6bc85b556a57f3097371363bf03e28e755c57f403f470bcda90e0a23"
+    },
+    {
+      "bytes": 7616,
+      "mode": 420,
+      "path": ".qwen/skills/writing-skills/references/discovery.md",
+      "sha256": "c6bbc74af3be90f693f7cbc986af6fa94e8df75f65109b52e96032587f5b92af"
+    },
+    {
+      "bytes": 1262,
+      "mode": 420,
+      "path": ".qwen/skills/writing-skills/references/flowcharts.md",
+      "sha256": "8b1f542391f274f0d33f3457ac099a3d317d6877eaa3b8d3b1ebef151b55fda7"
     },
     {
       "bytes": 5970,
       "mode": 420,
-      "path": ".qwen/skills/writing-skills/graphviz-conventions.dot",
+      "path": ".qwen/skills/writing-skills/references/graphviz-conventions.dot",
       "sha256": "e2890a593c91370e384b42f2f67b1a6232c9e69dddea7891a0c1c46d7b20b694"
     },
     {
       "bytes": 5901,
       "mode": 420,
-      "path": ".qwen/skills/writing-skills/persuasion-principles.md",
+      "path": ".qwen/skills/writing-skills/references/persuasion-principles.md",
       "sha256": "a51bc9bf75189ea73a27b3fb504a2fdfdb966fb1f7f1cdf03203230a216ccc03"
+    },
+    {
+      "bytes": 12557,
+      "mode": 420,
+      "path": ".qwen/skills/writing-skills/references/testing-skills-with-subagents.md",
+      "sha256": "ed8a6862c085900135962390530d9dc7637ad6d650b4324ce3b051287a5c3f22"
     },
     {
       "bytes": 4968,
       "mode": 493,
       "path": ".qwen/skills/writing-skills/render-graphs.js",
       "sha256": "c7f412cc629461c4d10287e668731874c0497707023e3e3f74a5355eb2cee196"
-    },
-    {
-      "bytes": 12558,
-      "mode": 420,
-      "path": ".qwen/skills/writing-skills/testing-skills-with-subagents.md",
-      "sha256": "c711346852c911b24a84aa161e0cff06a4cd7f4e2fa9e9c0a266cead5afcbade"
     }
   ],
   "generator": "closed-source-materialization-v1",

@@ -39,14 +39,14 @@
   ],
   "owners": [
     {
-      "commit": "tree 63868243a110e805d36760f533697a1f4d719c37\nparent d003977f69ef0368eb041f0513c2dab1934f2511\nauthor github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1791142148 +0000\ncommitter github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1791142148 +0000\n\nchore(release): v6.12.1 [skip ci]\n",
+      "commit": "tree 73527d35a02033687a1ddf57e9d700cfd1d08634\nparent 9b841a01b6cb4ea1f24dffc35be99ab3314831c3\nauthor github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1792012723 +0000\ncommitter github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1792012723 +0000\n\nchore(release): v6.12.4 [skip ci]\n",
       "id": "baseline-bmad",
       "inventory": {
         "path": ".getzilla/templates/baseline/bmad-codex-sh.json",
-        "sha256": "cc9e1976a4e614b8f3474c3d2c375a957c2fb6e6fac5eb8ad6c11fc4a6e16242"
+        "sha256": "1920cbf071c5c56d30116212ff75c931ae7ceb9a67652f2fdbfb42d99a11a6b8"
       },
       "repository": "https://github.com/bmad-code-org/BMAD-METHOD",
-      "revision": "790dae9c8e2a1d73575cb2d40b14dd4963391f29",
+      "revision": "bab9082c3e884e0d72c759bcd1a6d90bcc01be84",
       "root": ".getzilla/templates/baseline/blobs",
       "trees": [
         {
@@ -54,7 +54,7 @@
             {
               "mode": "40000",
               "name": ".claude-plugin",
-              "oid": "68f377c0e86df69e21e24e28128913a7371f3832"
+              "oid": "d8e47e5c30a58a0835466410d7c7d8cf71def2fb"
             },
             {
               "mode": "100644",
@@ -114,7 +114,7 @@
             {
               "mode": "100644",
               "name": "CHANGELOG.md",
-              "oid": "48d0236a0c900c39f849ecef5ca98642a7f547de"
+              "oid": "ca57ad6f603c3a82bb38cc88635cbe18e86a898f"
             },
             {
               "mode": "100644",
@@ -184,7 +184,12 @@
             {
               "mode": "100644",
               "name": "bmad-modules.yaml",
-              "oid": "49ebd4ed191c46b59802de1977411b7b2d574d61"
+              "oid": "5bbabbf74f83a898e812c3c4f35c3d1e883a3098"
+            },
+            {
+              "mode": "100644",
+              "name": "body.md",
+              "oid": "334a3d51ffba2c3a61b5973fc812f579272d48f0"
             },
             {
               "mode": "40000",
@@ -204,12 +209,17 @@
             {
               "mode": "100644",
               "name": "package-lock.json",
-              "oid": "8083b5caef991089b55e13c2329af230c8b53b5b"
+              "oid": "3475e70568bdcf1c688cd9afbae5037f282a38ff"
             },
             {
               "mode": "100644",
               "name": "package.json",
-              "oid": "ae8966a1f04c37e31224fedee6c6b0473edca42d"
+              "oid": "ea177e715a2e5e74eb3b223c70fed1ab25ca603b"
+            },
+            {
+              "mode": "100644",
+              "name": "pr2.md",
+              "oid": "7959fa4df5b23a9153b8d5bad1181831a99df8ef"
             },
             {
               "mode": "100644",
@@ -224,17 +234,17 @@
             {
               "mode": "40000",
               "name": "src",
-              "oid": "e6ea00e6dd01aaab3baf688f4ec15779b15dfaa9"
+              "oid": "847f0f4546c15fcd74ac6e59f6fec35d101cb06e"
             },
             {
               "mode": "40000",
               "name": "test",
-              "oid": "154294c97aa4c5c5c15eec9ec0d8cb13a59d28a6"
+              "oid": "4de25b9fec08c3522a53df86351d234a83443c9d"
             },
             {
               "mode": "40000",
               "name": "tools",
-              "oid": "e7e9c89268bc7d9971a933ebcc200d9f4481e86f"
+              "oid": "00cd3a0a6f43a760bf3c85636bb3df7936e9abf0"
             },
             {
               "mode": "40000",
@@ -247,27 +257,27 @@
               "oid": "02f72eecd05bb93bb722cc0bc378cb9573041a1b"
             }
           ],
-          "oid": "63868243a110e805d36760f533697a1f4d719c37"
+          "oid": "73527d35a02033687a1ddf57e9d700cfd1d08634"
         },
         {
           "entries": [
             {
               "mode": "40000",
               "name": "bmm-skills",
-              "oid": "e8ea76a119365e8858174f0b7e6fd107fbeb8a56"
+              "oid": "816e1bdd8ef87d496390554d7fc9301c5e0da0e4"
             },
             {
               "mode": "40000",
               "name": "core-skills",
-              "oid": "9e102673582e5c431bcc65cefe81e1e885964cd6"
+              "oid": "bceb87e94c06fb4f1b5a63de356871fe37b39bdc"
             },
             {
               "mode": "40000",
               "name": "scripts",
-              "oid": "25c889394b188f256dac8dbce1d96273677fdd54"
+              "oid": "8266c72d3cdfc44f01ead8e2540a2239b9f8e13a"
             }
           ],
-          "oid": "e6ea00e6dd01aaab3baf688f4ec15779b15dfaa9"
+          "oid": "847f0f4546c15fcd74ac6e59f6fec35d101cb06e"
         },
         {
           "entries": [
@@ -289,12 +299,12 @@
             {
               "mode": "40000",
               "name": "plan",
-              "oid": "678e2c33fbb7e89050b829e555f544416e81dd41"
+              "oid": "6507c19368b98bffe8e2c9926567d1193d5a8bb9"
             },
             {
               "mode": "40000",
               "name": "ship",
-              "oid": "bae87ae9a906f261c3b6b738c7688542ef2645c2"
+              "oid": "2a63cbe0293742a05a8dd6d05b9ae251d3d11e06"
             },
             {
               "mode": "40000",
@@ -302,14 +312,14 @@
               "oid": "19a8e70043bf1829f98b01e7d55d66111ccba135"
             }
           ],
-          "oid": "e8ea76a119365e8858174f0b7e6fd107fbeb8a56"
+          "oid": "816e1bdd8ef87d496390554d7fc9301c5e0da0e4"
         },
         {
           "entries": [
             {
               "mode": "40000",
               "name": "bmad-architecture",
-              "oid": "4c73045bc216c1886a2146b0a61567fd70692947"
+              "oid": "82413aa665685fa3484b7ce36f3c6835bd8661d8"
             },
             {
               "mode": "40000",
@@ -349,7 +359,7 @@
             {
               "mode": "40000",
               "name": "bmad-sprint-planning",
-              "oid": "6cc794ad343f4234ed9967ac9a72243a561ac1ba"
+              "oid": "a3c2108e78476b3993b73387ea0ddbd5401bc53c"
             },
             {
               "mode": "40000",
@@ -357,7 +367,7 @@
               "oid": "efcd2121635660da21feb0e027dc6cc025839a07"
             }
           ],
-          "oid": "678e2c33fbb7e89050b829e555f544416e81dd41"
+          "oid": "6507c19368b98bffe8e2c9926567d1193d5a8bb9"
         },
         {
           "entries": [
@@ -509,12 +519,12 @@
             {
               "mode": "40000",
               "name": "bmad-customize",
-              "oid": "9e468e5bbbb17797af5b616796d8671bc268ec18"
+              "oid": "d76f843c674775da7c620bbbc866c605d9a5504c"
             },
             {
               "mode": "40000",
               "name": "bmad-deep-recon",
-              "oid": "965695b68ac62118932f4a508d74f76783439a06"
+              "oid": "8b4af7ff02d18100e909cab85de8539fdb1458f3"
             },
             {
               "mode": "40000",
@@ -552,7 +562,7 @@
               "oid": "12716e90dedf97c7434fcc1b8344cd3db5a7a368"
             }
           ],
-          "oid": "9e102673582e5c431bcc65cefe81e1e885964cd6"
+          "oid": "bceb87e94c06fb4f1b5a63de356871fe37b39bdc"
         },
         {
           "entries": [

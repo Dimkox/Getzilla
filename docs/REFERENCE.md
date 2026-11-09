@@ -547,9 +547,9 @@ Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_so
 
 | Component | Pinned | Upstream | Observed latest | Observed |
 | --- | --- | --- | --- | --- |
-| Superpowers | 6.4.2 | obra/superpowers | 6.4.2 | 2026-10-06 |
-| BMAD Method | 6.12.1 | bmad-code-org/BMAD-METHOD | 6.12.1 | 2026-10-06 |
-| GitHub Spec Kit | 1.1.0 | github/spec-kit | 1.1.0 | 2026-10-06 |
+| Superpowers | 7.0.2 | obra/superpowers | 7.0.2 | 2026-11-09 |
+| BMAD Method | 6.12.4 | bmad-code-org/BMAD-METHOD | 6.12.4 | 2026-11-09 |
+| GitHub Spec Kit | 1.3.2 | github/spec-kit | 1.3.2 | 2026-11-09 |
 
 These rows are dated currency observations for the workflow artifact adapters. The required installed Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline has its own pinned manifest. `getzilla baseline status --project /path/to/repo` inspects installation and project wiring; `getzilla baseline apply --project /path/to/repo` connects an installed workflow baseline. See [baseline setup](baseline.md) for user-level installation and security tools. Optional tool updates are separate from that requirement. `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
 
