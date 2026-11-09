@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager
 import hashlib
 import json
+import os
+import secrets
+import stat
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -22,6 +26,112 @@ def load_file(path, name):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+ACCEPTED_DESIGN_BASE = '7dbeb45af030fab67bd49cf2261cf288d1ceeb7c'
+DESIGN_FILES = {
+    '0.1.0': ('module.json','reference.py','pack-v1.schema.json','LICENSE'),
+    '0.2.0': ('module.json','reference.py','preview.py','pack-v1.schema.json','pack-v2.schema.json','LICENSE'),
+}
+
+
+def sealed_design_source(destination, versions):
+    """Only named public artifacts; never load the repository's default catalogue."""
+    destination.mkdir(mode=0o700)
+    catalogue = {'schema_version':1,'core_api':1,
+                 'publishers':{'getzilla':{'licenses':['MIT']}},
+                 'modules':{'design-reference':{'publisher':'getzilla','versions':{}}}}
+    for version in versions:
+        if version not in DESIGN_FILES:
+            raise ValueError('public_design_fixture_version')
+        relative = '.getzilla/optional-modules/design-reference/' + version + '/'
+        target = destination / relative
+        target.mkdir(parents=True)
+        for name in DESIGN_FILES[version]:
+            raw = (subprocess.check_output(['git','show',ACCEPTED_DESIGN_BASE + ':' + relative + name],
+                                           cwd=ROOT, timeout=10) if version == '0.1.0'
+                   else (ROOT / relative / name).read_bytes())
+            (target / name).write_bytes(raw)
+        catalogue['modules']['design-reference']['versions'][version] = {
+            'manifest':relative + 'module.json',
+            'sha256':hashlib.sha256((target / 'module.json').read_bytes()).hexdigest()}
+    folder = destination / '.getzilla/config'
+    folder.mkdir(parents=True)
+    (folder / 'optional-modules.json').write_text(json.dumps(catalogue))
+    return destination
+
+
+@contextmanager
+def browser_fixture_temp(worker_script):
+    """Explicit test capability; only the exact optional worker gets this temp root."""
+    def need(condition):
+        if not condition:
+            raise ValueError('browser_fixture_temp_unavailable')
+    selected = os.environ.get('GETZILLA_DESIGN_BROWSER_TEMP_ROOT', '')
+    need(bool(selected) and os.name == 'posix' and hasattr(os, 'O_NOFOLLOW')
+         and shutil.rmtree.avoids_symlink_attacks)
+    common = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                     cwd=ROOT, text=True, timeout=5).strip()
+    runtime = Path(common).parent / '.getzilla/runtime'
+    root = Path(selected)
+    need(root.is_absolute() and root.parent == runtime and len(os.fsencode(root)) <= 48)
+    held = []
+    child = None
+    child_fd = None
+    def identity(info):
+        return info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode)
+    def check():
+        for parent, name, descriptor in held[1:]:
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            need(stat.S_ISDIR(current.st_mode) and identity(current) == identity(os.fstat(descriptor)))
+        if child_fd is not None:
+            current = os.stat(child, dir_fd=held[-1][2], follow_symlinks=False)
+            need(stat.S_ISDIR(current.st_mode) and identity(current) == identity(os.fstat(child_fd)))
+    try:
+        descriptor = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        held.append((None, '/', descriptor))
+        for name in root.parts[1:]:
+            parent = held[-1][2]
+            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            held.append((parent, name, descriptor))
+        info = os.fstat(descriptor)
+        need(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700)
+        check()
+        for _ in range(8):
+            candidate = secrets.token_hex(3)
+            try:
+                os.mkdir(candidate, 0o700, dir_fd=descriptor)
+                child = candidate
+                break
+            except FileExistsError:
+                pass
+        need(child is not None)
+        child_fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+        child_info = os.fstat(child_fd)
+        need(child_info.st_uid == os.geteuid() and stat.S_IMODE(child_info.st_mode) == 0o700)
+        check()
+        native_popen = subprocess.Popen
+        expected = [sys.executable, '-I', '-c', worker_script]
+        def launch(command, *args, **kwargs):
+            if command == expected:
+                check()
+                environment = dict(os.environ if kwargs.get('env') is None else kwargs['env'])
+                environment.update({name: str(root / child) for name in ('TMPDIR','TEMP','TMP')})
+                kwargs['env'] = environment
+            return native_popen(command, *args, **kwargs)
+        with patch.object(subprocess, 'Popen', side_effect=launch):
+            yield
+        check()
+    finally:
+        try:
+            if child is not None and child_fd is not None:
+                check()
+                shutil.rmtree(child, dir_fd=held[-1][2])
+        finally:
+            if child_fd is not None:
+                os.close(child_fd)
+            for _parent, _name, descriptor in reversed(held):
+                os.close(descriptor)
 
 
 def create_public_task(root, session):
@@ -64,14 +174,29 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def extractor(self):
-        path = ROOT / '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        path = ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
         self.assertTrue(path.is_file(), 'explicit local design-reference artifact is missing')
         return load_file(path, 'public_design_reference')
+
+    def test_accepted_v010_is_exact_and_v020_is_a_distinct_immutable_bundle(self):
+        base = '7dbeb45af030fab67bd49cf2261cf288d1ceeb7c'
+        old = ROOT / '.getzilla/optional-modules/design-reference/0.1.0'
+        for name in ('module.json','reference.py','pack-v1.schema.json','LICENSE'):
+            expected = subprocess.check_output(['git','show',base + ':' +
+                '.getzilla/optional-modules/design-reference/0.1.0/' + name], cwd=ROOT, timeout=10)
+            self.assertTrue((old / name).read_bytes() == expected,
+                            'accepted immutable0.1.0 artifact changed: ' + name)
+        self.assertEqual({p.name for p in old.iterdir() if p.is_file()},
+                         {'module.json','reference.py','pack-v1.schema.json','LICENSE'})
+        new = ROOT / '.getzilla/optional-modules/design-reference/0.2.0'
+        self.assertTrue((new / 'module.json').is_file(), 'new immutable0.2.0 bundle missing')
+        self.assertEqual(json.loads((new / 'module.json').read_bytes())['version'], '0.2.0')
+        self.assertEqual((old / 'pack-v1.schema.json').read_bytes(), (new / 'pack-v1.schema.json').read_bytes())
 
     def test_architecture_declares_only_the_exact_local_reference_source(self):
         from getzilla import architecture
         snapshot = architecture.load_architecture(ROOT)
-        source = '.getzilla/optional-modules/design-reference/0.1.0/reference.py'
+        source = '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
         unrelated = '.getzilla/optional-modules/unregistered/0.1.0/reference.py'
         inventory = (architecture._RepositoryArtifact(source, 'file', (ROOT / source).stat().st_size),
                      architecture._RepositoryArtifact(unrelated, 'file', 0))
@@ -95,13 +220,84 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous)
         OptionalModuleTests.install_core(self, self.root)
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'},
+                       source=sealed_design_source(self.root / 'sealed-v020-source', ('0.2.0',)))
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         _route, directory = create_public_task(self.root, session)
         command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
         (self.root / 'tokens.json').write_text('{"x":"1px"}')
         first = command.capture(self.root, ['tokens.json'], capture_id='first', captured_at='2026-11-07T00:00:00Z')
         return command, directory / 'evidence/design-reference', first
+
+    def test_real_public_v010_to_v020_upgrade_preserves_history(self):
+        from getzilla.optional_modules import admit_module, manage_modules
+        from getzilla.state import bind_session, current_session
+        from tests.test_optional_modules import OptionalModuleTests
+        previous = current_session()
+        session = previous or 'public-design-version-fixture'
+        bind_session(session)
+        self.addCleanup(bind_session, previous)
+        OptionalModuleTests.install_core(self, self.root)  # Only this seven-line public seed helper.
+        old_source = sealed_design_source(self.root / 'sealed-old-source', ('0.1.0',))
+        new_source = sealed_design_source(self.root / 'sealed-new-source', ('0.1.0','0.2.0'))
+        old_folder = old_source / '.getzilla/optional-modules/design-reference/0.1.0'
+        old_bytes = {name:(old_folder / name).read_bytes() for name in DESIGN_FILES['0.1.0']}
+        old_sha = hashlib.sha256(old_bytes['module.json']).hexdigest()
+        old_script = subprocess.check_output(['git','show',ACCEPTED_DESIGN_BASE +
+                                               ':scripts/getzilla_design_reference.py'], cwd=ROOT, timeout=10)
+        script = old_source / 'scripts/getzilla_design_reference.py'
+        script.parent.mkdir()
+        script.write_bytes(old_script)
+        manage_modules(self.root, 'install', {'design-reference':'0.1.0'}, source=old_source)
+        manage_modules(self.root, 'enable', {'design-reference':None}, grants=['design.reference.read'])
+        self.assertEqual(admit_module(self.root, 'design-reference', permission='design.reference.read')['manifest_sha256'], old_sha)
+        create_public_task(self.root, session)
+        (self.root / 'tokens.json').write_text('{"x":"1px"}')
+        old_cli = load_file(script, 'actual_accepted_v010_design_cli')
+        first = old_cli.capture(self.root, ['tokens.json'], capture_id='actual-old',
+                                captured_at='2026-11-09T00:00:00Z')
+        original_path = self.root / first['artifact']
+        original_bytes = original_path.read_bytes()
+        original_record = json.loads(original_bytes)
+        self.assertEqual(original_record['module_manifest_sha256'], old_sha)
+        new_cli = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'new_v020_design_cli')
+        self.assertEqual(new_cli._admitted(self.root)['version'], '0.1.0')
+        compatible = new_cli.capture(self.root, ['tokens.json'], capture_id='still-old-compatible',
+                                     captured_at='2026-11-09T00:00:01Z')
+        self.assertEqual(new_cli.compare(self.root, first['sha256'], compatible['sha256'])['changed'], [])
+        installed = self.root / '.getzilla/modules/design-reference'
+        for name, raw in old_bytes.items():
+            self.assertTrue((installed / name).read_bytes() == raw)
+        foreign = installed / 'user.css'
+        foreign.write_bytes(b'/* owned public fixture sentinel */')
+        foreign_bytes = foreign.read_bytes()
+        settings = self.root / '.mcp.json'
+        settings.write_bytes(b'{"mcpServers":{}}\n')
+        settings_bytes = settings.read_bytes()
+        manage_modules(self.root, 'update', {'design-reference':'0.2.0'}, source=new_source)
+        self.assertFalse(admit_module(self.root, 'design-reference')['allowed'])
+        self.assertEqual(json.loads((installed / 'module.json').read_bytes())['version'], '0.2.0')
+        self.assertEqual(original_path.read_bytes(), original_bytes)
+        self.assertEqual(foreign.read_bytes(), foreign_bytes)
+        self.assertEqual(settings.read_bytes(), settings_bytes)
+        manage_modules(self.root, 'enable', {'design-reference':None}, grants=['design.reference.read'])
+        new_admission = new_cli._admitted(self.root)
+        self.assertEqual(new_admission['version'], '0.2.0')
+        self.assertNotEqual(new_admission['manifest_sha256'], old_sha)
+        current = new_cli.capture(self.root, ['tokens.json'], capture_id='actual-new',
+                                  captured_at='2026-11-09T00:00:02Z')
+        delta = new_cli.compare(self.root, first['sha256'], current['sha256'])
+        self.assertEqual(delta, {'added':[],'removed':[],'changed':[],'sources_changed':[]})
+        self.assertEqual(json.loads((self.root / current['artifact']).read_bytes())['pack']['content_digest'],
+                         original_record['pack']['content_digest'])
+        self.assertEqual(original_path.read_bytes(), original_bytes)
+        for name, raw in old_bytes.items():
+            self.assertTrue((old_folder / name).read_bytes() == raw)
+            self.assertTrue((new_source / '.getzilla/optional-modules/design-reference/0.1.0' / name).read_bytes() == raw)
+        print(json.dumps({'public306_upgrade':{'from':'0.1.0','to':'0.2.0','actual_old_record':True,
+                          'old_d1_supported':True,'history_unchanged':True,'foreign_unchanged':True,
+                          'old_manifest':old_sha,'new_manifest':new_admission['manifest_sha256']},
+                          'lifecycle166_acceptance':False}, sort_keys=True))
 
     def test_full32_history_keeps_exact_replay_and_refuses_the_next_event(self):
         command, directory, first = self.record_fixture()
@@ -387,7 +583,7 @@ class LocalDesignReferenceTests(unittest.TestCase):
         self.assertEqual(rows['--gap']['context'], ['@media (min-width: 3px)', ':root'])
         self.assertEqual(rows['--gap']['locator']['line'], 3)
         import jsonschema
-        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.1.0/pack-v1.schema.json').read_text())
+        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.2.0/pack-v1.schema.json').read_text())
         jsonschema.Draft202012Validator(schema).validate(result)
 
     def test_self_consistent_passive_ownership_cannot_admit_different_addon_code(self):
@@ -399,11 +595,8 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous)
         OptionalModuleTests.install_core(self, self.root)
-        source = self.root / 'public-source'
-        artifact = source / '.getzilla/optional-modules/design-reference/0.1.0'
-        artifact.mkdir(parents=True)
-        for name in ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE'):
-            shutil.copyfile(ROOT / '.getzilla/optional-modules/design-reference/0.1.0' / name, artifact / name)
+        source = sealed_design_source(self.root / 'public-source', ('0.2.0',))
+        artifact = source / '.getzilla/optional-modules/design-reference/0.2.0'
         reference = artifact / 'reference.py'
         reference.write_bytes(reference.read_bytes() + b'\n# different inert public artifact\n')
         descriptor = json.loads((artifact / 'module.json').read_text())
@@ -411,12 +604,11 @@ class LocalDesignReferenceTests(unittest.TestCase):
             if entry['path'] == 'reference.py':
                 entry['sha256'] = hashlib.sha256(reference.read_bytes()).hexdigest()
         (artifact / 'module.json').write_text(json.dumps(descriptor))
-        registry = json.loads((ROOT / '.getzilla/config/optional-modules.json').read_text())
-        registry['modules']['design-reference']['versions']['0.1.0']['sha256'] = hashlib.sha256(
+        registry = json.loads((source / '.getzilla/config/optional-modules.json').read_text())
+        registry['modules']['design-reference']['versions']['0.2.0']['sha256'] = hashlib.sha256(
             (artifact / 'module.json').read_bytes()).hexdigest()
-        (source / '.getzilla/config').mkdir()
         (source / '.getzilla/config/optional-modules.json').write_text(json.dumps(registry))
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=source)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'}, source=source)
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         self.assertTrue(admit_module(self.root, 'design-reference', permission='design.reference.read')['allowed'])
         create_public_task(self.root, session)
@@ -435,7 +627,8 @@ class LocalDesignReferenceTests(unittest.TestCase):
         bind_session(session)
         self.addCleanup(bind_session, previous_session)
         OptionalModuleTests.install_core(self, self.root)
-        manage_modules(self.root, 'install', {'design-reference': '0.1.0'}, source=ROOT)
+        manage_modules(self.root, 'install', {'design-reference': '0.2.0'},
+                       source=sealed_design_source(self.root / 'sealed-v020-source', ('0.2.0',)))
         manage_modules(self.root, 'enable', {'design-reference': None}, grants=['design.reference.read'])
         command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'public_design_reference_cli')
         (self.root / 'tokens.json').write_text('{"x":"1px","y":"2px"}')
@@ -477,3 +670,355 @@ class LocalDesignReferenceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class PreviewDesignReferenceTests(unittest.TestCase):
+    def setUp(self):
+        if (os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1'
+                and self._testMethodName.startswith(('test_controlled_preview', 'test_fixture_'))):
+            adapter = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/preview.py',
+                                'explicit_browser_fixture_adapter')
+            self.enterContext(browser_fixture_temp(adapter._PREVIEW_WORKER))
+
+    def extractor(self):
+        from functools import partial
+        reference = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py',
+                              'preview_design_reference')
+        preview = load_file(ROOT / '.getzilla/optional-modules/design-reference/0.2.0/preview.py',
+                            'preview_design_adapter')
+        reference.capture_preview = partial(preview.capture_preview, reference)
+        return reference
+
+    def test_preview_owned_streams_close_on_timeout_reap_error_and_setup_failure(self):
+        module = self.extractor()
+        for case in ('timeout-reap-timeout', 'initial-procstat-failure'):
+            with self.subTest(case=case):
+                process = Mock(pid=4321, returncode=-9)
+                process.stdin, process.stdout = Mock(), Mock()
+                process.communicate.side_effect = subprocess.TimeoutExpired('owned-worker', 15)
+                process.wait.side_effect = (subprocess.TimeoutExpired('owned-worker', 2)
+                                            if case == 'timeout-reap-timeout' else None)
+                fields = ['S','1'] + ['0'] * 17 + ['12345']
+                with patch.object(subprocess, 'Popen', return_value=process), \
+                     patch('pathlib.Path') as paths, patch('threading.Thread'), \
+                     patch('os.pidfd_open', return_value=90), patch('os.close'), \
+                     patch('signal.pidfd_send_signal') as signal_mock:
+                    paths.return_value.iterdir.return_value = []
+                    if case == 'initial-procstat-failure':
+                        paths.return_value.read_text.side_effect = OSError('owned fixture procstat unavailable')
+                    else:
+                        paths.return_value.read_text.return_value = '4321 (worker) ' + ' '.join(fields)
+                    with self.assertRaises((ValueError, OSError, subprocess.TimeoutExpired)):
+                        module.capture_preview('http://127.0.0.1:8000/', ['http://127.0.0.1:8000/'],
+                                               capture_id='stream-unit', captured_at='2026-11-09T00:00:00Z')
+                    process.stdin.close.assert_called_once_with()
+                    process.stdout.close.assert_called_once_with()
+                    process.wait.assert_called_once_with(timeout=2)
+                    if case == 'initial-procstat-failure':
+                        process.kill.assert_called_once_with()
+                        signal_mock.assert_not_called()
+
+    def test_optional_transport_has_separate_source_and_architecture_boundary(self):
+        import ast
+        from getzilla import architecture
+        preview = '.getzilla/optional-modules/design-reference/0.2.0/preview.py'
+        self.assertTrue((ROOT / preview).is_file(), 'separate optional preview adapter is missing')
+        reference = ROOT / '.getzilla/optional-modules/design-reference/0.2.0/reference.py'
+        imports = {item.name for node in ast.walk(ast.parse(reference.read_text()))
+                   if isinstance(node, ast.Import) for item in node.names}
+        self.assertFalse(imports & {'subprocess','http.client','playwright','socket'})
+        snapshot = architecture.load_architecture(ROOT)
+        owners = [node['id'] for node in snapshot.system['nodes'] if preview in node['repository_paths']]
+        self.assertEqual(owners, ['NODE-OPTIONAL-DESIGN-PREVIEW'])
+        policy = next(n for n in snapshot.system['nodes'] if n['id'] == 'NODE-LOCAL-ROUTE-POLICY')
+        self.assertEqual(policy['runtime']['network'], 'none')
+
+    def test_browser_fixture_temp_root_is_explicit_and_worker_only(self):
+        helper = globals().get('browser_fixture_temp')
+        self.assertTrue(callable(helper), 'explicit browser fixture temp capability is missing')
+        for value in ('', '/tmp', '/outside-canonical-runtime'):
+            with self.subTest(value=value), patch.dict(os.environ, {'GETZILLA_DESIGN_BROWSER_TEMP_ROOT': value}):
+                with self.assertRaisesRegex(ValueError, 'browser_fixture_temp_unavailable'):
+                    with helper('controlled-worker'):
+                        pass
+        if os.environ.get('GETZILLA_DESIGN_BROWSER_TEMP_ROOT'):
+            original = {key: os.environ.get(key) for key in ('TMPDIR','TEMP','TMP')}
+            common = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                             cwd=ROOT, text=True, timeout=5)
+            with patch.object(subprocess, 'Popen') as native, \
+                 patch.object(subprocess, 'check_output', return_value=common):
+                with helper('controlled-worker'):
+                    subprocess.Popen([sys.executable, '-I', '-c', 'controlled-worker'])
+                    child = Path(native.call_args.kwargs['env']['TMPDIR'])
+                    self.assertEqual(child.parent, Path(os.environ['GETZILLA_DESIGN_BROWSER_TEMP_ROOT']))
+                    self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o700)
+                    self.assertEqual({key: os.environ.get(key) for key in original}, original)
+                    subprocess.Popen([sys.executable, '-c', 'ordinary-unlaunched-fixture'])
+                    self.assertNotIn('env', native.call_args.kwargs)
+                self.assertFalse(child.exists())
+
+    def test_live_and_unbounded_scope_refused_before_browser_import(self):
+        module = self.extractor()
+        self.assertTrue(callable(getattr(module, 'capture_preview', None)), 'preview capture is missing')
+        for url in ('https://example.com/', 'http://localhost:8000/', 'http://127.0.0.1:8000/#x'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                module.capture_preview(url, [url], capture_id='preview',
+                                       captured_at='2026-11-09T00:00:00Z')
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_controlled_preview_blocks_mutations_and_preserves_observations(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        hits = []
+        body = b'''<!doctype html><style>button { color: rgb(1, 2, 3); border-radius: 7px }</style>
+<button onclick="this.style.color='rgb(9, 9, 9)';fetch('/click',{method:'POST'})">Go</button><a href='/click' onclick="document.querySelector('button').style.color='rgb(9, 9, 9)'">Link</a>
+<script>fetch('/write',{method:'POST'}); navigator.sendBeacon('/beacon','x');
+new WebSocket('ws://127.0.0.1:PORT/socket'); fetch('/read');
+setTimeout(()=>document.body.setAttribute('data-dynamic','yes'),20);</script>'''
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                hits.append(('GET', self.path))
+                value = body.replace(b'PORT', str(self.server.server_port).encode())
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+            def do_POST(self):
+                hits.append(('POST', self.path))
+                self.send_response(204)
+                self.end_headers()
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def stop_server():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_server)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        self.assertTrue(callable(getattr(module, 'capture_preview', None)), 'preview capture is missing')
+        pack = module.capture_preview(url, [url], capture_id='preview',
+                                      captured_at='2026-11-09T00:00:00Z')
+        self.assertEqual(hits, [('GET', '/')])
+        self.assertEqual(pack['content']['coverage']['status'], 'partial')
+        self.assertIn('blocked-transport', pack['content']['coverage']['reasons'])
+        self.assertIn('dynamic-content', pack['content']['coverage']['reasons'])
+        self.assertTrue(any(t['raw_value'] == 'rgb(1, 2, 3)' for t in pack['content']['tokens']))
+        module.validate_pack(pack)
+        import jsonschema
+        schema = json.loads((ROOT / '.getzilla/optional-modules/design-reference/0.2.0/pack-v2.schema.json').read_text())
+        jsonschema.Draft202012Validator(schema).validate(pack)
+        again = module.capture_preview(url, [url], capture_id='preview2',
+                                       captured_at='2026-11-09T01:00:00Z')
+        self.assertEqual(pack['content_digest'], again['content_digest'])
+        self.assertEqual(module.diff(pack, again)['changed'], [])
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        command, directory, local = LocalDesignReferenceTests.record_fixture(self)
+        local_bytes = (self.root / local['artifact']).read_bytes()
+        published = command.capture_preview(self.root, url, [url], capture_id='published-preview',
+                                            captured_at='2026-11-09T00:00:00Z')
+        replay = command.capture_preview(self.root, url, [url], capture_id='published-preview',
+                                         captured_at='2026-11-09T00:00:00Z')
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(published['artifact'], replay['artifact'])
+        self.assertEqual((self.root / local['artifact']).read_bytes(), local_bytes)
+        self.assertEqual(len(list(directory.iterdir())), 2)
+        self.assertEqual(command.compare(self.root, published['sha256'], replay['sha256'])['changed'], [])
+        print(json.dumps({'fixture_requests': hits, 'browser': pack['content']['browser'],
+                          'affinity': sorted(os.sched_getaffinity(0)), 'immutable_history_records': 2, 'worker_interpreter': sys.executable,
+                          'browser_temp_policy': 'explicit-owned-short-canonical-runtime'}, sort_keys=True))
+        pack['content']['parameters']['theme'] = 'invalid'
+        with self.assertRaises(ValueError):
+            module.validate_pack(pack)
+
+    def test_preview_parameters_are_closed_and_bounded(self):
+        module = self.extractor()
+        url = 'http://127.0.0.1:8000/'
+        for resources, viewport, theme, locale in (
+                ([url, 'http://127.0.0.1:8001/style'], {'width':800,'height':600}, 'light', 'en'),
+                ([url], {'width':True,'height':600}, 'light', 'en'),
+                ([url], {'width':800,'height':600}, 'system', 'en'),
+                ([url], {'width':800,'height':600}, 'light', '../en'),
+                ([url + '?q=\n'], {'width':800,'height':600}, 'light', 'en')):
+            with self.subTest(resources=resources, viewport=viewport, theme=theme, locale=locale):
+                with self.assertRaises(ValueError):
+                    module._preview_parameters(url, resources, viewport, theme, locale)
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_resource_refusals_and_loading_limits(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        hits = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                hits.append(self.path)
+                if self.path == '/':
+                    value = (b'<link rel="stylesheet" href="/missing.css">'
+                             b'<link rel="stylesheet" href="/redirect.css">'
+                             b'<link rel="stylesheet" href="/large.css">'
+                             b'<img src="http://127.0.0.1:1/outside">'
+                             b'<img src="/denied">' + b'<div>x</div>' * 150)
+                    status = 200
+                elif self.path == '/redirect.css':
+                    self.send_response(302)
+                    self.send_header('Location', '/mutation')
+                    self.end_headers()
+                    return
+                elif self.path == '/large.css':
+                    value, status = b'x' * 262145, 200
+                else:
+                    value, status = b'', 404
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def stop_server():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_server)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        resources = sorted([url, url + 'missing.css', url + 'redirect.css', url + 'large.css'])
+        module = self.extractor()
+        pack = module.capture_preview(url, resources, capture_id='limited',
+                                      captured_at='2026-11-09T00:00:00Z')
+        reasons = pack['content']['coverage']['reasons']
+        self.assertTrue({'blocked-transport','resource-unavailable','response-budget',
+                         'dom-budget','loading-incomplete'} <= set(reasons), reasons)
+        self.assertNotIn('/denied', hits)
+        self.assertNotIn('/mutation', hits)
+        self.assertEqual(len(pack['content']['tokens']), 1536)
+
+    def test_disabled_preview_never_loads_adapter(self):
+        command = load_file(ROOT / 'scripts/getzilla_design_reference.py', 'preview_command')
+        with patch.object(command, '_admitted', side_effect=command.DesignReferenceError('disabled')), \
+             patch.object(command, '_load') as load:
+            with self.assertRaises(command.DesignReferenceError):
+                command.capture_preview(ROOT, 'http://127.0.0.1:8000/', [],
+                                        capture_id='disabled', captured_at='2026-11-09T00:00:00Z')
+            load.assert_not_called()
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_font_failure_and_single_property_diff(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        version = [3]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                if self.path == '/font':
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                value = ("<style>@font-face{font-family:Missing;src:url('/font')}"
+                         "button{font-family:Missing;color:rgb(1,2," + str(version[0])
+                         + ")}</style><button>x</button>").encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        packs = []
+        for index in (3,4):
+            version[0] = index
+            packs.append(module.capture_preview(url, [url, url + 'font'], capture_id='font' + str(index),
+                                                captured_at='2026-11-09T00:00:00Z'))
+        self.assertIn('fonts-incomplete', packs[0]['content']['coverage']['reasons'])
+        delta = module.diff(*packs)
+        self.assertEqual(len(delta['changed']), 1)
+        self.assertEqual(delta['sources_changed'], [url])
+        self.assertFalse(delta['added'] or delta['removed'])
+
+    @unittest.skipUnless(os.environ.get('GETZILLA_DESIGN_BROWSER_TESTS') == '1',
+                         'explicit optional browser qualification only')
+    def test_fixture_infinite_script_hits_hard_deadline_and_stops_worker_group(self):
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                value = b'<script>setTimeout(()=>{while(true){}},50)</script>'
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(value)))
+                self.end_headers()
+                self.wfile.write(value)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        module = self.extractor()
+        spawned = []
+        observed = {}
+        finished = threading.Event()
+        def process_rows():
+            rows = {}
+            for entry in list(Path('/proc').iterdir())[:8192]:
+                if entry.name.isdigit():
+                    try:
+                        fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                        rows[int(entry.name)] = (int(fields[1]), fields[0], fields[19])
+                    except (FileNotFoundError, ProcessLookupError, PermissionError):
+                        pass
+            return rows
+        def monitor():
+            while not finished.wait(.05):
+                rows = process_rows()
+                family = {spawned[0].pid}
+                for _ in range(16):
+                    family.update(pid for pid, row in rows.items() if row[0] in family)
+                observed.update({pid:rows[pid][2] for pid in family if pid in rows})
+        real = subprocess.Popen
+        def observe(*args, **kwargs):
+            proc = real(*args, **kwargs)
+            spawned.append(proc)
+            threading.Thread(target=monitor, daemon=True).start()
+            return proc
+        started = time.monotonic()
+        with patch.object(subprocess, 'Popen', side_effect=observe):
+            with self.assertRaisesRegex(module.ReferenceError, 'preview_timeout'):
+                module.capture_preview(url, [url], capture_id='timeout',
+                                       captured_at='2026-11-09T00:00:00Z')
+        finished.set()
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertIsNotNone(spawned[0].poll())
+        self.assertGreater(len(observed), 2, 'browser descendants were not observed')
+        remaining = process_rows()
+        for pid, birth in observed.items():
+            if pid in remaining and remaining[pid][2] == birth:
+                self.assertEqual(remaining[pid][1], 'Z', 'observed browser descendant survived')
+        # Child zombies may await PID1 reaping; no running group member may remain.
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                status = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            if int(status[2]) == spawned[0].pid:
+                self.assertEqual(status[0], 'Z', 'running browser descendant survived deadline')
+        print(json.dumps({'preview_deadline_seconds': round(time.monotonic() - started, 2),
+                          'worker_reaped': True, 'observed_family_pids': len(observed), 'running_observed_descendants': 0,
+                          'running_group_members': 0}))

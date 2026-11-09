@@ -26,8 +26,12 @@ from getzilla.util import find_root  # noqa: E402
 from getzilla.workflow_storage import change_directory  # noqa: E402
 
 NAME = 'design-reference'
+CURRENT_VERSION = '0.2.0'
 PERMISSION = 'design.reference.read'
-EXPECTED_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
+EXPECTED_MANIFEST_SHA256 = '60196d7468bc89c4e3152f85923e7e467e89b59abe754b7cef3cecde7c288feb'
+# Read-only compatibility for immutable v1 records from accepted PR368.
+HISTORICAL_V1_MANIFEST_SHA256 = '2a8554a1a80dd130d421068fb3ba577cc11fed8b1fbe97025c18442d9c47d452'
+TRUSTED_MANIFESTS = {'0.1.0': HISTORICAL_V1_MANIFEST_SHA256, CURRENT_VERSION: EXPECTED_MANIFEST_SHA256}
 MAX_HISTORY = 32
 MAX_RECORD_BYTES = 1024 * 1024
 
@@ -46,31 +50,33 @@ def _encode(value):
                       allow_nan=False).encode('utf-8', 'strict')
 
 
-def _load(root, admission):
+def _load(root, admission, *, entrypoint='reference.py'):
     """Load only admitted, hash-checked installed bytes, never project imports."""
+    _need(entrypoint in ('reference.py', 'preview.py')
+          and (entrypoint == 'reference.py' or admission['version'] == CURRENT_VERSION))
     prefix = '.getzilla/modules/design-reference/'
     with ReadOnlyBoundRoot(root) as binding:
         descriptor = binding.read(prefix + 'module.json', limit=65536)
         _need(descriptor is not None and descriptor.sha256 == admission['manifest_sha256'])
         manifest = json.loads(descriptor.content)
-        _need(manifest['version'] == '0.1.0' and manifest['publisher'] == 'getzilla'
+        _need(manifest['version'] == admission['version'] and manifest['publisher'] == 'getzilla'
               and manifest['license'] == 'MIT' and manifest['hooks'] == 'declarative-v1')
-        entry = next(item for item in manifest['files'] if item['path'] == 'reference.py')
-        source = binding.read(prefix + 'reference.py', limit=256 * 1024)
+        entry = next(item for item in manifest['files'] if item['path'] == entrypoint)
+        source = binding.read(prefix + entrypoint, limit=256 * 1024)
         _need(source is not None and source.sha256 == entry['sha256'] and entry['mutable'] is False)
         _need(admit_module(root, NAME, permission=PERMISSION) == admission)
         module = types.ModuleType('_getzilla_admitted_design_reference')
         # Fixed reviewed manifest pins these held immutable source bytes.
         exec(compile(source.content, '<admitted-design-reference>', 'exec'), module.__dict__)  # nosec B102
-        _need(binding.read(prefix + 'reference.py', limit=256 * 1024) == source)
+        _need(binding.read(prefix + entrypoint, limit=256 * 1024) == source)
         return module
 
 
 def _admitted(root):
     admission = admit_module(root, NAME, permission=PERMISSION)
     _need(admission.get('allowed') is True and admission.get('external_authority') is False
-          and admission.get('workers') == 0 and admission.get('version') == '0.1.0'
-          and admission.get('manifest_sha256') == EXPECTED_MANIFEST_SHA256)
+          and admission.get('workers') == 0 and admission.get('version') in TRUSTED_MANIFESTS
+          and admission.get('manifest_sha256') == TRUSTED_MANIFESTS[admission['version']])
     return admission
 
 
@@ -85,6 +91,15 @@ def _task(root):
 
 
 def _record(context, pack, admission):
+    if pack['content']['schema_version'] == 2:
+        return {'schema_version': 1, 'advisory': True, 'task': context,
+                'module_manifest_sha256': admission['manifest_sha256'], 'pack': pack,
+                'summary': {'coverage': 'partial', 'tokens': len(pack['content']['tokens']),
+                            'sources': [row['path'] for row in pack['content']['sources']],
+                            'text': 'Controlled fixture computed styles; partial coverage.\n'
+                            + '\n'.join('[Fixture source](' + quote(row['path'], safe='/:?=&%') + ')'
+                                        for row in pack['content']['sources'])
+                            + '\nAdvisory only; no functionality, a11y, acceptance or live passivity claim.'}}
     return {'schema_version': 1, 'advisory': True, 'task': context,
               'module_manifest_sha256': admission['manifest_sha256'], 'pack': pack,
               'summary': {'coverage': pack['content']['coverage']['status'],
@@ -146,7 +161,11 @@ def _history(binding, directory, module, context, admission):
                       for key in ('spec_digest', 'requirements_digest', 'digest'))
               and task['digest'] == hashlib.sha256(_encode({key: value for key, value in task.items() if key != 'digest'})).hexdigest())
         module.validate_pack(record['pack'])
-        _need(_encode(record) == observed.content == _encode(_record(task, record['pack'], admission)))
+        historical = record['module_manifest_sha256']
+        _need(historical == admission['manifest_sha256'] or
+              (historical == HISTORICAL_V1_MANIFEST_SHA256 and record['pack']['content']['schema_version'] == 1))
+        historical_admission = dict(admission, manifest_sha256=historical)
+        _need(_encode(record) == observed.content == _encode(_record(task, record['pack'], historical_admission)))
         identity = record['pack']['capture']['id']
         _need(identity not in ids)
         ids.add(identity)
@@ -179,7 +198,7 @@ def _publish(root, module, pack, admission):
             if identity is not None:
                 existing = binding.read(relative, limit=MAX_RECORD_BYTES)
                 _need(existing is not None and existing.identity == identity and existing.content == raw)
-            for source in pack['content']['sources']:
+            for source in (pack['content']['sources'] if pack['content']['schema_version'] == 1 else []):
                 observed = binding.read(source['path'], limit=256 * 1024)
                 _need(observed is not None and observed.sha256 == source['sha256'])
             binding.check()
@@ -201,6 +220,23 @@ def capture(root, files, *, capture_id, captured_at):
         _task(root)  # No source extraction without the actual owned task package.
         module = _load(root, admission)
         pack = module.capture(root, files, capture_id=capture_id, captured_at=captured_at)
+        _need(_admitted(root) == admission)
+        return _publish(root, module, pack, admission)
+    except DesignReferenceError:
+        raise
+    except (ValueError, OSError, TypeError, KeyError, StopIteration, UnicodeError):
+        raise DesignReferenceError('design_reference_unavailable') from None
+
+
+def capture_preview(root, url, resources, *, capture_id, captured_at, viewport=None, theme='light', locale='en-US'):
+    try:
+        admission = _admitted(root)
+        _need(admission['version'] == CURRENT_VERSION)  # Legacy local authority never enables preview.
+        _task(root)
+        module = _load(root, admission)
+        adapter = _load(root, admission, entrypoint='preview.py')
+        pack = adapter.capture_preview(module, url, resources, capture_id=capture_id, captured_at=captured_at,
+                                      viewport=viewport, theme=theme, locale=locale)
         _need(_admitted(root) == admission)
         return _publish(root, module, pack, admission)
     except DesignReferenceError:
@@ -242,6 +278,15 @@ def main(argv=None):
     command.add_argument('--file', action='append', required=True)
     command.add_argument('--capture-id')
     command.add_argument('--timestamp')
+    command = commands.add_parser('capture-preview-fixture')
+    command.add_argument('--url', required=True)
+    command.add_argument('--resource', action='append', required=True)
+    command.add_argument('--width', type=int, default=1280)
+    command.add_argument('--height', type=int, default=720)
+    command.add_argument('--theme', choices=('light', 'dark'), default='light')
+    command.add_argument('--locale', default='en-US')
+    command.add_argument('--capture-id')
+    command.add_argument('--timestamp')
     command = commands.add_parser('diff')
     command.add_argument('previous')
     command.add_argument('current')
@@ -251,13 +296,19 @@ def main(argv=None):
         if args.operation == 'capture':
             result = capture(root, args.file, capture_id=args.capture_id or uuid.uuid4().hex,
                              captured_at=args.timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        elif args.operation == 'capture-preview-fixture':
+            result = capture_preview(root, args.url, sorted(set(args.resource)),
+                                     capture_id=args.capture_id or uuid.uuid4().hex,
+                                     captured_at=args.timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                     viewport={'width': args.width, 'height': args.height},
+                                     theme=args.theme, locale=args.locale)
         elif args.operation == 'diff':
             result = compare(root, args.previous, args.current)
         elif args.operation == 'status':
             result = module_status(root)
         else:
             result = manage_modules(root, args.operation,
-                                    {NAME: '0.1.0'} if args.operation in ('install', 'update') else {NAME: None},
+                                    {NAME: CURRENT_VERSION} if args.operation in ('install', 'update') else {NAME: None},
                                     source=getattr(args, 'source', None),
                                     grants=[PERMISSION] if args.operation == 'enable' else ())
         print(json.dumps(result, sort_keys=True))
