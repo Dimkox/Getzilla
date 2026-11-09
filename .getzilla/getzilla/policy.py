@@ -46,7 +46,7 @@ def sensitive_action(
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     lowered_tool = tool.lower()
-    if tool in {'apply_patch', 'Edit', 'Write'} or any(
+    if tool in {'apply_patch', 'Edit', 'Write', 'MultiEdit'} or any(
         word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file')
     ):
         return 'protected-path-write'
@@ -121,10 +121,15 @@ def _shell_mutation(
 def evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
+    from .task_intent import mutation_block_reason
+    directory = _execution_directory(root, execution_cwd)
+    intent_reason = mutation_block_reason(root, event, execution_cwd=directory)
+    if intent_reason:
+        return False, intent_reason
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':
-        return _legacy_evaluate_pre_tool(root, event)
+        return _legacy_evaluate_pre_tool(root, event, execution_cwd=directory)
 
     config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
     if not isinstance(config, dict):

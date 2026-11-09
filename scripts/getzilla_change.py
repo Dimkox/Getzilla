@@ -22,6 +22,7 @@ move = sub.add_parser('transition')
 move.add_argument('change_id')
 move.add_argument('target')
 move.add_argument('--reason', required=True)
+move.add_argument('--requirement', action='append', help='Stable typed ID of the independent implementation scope')
 sub.add_parser('show')
 args = parser.parse_args()
 root = find_root()
@@ -29,7 +30,8 @@ if args.command == 'start':
     result = start_change(root, args.title)
 elif args.command == 'transition':
     try:
-        result = transition(root, args.change_id, args.target, args.reason)
+        scope = {'requirement_ids': tuple(args.requirement)} if args.requirement else {}
+        result = transition(root, args.change_id, args.target, args.reason, **scope)
     except (ValueError, FileNotFoundError) as exc:
         # A refused transition is a usage answer, not a crash (#186): name the allowed next states.
         try:

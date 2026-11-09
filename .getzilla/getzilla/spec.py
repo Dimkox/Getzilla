@@ -599,6 +599,14 @@ def criterion_coverage(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def requirement_targets(spec: dict[str, Any]) -> dict[str, Any]:
+    """Current typed requirement content, shared by scope and semantic decisions."""
+    items = [spec['objective']]
+    for name in ('acceptance_criteria', 'invariants', 'forbidden_outcomes'):
+        items.extend(spec.get(name, []))
+    return {item['id']: item for item in items}
+
+
 def attestation_criterion_coverage(spec: dict[str, Any]) -> dict[str, Any]:
     """Return the exact AC-only criterion_coverage shape used by Trust CI v1.
 
