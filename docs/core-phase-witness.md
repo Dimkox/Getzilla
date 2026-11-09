@@ -2,6 +2,9 @@
 
 The existing optional pytest progress publisher records bounded phase facts in its private
 invocation directory. Existing v1 test slots and failure prefixes keep their original protocol.
+Manual plugin calls keep phase publication disabled by default. The native Core runner passes
+`--getzilla-progress-phases` explicitly. Without that option, no phase sidecars or phase report
+key appear; unavailable collection keeps the directory empty and the original slot bound stays.
 The controller records only `configured`. Each selected worker can record `configured`,
 `collection_finished`, then `first_test_start`, once each. Empty collection can finish without
 starting a test.

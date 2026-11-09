@@ -256,18 +256,29 @@ def pytest_addoption(parser):
     group = parser.getgroup('getzilla-core-progress')
     for name in ('dir', 'nonce', 'workers'):
         group.addoption('--getzilla-progress-' + name, default=None)
+    group.addoption('--getzilla-progress-phases', action='store_true', default=False)
 
 
 def pytest_configure(config):
     directory = config.getoption('getzilla_progress_dir')
     nonce = config.getoption('getzilla_progress_nonce')
     workers = config.getoption('getzilla_progress_workers')
+    try:
+        phases = config.getoption('getzilla_progress_phases')
+    except (KeyError, ValueError):
+        phases = False  # Older manual configuration adapters have no phase option.
+    if phases is None:
+        phases = False
+    if type(phases) is not bool:
+        raise ValueError('invalid closed Core phase option')
     if (not isinstance(directory, str) or not Path(directory).is_absolute()
             or not isinstance(nonce, str) or not re.fullmatch('[0-9a-f]{32}', nonce)
             or not isinstance(workers, str) or not re.fullmatch('[1-9][0-9]?', workers)
             or not 1 <= int(workers) <= MAX_WORKERS):
         raise ValueError('invalid closed Core progress options')
     if not hasattr(config, 'workerinput'):
+        if not phases:
+            return
         handle = None
         try:
             handle = _private_directory(Path(directory))
@@ -290,7 +301,8 @@ def pytest_configure(config):
     except OSError:
         return  # Observation IO must never change the primary test verdict.
     config.pluginmanager.register(writer, 'getzilla-core-progress-slot')
-    writer.configure_phases()
+    if phases:
+        writer.configure_phases()
 
 
 def _read_slot(handle, ordinal: int, nonce: str) -> dict[str, object]:

@@ -1,7 +1,9 @@
 """Pure phase protocol controls; no pytest workload or child process is launched."""
 from __future__ import annotations
 
+import ast
 import copy
+import inspect
 import json
 import os
 from pathlib import Path
@@ -29,15 +31,61 @@ class CorePhaseWitnessTests(unittest.TestCase):
         for writer in self.writers:
             writer.pytest_unconfigure(None)
 
-    def configure(self, worker='gw0'):
+    def configure(self, worker='gw0', phases=True):
         options = {'getzilla_progress_dir': str(self.directory), 'getzilla_progress_nonce': NONCE,
                    'getzilla_progress_workers': '1'}
+        if phases is not None:
+            options['getzilla_progress_phases'] = phases
         manager = SimpleNamespace(register=lambda writer, name: self.writers.append(writer))
         config = SimpleNamespace(getoption=options.get, pluginmanager=manager)
         if worker is not None:
             config.workerinput = {'workerid': worker}
         progress.pytest_configure(config)
         return self.writers[-1] if worker is not None else None
+
+    def test_legacy_default_has_only_slots_and_exact_progress_keys(self):
+        self.configure(None, phases=None)
+        writer = self.configure(phases=None)
+        self.finish_collection(writer)
+        self.assertEqual(list(self.directory.iterdir()), [])
+        writer.pytest_runtest_logstart('tests/test_public.py::Case::test_one[PRIVATE]', None)
+        self.assertEqual({p.name for p in self.directory.iterdir()}, {'worker-0.json'})
+        report = progress.read_progress(self.directory, NONCE, 1)
+        self.assertEqual(set(report), {'status', 'selected_workers', 'observed_workers',
+                                      'omitted_workers', 'slots', 'failure_events'})
+        self.assertEqual(report['observed_workers'], 1)
+        self.assertNotIn('PRIVATE', (self.directory / 'worker-0.json').read_text())
+
+    def test_phase_option_defaults_disabled_and_is_explicit_boolean(self):
+        options = []
+        group = SimpleNamespace(addoption=lambda *args, **kwargs: options.append((args, kwargs)))
+        progress.pytest_addoption(SimpleNamespace(getgroup=lambda name: group))
+        phase = [row for row in options if row[0] == ('--getzilla-progress-phases',)]
+        self.assertEqual(phase, [(('--getzilla-progress-phases',),
+                                 {'action': 'store_true', 'default': False})])
+        writer = self.configure(phases=False)
+        self.finish_collection(writer)
+        self.assertEqual(list(self.directory.iterdir()), [])
+        options = {'getzilla_progress_dir': str(self.directory),
+                   'getzilla_progress_nonce': NONCE, 'getzilla_progress_workers': '1'}
+        legacy = SimpleNamespace(getoption=options.__getitem__)
+        progress.pytest_configure(legacy)
+        self.assertEqual(list(self.directory.iterdir()), [])
+
+    def test_native_progress_arguments_enable_phases_without_other_changes(self):
+        from getzilla import python_test_runner
+        builder = getattr(python_test_runner, '_progress_arguments', None)
+        self.assertIsNotNone(builder)
+        self.assertEqual(builder(self.directory, NONCE, 1), [
+            '-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(self.directory),
+            '--getzilla-progress-nonce', NONCE, '--getzilla-progress-workers', '1',
+            '--getzilla-progress-phases'])
+        body = ast.parse(inspect.getsource(python_test_runner.run_core_tests))
+        calls = [node for node in ast.walk(body) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == '_progress_arguments']
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([node.id for node in calls[0].args],
+                         ['progress_root', 'progress_nonce', 'workers'])
 
     def phases(self):
         return progress.read_progress(self.directory, NONCE, 1).get('phase_witness')

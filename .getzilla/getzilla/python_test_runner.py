@@ -661,6 +661,12 @@ def select_engine(workers: int, measured: bool) -> tuple[int, str]:
     return 0, "unittest"
 
 
+def _progress_arguments(directory: Path, nonce: str, workers: int) -> list[str]:
+    return ['-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(directory),
+            '--getzilla-progress-nonce', nonce, '--getzilla-progress-workers', str(workers),
+            '--getzilla-progress-phases']
+
+
 def _pytest_command(workers: int, distribution: str) -> list[str]:
     if not _parallel_process_cleanup_supported():
         raise RunnerError('parallel process cleanup requires POSIX sessions or Windows Job Objects; '
@@ -858,8 +864,7 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                     progress_root.mkdir(mode=0o700)
                 except OSError:
                     pass  # Diagnostic storage cannot prevent the real backend.
-                command += ['-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(progress_root),
-                            '--getzilla-progress-nonce', progress_nonce, '--getzilla-progress-workers', str(workers)]
+                command += _progress_arguments(progress_root, progress_nonce, workers)
             if measured:
                 command += ['-p', 'pytest_cov.plugin', '--cov', f'--cov-config={config}', '--cov-report=term']
             command += ['tests']
