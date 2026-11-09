@@ -107,9 +107,17 @@ def _detail(code: str, name: str, message: str) -> dict[str, str]:
     return {"severity": "error", "code": code, "path": name, "message": message}
 
 
-def _status_findings(check: object, mode: str, docs_scope: dict[str, object] | None) -> list[dict[str, str]]:
+def _source_optional(check: object, required_plan: dict | None) -> bool:
+    rows = required_plan.get('obligations') if isinstance(required_plan, dict) else None
+    if not isinstance(rows, list):
+        return False
+    selected = [row for row in rows if isinstance(row, dict) and row.get('check_id') == _value(check, 'name')]
+    return bool(selected) and all(row.get('applicability') == 'not_applicable' and row.get('evidence') for row in selected)
+
+
+def _status_findings(check: object, mode: str, docs_scope: dict[str, object] | None, required_plan=None) -> list[dict[str, str]]:
     name, status, summary = (_value(check, key) for key in ('name', 'status', 'summary'))
-    if status == 'skip' and mode in {'pr', 'release'} and not _allowed_skip(name, summary, docs_scope):
+    if status == 'skip' and mode in {'pr', 'release'} and not (_allowed_skip(name, summary, docs_scope) or _source_optional(check, required_plan)):
         return [_detail('mandatory-check-skipped', name,
                         f'{name} was skipped without an explicit QG-01 allowance: {summary}')]
     if status not in {'pass', 'fail', 'skip', 'cancelled'}:
@@ -117,10 +125,10 @@ def _status_findings(check: object, mode: str, docs_scope: dict[str, object] | N
     return []
 
 
-def required_check_refused(check: object, *, mode: str, docs_scope: dict[str, object] | None = None) -> bool:
+def required_check_refused(check: object, *, mode: str, docs_scope: dict[str, object] | None = None, required_plan=None) -> bool:
     """Inspect one completed result without claiming future admission completeness."""
     return mode in {'pr', 'release'} and (
-        _value(check, 'status') in {'fail', 'cancelled'} or bool(_status_findings(check, mode, docs_scope))
+        _value(check, 'status') in {'fail', 'cancelled'} or bool(_status_findings(check, mode, docs_scope, required_plan))
     )
 
 
@@ -184,7 +192,7 @@ def evaluate_quality_gate(
             details.append(_detail("mandatory-check-missing", "coverage", "coverage did not run"))
 
     for name, check in sorted(check_map.items()):
-        details.extend(_status_findings(check, mode, docs_scope))
+        details.extend(_status_findings(check, mode, docs_scope, required_plan))
 
     if details:
         return QualityGateDecision("fail", f"QG-01 blocked admission: {len(details)} finding(s)", details)

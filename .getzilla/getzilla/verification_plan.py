@@ -482,6 +482,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
         elif os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
             exclusions['factory-postgres-exit'] = 'repository-sandbox has no nested-container/database capability'
     if docs_scope.get('eligible') is True:
+        names.update(docs_scope.get('skipped_checks', []))
         exclusions.update({name: 'admitted documentation/state scope' for name in docs_scope.get('skipped_checks', [])})
     fingerprint = tree_fingerprint(root)
     result = [obligation(name, required=name not in exclusions, evidence=(

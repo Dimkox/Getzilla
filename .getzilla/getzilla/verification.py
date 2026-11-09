@@ -145,7 +145,7 @@ class _CheckDispatch:
 
     def add(self, check):
         self.results.append(check)
-        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope):
+        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope, required_plan=self.required_plan):
             self.blocked_by = check.name
         return check
 
@@ -3165,7 +3165,9 @@ def _required_quality_gate(root, mode, profiles, results, required_plan, docs_sc
     from .expanded_security import validate_data_source
     current = None
     try:
-        current = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)['binding']
+        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+        if observed == required_plan:
+            current = observed['binding']
     except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
         pass
     return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,

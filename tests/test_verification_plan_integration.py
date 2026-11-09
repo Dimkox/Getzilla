@@ -15,6 +15,42 @@ from getzilla import verification
 
 
 class RequiredDispatchTests(unittest.TestCase):
+    def test_forged_optionality_cannot_borrow_current_policy_binding(self):
+        from getzilla.verification_plan import bind_result, build_required_plan, obligation, digest
+        with mock.patch('getzilla.verification_plan.policy_binding', return_value={'digest': 'a' * 64}):
+            current = build_required_plan(Path('.'), mode='fast', context={}, source={}, inventory={}, risk={},
+                selection={}, extra_obligations=[obligation('owned')])
+        forged = copy.deepcopy(current)
+        forged['obligations'][0].update(applicability='not_applicable', evidence={'kind': 'forged-source-exclusion'})
+        forged['digest'] = digest({key: value for key, value in forged.items() if key != 'digest'})
+        result = verification.CheckResult('owned', 'skip', 'forged optionality')
+        bind_result(forged, result)
+        with mock.patch('getzilla.verification_plan.current_required_plan', return_value=current):
+            gate = verification._required_quality_gate(Path('.'), 'fast', [], [result], forged)
+        self.assertEqual(gate.status, 'fail')
+
+    def test_proved_optional_security_does_not_block_independent_dispatch(self):
+        from getzilla.verification_plan import bind_result, build_required_plan, obligation
+        from getzilla.quality_gates import evaluate_quality_gate
+        with mock.patch('getzilla.verification_plan.policy_binding', return_value={'digest': 'a' * 64}):
+            plan = build_required_plan(Path('.'), mode='pr', context={}, source={}, inventory={}, risk={}, selection={},
+                extra_obligations=[obligation('owned-optional', required=False, evidence={'kind': 'complete-empty-source'}),
+                                   obligation('owned-later')])
+        results, observed = [], []
+        dispatcher = verification._CheckDispatch(results, 'pr', required_plan=plan)
+        dispatcher.run('owned-optional', lambda: verification.CheckResult('owned-optional', 'skip', 'complete source contains no applicable objects'))
+        dispatcher.run('owned-later', lambda: observed.append('ran') or verification.CheckResult('owned-later', 'pass', 'closed'))
+        self.assertEqual(observed, ['ran'])
+        for result in results:
+            bind_result(plan, result)
+        gate = evaluate_quality_gate(mode='pr', checks=results, required_plan=plan, current_binding=plan['binding'],
+            now_utc=datetime(2026,11,9,tzinfo=timezone.utc), data_source_validator=lambda *a, **kw: True)
+        # This minimal unit omits mandatory PR checks, but its proved optional result is not a skip refusal.
+        self.assertFalse(any(row['path'] == 'owned-optional' for row in gate.details))
+        refused = verification._CheckDispatch([], 'pr', required_plan=plan)
+        refused.run('owned-later', lambda: verification.CheckResult('owned-later', 'skip', 'same wording cannot waive required work'))
+        self.assertEqual(refused.blocked_by, 'owned-later')
+
     def test_no_python_inputs_has_explicit_applicability_record(self):
         with tempfile.TemporaryDirectory() as directory, \
              mock.patch.object(verification, '_ruff', return_value=verification.CheckResult('ruff', 'pass', 'unit')), \
