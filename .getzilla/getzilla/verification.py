@@ -2425,6 +2425,11 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
     output.update(status=('observed' if len(rendered) == workers and not unknown else
                            'partial' if rendered else 'unavailable'),
                   observed_workers=len(slots), omitted_workers=workers - len(rendered), slots=rendered)
+    if 'phase_witness' in progress:
+        from .pytest_progress import phase_witness_details
+        candidate = {**output, 'phase_witness': phase_witness_details(progress['phase_witness'], workers)}
+        if len(json.dumps(candidate).encode('utf-8')) <= 16000:
+            output = candidate
     return output
 
 
