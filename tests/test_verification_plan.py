@@ -335,6 +335,7 @@ class CollectedLifecycleRepairTests(unittest.TestCase):
                 self.assertNotEqual(report['status'], 'pass')
                 self.assertEqual(report['verified_references'], [])
 
+
     def test_skip_expected_failure_and_missing_method_remain_unverified(self):
         from getzilla import criterion_tests as api
         for case, decorator, body in (('skip', '@unittest.skip("owned")\n ', 'self.assertTrue(True)'),
@@ -350,3 +351,38 @@ class CollectedLifecycleRepairTests(unittest.TestCase):
                 report = api._execute_references(root, [name + '.py::Owned::' + method])
                 self.assertEqual(report['status'], 'fail')
                 self.assertEqual(report['verified_references'], [])
+
+
+class CollectedSetupExecutionTests(unittest.TestCase):
+    def test_setup_replaced_hook_cannot_credit_uninvoked_declared_body(self):
+        from getzilla import criterion_tests as api
+        name = 'test_collected_setup_execution'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / (name + '.py')).write_text('import unittest\nSETUP_CALLED=False\nBODY_CALLED=False\n'
+                'class Owned(unittest.TestCase):\n'
+                ' def setUp(self):\n  global SETUP_CALLED\n  SETUP_CALLED=True\n  self._callTestMethod=lambda method: None\n'
+                ' def test_required(self):\n  global BODY_CALLED\n  BODY_CALLED=True\n  self.fail("owned failing body")\n')
+            self.addCleanup(sys.modules.pop, name, None)
+            report = api._execute_references(root, [name + '.py::Owned::test_required'])
+            self.assertTrue(sys.modules[name].SETUP_CALLED)
+            self.assertFalse(sys.modules[name].BODY_CALLED)
+            self.assertEqual(report['status'], 'fail')
+            self.assertEqual(report['verified_references'], [])
+
+    def test_normal_setup_body_and_teardown_preserve_unique_execution_credit(self):
+        from getzilla import criterion_tests as api
+        name = 'test_collected_setup_positive'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / (name + '.py')).write_text('import unittest\nORDER=[]\nclass Owned(unittest.TestCase):\n'
+                ' def setUp(self):\n  ORDER.append("setup")\n'
+                ' def test_required(self):\n  ORDER.append("body")\n  self.assertEqual(ORDER,["setup","body"])\n'
+                ' def tearDown(self):\n  ORDER.append("teardown")\n')
+            self.addCleanup(sys.modules.pop, name, None)
+            refs = [name + '.py::Owned', name + '.py::Owned::test_required']
+            report = api._execute_references(root, refs)
+            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['verified_references'], sorted(refs))
+            self.assertEqual(len(report['tests']), 1)
+            self.assertEqual(sys.modules[name].ORDER, ['setup', 'body', 'teardown'])

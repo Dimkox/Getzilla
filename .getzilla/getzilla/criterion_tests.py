@@ -158,7 +158,7 @@ class _Discard:
         pass
 
 
-def _trusted_lifecycle(case):
+def _trusted_lifecycle(case, method_hook=None):
     """Only the canonical unittest lifecycle can earn this driver's execution credit.
 
     Owned setUp/tearDown/test bodies remain ordinary test code, not confined code.
@@ -166,14 +166,17 @@ def _trusted_lifecycle(case):
     """
     names = ('run', '__call__', '__getattribute__', '_callTestMethod', '_callSetUp',
              '_callTearDown', '_callCleanup', 'doCleanups')
-    return all(inspect.getattr_static(case, name) is inspect.getattr_static(unittest.TestCase, name)
+    return all(inspect.getattr_static(case, name) is
+               (method_hook if name == '_callTestMethod' and method_hook is not None else
+                inspect.getattr_static(unittest.TestCase, name))
                for name in names)
 
 
 class _ObservedResult(unittest.TestResult):
-    def __init__(self, identities):
+    def __init__(self, identities, methods):
         super().__init__()
         self.identities, self.observed, self.outcomes = identities, [], {}
+        self.methods, self.invocations, self.method_hooks = methods, {}, {}
 
     def startTest(self, test):
         if not _trusted_lifecycle(test):
@@ -182,11 +185,38 @@ class _ObservedResult(unittest.TestResult):
         name = self.identities[id(test)]
         self.observed.append(name)
         self.outcomes[name] = 'unknown'
+        selected, selected_code = self.methods[id(test)]
+        trusted_call = unittest.TestCase._callTestMethod
+        witness = {'started': 0, 'returned': 0}
+        def invoke(method):
+            if (not _trusted_lifecycle(test, invoke) or witness['started']
+                    or not inspect.ismethod(method) or method.__self__ is not test
+                    or method.__func__ is not selected.__func__ or selected.__func__.__code__ is not selected_code):
+                raise ValueError('typed selected method or lifecycle changed after setup')
+            witness['started'] += 1
+            # Invoke the callable pinned to the verified declaration before
+            # setup, never a fresh attribute lookup or a result callback.
+            trusted_call(test, selected)
+            witness['returned'] += 1
+        self.invocations[name] = witness
+        self.method_hooks[id(test)] = invoke
+        object.__setattr__(test, '_callTestMethod', invoke)
+
+    def _completed_method(self, test):
+        name = self.identities[id(test)]
+        return (self.invocations.get(name) == {'started': 1, 'returned': 1}
+                and _trusted_lifecycle(test, self.method_hooks.get(id(test))))
 
     def addSuccess(self, test):
         name = self.identities[id(test)]
-        if self.outcomes.get(name) == 'unknown':
+        if self.outcomes.get(name) == 'unknown' and self._completed_method(test):
             self.outcomes[name] = 'pass'
+
+    def stopTest(self, test):
+        hook = self.method_hooks.get(id(test))
+        if inspect.getattr_static(test, '_callTestMethod') is hook:
+            object.__delattr__(test, '_callTestMethod')
+        super().stopTest(test)
 
     def addFailure(self, test, err):
         self.outcomes[self.identities[id(test)]] = 'fail'
@@ -213,7 +243,7 @@ class _ObservedResult(unittest.TestResult):
 def _execute_references(root, references):
     root = root.resolve()
     ownership, contents = _source_ownership(root, references)
-    selections, cases, identities, loaded = {}, {}, {}, {}
+    selections, cases, identities, loaded, methods = {}, {}, {}, {}, {}
     sys.path.insert(0, str(root))
     try:
         with contextlib.redirect_stdout(_Discard()), contextlib.redirect_stderr(_Discard()):
@@ -249,6 +279,9 @@ def _execute_references(root, references):
                     function = inspect.unwrap(inspect.getattr_static(cls, method))
                     if not inspect.isfunction(function) or Path(function.__code__.co_filename).resolve() != (root / relative).resolve():
                         raise ValueError('typed case implementation was substituted')
+                    raw = inspect.getattr_static(cls, method)
+                    if raw is not function and getattr(raw, '__unittest_skip__', False) is not True:
+                        raise ValueError('typed method wrapper lacks a supported exact-body execution contract')
                     declaration = next((child for node in ast.parse(contents[relative]).body
                                         if isinstance(node, ast.ClassDef) and node.name == cls.__name__
                                         for child in node.body if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -263,10 +296,11 @@ def _execute_references(root, references):
                     selected.append(name)
                     cases.setdefault(name, case)
                     identities[id(cases[name])] = name
+                    methods[id(cases[name])] = raw.__get__(cases[name], cls), raw.__code__
                 selections[reference] = selected
                 if len(cases) > MAX_TESTS:
                     raise ValueError('typed selection exceeds existing case bound')
-            result = _ObservedResult(identities)
+            result = _ObservedResult(identities, methods)
             unittest.TestSuite(cases.values()).run(result)
         if _source_ownership(root, references)[0] != ownership:
             raise ValueError('typed source changed during execution')
