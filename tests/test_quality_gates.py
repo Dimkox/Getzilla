@@ -14,12 +14,13 @@ from getzilla.verification_plan import bind_result, build_required_plan, obligat
 def evaluate_quality_gate(*, mode, checks, docs_scope=None):
     """These admission unit fixtures declare their own source world, not a real verification."""
     checks = copy.deepcopy(checks)
-    allowed = {'no non-test python paths', 'no python quality paths', '0 specs checked; exempt=True',
-               'architecture authority inputs are absent; not executed',
-               'pytest runner owns tests; measure unittest trees only',
-               'repository-sandbox has no nested-container/database capability'}
+    allowed = {('bandit', 'no non-test python paths'), ('ruff', 'no python quality paths'),
+               ('change-spec', '0 specs checked; exempt=True'),
+               ('architecture-inputs', 'architecture authority inputs are absent; not executed'),
+               ('coverage', 'pytest runner owns tests; measure unittest trees only'),
+               ('factory-postgres-exit', 'repository-sandbox has no nested-container/database capability')}
     excluded = set((docs_scope or {}).get('skipped_checks', [])) if (docs_scope or {}).get('eligible') else set()
-    rows = [obligation(item.name, required=not (item.name in excluded or item.summary in allowed),
+    rows = [obligation(item.name, required=not (item.name in excluded or (item.name, item.summary) in allowed),
                        evidence={'kind': 'unit-source-applicability', 'name': item.name}) for item in checks]
     with mock.patch('getzilla.verification_plan.policy_binding', return_value={'digest': 'a' * 64}):
         plan = build_required_plan(Path('.'), mode=mode, context={}, source={}, inventory={}, risk={},
