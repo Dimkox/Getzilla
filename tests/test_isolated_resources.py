@@ -129,6 +129,136 @@ class ResourceHardeningTests(unittest.TestCase):
                 owner.container("c",PIN)
 
 
+class ResourceRepairTests(unittest.TestCase):
+    def setUp(self):
+        self.native_identity = importlib.import_module("getzilla.disposable_resources")._process_identity
+        ResourceHardeningTests.setUp(self)
+
+    def test_directory_deadline_precedes_destructive_steps(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-repair")
+        path = owner.directory("data")
+        (path / "payload").write_text("retained")
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            owner.cleanup(deadline=time.monotonic() - 1)
+        self.assertEqual((path / "payload").read_text(), "retained")
+        self.assertEqual(owner.resources[0]["status"], "unconfirmed")
+        owner.cleanup()
+        self.assertFalse(path.exists())
+
+    def test_pending_network_and_container_bind_full_identity_without_reallocation(self):
+        for kind in ("network", "container"):
+            with self.subTest(kind=kind):
+                owner = self.module.OwnedDocker(self.root / (kind + ".json"), "gz-repair")
+                docker = DockerDouble()
+                interrupted = [False]
+                def boundary(command, *args, **kwargs):
+                    if command[1:3] == [kind, "inspect"] and not interrupted[0]:
+                        interrupted[0] = True
+                        return ProcessResult(command, 0, terminal_state="timeout")
+                    return docker(command, *args, **kwargs)
+                with patch.object(self.module, "_execute", side_effect=boundary):
+                    with self.assertRaises(self.module.CleanupUnconfirmed):
+                        owner.network("net") if kind == "network" else owner.container("app", PIN)
+                    self.assertEqual(owner.resources[0]["status"], "pending")
+                    try:
+                        owner.cleanup()
+                    except self.module.CleanupUnconfirmed:
+                        self.fail("complete owned pending identity must recover")
+                self.assertEqual(docker.items[kind], {})
+                self.assertEqual(owner.resources[0]["status"], "removed")
+                self.assertRegex(docker.removed[0][1], r"^[0-9a-f]{64}$")
+                self.assertEqual(sum(c[1] == "run" or c[1:3] == ["network", "create"] for c in docker.commands), 1)
+
+    def test_volume_required_values_refuse_partial_live_and_recovered_identity(self):
+        for field in ("CreatedAt", "Mountpoint"):
+            for bad in (None, ""):
+                with self.subTest(field=field, value=bad):
+                    stem = field + ("null" if bad is None else "empty")
+                    owner = self.module.OwnedDocker(self.root / (stem + ".json"), "gz-repair")
+                    docker = DockerDouble()
+                    def partial(command, *args, **kwargs):
+                        result = docker(command, *args, **kwargs)
+                        if command[1:3] == ["volume", "inspect"]:
+                            value = json.loads(result.stdout)
+                            value[0][field] = bad
+                            return ProcessResult(command, 0, json.dumps(value))
+                        return result
+                    with patch.object(self.module, "_execute", side_effect=partial):
+                        with self.assertRaises(ValueError):
+                            owner.volume("disk")
+                    self.assertEqual(docker.removed, [])
+        owner = self.module.OwnedDocker(self.root / "complete.json", "gz-repair")
+        docker = DockerDouble()
+        with patch.object(self.module, "_execute", side_effect=docker):
+            owner.volume("disk")
+            complete = json.loads(owner.manifest.read_text())
+            for field in ("CreatedAt", "Mountpoint"):
+                malformed = copy.deepcopy(complete)
+                malformed["resources"][0]["identity"][field] = None
+                owner.manifest.write_text(json.dumps(malformed))
+                with patch.object(self.module, "_process_identity", return_value={**owner.owner_process, "start": "changed"}):
+                    with self.assertRaises(ValueError):
+                        self.module.OwnedDocker.recover(owner.manifest)
+            owner.manifest.write_text(json.dumps(complete))
+            owner._journal_identity = self.module._read(owner.manifest).identity
+            owner.cleanup()
+        self.assertEqual(docker.items["volume"], {})
+
+    def test_recovery_requires_namespace_before_exact_target_absence(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-repair")
+        owner.owner_process["pid"] = 424242
+        owner._save()
+        native_read = Path.read_text
+        mode = ["self"]
+        def proc(path, *args, **kwargs):
+            value = str(path)
+            if value == "/proc/sys/kernel/random/boot_id":
+                if mode[0] == "boot":
+                    raise FileNotFoundError("owned boot unavailable")
+                return "unit-boot"
+            if value == "/proc/self/stat":
+                if mode[0] == "self":
+                    raise FileNotFoundError("owned self unavailable")
+                return f"{os.getpid()} (owned) " + " ".join(["R", *(["0"] * 18), "unit-start"])
+            if value == "/proc/424242/stat":
+                raise FileNotFoundError("owned target absent")
+            if value.startswith("/proc/"):
+                raise AssertionError("unadmitted procfs observation")
+            return native_read(path, *args, **kwargs)
+        with patch.object(Path, "read_text", proc), patch.object(self.module, "_process_identity", self.native_identity):
+            for missing in ("self", "boot"):
+                with self.subTest(missing=missing):
+                    mode[0] = missing
+                    try:
+                        outcome = self.module.OwnedDocker.recover(owner.manifest)
+                    except (OSError, self.module.CleanupUnconfirmed) as error:
+                        outcome = type(error)
+                    self.assertIs(outcome, self.module.CleanupUnconfirmed)
+            mode[0] = "target"
+            self.assertEqual(self.module.OwnedDocker.recover(owner.manifest).nonce, owner.nonce)
+
+    def test_initial_marker_cannot_be_replaced_by_later_baseline(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-repair")
+        path = owner.directory("data")
+        (path / "payload").write_text("retained")
+        read = self.module.fsx.ReadOnlyBoundRoot.read
+        calls = []
+        def changed(root, relative, **kwargs):
+            if root.path == path and relative == ".owner":
+                calls.append(relative)
+                if len(calls) == 2:
+                    (path / ".owner").write_text("f" * 32)
+            return read(root, relative, **kwargs)
+        with patch.object(self.module.fsx.ReadOnlyBoundRoot, "read", changed):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                owner.cleanup()
+        self.assertTrue((path / "payload").is_file())
+        self.assertEqual((path / "payload").read_text(), "retained")
+        (path / ".owner").write_text(owner.nonce)
+        owner.cleanup()
+        self.assertFalse(path.exists())
+
+
 class ProcessIdentityTests(unittest.TestCase):
     def test_mismatched_process_namespace_cannot_supply_any_birth_identity(self):
         module = importlib.import_module("getzilla.disposable_resources")
@@ -228,17 +358,22 @@ class DockerDouble:
         elif args[:2] in (["container", "inspect"], ["volume", "inspect"], ["network", "inspect"]):
             selected = self.items[args[0]].get(args[-1])
             if selected is None:
-                selected = next(x for x in self.items[args[0]].values() if x.get("Id") == args[-1])
+                selected = next(x for x in self.items[args[0]].values()
+                                if x.get("Id") == args[-1] or x.get("Name", "").removeprefix("/") == args[-1])
             value = [selected]
         elif len(args) > 1 and args[1] == "ls":
             if self.unavailable_listing:
                 raise subprocess.CalledProcessError(1, command)
+            if args[0] == "container" and args[-1] == "{{.Names}}":
+                return ProcessResult(command, 0, "\n".join(v["Name"].removeprefix("/") for v in self.items["container"].values()), "")
             return ProcessResult(command, 0, "\n".join(self.items[args[0]]), "")
         elif len(args) > 1 and args[1] == "rm":
             kind, key = args[0], args[-1]
             self.removed.append((kind, key))
             if not self.lie_about_removal:
-                self.items[kind].pop(key, None)
+                named = next((name for name, value in self.items[kind].items()
+                              if name == key or value.get("Id") == key), key)
+                self.items[kind].pop(named, None)
             return ProcessResult(command, 0, key, "")
         else:
             raise AssertionError(f"unexpected docker boundary {args[:3]}")

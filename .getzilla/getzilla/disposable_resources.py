@@ -42,12 +42,16 @@ def _execute(command, root, environment, *, timeout):
 
 
 def _process_identity(pid: int) -> dict:
-    current = Path("/proc/self/stat").read_text(encoding="utf-8")
+    try:
+        current = Path("/proc/self/stat").read_text(encoding="utf-8")
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except FileNotFoundError as error:
+        raise CleanupUnconfirmed("Observer procfs identity is unavailable") from error
     if int(current.split(" ", 1)[0]) != os.getpid():
         raise CleanupUnconfirmed("Process and procfs namespaces disagree; resource ownership cannot be established")
     value = current if pid == os.getpid() else Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     fields = value[value.rfind(")") + 2:].split()
-    return {"pid": pid, "start": fields[19], "boot": Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()}
+    return {"pid": pid, "start": fields[19], "boot": boot}
 
 
 class CleanupUnconfirmed(RuntimeError):
@@ -112,14 +116,25 @@ def _canonical_mounts(mounts):
 
 def _identity(kind: str, value: dict) -> dict:
     if kind == "container":
+        if (type(value.get("Mounts")) is not list or type(value["Config"].get("Labels")) is not dict
+                or any(type(m) is not dict or not {"Type", "Name", "Source", "Destination", "RW"} <= set(m)
+                       or type(m["RW"]) is not bool for m in value["Mounts"])):
+            raise ValueError("Incomplete container observation")
         return {"id": value["Id"], "name": value["Name"].removeprefix("/"),
                 "image_id": value["Image"], "image": value["Config"]["Image"],
                 "labels": value["Config"].get("Labels") or {},
                 "mounts": _canonical_mounts([
                     {key: item.get(key) for key in ("Type", "Name", "Source", "Destination", "RW")}
                     for item in value.get("Mounts", [])])}
-    result = {key: value.get(key) for key in ("Name", "Labels", "Driver", "Options")}
+    if (not {"Name", "Labels", "Driver", "Options"} <= set(value)
+            or type(value["Labels"]) is not dict or type(value["Driver"]) is not str
+            or not value["Driver"] or value["Options"] is not None and type(value["Options"]) is not dict):
+        raise ValueError("Incomplete resource observation")
+    result = {key: value[key] for key in ("Name", "Labels", "Driver", "Options")}
     if kind == "volume":
+        if (type(value.get("CreatedAt")) is not str or not 0 < len(value["CreatedAt"]) <= 128
+                or not _absolute_posix_path(value.get("Mountpoint"))):
+            raise ValueError("Incomplete volume birth or location")
         result.update({key: value.get(key) for key in ("CreatedAt", "Mountpoint")})
     else:
         result["Id"] = value["Id"]
@@ -244,7 +259,11 @@ class OwnedDocker:
         owner = instance.owner_process
         if type(owner.get("pid")) is not int or owner["pid"] <= 0:
             raise ValueError("Invalid allocator identity")
-        if owner.get("boot") != Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip():
+        try:
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        except FileNotFoundError as error:
+            raise CleanupUnconfirmed("Allocator boot observation is unavailable") from error
+        if owner.get("boot") != boot:
             raise CleanupUnconfirmed("Allocator boot identity is unavailable")
         try:
             if _process_identity(owner["pid"]) == owner:
@@ -292,6 +311,9 @@ class OwnedDocker:
                     raise ValueError("Foreign journal identity")
                 if item["kind"] == "network" and not _ID.fullmatch(identity.get("Id", "")):
                     raise ValueError("Invalid full network identity")
+                if item["kind"] == "volume" and (type(identity["CreatedAt"]) is not str
+                        or not 0 < len(identity["CreatedAt"]) <= 128 or not _absolute_posix_path(identity["Mountpoint"])):
+                    raise ValueError("Incomplete volume journal identity")
             if item["kind"] == "container" and (not _PIN.fullmatch(item.get("image", ""))
                     or not re.fullmatch(r"sha256:[0-9a-f]{64}", item.get("image_id", ""))
                     or item["status"] == "bound" and not _ID.fullmatch(item.get("id", ""))):
@@ -358,21 +380,29 @@ class OwnedDocker:
         return [part for key, value in self.labels.items() for part in ("--label", f"{key}={value}")]
 
     def _bind(self, item, key):
+        previous = dict(item)
         value = _inspect(item["kind"], key)
         identity = _identity(item["kind"], value)
+        recovering = key == item["name"] and item["status"] in ("pending", "unconfirmed") and "identity" not in item
         labels = identity.get("labels", identity.get("Labels")) or {}
         if any(labels.get(key) != val for key, val in self.labels.items()):
             raise ValueError("New resource did not retain ownership labels")
         if identity.get("name", identity.get("Name")) != item["name"]:
             raise ValueError("New resource name differs from intent")
         if item["kind"] == "container":
-            if identity["id"] != key or not _ID.fullmatch(key) or identity["image"] != item["image"] or identity["image_id"] != item["image_id"]:
+            if (not _ID.fullmatch(identity["id"]) or not recovering and identity["id"] != key
+                    or identity["image"] != item["image"] or identity["image_id"] != item["image_id"]):
                 raise ValueError("New container identity differs from intent")
             item["id"] = identity["id"]
-        if item["kind"] == "network" and (not _ID.fullmatch(key) or identity["Id"] != key):
+        if item["kind"] == "network" and (not _ID.fullmatch(identity["Id"]) or not recovering and identity["Id"] != key):
             raise ValueError("New network identity differs from returned ID")
         item["identity"], item["status"] = identity, "bound"
-        self._save()
+        try:
+            self._save()
+        except (OSError, ValueError):
+            item.clear()
+            item.update(previous)
+            raise
         return item
 
     def volume(self, suffix: str):
@@ -383,6 +413,8 @@ class OwnedDocker:
     def network(self, suffix: str):
         item = self._intent("network", suffix)
         key = _docker("network", "create", "--internal", *self._labels(), item["name"])
+        if not _ID.fullmatch(key):
+            raise ValueError("Docker did not return a full network ID")
         return self._bind(item, key)
 
     def directory(self, suffix: str):
@@ -427,13 +459,22 @@ class OwnedDocker:
                 entries = os.listdir(directory.handle)
                 if len(entries) > 2 or set(entries) - {".owner", "payload"}:
                     raise CleanupUnconfirmed("Unexpected disposable payload")
-                snapshots = {name: directory.read(name, limit=_LIMIT) for name in entries}
-                for name, snapshot in snapshots.items():
+                snapshots = {name: marker if name == ".owner" else directory.read(name, limit=_LIMIT) for name in entries}
+                if any(directory.read(name, limit=_LIMIT) != snapshot for name, snapshot in snapshots.items()):
+                    raise CleanupUnconfirmed("Disposable payload changed")
+                for name in sorted(snapshots, key=lambda name: name == ".owner"):
+                    snapshot = snapshots[name]
                     directory.check()
                     if directory.read(name, limit=_LIMIT) != snapshot:
                         raise CleanupUnconfirmed("Disposable payload changed")
+                    if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                        raise CleanupUnconfirmed("Cleanup deadline exhausted")
+                    if directory.read(".owner", limit=32) != marker:
+                        raise CleanupUnconfirmed("Disposable ownership marker changed")
                     fsx.unlink_at(directory.handle, name)
                 directory.check()
+                if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                    raise CleanupUnconfirmed("Cleanup deadline exhausted")
                 fsx.rmdir_at(parent.handle, item["name"])
             parent.check()
             try:
@@ -516,6 +557,8 @@ class OwnedDocker:
         errors = []
         for item in reversed(self.resources):
             try:
+                if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                    raise CleanupUnconfirmed("Cleanup deadline exhausted")
                 if item["kind"] == "directory":
                     self._remove_directory(item)
                     item["status"] = "removed"
@@ -527,6 +570,8 @@ class OwnedDocker:
                 if "identity" not in item:
                     self._bind(item, key)
                     key = item.get("id", item["name"])
+                if item["kind"] == "network":
+                    key = item["identity"]["Id"]
                 identity = _identity(item["kind"], _inspect(item["kind"], key))
                 expected = item["identity"]
                 if item["kind"] == "container":
