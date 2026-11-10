@@ -190,8 +190,13 @@ class Gateway:
                     return finish('module_unavailable')
                 if self.live_policy() is not True or not self.config['live_enabled']:
                     return finish('live_policy_changed')
+                wire = provider_request(provider, request)
             except Exception:
                 return finish('module_unavailable')
+            # Admission, policy I/O and wire construction consume the same elapsed budget.
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                return finish('deadline_exhausted')
             usage['attempted_calls'] += 1
             usage['reserved_estimated_cost_microusd'] += estimate
             attempted = self.clock()
@@ -201,7 +206,6 @@ class Gateway:
             result['attempts'].append(attempt)
             name = provider['id']
             try:
-                wire = provider_request(provider, request)
                 status, headers, raw = self.transport(wire, remaining)
                 if self.clock() >= deadline:
                     raise TimeoutError()

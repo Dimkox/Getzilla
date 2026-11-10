@@ -29,13 +29,13 @@
     },
     {
       "path": "gateway.py",
-      "sha256": "59e936b7f2a39734b01e43364c46fc5c6f50c41883b6bfe3cfbb49b942fa6559",
+      "sha256": "a57c66da4d6735708555f85691b33a05060dcb85c9dc6c3c9f8048779d42daca",
       "mode": 420,
       "mutable": false
     },
     {
       "path": "interfaces.py",
-      "sha256": "a7a8d4a5d8e1baceb841f743babf86ce0f289662b0975ad51edf7372b8d3af5a",
+      "sha256": "225daed871c64cca0bb5525c5b3c8930d8877c0483fdb19469b949d72b1f74f2",
       "mode": 420,
       "mutable": false
     },

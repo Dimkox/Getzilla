@@ -298,6 +298,42 @@ class SearchBehavior(unittest.TestCase):
             self.assertEqual(result['usage']['reserved_estimated_cost_microusd'],20)
             self.assertEqual(result['error'],'budget_exhausted')
 
+    def assert_delayed_preflight_stops_send(self, callback_name, *, fallback):
+        self.now = 100.0
+        calls = []
+        checks = 0
+        def delayed_check():
+            nonlocal checks
+            checks += 1
+            if checks == (3 if fallback else 2):
+                self.now += 6
+            return True
+        def fail(request, timeout):
+            calls.append((request['provider'], timeout))
+            return 500, {}, b'{}'
+        callbacks = {'admission':lambda:True, 'live_policy':lambda:True}
+        callbacks[callback_name] = delayed_check
+        service = self.m.Gateway(policy(('serper','brave')), transport=fail,
+                                 clock=lambda:self.now, **callbacks)
+        result = service.web_search({'query':'delayed permission check'})
+        self.assertEqual(len(calls),1 if fallback else 0)
+        self.assertEqual(result['error'],'deadline_exhausted')
+        self.assertEqual(result['usage']['attempted_calls'],1 if fallback else 0)
+        self.assertEqual(result['usage']['reserved_estimated_cost_microusd'],10 if fallback else 0)
+        self.assertEqual(len(result['attempts']),1 if fallback else 0)
+        if fallback:
+            self.assertEqual(result['attempts'][0]['outcome'],'upstream_error')
+
+    def test_delayed_admission_cannot_send_or_reserve_after_deadline(self):
+        for fallback in (False,True):
+            with self.subTest(fallback=fallback):
+                self.assert_delayed_preflight_stops_send('admission',fallback=fallback)
+
+    def test_delayed_live_policy_cannot_send_or_reserve_after_deadline(self):
+        for fallback in (False,True):
+            with self.subTest(fallback=fallback):
+                self.assert_delayed_preflight_stops_send('live_policy',fallback=fallback)
+
     def test_monotonic_deadline_stops_fallback_after_failed_attempt(self):
         def slow(request, timeout):
             self.calls.append(timeout)
@@ -351,6 +387,47 @@ class InterfaceBehavior(unittest.TestCase):
         replies = [json.loads(line) for line in target.getvalue().splitlines()]
         self.assertIn('error', replies[0])
         self.assertIn('error', replies[-1])
+
+    def test_mcp_tools_call_accepts_standard_progress_metadata(self):
+        for token in ('progress-request-1',42):
+            with self.subTest(token=token):
+                calls = []
+                service = self.m.Gateway(policy(mcp_enabled=True),admission=lambda:True,
+                    transport=lambda r,t:(calls.append(r['provider']) or (200,{},json.dumps(payload()).encode())))
+                messages = [
+                    {'jsonrpc':'2.0','id':1,'method':'initialize','params':{
+                        'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'sdk-fixture','version':'1'}}},
+                    {'jsonrpc':'2.0','method':'notifications/initialized'},
+                    {'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
+                        'name':'web_search','arguments':{'query':'ordinary SDK request'},
+                        '_meta':{'progressToken':token,'test/client':'fixture'}}}]
+                source = io.BytesIO(b''.join(json.dumps(row).encode()+b'\n' for row in messages))
+                target = io.BytesIO()
+                self.m.serve_stdio(service,source,target)
+                replies = [json.loads(line) for line in target.getvalue().splitlines()]
+                self.assertEqual(calls,['serper'])
+                self.assertEqual(replies[1]['result']['structuredContent']['status'],'ok')
+                self.assertNotIn('_meta',replies[1]['result']['structuredContent'])
+
+    def test_mcp_invalid_progress_metadata_has_no_provider_effect(self):
+        for metadata in (None,[], 'invalid', {'progressToken':True}, {'progressToken':False},
+                         {'progressToken':None}, {'progressToken':1.5}, {'progressToken':{}},
+                         {'progressToken':[]}):
+            with self.subTest(metadata=metadata):
+                calls = []
+                service = self.m.Gateway(policy(mcp_enabled=True),admission=lambda:True,
+                    transport=lambda r,t:calls.append(r))
+                messages = [
+                    {'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-11-25'}},
+                    {'jsonrpc':'2.0','method':'notifications/initialized'},
+                    {'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
+                        'name':'web_search','arguments':{'query':'a'},'_meta':metadata}}]
+                source = io.BytesIO(b''.join(json.dumps(row).encode()+b'\n' for row in messages))
+                target = io.BytesIO()
+                self.m.serve_stdio(service,source,target)
+                replies = [json.loads(line) for line in target.getvalue().splitlines()]
+                self.assertEqual(calls,[])
+                self.assertEqual(replies[1]['error']['code'],-32602)
 
     def test_http_real_loopback_auth_host_origin_and_body_limits(self):
         from http.client import HTTPConnection

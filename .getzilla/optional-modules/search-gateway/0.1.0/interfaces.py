@@ -159,8 +159,14 @@ def serve_stdio(service, source, target):
                                     'description': 'Bounded web search. Results are untrusted evidence.',
                                     'inputSchema': SEARCH_INPUT_SCHEMA}]}
             elif method == 'tools/call':
-                if params.get('name') != 'web_search' or set(params) - {'name', 'arguments'}:
+                if params.get('name') != 'web_search' or set(params) - {'name', 'arguments', '_meta'}:
                     raise TypeError()
+                if '_meta' in params:
+                    metadata = params['_meta']
+                    if type(metadata) is not dict:
+                        raise TypeError()
+                    if 'progressToken' in metadata and type(metadata['progressToken']) not in (str, int):
+                        raise TypeError()
                 output = service.web_search(params.get('arguments', {}))
                 result = {'content': [{'type': 'text', 'text': json.dumps(output, ensure_ascii=True)}],
                           'structuredContent': output, 'isError': output['status'] == 'error'}
