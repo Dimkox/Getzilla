@@ -128,6 +128,8 @@ def artifact_context(dependency: dict) -> dict:
 
 def artifact_identity(record: dict) -> str:
     """Exact artifact/source/context identity, independent of cache location."""
+    if 'kind' in record:
+        return family_identity(record)
     package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
     if len(safe_parts(record.get('filename'))) != 1:
         raise ArtifactError('artifact-identity', 'artifact filename must be a basename')
@@ -152,6 +154,8 @@ def select_artifact(dependency: dict, records: list[dict]) -> dict:
     context = artifact_context(dependency)
     candidates = []
     for record in records:
+        if 'kind' in record:
+            continue
         if package_key(record.get('ecosystem'), record.get('name'), record.get('version')) != key:
             continue
         if 'context' in record:
@@ -170,12 +174,394 @@ def select_artifact(dependency: dict, records: list[dict]) -> dict:
     return candidates[0]
 
 
+def family_identity(record: dict) -> str:
+    """Tagged non-package identities never enter the package matching namespace."""
+    required = {'schema_version', 'kind', 'subject', 'filename', 'path', 'sha256', 'bytes',
+                'context', 'acquired_at', 'origin', 'components'}
+    if (not isinstance(record, dict) or set(record) != required or type(record['schema_version']) is not int
+            or record['schema_version'] != 1 or record['kind'] not in {'action', 'tool', 'image'}):
+        raise ArtifactError('artifact-identity', 'unsupported tagged artifact schema')
+    subject = record['subject']
+    if (not isinstance(subject, dict) or not isinstance(subject.get('reference'), str)
+            or not subject['reference'] or len(subject['reference']) > 1024):
+        raise ArtifactError('artifact-identity', 'artifact needs an exact source-owned subject')
+    _digest(subject.get('source_sha256'), 'source declaration')
+    safe_parts(subject.get('manifest'))
+    if type(subject.get('line')) is not int or not 1 <= subject['line'] <= 1000000:
+        raise ArtifactError('artifact-context', 'artifact source line is unavailable')
+    if not isinstance(record['context'], dict):
+        raise ArtifactError('artifact-context', 'artifact use context must be an object')
+    context = artifact_context(record['context'])
+    if context != record['context'] or context != artifact_context(subject):
+        raise ArtifactError('artifact-context', 'artifact context differs from source-owned use')
+    if type(record['bytes']) is not int or not 0 < record['bytes'] <= MAX_ARTIFACT_BYTES:
+        raise ArtifactError('artifact-size', 'artifact needs a bounded exact byte count')
+    safe_parts(record['path'])
+    if len(safe_parts(record['filename'])) != 1:
+        raise ArtifactError('artifact-path', 'artifact filename must be a basename')
+    _digest(record['sha256'], 'artifact')
+    for key in ('origin', 'components'):
+        if not isinstance(record[key], dict):
+            raise ArtifactError('artifact-origin', 'artifact proof descriptor is missing')
+    _digest(record['components'].get('sha256'), 'component proof')
+    safe_parts(record['components'].get('path'))
+    value = {key: record[key] for key in ('schema_version', 'kind', 'subject', 'filename', 'sha256', 'bytes', 'context', 'origin', 'components')}
+    # Cache locations are not artifact identities; their actual bytes are bound below.
+    value['origin'] = {key: item for key, item in value['origin'].items() if not key.endswith('_path')}
+    value['components'] = {'sha256': record['components']['sha256']}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def select_family(subject: dict, kind: str, records: list[dict]) -> dict:
+    matches = [record for record in records if record.get('kind') == kind and record.get('subject') == subject]
+    if len(matches) != 1:
+        raise ArtifactError('license-artifact-missing', 'select one exact source-owned artifact family record')
+    family_identity(matches[0])
+    return matches[0]
+
+
+def _saved_proof(root: Path, path: str, digest: str) -> tuple[bytes, dict]:
+    raw = read_file(root, path, MAX_INDEX_BYTES)
+    if hashlib.sha256(raw).hexdigest() != _digest(digest, 'saved proof'):
+        raise ArtifactError('artifact-origin', 'saved proof bytes changed')
+    value = _json(raw)
+    if not isinstance(value, dict):
+        raise ArtifactError('artifact-origin', 'saved proof must be an object')
+    return raw, value
+
+
+def _check_git_namespace(rows: dict[str, dict]) -> None:
+    """No regular Git blob can also be a directory containing another blob."""
+    files = set(rows)
+    for path in rows:
+        parts = safe_parts(path)
+        if any('/'.join(parts[:depth]) in files for depth in range(1, len(parts))):
+            raise ArtifactError('artifact-origin', 'Git source has contradictory file/directory paths')
+
+
+def _git_tree(rows: dict[str, dict]) -> str:
+    """Recompute Git SHA-1 tree identity, not a substitute for publisher authority."""
+    _check_git_namespace(rows)
+    directories = {}
+    for path, row in rows.items():
+        parent, _, name = path.rpartition('/')
+        directories.setdefault(parent, {})[name] = (row['mode'], row['sha'])
+        while parent:
+            parent, _, name = parent.rpartition('/')
+            directories.setdefault(parent, {}).setdefault(name, None)
+    hashes = {}
+    for parent in sorted(directories, key=lambda name: name.count('/') + bool(name), reverse=True):
+        entries = []
+        for name, value in directories[parent].items():
+            mode, digest = value if value is not None else ('40000', hashes[(parent + '/' if parent else '') + name])
+            entries.append((name.encode() + (b'/' if mode == '40000' else b''), mode, name, digest))
+        body = b''.join(mode.encode() + b' ' + name.encode() + b'\0' + bytes.fromhex(digest)
+                        for _, mode, name, digest in sorted(entries))
+        hashes[parent] = hashlib.sha1(b'tree ' + str(len(body)).encode() + b'\0' + body, usedforsecurity=False).hexdigest()
+    return hashes.get('', '')
+
+
+def _validate_action_metadata(raw: bytes) -> None:
+    """Admit only the implemented self-contained composite subset, not shell execution."""
+    from .security_inventory import _parse_inventory_yaml, _YamlError
+    from ._policy_legacy import _shell_tokens
+
+    def unsupported():
+        raise ArtifactError('artifact-action-unsupported', 'Action execution/dependency metadata needs qualified coverage')
+
+    try:
+        document = _parse_inventory_yaml(raw.decode('utf-8'))
+    except (UnicodeDecodeError, _YamlError) as exc:
+        code = exc.code if isinstance(exc, _YamlError) else 'artifact-action-unsupported'
+        raise ArtifactError(code, 'Action metadata cannot be structurally qualified') from exc
+    if (document.kind != 'mapping' or not set(document.value) <= {'name', 'description', 'author', 'runs'}
+            or 'runs' not in document.value):
+        unsupported()
+    runs = document.value['runs']
+    if runs.kind != 'mapping' or set(runs.value) != {'using', 'steps'}:
+        unsupported()
+    using, steps = runs.value['using'], runs.value['steps']
+    if using.kind != 'scalar' or using.value != 'composite' or steps.kind != 'sequence':
+        unsupported()
+    for step in steps.value:
+        if step.kind != 'mapping' or set(step.value) != {'run', 'shell'}:
+            unsupported()
+        command, shell = step.value['run'], step.value['shell']
+        if command.kind != 'scalar' or shell.kind != 'scalar' or shell.value not in {'bash', 'sh'}:
+            unsupported()
+        # GitHub expression interpolation precedes shell quoting. A quoted
+        # expression is therefore not a literal even if the shell lexer says so.
+        if '${{' in command.value:
+            unsupported()
+        try:
+            tokens = _shell_tokens(command.value.strip(' \t\r\n'))
+        except ValueError:
+            unsupported()
+        if (len(tokens) != 2 or tokens[0].value != 'printf'
+                or any(t.operator or t.expansion or t.substitution or t.opaque for t in tokens)
+                or tokens[1].value.startswith('-') or '%' in tokens[1].value or '\\' in tokens[1].value):
+            unsupported()
+
+
+def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    subject, origin = record['subject'], record['origin']
+    match = re.fullmatch(r'([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/([A-Za-z0-9_./-]+))?@([0-9a-f]{40})', subject['reference'])
+    if not match or subject.get('kind') != 'github-action':
+        raise ArtifactError('artifact-origin', 'Action needs a full exact Git commit and repository')
+    owner, repository, subpath, revision = match.groups()
+    if subpath:
+        safe_parts(subpath)
+    api = f'https://api.github.com/repos/{owner}/{repository}'
+    if (set(origin) != {'kind', 'index_url', 'index_path', 'index_sha256', 'artifact_url', 'tree_path', 'tree_sha256', 'archive_root'}
+            or origin['kind'] != 'github-source' or origin['index_url'] != api + '/git/commits/' + revision
+            or origin['artifact_url'] != api + '/zipball/' + revision or not record['filename'].endswith('.zip')):
+        raise ArtifactError('artifact-origin', 'Action proof does not name its fixed official Git source')
+    commit_raw, commit = _saved_proof(root, origin['index_path'], origin['index_sha256'])
+    tree_raw, tree = _saved_proof(root, origin['tree_path'], origin['tree_sha256'])
+    if (commit.get('sha') != revision or not isinstance(commit.get('tree'), dict) or commit['tree'].get('sha') != tree.get('sha')
+            or tree.get('truncated') is not False or not isinstance(tree.get('tree'), list)
+            or not 0 < len(tree['tree']) <= MAX_MEMBERS):
+        raise ArtifactError('artifact-origin', 'Action needs complete commit and tree evidence')
+    rows = {}
+    for row in tree['tree']:
+        if not isinstance(row, dict):
+            raise ArtifactError('artifact-origin', 'Git tree entry is malformed')
+        name = row.get('path')
+        safe_parts(name)
+        if row.get('type') == 'tree' and row.get('mode') == '040000':
+            continue
+        if (name in rows or row.get('type') != 'blob' or row.get('mode') not in {'100644', '100755'}
+                or not isinstance(row.get('sha'), str) or not re.fullmatch('[0-9a-f]{40}', row['sha'])
+                or type(row.get('size')) is not int or not 0 <= row['size'] <= MAX_ARCHIVE_BYTES):
+            raise ArtifactError('artifact-origin', 'Git links/submodules/ambiguous tree entries are unsupported')
+        rows[name] = row
+    if _git_tree(rows) != tree.get('sha'):
+        raise ArtifactError('artifact-origin', 'complete Git tree identity differs')
+    prefix = origin['archive_root']
+    safe_parts(prefix)
+    if '/' in prefix:
+        raise ArtifactError('artifact-origin', 'archive needs one exact top-level root')
+    inventory = archive_inventory(payload, record['filename'])
+    observed = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for member in archive.infolist():
+            if member.orig_filename != member.filename:
+                raise ArtifactError('artifact-archive', 'archive original and logical names differ')
+            if member.is_dir():
+                continue
+            if not member.filename.startswith(prefix + '/'):
+                raise ArtifactError('artifact-origin', 'archive member lies outside the Git source root')
+            name = member.filename[len(prefix) + 1:]
+            row = rows.get(name)
+            if row is None or row['size'] != member.file_size or stat.S_IMODE(member.external_attr >> 16) != int(row['mode'], 8) & 0o777:
+                raise ArtifactError('artifact-origin', 'archive member differs from its Git mode/size')
+            digest = hashlib.sha1(b'blob ' + str(member.file_size).encode() + b'\0', usedforsecurity=False)
+            with archive.open(member) as stream:
+                while block := stream.read(65536):
+                    digest.update(block)
+            if digest.hexdigest() != row['sha']:
+                raise ArtifactError('artifact-origin', 'archive blob differs from exact Git tree')
+            observed[name] = row
+    metadata = [(subpath + '/' if subpath else '') + name for name in ('action.yml', 'action.yaml')
+                if (subpath + '/' if subpath else '') + name in rows]
+    if observed != rows or len(metadata) != 1:
+        raise ArtifactError('artifact-origin', 'archive is not the complete selected Action source')
+    metadata_path = prefix + '/' + metadata[0]
+    files = archive_files(payload, record['filename'], requested={metadata_path})
+    _validate_action_metadata(files[metadata_path])
+    evidence = [{'path': origin['index_path'], 'sha256': origin['index_sha256'], 'bytes': len(commit_raw)},
+                {'path': origin['tree_path'], 'sha256': origin['tree_sha256'], 'bytes': len(tree_raw)}]
+    return inventory, files, evidence
+
+
+def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    subject, origin = record['subject'], record['origin']
+    match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', subject['reference'])
+    if (not match or subject.get('kind') != 'release-tool' or subject.get('artifact_sha256') != record['sha256']
+            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'}):
+        raise ArtifactError('artifact-origin', 'release tool needs source-owned bytes and a qualified platform')
+    owner, repository, tag, filename = match.groups()
+    if (set(origin) != {'kind', 'index_url', 'index_path', 'index_sha256', 'artifact_url', 'source_commit'}
+            or origin['kind'] != 'github-release' or origin['artifact_url'] != subject['reference']
+            or origin['index_url'] != f'https://api.github.com/repos/{owner}/{repository}/releases/tags/{tag}'
+            or record['filename'] != filename or not filename.endswith('.zip')
+            or not isinstance(origin['source_commit'], str) or not re.fullmatch('[0-9a-f]{40}', origin['source_commit'])):
+        raise ArtifactError('artifact-origin', 'release tool source/asset identity is unsupported')
+    raw, release = _saved_proof(root, origin['index_path'], origin['index_sha256'])
+    if (release.get('tag_name') != tag or release.get('target_commitish') != origin['source_commit']
+            or not isinstance(release.get('assets'), list) or len(release['assets']) > MAX_MEMBERS):
+        raise ArtifactError('artifact-origin', 'release needs an exact retained source commit, not an unresolved branch/tag')
+    candidates = [asset for asset in release['assets'] if isinstance(asset, dict) and asset.get('name') == filename]
+    if (len(candidates) != 1 or candidates[0].get('browser_download_url') != subject['reference']
+            or type(candidates[0].get('size')) is not int or candidates[0]['size'] != len(payload)
+            or candidates[0].get('digest') != 'sha256:' + record['sha256']):
+        raise ArtifactError('artifact-origin', 'release asset URL/size/digest differs from retained official metadata')
+    inventory = archive_inventory(payload, filename)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        if any(member.orig_filename != member.filename for member in archive.infolist()):
+            raise ArtifactError('artifact-archive', 'release archive names are ambiguous')
+    return inventory, archive_files(payload, filename), [
+        {'path': origin['index_path'], 'sha256': origin['index_sha256'], 'bytes': len(raw)}]
+
+
+def _image_source(record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    """Read one OCI image and every layer; a vulnerability report is not a SBOM."""
+    subject, origin = record['subject'], record['origin']
+    reference = subject['reference']
+    if (subject.get('kind') != 'oci-image' or not re.fullmatch(r'[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}', reference)
+            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'} or not record['filename'].endswith('.zip')
+            or set(origin) != {'kind', 'manifest_digest'} or origin['kind'] != 'oci-layout'
+            or origin['manifest_digest'] != reference.rsplit('@', 1)[1]):
+        raise ArtifactError('artifact-origin', 'image needs an exact OCI identity and supported platform')
+    outer = archive_inventory(payload, record['filename'])
+    if 'oci-layout' not in outer or 'index.json' not in outer:
+        raise ArtifactError('artifact-origin', 'OCI layout/index is missing')
+    bound, licenses = {}, {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        if any(member.orig_filename != member.filename for member in archive.infolist()):
+            raise ArtifactError('artifact-archive', 'OCI archive names are ambiguous')
+        def read(name):
+            if name not in outer or outer[name]['size'] > MAX_ARTIFACT_BYTES:
+                raise ArtifactError('artifact-size', 'OCI object is missing or exceeds its bound')
+            return archive.read(name)
+        if _json(read('oci-layout')) != {'imageLayoutVersion': '1.0.0'}:
+            raise ArtifactError('artifact-origin', 'unsupported OCI layout')
+        index = _json(read('index.json'))
+        platform = dict(zip(('os', 'architecture'), subject['platform'].split('/')))
+        if (index.get('schemaVersion') != 2 or not isinstance(index.get('manifests'), list)
+                or len(index['manifests']) != 1 or not isinstance(index['manifests'][0], dict)
+                or index['manifests'][0].get('platform') != platform):
+            raise ArtifactError('artifact-origin', 'OCI index must select exactly one matching platform')
+        names = {'oci-layout', 'index.json'}
+        def blob(descriptor, media):
+            if (not isinstance(descriptor, dict) or descriptor.get('mediaType') not in media
+                    or not isinstance(descriptor.get('digest'), str) or not re.fullmatch('sha256:[0-9a-f]{64}', descriptor['digest'])
+                    or type(descriptor.get('size')) is not int or not 0 < descriptor['size'] <= MAX_ARTIFACT_BYTES):
+                raise ArtifactError('artifact-origin', 'OCI descriptor is unsupported or unbounded')
+            name = 'blobs/sha256/' + descriptor['digest'][7:]
+            raw = read(name)
+            if len(raw) != descriptor['size'] or hashlib.sha256(raw).hexdigest() != descriptor['digest'][7:]:
+                raise ArtifactError('artifact-hash', 'OCI descriptor bytes differ')
+            names.add(name)
+            return raw
+        selected = index['manifests'][0]
+        if selected.get('digest') != origin['manifest_digest']:
+            raise ArtifactError('artifact-origin', 'OCI selected manifest differs from image reference')
+        manifest = _json(blob(selected, {'application/vnd.oci.image.manifest.v1+json'}))
+        if (manifest.get('schemaVersion') != 2 or not isinstance(manifest.get('layers'), list)
+                or not 0 < len(manifest['layers']) <= MAX_MEMBERS):
+            raise ArtifactError('artifact-origin', 'OCI image has no complete bounded layers')
+        config = _json(blob(manifest.get('config'), {'application/vnd.oci.image.config.v1+json'}))
+        if any(config.get(key) != value for key, value in platform.items()):
+            raise ArtifactError('artifact-origin', 'OCI config platform differs')
+        rootfs = config.get('rootfs')
+        if (not isinstance(rootfs, dict) or rootfs.get('type') != 'layers' or not isinstance(rootfs.get('diff_ids'), list)
+                or len(rootfs['diff_ids']) != len(manifest['layers'])):
+            raise ArtifactError('artifact-origin', 'OCI config lacks exact uncompressed layer identities')
+        total = sum(row['size'] for row in outer.values())
+        for layer, diff_id in zip(manifest['layers'], rootfs['diff_ids']):
+            raw = blob(layer, {'application/vnd.oci.image.layer.v1.tar', 'application/vnd.oci.image.layer.v1.tar+gzip'})
+            if layer['mediaType'].endswith('+gzip'):
+                with gzip.open(io.BytesIO(raw), 'rb') as stream:
+                    expanded = stream.read(MAX_ARCHIVE_BYTES + 1)
+            else:
+                expanded = raw
+            if len(expanded) > MAX_ARCHIVE_BYTES or diff_id != 'sha256:' + hashlib.sha256(expanded).hexdigest():
+                raise ArtifactError('artifact-hash', 'OCI uncompressed layer identity differs or exceeds its budget')
+            prefix = 'layers/' + layer['digest'][7:] + '/'
+            members = archive_inventory(expanded, 'layer.tar')
+            total += sum(row['size'] for row in members.values())
+            if total > MAX_ARCHIVE_BYTES or len(bound) + len(members) + len(outer) > MAX_MEMBERS:
+                raise ArtifactError('artifact-size', 'OCI complete layer inventory exceeds aggregate limits')
+            for name, row in members.items():
+                if prefix + name in bound:
+                    raise ArtifactError('artifact-origin', 'OCI repeats layer identity')
+                bound[prefix + name] = row
+            licenses.update({prefix + name: body for name, body in archive_files(expanded, 'layer.tar').items()})
+        if names != set(outer):
+            raise ArtifactError('artifact-origin', 'OCI layout contains unreferenced or missing objects')
+    bound.update({'oci/' + name: row for name, row in outer.items()})
+    return bound, licenses, []
+
+
+def family_evidence(root: Path, record: dict) -> dict:
+    """One byte-bound reader shared by license evaluation and receipt projection."""
+    identity = family_identity(record)
+    payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
+    if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
+        raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')
+    if record['kind'] == 'action':
+        members, files, evidence = _action_source(root, record, payload)
+    elif record['kind'] == 'tool':
+        members, files, evidence = _release_source(root, record, payload)
+    elif record['kind'] == 'image':
+        members, files, evidence = _image_source(record, payload)
+    else:
+        raise ArtifactError('artifact-family-coverage', 'this family requires a qualified source/SBOM adapter')
+    raw, proof = _saved_proof(root, record['components']['path'], record['components']['sha256'])
+    if (set(proof) != {'schema_version', 'kind', 'artifact_sha256', 'complete', 'unresolved', 'components'}
+            or type(proof['schema_version']) is not int or proof['schema_version'] != 1
+            or proof['kind'] != 'artifact-component-inventory' or proof['artifact_sha256'] != record['sha256']
+            or proof['complete'] is not True or proof['unresolved'] != [] or not isinstance(proof['components'], list)
+            or not 0 < len(proof['components']) <= MAX_MEMBERS):
+        raise ArtifactError('license-transitive-coverage', 'component proof is incomplete or bound to other bytes')
+    covered, ids = set(), set()
+    for component in proof['components']:
+        if (not isinstance(component, dict) or set(component) != {'id', 'expression', 'requires', 'files', 'license_paths', 'notice_paths'}
+                or not isinstance(component['id'], str) or not component['id'] or component['id'] in ids
+                or not isinstance(component['files'], list) or not component['files']
+                or not all(isinstance(component[key], list) for key in ('requires', 'license_paths', 'notice_paths'))):
+            raise ArtifactError('license-transitive-coverage', 'component ownership or dependency graph is malformed')
+        ids.add(component['id'])
+        for item in component['files']:
+            if not isinstance(item, dict) or set(item) != {'path', 'sha256', 'bytes'}:
+                raise ArtifactError('license-transitive-coverage', 'component file evidence is malformed')
+            path = item['path']
+            safe_parts(path)
+            if path in covered or members.get(path) != {'sha256': item['sha256'], 'size': item['bytes']}:
+                raise ArtifactError('license-transitive-coverage', 'component files do not partition actual archive bytes')
+            covered.add(path)
+        owned = {item['path'] for item in component['files']}
+        for path in component['license_paths'] + component['notice_paths']:
+            safe_parts(path)
+            if path not in owned:
+                raise ArtifactError('license-obligation-missing', 'component license/notice is not retained in its actual bytes')
+    if covered != set(members) or any(not isinstance(dep, str) or dep not in ids for c in proof['components'] for dep in c['requires']):
+        raise ArtifactError('license-transitive-coverage', 'component graph or complete source coverage differs')
+    requested = {path for c in proof['components'] for path in c['license_paths'] + c['notice_paths']}
+    if record['kind'] != 'image':
+        files.update(archive_files(payload, record['filename'], requested=requested))
+    elif any(path not in files for path in requested):
+        raise ArtifactError('license-obligation-missing', 'OCI license/notice is not a retained recognized layer file')
+    evidence.append({'path': record['components']['path'], 'sha256': record['components']['sha256'], 'bytes': len(raw)})
+    return {'artifact_id': identity, 'members': members, 'files': files, 'components': proof['components'],
+            'binding': {'artifact_id': identity, 'artifact_sha256': record['sha256'], 'artifact_size': len(payload),
+                        'subject': record['subject'], 'context': record['context'], 'proofs': evidence},
+            'bound_bytes': len(payload) + sum(item['bytes'] for item in evidence)}
+
+
 def archive_inventory(payload: bytes, filename: str) -> dict[str, dict]:
     """Hash all ZIP members after the shared bounded, link-free archive validation."""
-    if not filename.endswith(('.whl', '.zip')):
-        raise ArtifactError('artifact-archive', 'extracted delivery requires ZIP member evidence')
     archive_files(payload, filename)
     result = {}
+    if not filename.endswith(('.whl', '.zip')):
+        with tarfile.open(fileobj=io.BytesIO(payload), mode='r:*') as archive:
+            for member in archive:
+                if member.isdir():
+                    continue
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise ArtifactError('artifact-archive', 'archive member cannot be read')
+                digest = hashlib.sha256()
+                size = 0
+                with stream:
+                    while block := stream.read(65536):
+                        digest.update(block)
+                        size += len(block)
+                if size != member.size:
+                    raise ArtifactError('artifact-archive', 'archive member is truncated')
+                result[member.name] = {'sha256': digest.hexdigest(), 'size': size}
+        return result
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         for member in archive.infolist():
             if member.is_dir():
@@ -312,6 +698,8 @@ def archive_files(payload: bytes, filename: str, *, requested: set[str] | None =
                 raise ArtifactError('artifact-archive', 'unsupported ZIP64, multi-volume or oversized central directory')
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                 for member in archive.infolist():
+                    if member.orig_filename != member.filename:
+                        raise ArtifactError('artifact-archive', 'original and logical ZIP member names differ')
                     wanted = admit(member.filename, member.file_size)
                     kind = stat.S_IFMT(member.external_attr >> 16)
                     if kind not in {0, stat.S_IFREG, stat.S_IFDIR} or member.flag_bits & 1:

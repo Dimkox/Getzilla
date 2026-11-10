@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from .security_osv_snapshot import VulnerabilityError, _pypi_key, _semver_key, normalize_name
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, archive_files,
                                  artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin)
+from .security_artifacts import family_evidence, select_family
 from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
 from .security_license_texts import recognized_license
 from .security_deliveries import verify_deliveries
@@ -414,10 +415,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             return {**result, 'status': 'skip', 'summary': 'complete inventory has no applicable third-party artifacts'}
         policy = _policy(policy)
         result['policy_digest'] = policy['digest']
-        for item in tools:
-            gap('license-tool-coverage', f"tool artifact license evidence is missing: {item.get('reference', item.get('kind', 'unknown'))}")
-        for item in images:
-            gap('license-image-coverage', f"image requires qualified exact-image SBOM/license evidence: {item.get('reference', 'unknown')}")
         raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
         bundle = _json(raw)
         if bundle.get('schema_version') != 1 or type(bundle.get('schema_version')) is not int:
@@ -437,6 +434,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
         indexed = {}
         for record in records:
             key = artifact_identity(record)
+            if 'kind' in record and record['subject'] not in (images if record['kind'] == 'image' else tools):
+                raise ArtifactError('artifact-inventory-binding', 'family record is not owned by this source inventory')
             if key in indexed:
                 raise ArtifactError('artifact-manifest', 'duplicate exact artifact/source/use identity')
             indexed[key] = record
@@ -444,6 +443,35 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
         result['source_evidence'] = {'manifest_sha256': hashlib.sha256(raw).hexdigest(),
             'last_verified_sync_utc': bundle['last_verified_sync_utc'], 'age_seconds': age,
             'checked_at_utc': current.isoformat(), 'coverage': {'declared_packages': len(indexed)}}
+        for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
+                              *((item, 'image') for item in images)]:
+            try:
+                record = select_family(subject, kind, records)
+                evidence = family_evidence(artifacts, record)
+                _family_age(record, current, bundle['last_verified_sync_utc'])
+                distribution = _distribution_for(subject, policy['usage_distribution'])
+                if distribution != 'internal':
+                    raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
+                selected, licenses, notices = [], [], []
+                for component in evidence['components']:
+                    chosen, identifiers = _select_expression(component['expression'], policy['auto_allow'])
+                    owned = {item['path'] for item in component['files']}
+                    files = {name: body for name, body in evidence['files'].items() if name in owned}
+                    license_files, notice_files = _license_evidence(files, component, identifiers, chosen)
+                    if any(not files.get(path, b'').strip() for path in component['notice_paths']):
+                        raise ArtifactError('license-obligation-missing', 'declared component NOTICE is empty')
+                    selected.extend(chosen)
+                    licenses.extend(license_files)
+                    notices.extend(notice_files)
+                result['details'].append({'kind': kind, 'reference': subject['reference'], 'status': 'pass',
+                    'selected_expression': ' AND '.join(sorted(set(selected))), 'distribution': distribution,
+                    **evidence['binding'], 'license_files': licenses, 'notice_files': notices,
+                    'obligations': 'internal use; exact source/component/license evidence retained'})
+            except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
+                code = getattr(exc, 'code', 'artifact-invalid')
+                if code == 'license-artifact-missing':
+                    code = 'license-image-coverage' if kind == 'image' else 'license-tool-coverage'
+                gap(code, str(exc))
         for dep in dependencies:
             try:
                 if dep.get('ecosystem') == 'PyPI':
@@ -454,6 +482,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     gap('license-scope-unknown', 'use/distribution scope requires an observed project decision', dep)
                 key = package_key(dep.get('ecosystem'), dep.get('name'), dep.get('version'))
                 record = select_artifact(dep, records)
+                if 'acquired_at' in record:
+                    _family_age(record, current, bundle['last_verified_sync_utc'])
                 payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
                 origin = verify_origin(artifacts, record, payload)
                 if dep.get('artifact_sha256') and dep['artifact_sha256'] != record['sha256']:
@@ -514,6 +544,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
     return result
 
 
+def _family_age(record: dict, current: datetime, catalog_time: str) -> None:
+    acquired = _timestamp(record.get('acquired_at'))
+    age = (current - acquired).total_seconds()
+    if age < 0 or age > MAX_AGE_SECONDS or acquired < _timestamp(catalog_time):
+        raise ArtifactError('artifact-stale', 'family acquisition is stale/future or catalog timestamp renews older evidence')
+
+
 def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None) -> dict:
     """Freeze actual catalog bytes for final-receipt revalidation, without policy PASS.
 
@@ -553,9 +590,22 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             if key in seen:
                 raise ArtifactError('artifact-manifest', 'catalog repeats a package artifact identity')
             seen.add(key)
+            if 'kind' in record:
+                subjects = inventory.get('images' if record['kind'] == 'image' else 'tools', [])
+                if record['subject'] not in subjects:
+                    raise ArtifactError('artifact-inventory-binding', 'family does not belong to the current source inventory')
+                _family_age(record, current, acquired)
+                evidence = family_evidence(artifacts, record)
+                total += evidence['bound_bytes']
+                if total > 512 * 1024 * 1024:
+                    raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
+                bindings.append(evidence['binding'])
+                continue
             origin = record.get('origin')
             if not isinstance(origin, dict):
                 raise ArtifactError('artifact-origin', 'catalog record lacks its saved registry index')
+            if 'acquired_at' in record:
+                _family_age(record, current, acquired)
             payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
             index = read_file(artifacts, origin.get('index_path'), MAX_INDEX_BYTES)
             verified = verify_origin(artifacts, record, payload, index_bytes=index)

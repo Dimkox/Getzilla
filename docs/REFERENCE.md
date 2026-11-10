@@ -547,9 +547,9 @@ Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_so
 
 | Component | Pinned | Upstream | Observed latest | Observed |
 | --- | --- | --- | --- | --- |
-| Superpowers | 6.4.2 | obra/superpowers | 6.4.2 | 2026-10-06 |
-| BMAD Method | 6.12.1 | bmad-code-org/BMAD-METHOD | 6.12.1 | 2026-10-06 |
-| GitHub Spec Kit | 1.1.0 | github/spec-kit | 1.1.0 | 2026-10-06 |
+| Superpowers | 7.0.2 | obra/superpowers | 7.0.2 | 2026-11-09 |
+| BMAD Method | 6.12.4 | bmad-code-org/BMAD-METHOD | 6.12.4 | 2026-11-09 |
+| GitHub Spec Kit | 1.3.2 | github/spec-kit | 1.3.2 | 2026-11-09 |
 
 These rows are dated currency observations for the workflow artifact adapters. The required installed Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline has its own pinned manifest. `getzilla baseline status --project /path/to/repo` inspects installation and project wiring; `getzilla baseline apply --project /path/to/repo` connects an installed workflow baseline. See [baseline setup](baseline.md) for user-level installation and security tools. Optional tool updates are separate from that requirement. `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
 
@@ -759,7 +759,7 @@ The verification report keeps schema version 1 with additive detail fields. Orig
 
 `getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. A finding fails the check with its OSV/GHSA/CVE ids, severity and fixed versions.
 
-It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked; `--mode pr`/`release` refuse that skip (only a repository without pinned dependencies may skip), so set one of them for those modes. The GitHub Actions workflow from `getzilla_ci.py --write` sets `GETZILLA_OSV_ONLINE=1`; Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
+It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked; `--mode pr`/`release` refuse that skip (only a repository without pinned dependencies may skip), so set one of them for those modes. The generated workflow keeps its existing `GETZILLA_OSV_ONLINE=1` legacy selector. The new public-input runtime capability is unactivated: later structured-security CI integration needs separately qualified offline inputs and any missing family adapters. The online flag supplies no structured feed or license evidence. See [public input preparation](security-checker-bootstrap.md#explicit-public-input-preparation). Missing, stale, unsupported or unqualified inputs refuse; a profile or `prepared` report is not a scan PASS, receipt or external attestation. Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
 
 A finding can be accepted for a limited time in `.getzilla/config/known-vulnerabilities.json`:
 

@@ -9,6 +9,14 @@ Every Getzilla install has the same baseline, with no option to skip any part of
 | BMAD | `_bmad/` method files and the agent's BMAD skills | full source commit, dependency lock, fixed generation command and asset hash |
 | Spec Kit | `.specify/` and the agent's `/speckit-*` skills | full source commit, hashed dependency closure, sh/ps variant and asset hash |
 
+The stable workflow baseline observed on 2026-11-09 is Superpowers 7.0.2,
+BMAD Method 6.12.4 and GitHub Spec Kit 1.3.2. Exact commits, source archive hashes,
+locked dependency hashes and all 24 selected-agent manifests are bound in
+`toolchain.json`. The source archives were checked against their exact Git trees;
+annotated tag metadata is not a signed attestation. The Spec Kit lock includes
+its current MCP, Pydantic and Lark dependency closure, used only in the isolated
+generation environment. Ordinary project onboarding still copies fixed assets.
+
 ## Installer
 
 `install.sh` / `install.ps1` install the security data, then the workflow baseline:

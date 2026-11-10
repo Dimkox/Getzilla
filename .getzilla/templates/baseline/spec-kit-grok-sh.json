@@ -22,9 +22,9 @@
     "sh"
   ],
   "binding": {
-    "dependency_lock_sha256": "465faa6ad8743a19e8acee80467e8376a4aebbe286853149c66f487c309d560a",
-    "source_archive_sha256": "33b3ee3f7c8dfb6ea5be60c6df31b97f44e7ca7a29a303eb3af7a882fdc62281",
-    "source_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175"
+    "dependency_lock_sha256": "cc93d484da0a09a4134d212e7a4a33e8353a3f4223b13f6a4dd463414fed1fd0",
+    "source_archive_sha256": "15192dfc3770ac170e6b026f495ec157e42d31c96bd1cf9e19ebe5c68527bab4",
+    "source_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342"
   },
   "component": "spec-kit",
   "files": [
@@ -71,10 +71,10 @@
       "sha256": "c77d361665b34d5870dd1ffe9d2c805700a36cfacd35c63a935ea6edcb100762"
     },
     {
-      "bytes": 18638,
+      "bytes": 19011,
       "mode": 420,
       "path": ".grok/skills/speckit-specify/SKILL.md",
-      "sha256": "342dd2173103ce701b2bae2f489b462da19fc7369d920c93df10754be2216be8"
+      "sha256": "41f7edd3243e0858ec477c41f16824e2f5df678b3e85b49b5c171eff0ddb180a"
     },
     {
       "bytes": 11576,
@@ -83,46 +83,34 @@
       "sha256": "4dfb5cb2fd544f7ad5f1ddb9ff44bf230082fc312090db7e36102fe400dfab77"
     },
     {
-      "bytes": 8064,
-      "mode": 420,
-      "path": ".grok/skills/speckit-taskstoissues/SKILL.md",
-      "sha256": "a25c75b567310292548df39ebaef19b98e3fa9c0b28de32a177c677256acf743"
-    },
-    {
-      "bytes": 384,
+      "bytes": 586,
       "mode": 420,
       "path": ".specify/.gitignore",
-      "sha256": "8c908410d177a1ef3d0dee16d7ad55f2ac3333df3104c4d4adee1c9b82f1dbc1"
+      "sha256": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
     },
     {
-      "bytes": 1060,
-      "mode": 420,
-      "path": ".specify/LICENSE",
-      "sha256": "2510b446bc1f0cf9702453075d20cd88631e20e5642658edb7325d9c1eb534f7"
-    },
-    {
-      "bytes": 166,
+      "bytes": 193,
       "mode": 420,
       "path": ".specify/init-options.json",
-      "sha256": "32f3c959f7deff815184fec0a725729410bbe88c0ecbc50f4d67f3bec8a1d544"
+      "sha256": "b7179554b8ff9c92fa099253941368350e1ed2aa9db7362bc6e9b42527cff151"
     },
     {
       "bytes": 267,
       "mode": 420,
       "path": ".specify/integration.json",
-      "sha256": "dc8df58a6df4b5679b91dfc4f5d78fda1776e3b1b0b9fbd498fd1987ded95c5c"
+      "sha256": "b916987af3a36437a7dd48bcf48aae1ab79b9d706543dd74a3bb9bca9e6bd45c"
     },
     {
-      "bytes": 1262,
+      "bytes": 1143,
       "mode": 420,
       "path": ".specify/integrations/grok.manifest.json",
-      "sha256": "1bccf4a4230d1eb670d2feea59d755025549812f8e340906c3e846e9553145f5"
+      "sha256": "b2f271e43a06f79e664e12da3b707a30679ac0c2237737c1ebf67fbf8ccaac0e"
     },
     {
       "bytes": 1474,
       "mode": 420,
       "path": ".specify/integrations/speckit.manifest.json",
-      "sha256": "37917c862a3870894076effba0aface3f419a20cfe6d17725d292704efaefedf"
+      "sha256": "105417dd56b7a9bea25f3bf31ee6c99b386eb64cc70752060839a873f509b4e8"
     },
     {
       "bytes": 103,
@@ -137,10 +125,10 @@
       "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
     },
     {
-      "bytes": 8193,
+      "bytes": 8401,
       "mode": 493,
       "path": ".specify/scripts/bash/check-prerequisites.sh",
-      "sha256": "daa377146db4fb69912f42611a7b91c5d55873b3e3e27ed33bd8d67505826344"
+      "sha256": "e127735bbc5ac42181e2a3c773a2d639979f865f18e74a1a977cdf53392a0a7d"
     },
     {
       "bytes": 39506,
@@ -161,10 +149,10 @@
       "sha256": "829e227096abc8bf0889889ec9f792f503ca5d395b7836a8a7eb739ee75214e7"
     },
     {
-      "bytes": 2540,
+      "bytes": 2838,
       "mode": 493,
       "path": ".specify/scripts/bash/setup-plan.sh",
-      "sha256": "d0bd298c026446f3c63167130d65e49e4aa4485de6bef18bcdfd57b19aa0de96"
+      "sha256": "d378ec66ba20d2da01c71dad8935062c1c27f0bba890be9a6d3dda52ea056a4e"
     },
     {
       "bytes": 3549,
@@ -212,7 +200,7 @@
       "bytes": 369,
       "mode": 420,
       "path": ".specify/workflows/workflow-registry.json",
-      "sha256": "0c66a1f2093d9d103d445fc79e1b12af5ea7e4d06145f6728c2f8e42533a9ee7"
+      "sha256": "2d94a8cd81ea7ccc4a1e566a25ef0aee3698c37e09bd09fffbf5bd5bcb004f12"
     }
   ],
   "generator": "linux-bubblewrap-offline-v1",
