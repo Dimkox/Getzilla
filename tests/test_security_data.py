@@ -193,18 +193,24 @@ class SnapshotTests(unittest.TestCase):
         (self.root / 'requirements.txt').write_text('example==1.0.0\n')
         locations = {'ROOT':str(self.root), 'DIR':str(self.database),
                      'ARTIFACTS':str(self.root/'artifacts'), 'TOOLS':str(self.root/'tools'),
-                     'REPORT':str(self.root/'report.json')}
-        def evaluate(root, database, artifacts, tools, *, refresh=False, provision=False):
+                     'REPORT':str(self.root/'report.json'), 'PROFILE':str(self.root/'profile.json')}
+        declared_profile = {'fixture': 'explicit dispatch-only profile'}
+        security_cli._atomic(Path(locations['PROFILE']), json.dumps(declared_profile).encode())
+        def prepare(args, profile):
+            self.assertEqual(profile, declared_profile)
+            self.assertEqual(args.input_profile, Path(locations['PROFILE']))
+            self.assertTrue(args.refresh)
             def fetch(url):
                 body = (osv_bytes() if url == SD.SOURCE_URLS['osv:PyPI'] else
                         kev_payload() if url == SD.SOURCE_URLS['kev'] else epss_payload())
                 return FetchResult(body,url,url,200)
             from getzilla.security_inventory import collect_inventory
-            ecosystems = sorted({d['ecosystem'] for d in collect_inventory(root)['dependencies']})
-            reports = refresh_feeds(database,ecosystems,fetch=fetch,now=NOW) if refresh else []
+            ecosystems = sorted({d['ecosystem'] for d in collect_inventory(args.root)['dependencies']})
+            reports = refresh_feeds(args.database,ecosystems,fetch=fetch,now=NOW) if args.refresh else []
             passed = len(reports)==3 and all(r['status']=='pass' for r in reports)
-            return {'status':'pass' if passed else 'fail', 'checks':[], 'qualification_gaps':[]}
-        with mock.patch.object(security_cli,'evaluate',side_effect=evaluate):
+            return {'kind':'public-security-input-preparation', 'status':'prepared' if passed else 'unavailable',
+                    'qualification':'UNVERIFIED', 'scan_outcomes':[]}
+        with mock.patch.object(security_cli,'_supervised_preparation',side_effect=prepare):
             self.assertEqual(security_cli.main([locations.get(value,value) for value in arguments[2:]]),0)
         payload, evidence = SD.read_snapshot(self.database,'osv:PyPI',now=NOW)
         self.assertEqual(payload,osv_bytes())
