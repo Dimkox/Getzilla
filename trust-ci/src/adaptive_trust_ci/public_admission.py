@@ -164,18 +164,25 @@ def _core():
 
 def _snapshot_preflight(root):
     rows = content_manifest(root, bundle.SNAPSHOT_BYTES)
-    expanded = 0
+    expanded = members = 0
     for row in rows:
-        if row['path'].endswith('.zip'):
-            data = read_file(Path(root) / row['path'], bundle.SNAPSHOT_BYTES)
-            import io
+        data = read_file(Path(root) / row['path'], bundle.SNAPSHOT_BYTES)
+        import io
+        # Authoritative objects are hash-named; compatibility suffixes confer no role.
+        if zipfile.is_zipfile(io.BytesIO(data)):
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                if len(archive.infolist()) > 10000:
+                entries = archive.infolist()
+                members += len(entries)
+                if members > 10000:
                     raise bundle.BundleError('snapshot-member-limit')
-                for member in archive.infolist():
+                for member in entries:
                     expanded += member.file_size
                     if member.file_size > bundle.MEMBER_BYTES or expanded > bundle.SNAPSHOT_BYTES:
                         raise bundle.BundleError('snapshot-expanded-limit')
+        else:
+            expanded += len(data)
+            if expanded > bundle.SNAPSHOT_BYTES:
+                raise bundle.BundleError('snapshot-expanded-limit')
     return rows
 
 

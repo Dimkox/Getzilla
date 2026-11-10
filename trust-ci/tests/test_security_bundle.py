@@ -10,6 +10,7 @@ import os
 import runpy
 import subprocess
 import sys
+import zipfile
 from dataclasses import replace
 import unittest
 import tempfile
@@ -292,3 +293,43 @@ class LocalCliOwnedTests(unittest.TestCase):
                 self.assertFalse(result['independent_attestation'])
                 self.assertEqual(result['checks_executed_by_cli'], [])
                 self.assertEqual(len(observed), 4)  # Two exact Git reads per actual inventory validation.
+
+
+class SnapshotContentBoundsTests(unittest.TestCase):
+    @staticmethod
+    def archive(count, member_bytes):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for index in range(count):
+                with archive.open('owned-' + str(index) + '.json', 'w') as output:
+                    remaining = member_bytes
+                    block = b'A' * 65536
+                    while remaining:
+                        part = block[:min(remaining, len(block))]
+                        output.write(part)
+                        remaining -= len(part)
+        return stream.getvalue()
+
+    def test_extensionless_authoritative_zip_has_expanded_and_member_bounds(self):
+        from adaptive_trust_ci import public_admission
+        runtime = Path(__file__).resolve().parents[2] / '.getzilla/runtime'
+        with tempfile.TemporaryDirectory(prefix='326-snapshot-bounds-', dir=runtime) as directory:
+            root = Path(directory)
+            target = root / 'database/.snapshots/sha256'
+            target.mkdir(parents=True)
+            for members, size, refused in ((1, 12 * 1024 * 1024, False),
+                                           (3, 12 * 1024 * 1024, True),
+                                           (1, 17 * 1024 * 1024, True)):
+                raw = self.archive(members, size)
+                self.assertLess(len(raw), 65536)
+                path = target / hashlib.sha256(raw).hexdigest()
+                path.write_bytes(raw)
+                try:
+                    with self.subTest(members=members, member_bytes=size):
+                        if refused:
+                            with self.assertRaises(bundle.BundleError):
+                                public_admission._snapshot_preflight(root)
+                        else:
+                            self.assertEqual(len(public_admission._snapshot_preflight(root)), 1)
+                finally:
+                    path.unlink()
