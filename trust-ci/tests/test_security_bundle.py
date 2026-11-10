@@ -292,5 +292,3 @@ class LocalCliOwnedTests(unittest.TestCase):
                 self.assertFalse(result['independent_attestation'])
                 self.assertEqual(result['checks_executed_by_cli'], [])
                 self.assertEqual(len(observed), 4)  # Two exact Git reads per actual inventory validation.
-
-

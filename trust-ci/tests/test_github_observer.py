@@ -138,4 +138,3 @@ class ProviderGraphTests(unittest.TestCase):
                 with self.assertRaises(ObservationError):
                     observe(client, authority, source)
                 self.assertLessEqual(len(router.calls), 14)
-
