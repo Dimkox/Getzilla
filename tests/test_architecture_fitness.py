@@ -89,6 +89,222 @@ class GitArchitectureRepo:
         return self.git("rev-parse", "HEAD")
 
 
+class ArchitectureAdmissionPrerequisiteTests(unittest.TestCase):
+    PARSER = '''import http.client
+import io
+def parse():
+    class Socket:
+        def makefile(self, mode):
+            return io.BytesIO(b"HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n")
+    response = http.client.HTTPResponse(Socket())
+    response.begin()
+    return response.read()
+'''
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='architecture-admission-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        home = Path(temporary.name) / 'home'
+        home.mkdir(mode=0o700)
+        environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
+            'TMPDIR': temporary.name, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_TERMINAL_PROMPT': '0'}
+        self.environment = patch.dict(os.environ, environment, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        temporary_root = patch.object(tempfile, 'tempdir', temporary.name)
+        temporary_root.start()
+        self.addCleanup(temporary_root.stop)
+
+    def _pair(self, mutation=None):
+        diagrams = importlib.import_module('getzilla.architecture_diagrams')
+        system, rules = _system(), _rules()
+        system['trust_domains'].extend([
+            {'id': 'TD-CONTROL', 'kind': 'trust_ci_control', 'owner': 'engineering'},
+            {'id': 'TD-REMOTE', 'kind': 'external_platform', 'owner': 'provider'}])
+        system['secret_classes'] = [{'id': 'SECRET-GITHUB-APP', 'classification': 'trust_material'}]
+        system['nodes'].append({'id': 'NODE-GITHUB', 'type': 'external_system', 'owner': 'GitHub',
+            'trust_domain': 'TD-REMOTE', 'data_classification': 'DATA-INTERNAL', 'secrets': [],
+            'runtime': {'kind': 'external_managed', 'lifecycle': 'long_running', 'network': 'external_managed', 'evidence': 'source_described'},
+            'repository_paths': [], 'public_contracts': []})
+        rules['change_separation_policies'] = [{'id': 'FIT-SEPARATION', 'implementation_prefixes': ['architecture', '.getzilla'],
+            'trust_ci_prefixes': ['trust-ci'], 'severity': 'error'}]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        def views():
+            rendered = diagrams.render_diagrams(ARCHITECTURE.load_architecture(repo.root))
+            for name, text in rendered.items():
+                repo.write_text('architecture/generated/' + name + '.mmd', text)
+        views()
+        if mutation == 'forged_base_view':
+            repo.write_text('architecture/generated/context.mmd', 'not the base model\n')
+        if mutation == 'existing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 0\n')
+        base = repo.commit('closed component metadata base')
+        component = copy.deepcopy(system['nodes'][0])
+        component.update(id='NODE-COMPONENT', repository_paths=['trust-ci/src/adaptive_trust_ci/component.py'])
+        observer = copy.deepcopy(component)
+        observer.update(id='NODE-OBSERVER', trust_domain='TD-CONTROL', secrets=['SECRET-GITHUB-APP'],
+            repository_paths=['trust-ci/src/adaptive_trust_ci/observer.py'])
+        observer['runtime']['network'] = 'declared_egress'
+        system['nodes'].extend([component, observer])
+        for identity, source, target, protocol in (
+            ('EDGE-COMPONENT-CORE', 'NODE-COMPONENT', 'NODE-A', 'python'),
+            ('EDGE-COMPONENT-OBSERVER', 'NODE-COMPONENT', 'NODE-OBSERVER', 'python'),
+            ('EDGE-OBSERVER-GITHUB', 'NODE-OBSERVER', 'NODE-GITHUB', 'https')):
+            edge = copy.deepcopy(system['edges'][0])
+            edge.update(id=identity, **{'from': source, 'to': target}, protocol=protocol)
+            edge['failure_behavior']['timeout_ms'] = 20000
+            if protocol == 'https':
+                edge.update(type='data_flow', authentication='github_app', network_policy='allowlisted_egress')
+            system['edges'].append(edge)
+        if mutation == 'old_owner':
+            system['nodes'][0]['owner'] = 'changed'
+        if mutation == 'overlap':
+            component['repository_paths'] = ['trust-ci/src/adaptive_trust_ci']
+        if mutation == 'effectful_edge':
+            system['edges'][-1]['type'] = 'publication'
+        if mutation == 'long_running':
+            observer['runtime']['lifecycle'] = 'long_running'
+        if mutation == 'local_secret':
+            component['secrets'] = ['SECRET-GITHUB-APP']
+        if mutation == 'extra_definition':
+            system['signals'].append({'id': 'SIG-NEW', 'description': 'new capability'})
+        if mutation == 'local_only':
+            system['nodes'].remove(observer)
+            system['edges'] = [e for e in system['edges'] if e['id'] not in {'EDGE-COMPONENT-OBSERVER', 'EDGE-OBSERVER-GITHUB'}]
+        repo.model(system, rules)
+        repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 1\n')
+        if mutation != 'missing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/observer.py', 'VALUE = 2\n')
+        views()
+        if mutation == 'forged_view':
+            repo.write_text('architecture/generated/container.mmd', 'not the head model\n')
+        if mutation == 'extra_view':
+            repo.write_text('architecture/generated/unregistered.mmd', 'extra\n')
+        if mutation == 'core_code':
+            repo.write_text('.getzilla/getzilla/changed.py', 'VALUE = 3\n')
+        head = repo.commit('source-bound component addition')
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        return FIT._change_separation(ARCHITECTURE.load_architecture(repo.root), diff, root=repo.root), diff
+
+    def test_exact_new_component_and_both_generated_snapshots_qualify(self):
+        result, _ = self._pair()
+        self.assertEqual(result.status, 'pass', result.findings)
+
+    def test_local_only_component_checks_unchanged_derived_views(self):
+        result, diff = self._pair('local_only')
+        self.assertEqual(result.status, 'pass', result.findings)
+        self.assertNotIn('architecture/generated/context.mmd', diff.changed_paths)
+        self.assertNotIn('architecture/generated/data-flow.mmd', diff.changed_paths)
+
+    def test_component_metadata_negatives_preserve_separation(self):
+        for mutation in ('old_owner', 'overlap', 'effectful_edge', 'long_running', 'local_secret',
+                         'extra_definition', 'existing_source', 'forged_view', 'forged_base_view', 'extra_view', 'core_code'):
+            with self.subTest(mutation=mutation):
+                result, _ = self._pair(mutation)
+                self.assertEqual(result.status, 'fail', result.findings)
+
+    def test_missing_source_or_paired_state_never_qualifies(self):
+        missing, _ = self._pair('missing_source')
+        self.assertEqual(missing.status, 'fail', missing.findings)
+        _, diff = self._pair()
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _base_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _head_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, head_kind='worktree')), ())
+
+    def _network(self, source):
+        tree = ast.parse(source)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['repository_paths'] = ['src/owned.py']
+        rules['network_policies'] = [{'id': 'FIT-NETWORK', 'node_types': ['local_component'],
+            'allowed_protocols': ['https'], 'require_declared_edge': True, 'severity': 'error'}]
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path='src/owned.py', status='added'),))
+        python = SimpleNamespace(root=ROOT, tree=lambda path: tree)
+        with patch.object(FIT, '_project_import_roots', return_value=set()), patch.object(FIT, 'read_diff_file', return_value=None):
+            return FIT._network_clients(snapshot, diff, python), FIT._network_families(tree, set()), FIT._new_network_client(ROOT, snapshot, diff, python)
+
+    def test_literal_response_parser_is_not_a_network_client_or_trigger(self):
+        result, families, trigger = self._network(self.PARSER)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+
+    def test_instrumentation_requires_closed_calls_bindings_and_literal_targets(self):
+        base = self.PARSER.replace('import io', 'import io\nfrom unittest import mock')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(expression):
+            return base.replace(call, '    with mock.patch(' + expression + ', replacement):\n    ' + call)
+        safe = patched('"adaptive_trust_ci.github_observer.bounded_json"')
+        safe += '\nclock = mock.Mock(side_effect=[0, 1])\nclass Case(unittest.TestCase):\n    pass\n'
+        safe = 'import unittest\nfrom adaptive_trust_ci.github_observer import ObservationError\n' + safe
+        result, families, trigger = self._network(safe)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+        bad = [patched('"http." + "client.HTTPResponse"'),
+               patched('f"{module_name}.HTTPResponse"'), patched('unknown_target'),
+               base.replace(call, '    escaped = mock.patch\n    with escaped(unknown_target, replacement):\n    ' + call),
+               base + '\nmock.patch = replacement\n']
+        for source in bad:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
+    def test_imported_byte_supplier_alias_remains_protected_from_patching(self):
+        base = self.PARSER.replace('import io', 'from io import BytesIO as Buffer\nimport owned\nfrom unittest import mock')
+        base = base.replace('io.BytesIO(', 'Buffer(')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(target):
+            return base.replace(call, '    with mock.patch("' + target + '", replacement):\n    ' + call)
+        for source in (base, patched('owned.unrelated')):
+            result, families, trigger = self._network(source)
+            self.assertEqual(result.status, 'not_applicable', result.findings)
+            self.assertEqual(families, set())
+            self.assertFalse(trigger)
+        result, families, trigger = self._network(patched('owned.Buffer'))
+        for consumer, actual, expected in (('network_clients', result.status, 'fail'),
+                ('network_families', bool(families), True), ('new_network_client', trigger, True)):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(actual, expected)
+
+    def test_unproved_response_sources_aliases_and_connections_remain_network(self):
+        class_scope_alias = '''import io
+http = unknown
+class Scope:
+    import http.client as http
+    def parse(self):
+        class Socket:
+            def makefile(self, mode):
+                return io.BytesIO(b"owned")
+        return http.HTTPResponse(Socket())
+'''
+        default_scope = self.PARSER.replace('def parse():', 'Socket = unknown\ndef parse(value=http.client.HTTPResponse(Socket())):').replace(
+            '    response = http.client.HTTPResponse(Socket())\n    response.begin()\n    return response.read()', '    return value')
+        patched_namespace = self.PARSER.replace('import io', 'import io\nfrom unittest import mock').replace(
+            '    response = http.client.HTTPResponse(Socket())',
+            '    with mock.patch("http.client.HTTPResponse", unknown):\n        response = http.client.HTTPResponse(Socket())')
+        variants = [self.PARSER.replace('Socket())', 'unknown_socket)'),
+            self.PARSER.replace('return io.BytesIO(', 'return factory('),
+            self.PARSER + '\nhttp.client.HTTPSConnection("example.test")\n',
+            self.PARSER + '\nhttp.client = replacement\n',
+            self.PARSER + '\nleaked = http.client\n',
+            self.PARSER + '\nleaked_buffer = io.BytesIO\n',
+            self.PARSER.replace('class Socket:', 'class Socket(External):'),
+            self.PARSER.replace('class Socket:', '@decorator\n    class Socket:'),
+            self.PARSER.replace('response = http.client', 'Socket.makefile = replacement\n    response = http.client'),
+            self.PARSER.replace('return io.BytesIO(', 'SIDE_EFFECT()\n            return io.BytesIO('), class_scope_alias, default_scope, patched_namespace]
+        for source in variants:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
+
 class ArchitectureFitnessTests(unittest.TestCase):
     maxDiff = None
 
