@@ -1826,8 +1826,8 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
     protected = {'http', 'client', 'HTTPResponse', 'io', 'BytesIO', 'makefile'}
     protected.update(name for name, _, _ in http_events)
     protected.update(node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
-    protected.update(event.name for event in events if isinstance(event.node, ast.Import)
-                     and any(alias.name == 'io' for alias in event.node.names))
+    protected.update(node.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and imported(node) in {'io', 'io.BytesIO'})
     if not _instrumentation_targets_closed(tree, parents, events, resolve, imported, protected):
         return set()
     # A module/class alias cannot escape or be mutated into another supplier.

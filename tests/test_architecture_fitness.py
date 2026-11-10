@@ -254,6 +254,23 @@ def parse():
                 self.assertTrue(families)
                 self.assertTrue(trigger)
 
+    def test_imported_byte_supplier_alias_remains_protected_from_patching(self):
+        base = self.PARSER.replace('import io', 'from io import BytesIO as Buffer\nimport owned\nfrom unittest import mock')
+        base = base.replace('io.BytesIO(', 'Buffer(')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(target):
+            return base.replace(call, '    with mock.patch("' + target + '", replacement):\n    ' + call)
+        for source in (base, patched('owned.unrelated')):
+            result, families, trigger = self._network(source)
+            self.assertEqual(result.status, 'not_applicable', result.findings)
+            self.assertEqual(families, set())
+            self.assertFalse(trigger)
+        result, families, trigger = self._network(patched('owned.Buffer'))
+        for consumer, actual, expected in (('network_clients', result.status, 'fail'),
+                ('network_families', bool(families), True), ('new_network_client', trigger, True)):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(actual, expected)
+
     def test_unproved_response_sources_aliases_and_connections_remain_network(self):
         class_scope_alias = '''import io
 http = unknown
