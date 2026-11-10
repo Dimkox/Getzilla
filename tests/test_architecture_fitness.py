@@ -89,6 +89,222 @@ class GitArchitectureRepo:
         return self.git("rev-parse", "HEAD")
 
 
+class ArchitectureAdmissionPrerequisiteTests(unittest.TestCase):
+    PARSER = '''import http.client
+import io
+def parse():
+    class Socket:
+        def makefile(self, mode):
+            return io.BytesIO(b"HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n")
+    response = http.client.HTTPResponse(Socket())
+    response.begin()
+    return response.read()
+'''
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='architecture-admission-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        home = Path(temporary.name) / 'home'
+        home.mkdir(mode=0o700)
+        environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
+            'TMPDIR': temporary.name, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_TERMINAL_PROMPT': '0'}
+        self.environment = patch.dict(os.environ, environment, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        temporary_root = patch.object(tempfile, 'tempdir', temporary.name)
+        temporary_root.start()
+        self.addCleanup(temporary_root.stop)
+
+    def _pair(self, mutation=None):
+        diagrams = importlib.import_module('getzilla.architecture_diagrams')
+        system, rules = _system(), _rules()
+        system['trust_domains'].extend([
+            {'id': 'TD-CONTROL', 'kind': 'trust_ci_control', 'owner': 'engineering'},
+            {'id': 'TD-REMOTE', 'kind': 'external_platform', 'owner': 'provider'}])
+        system['secret_classes'] = [{'id': 'SECRET-GITHUB-APP', 'classification': 'trust_material'}]
+        system['nodes'].append({'id': 'NODE-GITHUB', 'type': 'external_system', 'owner': 'GitHub',
+            'trust_domain': 'TD-REMOTE', 'data_classification': 'DATA-INTERNAL', 'secrets': [],
+            'runtime': {'kind': 'external_managed', 'lifecycle': 'long_running', 'network': 'external_managed', 'evidence': 'source_described'},
+            'repository_paths': [], 'public_contracts': []})
+        rules['change_separation_policies'] = [{'id': 'FIT-SEPARATION', 'implementation_prefixes': ['architecture', '.getzilla'],
+            'trust_ci_prefixes': ['trust-ci'], 'severity': 'error'}]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        def views():
+            rendered = diagrams.render_diagrams(ARCHITECTURE.load_architecture(repo.root))
+            for name, text in rendered.items():
+                repo.write_text('architecture/generated/' + name + '.mmd', text)
+        views()
+        if mutation == 'forged_base_view':
+            repo.write_text('architecture/generated/context.mmd', 'not the base model\n')
+        if mutation == 'existing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 0\n')
+        base = repo.commit('closed component metadata base')
+        component = copy.deepcopy(system['nodes'][0])
+        component.update(id='NODE-COMPONENT', repository_paths=['trust-ci/src/adaptive_trust_ci/component.py'])
+        observer = copy.deepcopy(component)
+        observer.update(id='NODE-OBSERVER', trust_domain='TD-CONTROL', secrets=['SECRET-GITHUB-APP'],
+            repository_paths=['trust-ci/src/adaptive_trust_ci/observer.py'])
+        observer['runtime']['network'] = 'declared_egress'
+        system['nodes'].extend([component, observer])
+        for identity, source, target, protocol in (
+            ('EDGE-COMPONENT-CORE', 'NODE-COMPONENT', 'NODE-A', 'python'),
+            ('EDGE-COMPONENT-OBSERVER', 'NODE-COMPONENT', 'NODE-OBSERVER', 'python'),
+            ('EDGE-OBSERVER-GITHUB', 'NODE-OBSERVER', 'NODE-GITHUB', 'https')):
+            edge = copy.deepcopy(system['edges'][0])
+            edge.update(id=identity, **{'from': source, 'to': target}, protocol=protocol)
+            edge['failure_behavior']['timeout_ms'] = 20000
+            if protocol == 'https':
+                edge.update(type='data_flow', authentication='github_app', network_policy='allowlisted_egress')
+            system['edges'].append(edge)
+        if mutation == 'old_owner':
+            system['nodes'][0]['owner'] = 'changed'
+        if mutation == 'overlap':
+            component['repository_paths'] = ['trust-ci/src/adaptive_trust_ci']
+        if mutation == 'effectful_edge':
+            system['edges'][-1]['type'] = 'publication'
+        if mutation == 'long_running':
+            observer['runtime']['lifecycle'] = 'long_running'
+        if mutation == 'local_secret':
+            component['secrets'] = ['SECRET-GITHUB-APP']
+        if mutation == 'extra_definition':
+            system['signals'].append({'id': 'SIG-NEW', 'description': 'new capability'})
+        if mutation == 'local_only':
+            system['nodes'].remove(observer)
+            system['edges'] = [e for e in system['edges'] if e['id'] not in {'EDGE-COMPONENT-OBSERVER', 'EDGE-OBSERVER-GITHUB'}]
+        repo.model(system, rules)
+        repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 1\n')
+        if mutation != 'missing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/observer.py', 'VALUE = 2\n')
+        views()
+        if mutation == 'forged_view':
+            repo.write_text('architecture/generated/container.mmd', 'not the head model\n')
+        if mutation == 'extra_view':
+            repo.write_text('architecture/generated/unregistered.mmd', 'extra\n')
+        if mutation == 'core_code':
+            repo.write_text('.getzilla/getzilla/changed.py', 'VALUE = 3\n')
+        head = repo.commit('source-bound component addition')
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        return FIT._change_separation(ARCHITECTURE.load_architecture(repo.root), diff, root=repo.root), diff
+
+    def test_exact_new_component_and_both_generated_snapshots_qualify(self):
+        result, _ = self._pair()
+        self.assertEqual(result.status, 'pass', result.findings)
+
+    def test_local_only_component_checks_unchanged_derived_views(self):
+        result, diff = self._pair('local_only')
+        self.assertEqual(result.status, 'pass', result.findings)
+        self.assertNotIn('architecture/generated/context.mmd', diff.changed_paths)
+        self.assertNotIn('architecture/generated/data-flow.mmd', diff.changed_paths)
+
+    def test_component_metadata_negatives_preserve_separation(self):
+        for mutation in ('old_owner', 'overlap', 'effectful_edge', 'long_running', 'local_secret',
+                         'extra_definition', 'existing_source', 'forged_view', 'forged_base_view', 'extra_view', 'core_code'):
+            with self.subTest(mutation=mutation):
+                result, _ = self._pair(mutation)
+                self.assertEqual(result.status, 'fail', result.findings)
+
+    def test_missing_source_or_paired_state_never_qualifies(self):
+        missing, _ = self._pair('missing_source')
+        self.assertEqual(missing.status, 'fail', missing.findings)
+        _, diff = self._pair()
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _base_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _head_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, head_kind='worktree')), ())
+
+    def _network(self, source):
+        tree = ast.parse(source)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['repository_paths'] = ['src/owned.py']
+        rules['network_policies'] = [{'id': 'FIT-NETWORK', 'node_types': ['local_component'],
+            'allowed_protocols': ['https'], 'require_declared_edge': True, 'severity': 'error'}]
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path='src/owned.py', status='added'),))
+        python = SimpleNamespace(root=ROOT, tree=lambda path: tree)
+        with patch.object(FIT, '_project_import_roots', return_value=set()), patch.object(FIT, 'read_diff_file', return_value=None):
+            return FIT._network_clients(snapshot, diff, python), FIT._network_families(tree, set()), FIT._new_network_client(ROOT, snapshot, diff, python)
+
+    def test_literal_response_parser_is_not_a_network_client_or_trigger(self):
+        result, families, trigger = self._network(self.PARSER)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+
+    def test_instrumentation_requires_closed_calls_bindings_and_literal_targets(self):
+        base = self.PARSER.replace('import io', 'import io\nfrom unittest import mock')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(expression):
+            return base.replace(call, '    with mock.patch(' + expression + ', replacement):\n    ' + call)
+        safe = patched('"adaptive_trust_ci.github_observer.bounded_json"')
+        safe += '\nclock = mock.Mock(side_effect=[0, 1])\nclass Case(unittest.TestCase):\n    pass\n'
+        safe = 'import unittest\nfrom adaptive_trust_ci.github_observer import ObservationError\n' + safe
+        result, families, trigger = self._network(safe)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+        bad = [patched('"http." + "client.HTTPResponse"'),
+               patched('f"{module_name}.HTTPResponse"'), patched('unknown_target'),
+               base.replace(call, '    escaped = mock.patch\n    with escaped(unknown_target, replacement):\n    ' + call),
+               base + '\nmock.patch = replacement\n']
+        for source in bad:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
+    def test_imported_byte_supplier_alias_remains_protected_from_patching(self):
+        base = self.PARSER.replace('import io', 'from io import BytesIO as Buffer\nimport owned\nfrom unittest import mock')
+        base = base.replace('io.BytesIO(', 'Buffer(')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(target):
+            return base.replace(call, '    with mock.patch("' + target + '", replacement):\n    ' + call)
+        for source in (base, patched('owned.unrelated')):
+            result, families, trigger = self._network(source)
+            self.assertEqual(result.status, 'not_applicable', result.findings)
+            self.assertEqual(families, set())
+            self.assertFalse(trigger)
+        result, families, trigger = self._network(patched('owned.Buffer'))
+        for consumer, actual, expected in (('network_clients', result.status, 'fail'),
+                ('network_families', bool(families), True), ('new_network_client', trigger, True)):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(actual, expected)
+
+    def test_unproved_response_sources_aliases_and_connections_remain_network(self):
+        class_scope_alias = '''import io
+http = unknown
+class Scope:
+    import http.client as http
+    def parse(self):
+        class Socket:
+            def makefile(self, mode):
+                return io.BytesIO(b"owned")
+        return http.HTTPResponse(Socket())
+'''
+        default_scope = self.PARSER.replace('def parse():', 'Socket = unknown\ndef parse(value=http.client.HTTPResponse(Socket())):').replace(
+            '    response = http.client.HTTPResponse(Socket())\n    response.begin()\n    return response.read()', '    return value')
+        patched_namespace = self.PARSER.replace('import io', 'import io\nfrom unittest import mock').replace(
+            '    response = http.client.HTTPResponse(Socket())',
+            '    with mock.patch("http.client.HTTPResponse", unknown):\n        response = http.client.HTTPResponse(Socket())')
+        variants = [self.PARSER.replace('Socket())', 'unknown_socket)'),
+            self.PARSER.replace('return io.BytesIO(', 'return factory('),
+            self.PARSER + '\nhttp.client.HTTPSConnection("example.test")\n',
+            self.PARSER + '\nhttp.client = replacement\n',
+            self.PARSER + '\nleaked = http.client\n',
+            self.PARSER + '\nleaked_buffer = io.BytesIO\n',
+            self.PARSER.replace('class Socket:', 'class Socket(External):'),
+            self.PARSER.replace('class Socket:', '@decorator\n    class Socket:'),
+            self.PARSER.replace('response = http.client', 'Socket.makefile = replacement\n    response = http.client'),
+            self.PARSER.replace('return io.BytesIO(', 'SIDE_EFFECT()\n            return io.BytesIO('), class_scope_alias, default_scope, patched_namespace]
+        for source in variants:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
+
 class ArchitectureFitnessTests(unittest.TestCase):
     maxDiff = None
 
@@ -9156,6 +9372,182 @@ class QueueDiagnosticProvenanceTests(unittest.TestCase):
             raise ValueError('closed public exception')
         with self.assertRaisesRegex(ValueError, '^closed public exception$'):
             self.observe(classify)
+
+
+class QueueCompleteEmptyHeadTests(unittest.TestCase):
+    """Closed source fixtures; never inspect the working repository inventory."""
+
+    supplier = b'from celery import Celery\ndef make():\n    return Celery("toy")\n'
+    opaque = b'from supplier import make\nopaque(make)\nview = make.__globals__\n'
+    advisory = ('queue analysis diagnostic '
+                '(base/classify/complete_empty_head/fitness): src/consumer.py')
+
+    def setUp(self):
+        canonical = Path(subprocess.check_output(
+            ['git', 'rev-parse', '--git-common-dir'], cwd=ROOT, text=True).strip()).resolve().parent
+        private = canonical / '.getzilla/runtime/scratch/372-empty-head-tests'
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._temp = tempfile.TemporaryDirectory(dir=private)
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+
+    def observe(self, head=b'pass\n', base=None, *, extra=None, status='modified', fault=None):
+        sources = {'head': {'src/consumer.py': head, 'src/supplier.py': self.supplier},
+                   'base': {'src/consumer.py': self.opaque if base is None else base,
+                            'src/supplier.py': self.supplier}}
+        if extra:
+            for side in sources:
+                sources[side].update(extra.get(side, {}))
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path='src/consumer.py', status=status),),
+                               base_sha='owned-base', baseline_introduced=False, changes=())
+
+        def read(root, observed_diff, path, side='head'):
+            self.assertEqual(root, self.root)
+            self.assertIs(observed_diff, diff)
+            if fault and fault[:2] == (side, path):
+                raise fault[2]
+            return sources[side].get(path)
+
+        def paths(root, observed_diff, roots):
+            self.assertEqual(root, self.root)
+            return tuple(path for path, value in sources['head'].items() if value is not None)
+
+        with patch.object(FIT, 'read_diff_file', side_effect=read), \
+                patch.object(FIT, 'read_diff_files', side_effect=lambda root, d, names, side='head':
+                             {name: read(root, d, name, side) for name in names}), \
+                patch.object(FIT, '_repository_paths', side_effect=paths), \
+                patch.object(FIT, 'git_tree_paths', return_value=tuple(sources['base'])):
+            python = FIT._PythonInventory(self.root, diff)
+            provenance = FIT._new_queue_sources(self.root, diff, python, ('src',))
+        return provenance, diff, python
+
+    def background(self, provenance, diff, python, *, rules=True, edge=False, invalid=False, changed=False):
+        policy = {'id': 'TOY-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+                  'require_idempotency': True, 'require_correlation_id': True,
+                  'terminal_actions': ['dead_letter']}
+        behavior = {'max_retries': 4 if invalid else 1, 'idempotency': 'required',
+                    'correlation_id': 'required', 'terminal_action': 'dead_letter',
+                    'observable_signal': 'toy.failure'}
+        snapshot = SimpleNamespace(rules={'background_job_policies': [policy] if rules else []},
+            system={'nodes': [{'id': 'toy', 'type': 'worker'}],
+                    'edges': [{'id': 'toy-edge', 'from': 'toy', 'sync_or_async': 'asynchronous',
+                               'failure_behavior': behavior}] if edge else []})
+        with patch.object(FIT, '_model_changed', return_value=changed):
+            return FIT._background_jobs(self.root, snapshot, diff, python, provenance)
+
+    def test_unsupported_base_accepts_proven_empty_head(self):
+        for source in (b'pass\n', b''):
+            with self.subTest(source=source):
+                provenance, diff, python = self.observe(head=source)
+                self.assertEqual(provenance.state, 'not_queue')
+                self.assertEqual(provenance.paths, ())
+                self.assertEqual(provenance.signals, ())
+                result = self.background(provenance, diff, python)
+                self.assertEqual(result.status, 'not_applicable')
+                self.assertIn(self.advisory, result.findings)
+        # The same semantic refusal can arise inside a transitive supplier.
+        relay = b'from supplier import make\nopaque(make)\ndef forward():\n    return make()\n'
+        provenance, diff, python = self.observe(
+            base=b'from relay import forward\nopaque(forward)\n',
+            extra={'base': {'src/relay.py': relay}})
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertIn(self.advisory, self.background(provenance, diff, python).findings)
+
+    def test_proof_requires_supported_complete_empty_source(self):
+        cache = FIT._QueueResolutionCache((), (), {}, {})
+        def classify(source=b'pass\n', complete=True, **kwargs):
+            with patch.object(FIT, 'read_diff_files', return_value={}):
+                return FIT._queue_signals(self.root, None, ast.parse('pass'), 'head', cache, '', (),
+                    source_path='toy.py', source=source, complete_module=complete, **kwargs)
+        self.assertTrue(getattr(classify(), 'complete_empty', False))
+        self.assertTrue(classify(source=b'').complete_empty)
+        self.assertFalse(classify(source=None).complete_empty)
+        self.assertFalse(classify(complete=False).complete_empty)
+        self.assertFalse(FIT._QueueProvenanceResult('not_queue', 'toy', ()).complete_empty)
+        with patch.object(FIT, '_queue_adapter_names', return_value=
+                          FIT._QueueAdapterNamesResult(frozenset(), True)):
+            self.assertFalse(classify().complete_empty)
+        for analysis in (
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset(), True),
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset({'job'}), False),
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset(), False, frozenset({'make'})),
+            QUEUE_PROVENANCE.QueueTreeAnalysis(('import:celery',), frozenset(), False),
+        ):
+            with self.subTest(analysis=analysis), patch.object(FIT, 'analyze_queue_tree', return_value=analysis):
+                self.assertFalse(classify().complete_empty)
+        with patch.object(FIT, '_queue_adapter_names', return_value=
+                          FIT._QueueAdapterNamesResult(frozenset(), False, unproved_queue_callback=True)):
+            with self.assertRaises(ARCHITECTURE.ArchitectureError):
+                classify()
+
+    def test_head_failures_do_not_admit_unknown_base(self):
+        for source in (self.opaque, b'import celery\napp = celery.Celery("toy")\n',
+                       b'import celery\nif ???\n', b'import celery\n\xff', None):
+            with self.subTest(source=source):
+                provenance, _, _ = self.observe(head=source)
+                self.assertEqual(provenance.state, 'unsupported')
+                self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_BYTES', 4):
+            provenance, _, _ = self.observe(head=b'pass\n')
+        self.assertEqual(provenance.state, 'unsupported')
+        self.assertTrue(provenance.limits)
+        # Uncertain/unsupported analysis can have no signals; neither is proof.
+        real = FIT.analyze_queue_tree
+        def uncertain(tree, names, **kwargs):
+            value = real(tree, names, **kwargs)
+            return value._replace(uncertain=True) if ast.dump(tree) == ast.dump(ast.parse('pass')) else value
+        with patch.object(FIT, 'analyze_queue_tree', side_effect=uncertain):
+            provenance, _, _ = self.observe()
+        self.assertEqual(provenance.state, 'unsupported')
+
+    def test_only_callback_semantic_error_allows_fallback(self):
+        for code in ('io', 'git', 'fitness', 'limit'):
+            for path in ('src/consumer.py', 'src/supplier.py'):
+                with self.subTest(code=code, path=path):
+                    error = ARCHITECTURE.ArchitectureError('closed acquisition failure', code=code)
+                    provenance, _, _ = self.observe(fault=('base', path, error))
+                    self.assertEqual(provenance.state, 'unsupported')
+                    self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+        for source in (b'from celery import ???\n', b'import celery\n\xff'):
+            with self.subTest(base=source):
+                # Current parser heuristic sees the real queue-bearing HEAD.
+                provenance, _, _ = self.observe(head=b'import celery\n', base=source)
+                self.assertEqual(provenance.state, 'unsupported')
+        for supplier in (b'from celery import ???\n', b'import celery\n\xff'):
+            with self.subTest(supplier=supplier):
+                provenance, _, _ = self.observe(extra={'base': {'src/supplier.py': supplier}})
+                self.assertEqual(provenance.state, 'unsupported')
+                self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+
+    def test_known_base_and_deletions_keep_prior_behavior(self):
+        queue = b'import celery\napp = celery.Celery("toy")\n'
+        provenance, _, _ = self.observe(head=queue, base=b'pass\n')
+        self.assertEqual(provenance.state, 'resolved')
+        self.assertEqual(provenance.paths, ('src/consumer.py',))
+        self.assertTrue(provenance.signals)
+        provenance, _, _ = self.observe(head=queue, base=queue)
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertEqual(provenance.signals, ())
+        provenance, _, _ = self.observe(head=None, status='deleted')
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertEqual(provenance.causes, ())
+
+    def test_disclosure_survives_background_result_branches(self):
+        provenance, diff, python = self.observe()
+        for options, status in (({'rules': False}, 'not_applicable'), ({}, 'not_applicable'),
+            ({'changed': True}, 'not_applicable'), ({'changed': True, 'edge': True}, 'pass'),
+            ({'changed': True, 'edge': True, 'invalid': True}, 'fail')):
+            with self.subTest(options=options):
+                result = self.background(provenance, diff, python, **options)
+                self.assertEqual(result.status, status)
+                self.assertIn(self.advisory, result.findings)
+                self.assertNotIn('src/consumer.py', result.applicability.scanned_scope
+                                 if options.get('changed') or not options.get('rules', True) else ())
+        refused = provenance._replace(state='unsupported', paths=('src/other.py',),
+                                      signals=('src/other.py:unsupported:fitness',))
+        result = self.background(refused, diff, python)
+        self.assertEqual(result.status, 'unsupported')
+        self.assertIn(self.advisory, result.findings)
 
 
 if __name__ == "__main__":
