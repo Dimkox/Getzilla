@@ -287,7 +287,7 @@ class ResourceTransitionTests(unittest.TestCase):
             if command[1:3] == ["container", "inspect"]:
                 values = json.loads(result.stdout)
                 for mount in values[0]["Mounts"]:
-                    if mount["Type"] == "bind":
+                    if mount["Type"] == "bind" and mount.get("Name") is None:
                         mount.pop("Name", None)
                 return ProcessResult(command, 0, json.dumps(values))
             return result
@@ -486,7 +486,7 @@ class DockerDouble:
             if args[0] == "container":
                 value = copy.deepcopy(value)
                 for mount in value[0]["Mounts"]:
-                    if mount["Type"] == "bind":
+                    if mount["Type"] == "bind" and mount.get("Name") is None:
                         mount.pop("Name", None)
         elif len(args) > 1 and args[1] == "ls":
             if self.unavailable_listing:

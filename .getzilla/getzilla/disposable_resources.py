@@ -119,7 +119,9 @@ def _canonical_mounts(mounts):
 
 def _identity(kind: str, value: dict) -> dict:
     if kind == "container":
-        if (type(value.get("Mounts")) is not list or type(value["Config"].get("Labels")) is not dict
+        if type(value["Config"].get("Labels")) is not dict:
+            raise ValueError("Incomplete container labels")
+        if (type(value.get("Mounts")) is not list
                 or any(type(m) is not dict or not {"Type", "Source", "Destination", "RW"} <= set(m)
                        or m["Type"] not in ("bind", "volume")
                        or m["Type"] == "volume" and (type(m.get("Name")) is not str or not _NAME.fullmatch(m["Name"]))
@@ -611,7 +613,12 @@ class OwnedDocker:
                     key = item.get("id", item["name"])
                 if item["kind"] == "network":
                     key = item["identity"]["Id"]
-                identity = _identity(item["kind"], _inspect(item["kind"], key))
+                try:
+                    identity = _identity(item["kind"], _inspect(item["kind"], key))
+                except ValueError as error:
+                    if item["kind"] == "container" and error.args == ("Incomplete container observation",):
+                        item["cleanup_mismatch_fields"] = ["mounts"]
+                    raise
                 expected = item["identity"]
                 if item["kind"] == "container":
                     # Existing v1 journals may retain Docker's original order.
