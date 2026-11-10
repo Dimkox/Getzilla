@@ -1,7 +1,7 @@
 """Owned synthetic contracts for durable verification history; no real workload."""
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 import io
 import importlib.util
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla import pytest_progress, verification
@@ -19,6 +20,236 @@ from getzilla import util
 from getzilla import ci_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class JournalRuntimeRepairTests(unittest.TestCase):
+    def owned(self):
+        temporary = tempfile.TemporaryDirectory(prefix='owned-runtime-repair-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        return Path(temporary.name)
+
+    def sdk_coverage(self, archive=False, application_import=False):
+        from coverage import Coverage
+        from getzilla import python_test_runner
+        root = self.owned()
+        sdk, project = root / 'sdk', root / 'project'
+        package = sdk / '.getzilla/getzilla'
+        package.mkdir(parents=True)
+        (sdk / 'scripts').mkdir()
+        project.mkdir()
+        (project / 'tests').mkdir()
+        (project / 'tests/__init__.py').write_text('')
+        (project / 'subject.py').write_text('VALUE=1\n')
+        (project / 'tests/test_owned.py').write_text('import unittest\nimport subject\n'
+            + ('import getzilla\n' if application_import else '')
+            + 'class Owned(unittest.TestCase):\n def test_value(self): self.assertEqual(subject.VALUE,1)\n')
+        initializer = package / '__init__.py'
+        initializer.write_text('from pathlib import Path\n'
+            '__path__.insert(0,str(Path(__file__).resolve().parents[1]/"getzilla.zip"/"getzilla"))\n'
+            'Path(__file__).with_name("initializer-ran").write_text("owned")\n'
+            'def unused_application_branch():\n return 9\n')
+        members = {name: (ROOT / '.getzilla/getzilla' / name).read_bytes()
+                   for name in ('fsx.py', 'verification_journal.py')}
+        if archive:
+            with zipfile.ZipFile(sdk / '.getzilla/getzilla.zip', 'w') as stream:
+                for name, content in members.items():
+                    stream.writestr('getzilla/' + name, content)
+                stream.writestr('getzilla/__init__.py', 'raise AssertionError("archive initializer executed")\n')
+            origins = sdk / '.getzilla/getzilla.zip/getzilla'
+        else:
+            for name, content in members.items():
+                (package / name).write_bytes(content)
+            origins = package
+        harness = sdk / 'scripts/getzilla_unittest.py'
+        harness.write_bytes((ROOT / 'scripts/getzilla_unittest.py').read_bytes())
+        config = project / '.coveragerc'
+        config.write_text('[report]\nfail_under=100\n')
+        output = project / 'overlay'
+        output.mkdir()
+        with patch.object(python_test_runner, 'STACK_DIR', sdk / '.getzilla'), \
+                patch.object(python_test_runner.fsx, '__file__', str(origins / 'fsx.py')), \
+                patch.object(python_test_runner.diagnostics, '__file__', str(origins / 'verification_journal.py')):
+            overlay = python_test_runner._application_coverage_config(config, output, root=project)
+        run = journal.Run(project, None, 'owned-tests')
+        self.addCleanup(run.close)
+        home, temporary = root / 'home', root / 'tmp'
+        home.mkdir(mode=0o700)
+        temporary.mkdir(mode=0o700)
+        env = run.child_environment({'PATH': os.defpath, 'HOME': str(home), 'TMPDIR': str(temporary),
+            'PYTHONUTF8': '1', 'PYTHONIOENCODING': 'utf-8', 'COVERAGE_FILE': str(project / '.coverage'),
+            'PYTHONPATH': str(sdk / '.getzilla') + os.pathsep + str(project)}, 0)
+        result_file = project / 'result.json'
+        child = subprocess.run([sys.executable, '-B', '-m', 'coverage', 'run', '--rcfile=' + str(overlay),
+            str(harness), '--result', str(result_file), '--nonce', 'owned-count', 'discover', '-s', 'tests'],
+            cwd=project, env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(json.loads(result_file.read_text())['tests_run'], 1)
+        measured = Coverage(config_file=str(overlay), data_file=str(project / '.coverage'))
+        measured.load()
+        files = set(measured.get_data().measured_files())
+        if application_import:
+            self.assertIn(str(initializer), files)
+            self.assertTrue(initializer.with_name('initializer-ran').exists())
+            self.assertTrue(measured.analysis2(str(initializer))[3])
+        else:
+            self.assertNotIn(str(initializer), files)
+            self.assertFalse(initializer.with_name('initializer-ran').exists())
+            self.assertEqual(measured.get_option('report:fail_under'), 100)
+            self.assertEqual(measured.report(file=io.StringIO()), 100)
+
+    def test_file_sdk_observer_preserves_counted_full_application_coverage(self):
+        self.sdk_coverage()
+
+    def test_zip_sdk_observer_preserves_counted_full_application_coverage(self):
+        self.sdk_coverage(archive=True)
+
+    def test_explicit_public_sdk_import_remains_measured(self):
+        self.sdk_coverage(application_import=True)
+
+    def test_fake_pytest_config_never_attaches_journal_or_consumes_clock(self):
+        config = SimpleNamespace(getoption=lambda name: None, pluginmanager=SimpleNamespace(register=lambda *args: None))
+        with patch.dict(os.environ, {'GETZILLA_JOURNAL_DIR': 'owned-context'}), \
+                patch.object(journal, 'child_writer', return_value=None) as child, \
+                patch.object(journal.time, 'monotonic_ns') as clock:
+            result = pytest_progress._configure_journal(config)
+        self.assertFalse(result)
+        child.assert_not_called()
+        clock.assert_not_called()
+
+    def test_native_invalid_worker_contexts_never_fall_back_or_register(self):
+        import pytest
+        samples = [None, {'workerid': 'gw00', 'workercount': 1}, {'workerid': 'gw64', 'workercount': 64},
+                   {'workerid': 'gw0', 'workercount': True}, {'workerid': 'gw0'},
+                   {'workerid': 'gw1', 'workercount': 1}]
+        for worker in samples:
+            with self.subTest(worker=worker):
+                config = pytest.Config(pytest.PytestPluginManager())
+                config.workerinput = worker
+                with patch.dict(os.environ, {'GETZILLA_JOURNAL_DIR': 'owned-context'}), \
+                        patch.object(journal, 'child_writer', return_value=None) as child, \
+                        patch.object(config.pluginmanager, 'register') as register:
+                    try:
+                        result = pytest_progress._configure_journal(config)
+                    except Exception as exc:
+                        result = type(exc).__name__
+                self.assertIs(result, True)
+                child.assert_not_called()
+                register.assert_not_called()
+
+    def test_undeclared_child_actor_is_refused_before_writer_and_clock(self):
+        run = journal.Run(self.owned(), None, 'owned-tests')
+        self.addCleanup(run.close)
+        env = run.child_environment({}, 0)
+        with patch.object(journal, 'Writer', return_value=SimpleNamespace()) as writer, \
+                patch.object(journal.time, 'monotonic_ns') as clock:
+            result = journal.child_writer(env, ordinal=1)
+        self.assertIsNone(result)
+        writer.assert_not_called()
+        clock.assert_not_called()
+
+    def bootstrap_primary(self, mode):
+        before_path = list(sys.path)
+        public = {name: value for name, value in sys.modules.items()
+                  if name == 'getzilla' or name.startswith('getzilla.')}
+        spec = importlib.util.spec_from_file_location('owned_stdlib_harness', ROOT / 'scripts/getzilla_unittest.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        run = journal.Run(self.owned(), None, 'owned-tests')
+        self.addCleanup(run.close)
+        env = {} if mode == 'absent' else run.child_environment({}, 0)
+        if mode == 'malformed':
+            env['GETZILLA_JOURNAL_RUN'] = 'not-a-run'
+        name = '_getzilla_observer_' + run.run_id
+        sentinel = ModuleType(name)
+        primary = SimpleNamespace(result=SimpleNamespace(testsRun=1, wasSuccessful=lambda: True))
+        error = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', ['owned-harness', '--journal-only']), \
+                patch.object(cli.unittest, 'main', return_value=primary) as calls, patch.object(sys, 'stderr', error):
+            with patch.dict(sys.modules, {name: sentinel} if mode == 'collision' else {}):
+                if mode == 'error':
+                    with patch('importlib.machinery.PathFinder.find_spec', side_effect=ImportError('PRIVATE_BOOTSTRAP')):
+                        self.assertEqual(cli.main(), 0)
+                else:
+                    self.assertEqual(cli.main(), 0)
+                if mode == 'collision':
+                    self.assertIs(sys.modules.get(name), sentinel)
+                elif mode == 'error':
+                    self.assertFalse(any(key == name or key.startswith(name + '.') for key in sys.modules))
+            calls.assert_called_once()
+        self.assertEqual(sys.path, before_path)
+        self.assertEqual({key: value for key, value in sys.modules.items()
+                          if key == 'getzilla' or key.startswith('getzilla.')}, public)
+        self.assertNotIn('PRIVATE_BOOTSTRAP', error.getvalue())
+        if mode == 'absent':
+            self.assertEqual(error.getvalue(), '')
+        else:
+            self.assertIn('observer unavailable', error.getvalue())
+
+    def test_absent_observer_context_keeps_stdlib_primary_and_public_namespace(self):
+        self.bootstrap_primary('absent')
+
+    def test_bootstrap_error_removes_only_its_new_private_bindings(self):
+        self.bootstrap_primary('error')
+
+    def test_malformed_observer_context_keeps_primary_and_public_namespace(self):
+        self.bootstrap_primary('malformed')
+
+    def test_private_namespace_collision_preserves_existing_module(self):
+        self.bootstrap_primary('collision')
+
+    def test_expected_actor_union_allows_a_smaller_later_job(self):
+        run = journal.Run(self.owned(), None, 'owned-tests')
+        self.addCleanup(run.close)
+        run.expect_workers(4)
+        env = run.child_environment({}, 1)
+        worker = journal.child_writer(env, ordinal=1, worker_count=2)
+        self.assertIsNotNone(worker)
+        self.assertEqual(worker.actor, 'worker-1')
+        worker.close()
+
+    def test_native_controller_and_serial_contexts_are_separate(self):
+        import pytest
+        for count in (1, 64, True, 'auto'):
+            config = pytest.Config(pytest.PytestPluginManager())
+            with self.subTest(count=count), patch.dict(os.environ, {'GETZILLA_JOURNAL_DIR': 'owned-context'}), \
+                    patch.object(config, 'getoption', return_value=count), patch.object(journal, 'child_writer') as child:
+                self.assertIs(pytest_progress._configure_journal(config), True)
+                child.assert_not_called()
+        config = pytest.Config(pytest.PytestPluginManager())
+        with patch.dict(os.environ, {'GETZILLA_JOURNAL_DIR': 'owned-context'}), \
+                patch.object(config, 'getoption', return_value=None), patch.object(journal, 'child_writer', return_value=None) as child:
+            self.assertIs(pytest_progress._configure_journal(config), True)
+            child.assert_called_once_with()
+
+    def test_real_one_test_xdist_child_keeps_both_protocols(self):
+        root = self.owned()
+        (root / 'tests').mkdir()
+        (root / 'tests/test_owned.py').write_text('def test_owned():\n assert 1+1==2\n')
+        progress = root / 'progress'
+        progress.mkdir(mode=0o700)
+        home, temporary = root / 'home', root / 'tmp'
+        home.mkdir(mode=0o700)
+        temporary.mkdir(mode=0o700)
+        run = journal.Run(root, None, 'owned-tests')
+        self.addCleanup(run.close)
+        env = run.child_environment({'PATH': os.defpath, 'HOME': str(home), 'TMPDIR': str(temporary),
+            'PYTHONUTF8': '1', 'PYTHONIOENCODING': 'utf-8', 'PYTHONPATH': str(ROOT / '.getzilla'),
+            'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}, 0)
+        child = subprocess.run([sys.executable, '-B', '-m', 'pytest', '-p', 'xdist.plugin',
+            '-p', 'getzilla.pytest_progress', '-n', '1', '--getzilla-progress-dir', str(progress),
+            '--getzilla-progress-nonce', run.nonce, '--getzilla-progress-workers', '1',
+            '--getzilla-progress-phases', 'tests/test_owned.py', '-q'],
+            cwd=root, env=env, capture_output=True, text=True, timeout=45)
+        self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+        self.assertIn('1 passed', child.stdout)
+        phases = [json.loads(line) for line in (progress / 'worker-0.phases.jsonl').read_text().splitlines()]
+        self.assertEqual([row['phase'] for row in phases[1:]], ['configured', 'collection_finished', 'first_test_start'])
+        self.assertEqual(json.loads((progress / 'worker-0.json').read_text())['state'], 'idle')
+        events = [json.loads(line) for path in run.path.glob('worker-0-*.jsonl') for line in path.read_text().splitlines()]
+        self.assertTrue({'setup', 'call', 'teardown'} <= {row['stage'] for row in events if row['state'] == 'end'})
+        self.assertTrue(all(row['nonce'] == run.nonce for row in events))
+        run.close()
+        self.assertEqual(run.status, 'closed')
 
 
 class JournalStorageTests(unittest.TestCase):

@@ -702,6 +702,14 @@ def _read_limited(path: Path) -> str:
         return f'{type(exc).__name__}: {exc}'
 
 
+def _diagnostic_pid(process):
+    try:
+        value = getattr(process, 'pid', None)
+    except Exception:
+        return None
+    return value if type(value) is int and value > 0 else None
+
+
 def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, workers: int, environment: dict[str, str], *,
                                 test_files: list[str] | None = None) -> ProcessResult:
     if test_files is None:
@@ -756,19 +764,21 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                         continue
                     out_handle.close()
                     err_handle.close()
-                    actors[process.pid] = actor
+                    actors[id(process)] = actor
                     if run and run.writer:
-                        run.writer.emit('command', 'unknown', step='unittest-shard', process=process.pid)
+                        run.writer.emit('command', 'unknown', step='unittest-shard',
+                                        process=_diagnostic_pid(process))
                     active.append((test_file, process, stdout, stderr, result_file))
                 for item in list(active):
                     test_file, process, stdout, stderr, result_file = item
                     if process.poll() is None:
                         continue
                     active.remove(item)
-                    actors.pop(process.pid, None)
+                    actors.pop(id(process), None)
                     if run and run.writer:
                         run.writer.emit('command', 'end', step='unittest-shard', code=process.returncode,
-                                        outcome='pass' if process.returncode == 0 else 'fail', process=process.pid)
+                                        outcome='pass' if process.returncode == 0 else 'fail',
+                                        process=_diagnostic_pid(process))
                     job = fsx.owned_job(process)
                     if job is not None:
                         job.close()  # a finished shard's leftover descendants end with its job
@@ -782,7 +792,8 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
                         if run and run.writer:
-                            run.writer.emit('command', 'end', step='unittest-shard', outcome='timeout', process=process.pid)
+                            run.writer.emit('command', 'end', step='unittest-shard', outcome='timeout',
+                                            process=_diagnostic_pid(process))
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
                                          seconds=time.monotonic() - started, terminal_state='timeout',
                                          cleanup_metadata=_merge_cleanup(*(

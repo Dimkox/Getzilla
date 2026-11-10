@@ -383,18 +383,34 @@ class _JournalHooks:
 def _configure_journal(config):
     if 'GETZILLA_JOURNAL_DIR' not in os.environ:
         return False
+    try:
+        from pytest import Config, hookimpl
+    except ImportError:
+        return False
+    if not isinstance(config, Config):
+        return False
     # The xdist controller has no test phases; its parent owns controller history.
-    if not hasattr(config, 'workerinput'):
+    if hasattr(config, 'workerinput'):
+        worker = config.workerinput
+        if (type(worker) is not dict or not isinstance(worker.get('workerid'), str)
+                or not re.fullmatch(r'gw(?:0|[1-9][0-9]?)', worker['workerid'])
+                or type(worker.get('workercount')) is not int
+                or not 1 <= worker['workercount'] <= MAX_WORKERS
+                or int(worker['workerid'][2:]) >= worker['workercount']):
+            return True
+        writer = diagnostics.child_writer(ordinal=int(worker['workerid'][2:]), worker_count=worker['workercount'])
+    else:
         try:
-            if config.getoption('numprocesses'):
-                return True
+            count = config.getoption('numprocesses')
         except (KeyError, ValueError):
-            pass
-    worker = getattr(config, 'workerinput', {}).get('workerid', 'gw0')
-    writer = diagnostics.child_writer(ordinal=worker[2:] if isinstance(worker, str) and re.fullmatch(r'gw[0-9]{1,2}', worker) else None)
+            count = None
+        if count is not None and (type(count) is not int or not 0 <= count <= MAX_WORKERS):
+            return True
+        if count:
+            return True
+        writer = diagnostics.child_writer()
     if writer is None:
         return True
-    from pytest import hookimpl
     for name in ('pytest_collection', 'pytest_runtest_setup', 'pytest_runtest_call', 'pytest_runtest_teardown', 'pytest_runtest_makereport'):
         hookimpl(hookwrapper=True, tryfirst=True)(getattr(_JournalHooks, name))
     config.pluginmanager.register(_JournalHooks(writer), 'getzilla-verification-history')

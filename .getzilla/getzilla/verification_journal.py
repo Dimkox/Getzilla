@@ -152,7 +152,7 @@ def failure(exc, root=None):
 
 
 class Writer:
-    def __init__(self, path, run_id, actor, nonce):
+    def __init__(self, path, run_id, actor, nonce, *, require_expected=False):
         if not _RUN.fullmatch(run_id) or not _ACTOR.fullmatch(actor) or not _RUN.fullmatch(nonce):
             raise ValueError('journal-identity')
         self.handle = _directory(path)
@@ -160,7 +160,6 @@ class Writer:
         self.actor, self.run_id, self.nonce = actor, run_id, nonce
         self.fd = self.lock = None
         self.disabled = False
-        self.started = time.monotonic_ns()
         self.sequence = self.rotated = self.dropped = 0
         self.attempt = 1
         self.generation = self.size = 0
@@ -170,6 +169,8 @@ class Writer:
             header = json.loads(_read(self.handle, 'index.json', 16384))
             if header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active':
                 raise ValueError('journal-run-binding')
+            if require_expected and (type(header.get('expected')) is not list or actor not in header['expected']):
+                raise ValueError('journal-undeclared-actor')
             self.lock = fsx.open_at(self.handle, actor + '.lock', os.O_RDWR | os.O_CREAT | fsx.O_NOFOLLOW, 0o600)
             if not _regular(os.fstat(self.lock)):
                 raise OSError('journal-lock-unavailable')
@@ -183,6 +184,7 @@ class Writer:
                 self.attempt = prior['attempt'] + 1
             except FileNotFoundError:
                 pass
+            self.started = time.monotonic_ns()
             self._open_segment()
             self.health('active')
         except BaseException:
@@ -513,14 +515,32 @@ def _remove_run(history, record):
     path.rmdir()
 
 
-def child_writer(environment=None, ordinal=None):
+def child_writer(environment=None, ordinal=None, worker_count=None):
     values = environment if environment is not None else os.environ
     try:
         ordinal = str(ordinal) if ordinal is not None else values['GETZILLA_JOURNAL_ACTOR']
-        if not re.fullmatch(r'[0-9]{1,2}', ordinal) or int(ordinal) >= 64:
+        if not re.fullmatch(r'(?:[0-9]|[1-5][0-9]|6[0-3])', ordinal):
             raise ValueError('journal-worker')
-        return Writer(Path(values['GETZILLA_JOURNAL_DIR']), values['GETZILLA_JOURNAL_RUN'],
-                      'worker-' + str(int(ordinal)), values['GETZILLA_JOURNAL_NONCE'])
+        path, run_id, nonce = Path(values['GETZILLA_JOURNAL_DIR']), values['GETZILLA_JOURNAL_RUN'], values['GETZILLA_JOURNAL_NONCE']
+        if not path.is_absolute() or not _RUN.fullmatch(run_id) or not _RUN.fullmatch(nonce):
+            raise ValueError('journal-context')
+        actor = 'worker-' + ordinal
+        handle = _directory(path)
+        try:
+            header = json.loads(_read(handle, 'index.json', 16384))
+            expected = header.get('expected')
+            if (header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active'
+                    or type(expected) is not list or len(expected) > 64
+                    or any(not isinstance(item, str) or not _ACTOR.fullmatch(item) or item == 'controller' for item in expected)
+                    or len(set(expected)) != len(expected) or actor not in expected):
+                raise ValueError('journal-child-binding')
+            if worker_count is not None and (type(worker_count) is not int or not 1 <= worker_count <= 64
+                    or int(ordinal) >= worker_count
+                    or not {'worker-' + str(i) for i in range(worker_count)}.issubset(expected)):
+                raise ValueError('journal-child-count')
+        finally:
+            fsx.close_dir(handle)
+        return Writer(path, run_id, actor, nonce, require_expected=True)
     except (OSError, ValueError, KeyError, TypeError):
         if values.get('GETZILLA_JOURNAL_DIR'):
             print('getzilla journal: worker history unavailable', file=sys.stderr, flush=True)
