@@ -46,7 +46,7 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual(cli.main(['test', 'tests']), 0)
         self.assertEqual(calls.call_count, 2)
         self.assertEqual(calls.call_args_list[1].args[0],
-                         ['fixture-python', '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.'])
+                         ['fixture-python', str(cli.HOME / 'scripts/getzilla_unittest.py'), '--journal-only', 'discover', '-s', 'tests', '-t', '.'])
 
     def test_required_parallel_backend_preserves_bare_default_and_runner_status(self) -> None:
         from unittest import mock
@@ -59,7 +59,7 @@ class GetzillaCliTests(unittest.TestCase):
                             subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], status)]) as calls:
                     self.assertEqual(cli.main(['test', '--require-parallel', *options]), status)
                 self.assertEqual(calls.call_args_list[1].args[0],
-                    ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', '2',
+                    ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', '2',
                      *(options or ['tests'])])
 
     def test_parallel_workers_use_measured_capacity_with_two_cpu_reserve(self) -> None:
@@ -82,7 +82,7 @@ class GetzillaCliTests(unittest.TestCase):
             selected.assert_called_once_with(cli.HOME)
             self.assertEqual(run_call.call_args_list[0].args[0], ['fixture-python', '-c', 'import pytest, xdist'])
             self.assertEqual(run_call.call_args_list[1].args[0],
-                ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', '2', *arguments])
+                ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', '2', *arguments])
             self.assertFalse(run_call.call_args_list[1].kwargs['check'])
 
     def test_help_lists_every_command(self) -> None:

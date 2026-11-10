@@ -802,6 +802,16 @@ Creates `dist/getzilla-v<VERSION>.zip` and its checksum sidecar. See the [releas
 
 See skills under `.grok/skills/bitrix-development/` and example module in `examples/bitrix-module/`.
 
+## Live verification history
+
+`getzilla verify` and `getzilla test` publish a private history index on stderr before work starts. JSON stdout remains JSON. The final verifier report includes `diagnostics.index` and a health status. Journals live under `.getzilla/runtime/verification-history/<run-id>/`, outside temporary coverage and test-fixture cleanup. Follow a named actor stream with `tail -f` on the index's directory. Each actor has its own sequence, process attempt and invocation ordinals. Compare monotonic times only within that actor's process attempt; UTC is an observation, not proof of cross-process order.
+
+History records actual check/command boundaries and pytest or unittest collection, setup, call, teardown and outcomes. Skip entries include a safe source location when available and a closed dependency/platform/opt-in classification. Other skip reasons are `redacted-unknown`. Error classes and bounded relative source frames replace arbitrary exception messages. Parameters are removed before test identity hashing. Arguments, environment values, captured output, locals and source text are not journal data.
+
+The fixed bounds are 2048 bytes/event, four 128KiB segments per actor including rotation, 65 actors, 33MiB per run including metadata/transients, and four retained runs/132MiB overall. Rotation discloses discarded-event counts. Only precisely owned closed runs with closed streams can be evicted. Active, incomplete and unknown runs remain protected; saturation makes new diagnostics unavailable. Explicit loss/unavailable status uses metadata or a fixed stderr fallback when the disk cannot store its own error marker.
+
+Writes are immediately visible and survive process termination; power-loss durability is not promised. Missing end events remain unknown. Journals never change test selection, results, coverage, cleanup or the 900-second budget. They confer no receipt or merge authority. Existing local and hosted exports include a validated bounded tail subset within their original limits and mark it as a subset; an exported tail is not a complete run history.
+
 ## License
 
 [MIT License](../LICENSE).

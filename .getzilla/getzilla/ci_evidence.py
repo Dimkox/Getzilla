@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from .util import dump_json, git_head, git_output, now_utc
+from . import verification_journal as diagnostics
 
 _LOGS = ('core-tests.log', 'trust-ci-tests.log', 'smoke.log', 'install.log')
 
@@ -37,9 +38,23 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
     dump_json(output / 'state.json', {'schema_version': 1, 'job': job, 'job_status': status,
         'local_reviews': 'not_available_in_ci', 'local_analysis': 'not_available_in_ci',
         'authority': 'CI run observations only; local approval grants are never exported'})
+    journal_state = {'status': 'unavailable'}
+    if (root / '.getzilla/runtime/verification-history').exists():
+        candidates = diagnostics.export_entries(root)
+        journal_state = json.loads(candidates[0][1])
+        remaining = 10_485_760 - sum(p.stat().st_size for p in output.iterdir() if p.is_file())
+        for name, content in candidates:
+            if len(inventory) >= 126 or len(content) > 1_048_576 or len(content) > remaining:
+                journal_state['subset'] = True
+                continue
+            target = output / name
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            target.write_bytes(content)
+            remaining -= len(content)
+            inventory.append({'path': name, 'sha256': hashlib.sha256(content).hexdigest()})
     dump_json(output / 'provenance.json', {'schema_version': 1, 'source': 'github-actions',
         'head': head, 'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'job': job,
-        'run_id': run_id, 'observed_at': now_utc(), 'files': inventory})
+        'run_id': run_id, 'observed_at': now_utc(), 'files': inventory, 'diagnostics': journal_state})
 
 
 def export_local_evidence(root: Path, output: Path) -> None:
@@ -94,11 +109,21 @@ def export_local_evidence(root: Path, output: Path) -> None:
     head = git_head(root)
     if not head:
         raise ValueError('portable evidence requires an exact Git HEAD')
+    journal_state = {'status': 'unavailable'}
+    if (root / '.getzilla/runtime/verification-history').exists():
+        selected = diagnostics.export_entries(root)
+        journal_state = json.loads(selected[0][1])
+        for name, content in selected:
+            if len(content) > 1_048_576 or total + len(content) > 10_485_760 or len(entries) >= 128:
+                journal_state['subset'] = True
+                continue
+            entries.append((name, content))
+            total += len(content)
     manifest = {'schema_version': 1, 'source': 'local-workflow-observations', 'head': head,
         'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'route_id': route_id,
         'change_id': active.get('change_id'), 'observed_at': now_utc(),
         'authority': 'Archive only; historical observations retain their original bindings, never merge authority',
-        'files': [{'path': name, 'sha256': hashlib.sha256(content).hexdigest()} for name, content in entries]}
+        'files': [{'path': name, 'sha256': hashlib.sha256(content).hexdigest()} for name, content in entries], 'diagnostics': journal_state}
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, indent=2))

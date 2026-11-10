@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import verification_journal as diagnostics
+
 import ast
 import hashlib
 import json
@@ -82,6 +84,7 @@ class CheckResult:
         return asdict(self)
 
 
+@diagnostics.observed('agent-eval-checks')
 def _agent_eval_checks(root: Path, mode: str) -> list[CheckResult]:
     """Use the optional replay suites inside the existing verification gate."""
     return [CheckResult(**item) for item in required_suites(root, mode)]
@@ -105,6 +108,7 @@ class _RunState:
     context_error: str | None = None
 
 
+@diagnostics.observed('task-context-check')
 def _task_context_check(root: Path, state: _RunState) -> CheckResult:
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     from .state import task_transition, route_authority_present
@@ -153,7 +157,10 @@ class _CheckDispatch:
                 'execution': 'not_executed', 'blocked_by': self.blocked_by,
                 'message': f'not executed after {self.blocked_by} refused verification',
             }]))
-        check = callback()
+        with diagnostics.span(name) as detail:
+            check = callback()
+            if detail is not None and check is not None:
+                detail['outcome'] = check.status if check.status in {'pass', 'fail', 'skip', 'cancelled', 'error'} else 'unknown'
         return self.add(check) if check is not None else None
 
     def batch(self, names, callback):
@@ -161,8 +168,9 @@ class _CheckDispatch:
             for name in names:
                 self.run(name, None)
         else:
-            for check in callback():
-                self.add(check)
+            with diagnostics.span('check-batch'):
+                for check in callback():
+                    self.add(check)
 
 
 @contextmanager
@@ -248,6 +256,7 @@ def _risk_level(route: dict[str, object] | None) -> str:
     return {"low": "green", "medium": "yellow", "high": "red"}.get(risk, fallback)
 
 
+@diagnostics.observed('architecture-preflight-check')
 def _architecture_preflight_check(root: Path) -> CheckResult:
     if not architecture_inputs_present(root):
         return CheckResult("architecture-inputs", "skip", "architecture authority inputs are absent; not executed")
@@ -260,6 +269,7 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
     return CheckResult("architecture-inputs", "pass", "bounded model and referenced-input preflight executed")
 
 
+@diagnostics.observed('architecture-check')
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
@@ -386,6 +396,7 @@ def _architecture_check(
         )
 
 
+@diagnostics.observed('governance-check')
 def _governance_check(
     root: Path,
     route: dict[str, object] | None,
@@ -456,6 +467,7 @@ def _governance_check(
         )
 
 
+@diagnostics.observed('workflow-artifacts-check')
 def _workflow_artifacts_check(
     root: Path,
     route: dict[str, object] | None,
@@ -1303,6 +1315,7 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
     return result
 
 
+@diagnostics.observed('git-diff-check')
 def _git_diff_check(
     root: Path,
     mode: str,
@@ -1407,6 +1420,7 @@ def _git_diff_check(
     )
 
 
+@diagnostics.observed('secret-scan')
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, object]] = []
     try:
@@ -1445,6 +1459,7 @@ def _secret_scan(root: Path, files: list[str]) -> CheckResult:
                        details=findings)
 
 
+@diagnostics.observed('php-lint')
 def _php_lint(root: Path, files: list[str]) -> CheckResult:
     php_files = [rel for rel in files if rel.lower().endswith('.php') and (root / rel).is_file()]
     if not php_files:
@@ -1461,6 +1476,7 @@ def _php_lint(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('php-lint', 'fail' if failures else 'pass', f'{len(php_files)} files linted', stdout='\n'.join(outputs[-100:]), details=failures)
 
 
+@diagnostics.observed('bitrix')
 def _bitrix(root: Path, files: list[str]) -> CheckResult:
     findings = check_bitrix(root, files)
     errors = [item for item in findings if item.severity == 'error']
@@ -1472,6 +1488,7 @@ def _bitrix(root: Path, files: list[str]) -> CheckResult:
     )
 
 
+@diagnostics.observed('contracts')
 def _contracts(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     checked = 0
@@ -1498,6 +1515,7 @@ def _contracts(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('contract-structure', 'fail' if findings else 'pass', f'{checked} contracts checked', details=findings)
 
 
+@diagnostics.observed('sql-safety')
 def _sql_safety(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     for rel in files:
@@ -1607,6 +1625,7 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     return records
 
 
+@diagnostics.observed('change-specs')
 def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str) -> tuple[CheckResult, dict[str, object]]:
     gate = mode in {'pr', 'release'}
     exempt = bool(route and (route.get('light_diff') or {}).get('admitted')) or _docs_micro_exempt(route, files)
@@ -1668,6 +1687,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     return CheckResult('change-spec', 'fail' if findings else ('skip' if exempt and not selected else 'pass'), f'{len(records)} specs checked; exempt={exempt}', details=findings), metadata
 
 
+@diagnostics.observed('composer')
 def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -1730,6 +1750,7 @@ def _existing_quality_paths(root: Path) -> list[str]:
     return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
 
 
+@diagnostics.observed('ruff')
 def _ruff(root: Path) -> CheckResult:
     paths = _existing_quality_paths(root)
     if not paths:
@@ -1743,6 +1764,7 @@ def _ruff(root: Path) -> CheckResult:
     return result
 
 
+@diagnostics.observed('bandit')
 def _bandit(root: Path) -> CheckResult:
     paths = [rel for rel in _existing_quality_paths(root) if rel != 'tests' and not rel.startswith('tests/')]
     if not paths:
@@ -1774,6 +1796,7 @@ def _bandit(root: Path) -> CheckResult:
     return replace(result, summary=f'{result.summary}; {len(issues)} issues in {lines} lines', details=details)
 
 
+@diagnostics.observed('semgrep')
 def _semgrep(root: Path) -> CheckResult | None:
     config = _semgrep_config(root)
     if config is None:
@@ -1809,6 +1832,7 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
+@diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
     try:
         report = scan_known_vulnerabilities(root)
@@ -1852,6 +1876,7 @@ def _unpinned_opengrep(executable: Path) -> str | None:
     return None
 
 
+@diagnostics.observed('opengrep')
 def _opengrep(root: Path) -> CheckResult:
     """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
     rules = root / OPENGREP_RULES
@@ -1912,6 +1937,7 @@ def _trivy_config_present(root: Path) -> bool:
     )
 
 
+@diagnostics.observed('node')
 def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -2011,6 +2037,7 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
     return ensure_toolchain('node', stack.toolchain, version)
 
 
+@diagnostics.observed('factory-unit')
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
     if not (root / 'factory/pyproject.toml').is_file():
@@ -2055,6 +2082,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
         return [result]
 
 
+@diagnostics.observed('focused-python')
 def _focused_python(
     root: Path,
     results: list[CheckResult],
@@ -2104,6 +2132,7 @@ def _focused_python(
     return results
 
 
+@diagnostics.observed('python')
 def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = None, *,
             keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
     results: list[CheckResult] = []
@@ -2923,6 +2952,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'schema_version': 1, 'created_at': now_utc(), 'mode': 'fast', 'profiles': [], 'route_id': None,
         'tree_fingerprint': final_fingerprint, 'fingerprint_before': fingerprint,
         'head_before': head_before, 'head_after': head_after, 'changed_files': [],
+        'diagnostics': getattr(process, 'diagnostics', {'status': 'unavailable'}),
         'checks': [check.to_dict() for check in checks],
         'status': 'fail' if any(check.status in {'fail', 'cancelled'} for check in checks) else 'pass',
         'terminal_state': 'cancelled' if cancelled else 'completed', 'evidence_status': 'not_recorded',
@@ -2933,6 +2963,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
     return report
 
 
+@diagnostics.observed('diff-risk-check')
 def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
                      fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
     """Rederive and persist the same source-bound plan exposed before dispatch."""
@@ -2961,6 +2992,7 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     return CheckResult('diff-risk', 'pass', summary), metadata
 
 
+@diagnostics.observed('cost-guard-check')
 def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
                       git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Paid or unbounded operations need a budget contract and a tested bound before pr/release."""
@@ -2986,6 +3018,7 @@ def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
     return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('eu-ai-act-check')
 def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Optional EU AI Act evidence gate; silent unless the compliance:eu-ai-act component is installed."""
     from . import eu_ai_act
@@ -3004,6 +3037,7 @@ def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tu
     return CheckResult('eu-ai-act', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('hook-health-check')
 def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
                        diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
     """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
@@ -3028,6 +3062,7 @@ CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machin
 NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
 
 
+@diagnostics.observed('workflow-baseline-check')
 def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[str, object]]:
     """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
     import os
@@ -3065,7 +3100,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
     }
     state = _RunState(report)
-    with _cancellation() as cancellation:
+    with diagnostics.session(root, 'verify', report), _cancellation() as cancellation:
         try:
             result = _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
             if record:
@@ -3108,6 +3143,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     report = state.report
     cancellation.check()
     checked_fingerprint = tree_fingerprint(root)
+    if diagnostics.current():
+        diagnostics.current().bind_source(checked_fingerprint)
     route = get_active_route(root)
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     state.context_route_id = (route or {}).get('route_id')
