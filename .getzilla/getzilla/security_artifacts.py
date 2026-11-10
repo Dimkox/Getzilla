@@ -261,6 +261,48 @@ def _git_tree(rows: dict[str, dict]) -> str:
     return hashes.get('', '')
 
 
+def _validate_action_metadata(raw: bytes) -> None:
+    """Admit only the implemented self-contained composite subset, not shell execution."""
+    from .security_inventory import _parse_inventory_yaml, _YamlError
+    from ._policy_legacy import _shell_tokens
+
+    def unsupported():
+        raise ArtifactError('artifact-action-unsupported', 'Action execution/dependency metadata needs qualified coverage')
+
+    try:
+        document = _parse_inventory_yaml(raw.decode('utf-8'))
+    except (UnicodeDecodeError, _YamlError) as exc:
+        code = exc.code if isinstance(exc, _YamlError) else 'artifact-action-unsupported'
+        raise ArtifactError(code, 'Action metadata cannot be structurally qualified') from exc
+    if (document.kind != 'mapping' or not set(document.value) <= {'name', 'description', 'author', 'runs'}
+            or 'runs' not in document.value):
+        unsupported()
+    runs = document.value['runs']
+    if runs.kind != 'mapping' or set(runs.value) != {'using', 'steps'}:
+        unsupported()
+    using, steps = runs.value['using'], runs.value['steps']
+    if using.kind != 'scalar' or using.value != 'composite' or steps.kind != 'sequence':
+        unsupported()
+    for step in steps.value:
+        if step.kind != 'mapping' or set(step.value) != {'run', 'shell'}:
+            unsupported()
+        command, shell = step.value['run'], step.value['shell']
+        if command.kind != 'scalar' or shell.kind != 'scalar' or shell.value not in {'bash', 'sh'}:
+            unsupported()
+        # GitHub expression interpolation precedes shell quoting. A quoted
+        # expression is therefore not a literal even if the shell lexer says so.
+        if '${{' in command.value:
+            unsupported()
+        try:
+            tokens = _shell_tokens(command.value.strip(' \t\r\n'))
+        except ValueError:
+            unsupported()
+        if (len(tokens) != 2 or tokens[0].value != 'printf'
+                or any(t.operator or t.expansion or t.substitution or t.opaque for t in tokens)
+                or tokens[1].value.startswith('-') or '%' in tokens[1].value or '\\' in tokens[1].value):
+            unsupported()
+
+
 def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
     subject, origin = record['subject'], record['origin']
     match = re.fullmatch(r'([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/([A-Za-z0-9_./-]+))?@([0-9a-f]{40})', subject['reference'])
@@ -320,11 +362,16 @@ def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict
             if digest.hexdigest() != row['sha']:
                 raise ArtifactError('artifact-origin', 'archive blob differs from exact Git tree')
             observed[name] = row
-    if observed != rows or not any((subpath + '/' if subpath else '') + name in rows for name in ('action.yml', 'action.yaml')):
+    metadata = [(subpath + '/' if subpath else '') + name for name in ('action.yml', 'action.yaml')
+                if (subpath + '/' if subpath else '') + name in rows]
+    if observed != rows or len(metadata) != 1:
         raise ArtifactError('artifact-origin', 'archive is not the complete selected Action source')
+    metadata_path = prefix + '/' + metadata[0]
+    files = archive_files(payload, record['filename'], requested={metadata_path})
+    _validate_action_metadata(files[metadata_path])
     evidence = [{'path': origin['index_path'], 'sha256': origin['index_sha256'], 'bytes': len(commit_raw)},
                 {'path': origin['tree_path'], 'sha256': origin['tree_sha256'], 'bytes': len(tree_raw)}]
-    return inventory, archive_files(payload, record['filename']), evidence
+    return inventory, files, evidence
 
 
 def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:

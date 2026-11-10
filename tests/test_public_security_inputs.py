@@ -531,3 +531,70 @@ class CollectedDeclarationAndNamespaceTests(unittest.TestCase):
                     with self.assertRaises(artifacts.ArtifactError):
                         artifacts.family_evidence(directory, record)
         self.assertEqual(len(set(roots)), 1)
+
+
+class ActionMetadataClosureTests(unittest.TestCase):
+    def test_only_self_contained_composite_metadata_can_qualify(self):
+        def evaluate(metadata, alternate=False):
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                inventory, record, bundle = action_fixture(directory)
+                files = {'LICENSE': MIT, 'action.yml': metadata.encode()}
+                if alternate:
+                    files['action.yaml'] = metadata.encode()
+                tree_body = b''.join(b'100644 ' + name.encode() + b'\0' + bytes.fromhex(git_blob(body))
+                                     for name, body in sorted(files.items()))
+                tree_id = hashlib.sha1(b'tree ' + str(len(tree_body)).encode() + b'\0' + tree_body).hexdigest()
+                output = io.BytesIO()
+                with zipfile.ZipFile(output, 'w') as archive:
+                    for name, body in files.items():
+                        info = zipfile.ZipInfo('src/' + name)
+                        info.external_attr = 0o100644 << 16
+                        archive.writestr(info, body)
+                payload = output.getvalue()
+                commit = encoded({'sha': 'b' * 40, 'tree': {'sha': tree_id}})
+                tree = encoded({'sha': tree_id, 'truncated': False, 'tree': [
+                    {'path': name, 'mode': '100644', 'type': 'blob', 'sha': git_blob(body), 'size': len(body)}
+                    for name, body in sorted(files.items())]})
+                proof = encoded({'schema_version': 1, 'kind': 'artifact-component-inventory',
+                    'artifact_sha256': sha(payload), 'complete': True, 'unresolved': [], 'components': [
+                        {'id': 'owned', 'expression': 'MIT', 'requires': [], 'license_paths': ['src/LICENSE'],
+                         'notice_paths': [], 'files': [{'path': 'src/' + name, 'sha256': sha(body), 'bytes': len(body)}
+                                                      for name, body in sorted(files.items())]}]})
+                record.update(sha256=sha(payload), bytes=len(payload))
+                record['origin'].update(index_sha256=sha(commit), tree_sha256=sha(tree))
+                record['components']['sha256'] = sha(proof)
+                for relative, body in ((record['path'], payload), (record['origin']['index_path'], commit),
+                                       (record['origin']['tree_path'], tree), (record['components']['path'], proof)):
+                    (directory / relative).write_bytes(body)
+                (directory / 'manifest.json').write_bytes(encoded(bundle))
+                return licenses.evaluate_artifacts(inventory, directory, POLICY, now=NOW)['status']
+
+        prefix = 'name: owned\nruns:\n  using: composite\n  steps: '
+        for metadata in (prefix + '[]\n', prefix + '\n    - run: printf owned\n      shell: bash\n',
+                         prefix + '[{run: "printf \'owned text\'", shell: sh}]\n'):
+            with self.subTest(positive=metadata):
+                self.assertEqual(evaluate(metadata), 'pass')
+        unsupported = [
+            prefix + '\n    - uses: missing/proof-action@' + 'c' * 40 + '\n',
+            prefix + '[{"uses": "missing/proof-action@' + 'c' * 40 + '"}]\n',
+            prefix + '[{uses: "./local-action"}]\n',
+            prefix + '[{uses: "${{ inputs.action }}"}]\n',
+            prefix + '[{run: "curl https://example.invalid/tool", shell: bash}]\n',
+            prefix + '[{run: "printf owned && curl missing", shell: bash}]\n',
+            prefix + '[{run: "printf $(curl missing)", shell: bash}]\n',
+            prefix + '[{run: "printf `curl missing`", shell: bash}]\n',
+            prefix + '[{run: "printf \'${{ inputs.command }}\'", shell: bash}]\n',
+            prefix + '[{run: "printf owned", run: "curl missing", shell: bash}]\n',
+            prefix + '[&step {run: "printf owned", shell: bash}, *step]\n',
+            prefix + '[{run: "node main.js", shell: bash}]\n',
+            prefix + '\n    - run: |\n        printf owned \\\n        continuation\n      shell: bash\n',
+            'name: owned\nruns: {using: node24, main: main.js}\n',
+        ]
+        for metadata in unsupported:
+            with self.subTest(unsupported=metadata):
+                self.assertEqual(evaluate(metadata), 'fail')
+        self.assertEqual(evaluate(prefix + '[]\n', alternate=True), 'fail')
+        with patch.object(security_inventory, '_parse_inventory_yaml', side_effect=security_inventory._YamlError(
+                'yaml-parser-unavailable', 'owned missing parser contrast')):
+            self.assertEqual(evaluate(prefix + '[]\n'), 'fail')

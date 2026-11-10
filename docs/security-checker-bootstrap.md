@@ -63,6 +63,14 @@ catalog binding. These are integrity contracts, not legal or publisher authority
 Opaque binaries without a qualified license/source adapter remain unavailable.
 Vulnerability-only reports do not substitute for an image component graph.
 
+Action metadata must have one selected `action.yml` or `action.yaml`. The current
+supported subset is a composite with empty steps or `bash`/`sh` steps containing
+one literal, unformatted `printf` argument. Bounded structural YAML and the
+existing shell lexer reject ambiguous syntax and active expansion. Child `uses`,
+downloads, other commands or execution backends require qualified coverage and
+remain unsupported. A root-only component proof cannot clear these obligations.
+An unavailable structural parser refuses; there is no fallback or activation.
+
 Selected family descriptors can be published with the existing package owner
 using `--family-records PATH` during preparation/refresh. The descriptor object
 contains only schema_version=1, inventory_sha256 and records. Every referenced
