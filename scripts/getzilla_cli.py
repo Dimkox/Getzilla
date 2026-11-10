@@ -113,6 +113,8 @@ def _run_tests(args: list[str], *, require_parallel: bool = False, history=None)
         probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
     if probe.returncode == 0:
         workers = test_workers()
+        if history:
+            history.expect_workers(workers)
         print(f'getzilla test: {workers} parallel workers', flush=True)
         command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', str(workers), *targets]
     else:

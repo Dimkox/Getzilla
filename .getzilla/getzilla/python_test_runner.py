@@ -882,6 +882,8 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         progress_root = Path(directory) / 'progress'
         progress_nonce = uuid.uuid4().hex
         if workers and engine == 'pytest-xdist':
+            if diagnostics.current():
+                diagnostics.current().expect_workers(workers)
             command = _pytest_command(workers, 'worksteal')
             if 1 <= workers <= 64:
                 # The source CLI also serves uninstalled consumer roots. Load

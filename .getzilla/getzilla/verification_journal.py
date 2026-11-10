@@ -359,7 +359,7 @@ class Run:
                 run_handle = _directory(path)
                 try:
                     _publish(run_handle, 'index.json', {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
-                        'source': self.source, 'entrypoint': entrypoint, 'status': 'active'}, 16384)
+                        'source': self.source, 'entrypoint': entrypoint, 'status': 'active', 'expected': []}, 16384)
                 finally:
                     fsx.close_dir(run_handle)
                 registry['runs'].append({'run_id': self.run_id, 'nonce': self.nonce, 'status': 'active'})
@@ -379,11 +379,27 @@ class Run:
         return '.getzilla/runtime/verification-history/' + self.run_id + '/index.json'
 
     def child_environment(self, environment, actor=0):
-        values = dict(environment or os.environ)
+        values = dict(environment if environment is not None else os.environ)
+        for name in ('GETZILLA_JOURNAL_DIR', 'GETZILLA_JOURNAL_RUN', 'GETZILLA_JOURNAL_NONCE', 'GETZILLA_JOURNAL_ACTOR'):
+            values.pop(name, None)
         if self.writer is not None and self.path is not None and type(actor) is int and 0 <= actor < 64:
+            self.expect_workers(actor + 1)
             values.update(GETZILLA_JOURNAL_DIR=str(self.path), GETZILLA_JOURNAL_RUN=self.run_id,
                           GETZILLA_JOURNAL_NONCE=self.nonce, GETZILLA_JOURNAL_ACTOR=str(actor))
         return values
+
+    def expect_workers(self, workers):
+        if self.path is None or type(workers) is not int or not 1 <= workers <= 64:
+            return
+        handle = _directory(self.path)
+        try:
+            value = json.loads(_read(handle, 'index.json', 16384))
+            value['expected'] = sorted(set(value['expected']) | {'worker-' + str(i) for i in range(workers)})
+            _publish(handle, 'index.json', value, 16384)
+        except (OSError, ValueError, KeyError):
+            self.status = 'unavailable'
+        finally:
+            fsx.close_dir(handle)
 
     def summary(self):
         return {'version': 1, 'run_id': self.run_id, 'index': self.relative_index if self.path else None,
@@ -408,17 +424,21 @@ class Run:
         if self.writer is None:
             return
         self.writer.close()
-        self.status = 'closed' if not self.writer.disabled else 'unavailable'
+        self.status = 'closed' if not self.writer.disabled and self.status == 'active' else 'unavailable'
         handle = _directory(self.path)
         try:
+            value = json.loads(_read(handle, 'index.json', 16384))
+            expected = value['expected']
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = json.loads(_read(handle, actor + '.json', 2048))
-                    if health.get('status') != 'closed' or health.get('open_spans', 0):
-                        self.status = 'incomplete'
+                    if (health.get('status') != 'closed' or health.get('open_spans', 0)
+                            or health.get('run_id') != self.run_id or health.get('nonce') != self.nonce):
+                        self.status = 'incomplete' if self.status == 'closed' else self.status
                 except FileNotFoundError:
+                    if actor in expected:
+                        self.status = 'incomplete' if self.status == 'closed' else self.status
                     continue
-            value = json.loads(_read(handle, 'index.json', 16384))
             value['status'] = self.status
             _publish(handle, 'index.json', value, 16384)
         except (OSError, ValueError):
