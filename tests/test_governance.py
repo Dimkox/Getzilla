@@ -305,6 +305,12 @@ def _materialize_architecture(root: Path) -> None:
         "workflow-convergence-report-v1.schema.json",
     ):
         shutil.copy2(ROOT / "schemas" / schema_name, root / "schemas" / schema_name)
+    # A copied model needs each declared contract, including data-only optional schemas.
+    system = json.loads((root / "architecture" / "system.yaml").read_bytes())
+    for contract in system["contracts"]:
+        target = root / contract["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / contract["path"], target)
 
 
 def _architecture_evidence(
