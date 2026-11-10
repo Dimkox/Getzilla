@@ -645,7 +645,7 @@ def case_location(test, root=None):
             if test_identity(path) is not None and test_identity(path)['path'] == path and 1 <= code.co_firstlineno <= 1000000:
                 return (path, code.co_firstlineno)
     except Exception:
-        pass  # Unsupported metadata cannot change the original skip outcome.
+        return None  # Unsupported metadata cannot change the original skip outcome.
     return None
 
 
