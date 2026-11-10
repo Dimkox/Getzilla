@@ -176,8 +176,9 @@ class BoundedGetTransport:
         if (method != 'GET' or body is not None or parsed.scheme != 'https' or parsed.netloc != 'api.github.com'
                 or parsed.fragment or parsed.username or not parsed.path.startswith('/repos/') or len(url) > 2048):
             raise ObservationError('request-scope')
-        request_deadline = min(self.deadline, self.clock() + 5)
-        remaining = request_deadline - self.clock()
+        started = self.clock()
+        request_deadline = min(self.deadline, started + 5)
+        remaining = request_deadline - started
         if self.calls >= 14 or remaining <= 0:
             raise ObservationError('observation-limit')
         self.calls += 1
