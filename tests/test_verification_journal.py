@@ -22,6 +22,63 @@ from getzilla import ci_evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class JournalPostStartLossTests(unittest.TestCase):
+    @contextmanager
+    def owned_run(self, lost):
+        with tempfile.TemporaryDirectory(prefix='owned-poststart-loss-', dir=ROOT / '.getzilla/runtime') as directory:
+            root = Path(directory)
+            run = journal.Run(root, None, 'owned-tests')
+            original = run.path
+            moved = original.with_name(original.name + '-moved')
+            if lost:
+                original.rename(moved)
+            try:
+                yield root, run
+            finally:
+                if lost:
+                    moved.rename(original)
+                run.close()
+
+    def test_lost_optional_journal_keeps_primary_command_dispatch_and_result(self):
+        from getzilla import python_test_runner as runner
+        command = ['owned-synthetic-command', '--fixed']
+        environment = {'PATH': os.defpath, 'OWNED_FLAG': 'kept'}
+        for lost in (False, True):
+            with self.subTest(lost=lost), self.owned_run(lost) as (root, run), journal.activate(run), \
+                    patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned backend sentinel')) as launch:
+                try:
+                    result = runner.execute(command, root, environment, timeout=1)
+                except OSError as exc:
+                    result = type(exc).__name__
+                self.assertIsInstance(result, runner.ProcessResult)
+                self.assertEqual(result.returncode, 127)
+                launch.assert_called_once()
+                self.assertEqual(launch.call_args.args[0], command)
+                self.assertEqual(launch.call_args.kwargs['cwd'], root)
+                self.assertEqual(launch.call_args.kwargs['env']['OWNED_FLAG'], 'kept')
+                self.assertEqual(environment, {'PATH': os.defpath, 'OWNED_FLAG': 'kept'})
+                if lost:
+                    self.assertEqual(run.status, 'unavailable')
+
+    def test_lost_optional_journal_keeps_core_metadata_dispatch_and_result(self):
+        from getzilla import python_test_runner as runner
+        expected = runner.ProcessResult(['owned-primary-core'], 7)
+        with self.owned_run(True) as (root, run), journal.activate(run), \
+                patch.object(runner, 'select_engine', return_value=(1, 'pytest-xdist')), \
+                patch.object(runner, '_tool_versions', return_value={}), \
+                patch.object(runner, 'execute', return_value=expected) as execute:
+            try:
+                result = runner.run_core_tests(root, 'fast', 1)
+            except OSError as exc:
+                result = type(exc).__name__
+            self.assertIsInstance(result, runner.CoreTestRun)
+            self.assertIs(result.tests, expected)
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[1], root)
+            self.assertEqual(execute.call_args.args[0][-1], 'tests')
+            self.assertEqual(run.status, 'unavailable')
+
+
 class JournalRuntimeRepairTests(unittest.TestCase):
     def owned(self):
         temporary = tempfile.TemporaryDirectory(prefix='owned-runtime-repair-', dir=ROOT / '.getzilla/runtime')

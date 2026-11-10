@@ -398,15 +398,19 @@ class Run:
     def expect_workers(self, workers):
         if self.path is None or type(workers) is not int or not 1 <= workers <= 64:
             return
-        handle = _directory(self.path)
+        handle = None
         try:
+            handle = _directory(self.path)
             value = json.loads(_read(handle, 'index.json', 16384))
             value['expected'] = sorted(set(value['expected']) | {'worker-' + str(i) for i in range(workers)})
             _publish(handle, 'index.json', value, 16384)
         except (OSError, ValueError, KeyError):
             self.status = 'unavailable'
         finally:
-            fsx.close_dir(handle)
+            try:
+                fsx.close_dir(handle)
+            except OSError:
+                self.status = 'unavailable'
 
     def summary(self):
         return {'version': 1, 'run_id': self.run_id, 'index': self.relative_index if self.path else None,
