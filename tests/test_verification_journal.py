@@ -87,6 +87,14 @@ class JournalStorageTests(unittest.TestCase):
         run.close()
         self.assertEqual(run.status, 'incomplete')
 
+    def test_declared_missing_worker_cannot_be_reported_closed(self):
+        run = journal.Run(self.root(), None, 'owned-tests')
+        environment = run.child_environment({}, actor=0)
+        self.assertEqual(set(environment), {'GETZILLA_JOURNAL_DIR', 'GETZILLA_JOURNAL_RUN',
+                                          'GETZILLA_JOURNAL_NONCE', 'GETZILLA_JOURNAL_ACTOR'})
+        run.close()
+        self.assertEqual(run.status, 'incomplete')
+
     def test_safe_skip_classification_and_export_are_explicit_subsets(self):
         run = journal.Run(self.root(), None, 'owned-tests')
         run.writer.emit('call', 'end', nodeid='tests/test_owned.py::test_ok', outcome='skip',
