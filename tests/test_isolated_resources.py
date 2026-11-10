@@ -259,6 +259,128 @@ class ResourceRepairTests(unittest.TestCase):
         self.assertFalse(path.exists())
 
 
+class ResourceTransitionTests(unittest.TestCase):
+    setUp = ResourceRepairTests.setUp
+
+    def test_mount_fields_follow_kind_and_full_bind_cleanup(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-transition")
+        for kind in ("bind", "volume"):
+            with self.subTest(kind=kind):
+                mount = {"Type": kind, "Source": "/owned", "Destination": "/data", "RW": False}
+                if kind == "volume":
+                    mount["Name"] = "gz-transition-vol"
+                value = {"Id": "1" * 64, "Name": "/gz-transition-app", "Image": IMAGE_ID,
+                         "Config": {"Image": PIN, "Labels": owner.labels}, "Mounts": [mount]}
+                try:
+                    identity = self.module._identity("container", value)
+                except ValueError:
+                    self.fail("complete type-specific mount must be admitted")
+                self.assertEqual(identity["mounts"][0]["Name"], mount.get("Name"))
+                for field in ("Source", "Destination", "RW", *( ("Name",) if kind == "volume" else () )):
+                    broken = copy.deepcopy(value)
+                    del broken["Mounts"][0][field]
+                    with self.assertRaises(ValueError):
+                        self.module._identity("container", broken)
+        docker = DockerDouble()
+        def inspect(command, *args, **kwargs):
+            result = docker(command, *args, **kwargs)
+            if command[1:3] == ["container", "inspect"]:
+                values = json.loads(result.stdout)
+                for mount in values[0]["Mounts"]:
+                    if mount["Type"] == "bind":
+                        mount.pop("Name", None)
+                return ProcessResult(command, 0, json.dumps(values))
+            return result
+        with patch.object(self.module, "_execute", side_effect=inspect):
+            try:
+                owner.container("app", PIN, bind={self.root: "/src"})
+                owner.cleanup()
+            except ValueError:
+                self.fail("omitted volume-only Name must not strand a bind container")
+        self.assertEqual(docker.items["container"], {})
+
+    def test_marker_unlink_transition_is_recoverable_and_bound(self):
+        for ordinal, after in enumerate(("payload", ".owner")):
+            with self.subTest(after=after):
+                owner = self.module.OwnedDocker(self.root / f"owner{ordinal}.json", "gz-transition")
+                path = owner.directory("data" + str(ordinal))
+                (path / "payload").write_text("owned")
+                now = [0.0]
+                unlink = self.module.fsx.unlink_at
+                def interrupted(parent, name):
+                    result = unlink(parent, name)
+                    if name == after:
+                        now[0] = 61.0
+                    return result
+                with patch.object(self.module.time, "monotonic", side_effect=lambda: now[0]), \
+                        patch.object(self.module.fsx, "unlink_at", side_effect=interrupted):
+                    with self.assertRaises(self.module.CleanupUnconfirmed):
+                        owner.cleanup()
+                self.assertTrue(path.is_dir())
+                if after == ".owner":
+                    foreign = self.root / "original"
+                    path.rename(foreign)
+                    path.mkdir(mode=0o700)
+                    with self.assertRaises(self.module.CleanupUnconfirmed):
+                        owner.cleanup()
+                    self.assertTrue(path.is_dir())
+                    path.rmdir()
+                    foreign.rename(path)
+                with patch.object(self.module, "_process_identity", return_value={**owner.owner_process, "start": "changed"}):
+                    recovered = self.module.OwnedDocker.recover(owner.manifest)
+                try:
+                    recovered.cleanup()
+                except self.module.CleanupUnconfirmed:
+                    self.fail("durably owned cleanup transition must recover")
+                recovered.cleanup()
+                self.assertFalse(path.exists())
+        owner = self.module.OwnedDocker(self.root / "pending.json", "gz-transition")
+        path = owner.directory("pending")
+        (path / ".owner").unlink()
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            owner.cleanup()
+        self.assertTrue(path.is_dir())
+        (path / ".owner").write_text(owner.nonce)
+        (path / ".owner").chmod(0o600)
+        with patch.object(owner, "_save", side_effect=OSError("owned publication unavailable")):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                owner.cleanup()
+        self.assertTrue((path / ".owner").is_file())
+        owner.cleanup()
+        self.assertFalse(path.exists())
+
+    def test_second_boot_is_bound_before_live_reused_or_absent_target(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-transition")
+        owner.owner_process["pid"] = 424242
+        owner._save()
+        original = Path.read_text
+        for second in ("", "changed", "unit-boot"):
+            for target in ("live", "reused", "absent"):
+                with self.subTest(second=second, target=target):
+                    boots = []
+                    def proc(path, *args, **kwargs):
+                        name = str(path)
+                        if name == "/proc/sys/kernel/random/boot_id":
+                            boots.append(name)
+                            return "unit-boot" if len(boots) == 1 else second
+                        if name == "/proc/self/stat":
+                            return f"{os.getpid()} (owned) " + " ".join(["R", *(["0"] * 18), "observer"])
+                        if name == "/proc/424242/stat":
+                            if target == "absent":
+                                raise FileNotFoundError("owned absent target")
+                            birth = "unit-start" if target == "live" else "changed"
+                            return "424242 (owned) " + " ".join(["R", *(["0"] * 18), birth])
+                        if name.startswith("/proc/"):
+                            raise AssertionError("unadmitted procfs observation")
+                        return original(path, *args, **kwargs)
+                    with patch.object(Path, "read_text", proc), patch.object(self.module, "_process_identity", self.native_identity):
+                        if second == "unit-boot" and target != "live":
+                            self.assertEqual(self.module.OwnedDocker.recover(owner.manifest).nonce, owner.nonce)
+                        else:
+                            with self.assertRaises(self.module.CleanupUnconfirmed):
+                                self.module.OwnedDocker.recover(owner.manifest)
+
+
 class ProcessIdentityTests(unittest.TestCase):
     def test_mismatched_process_namespace_cannot_supply_any_birth_identity(self):
         module = importlib.import_module("getzilla.disposable_resources")
@@ -361,6 +483,11 @@ class DockerDouble:
                 selected = next(x for x in self.items[args[0]].values()
                                 if x.get("Id") == args[-1] or x.get("Name", "").removeprefix("/") == args[-1])
             value = [selected]
+            if args[0] == "container":
+                value = copy.deepcopy(value)
+                for mount in value[0]["Mounts"]:
+                    if mount["Type"] == "bind":
+                        mount.pop("Name", None)
         elif len(args) > 1 and args[1] == "ls":
             if self.unavailable_listing:
                 raise subprocess.CalledProcessError(1, command)

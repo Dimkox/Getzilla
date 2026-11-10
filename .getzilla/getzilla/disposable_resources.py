@@ -22,6 +22,7 @@ _PIN = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}\Z")
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,100}\Z")
 _ID = re.compile(r"[0-9a-f]{64}\Z")
 _DEADLINE = ContextVar("disposable_cleanup_deadline", default=None)
+_RECOVERY_BOOT = ContextVar("disposable_recovery_boot", default=None)
 _LIMIT = 1024 * 1024
 
 
@@ -47,6 +48,8 @@ def _process_identity(pid: int) -> dict:
         boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
     except FileNotFoundError as error:
         raise CleanupUnconfirmed("Observer procfs identity is unavailable") from error
+    if not boot or len(boot) > 128 or _RECOVERY_BOOT.get() not in (None, boot):
+        raise CleanupUnconfirmed("Observer boot identity is inconsistent")
     if int(current.split(" ", 1)[0]) != os.getpid():
         raise CleanupUnconfirmed("Process and procfs namespaces disagree; resource ownership cannot be established")
     value = current if pid == os.getpid() else Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
@@ -117,7 +120,9 @@ def _canonical_mounts(mounts):
 def _identity(kind: str, value: dict) -> dict:
     if kind == "container":
         if (type(value.get("Mounts")) is not list or type(value["Config"].get("Labels")) is not dict
-                or any(type(m) is not dict or not {"Type", "Name", "Source", "Destination", "RW"} <= set(m)
+                or any(type(m) is not dict or not {"Type", "Source", "Destination", "RW"} <= set(m)
+                       or m["Type"] not in ("bind", "volume")
+                       or m["Type"] == "volume" and (type(m.get("Name")) is not str or not _NAME.fullmatch(m["Name"]))
                        or type(m["RW"]) is not bool for m in value["Mounts"])):
             raise ValueError("Incomplete container observation")
         return {"id": value["Id"], "name": value["Name"].removeprefix("/"),
@@ -265,11 +270,21 @@ class OwnedDocker:
             raise CleanupUnconfirmed("Allocator boot observation is unavailable") from error
         if owner.get("boot") != boot:
             raise CleanupUnconfirmed("Allocator boot identity is unavailable")
+        token = _RECOVERY_BOOT.set(boot)
         try:
-            if _process_identity(owner["pid"]) == owner:
-                raise CleanupUnconfirmed("Allocator is still alive; recovery would race allocation")
-        except FileNotFoundError:
-            pass
+            try:
+                observed = _process_identity(owner["pid"])
+                if (type(observed) is not dict or set(observed) != set(owner)
+                        or type(observed["pid"]) is not int or observed["pid"] != owner["pid"]
+                        or type(observed["start"]) is not str or not 0 < len(observed["start"]) <= 128
+                        or observed["boot"] != boot):
+                    raise CleanupUnconfirmed("Allocator observation is incomplete or inconsistent")
+                if observed == owner:
+                    raise CleanupUnconfirmed("Allocator is still alive; recovery would race allocation")
+            except FileNotFoundError:
+                pass
+        finally:
+            _RECOVERY_BOOT.reset(token)
         return instance
 
     def _validate(self):
@@ -291,12 +306,21 @@ class OwnedDocker:
             allowed = {"kind", "name", "status", "identity", "cleanup_error", "cleanup_mismatch_fields"}
             if item["kind"] == "container":
                 allowed |= {"id", "image", "image_id"}
+            if item["kind"] == "directory":
+                allowed.add("directory_removal")
             if set(item) - allowed:
                 raise ValueError("Unknown resource journal fields")
             seen.add((item["kind"], item["name"]))
             if item["status"] == "bound" and type(item.get("identity")) is not dict:
                 raise ValueError("Missing bound resource identity")
             identity = item.get("identity")
+            if "directory_removal" in item:
+                transition = item["directory_removal"]
+                if (identity is None or type(transition) is not dict or set(transition) != {"marker", "nonce"}
+                        or transition["nonce"] != self.nonce or type(transition["marker"]) is not list
+                        or len(transition["marker"]) != 8 or any(type(v) is not int or v < 0 for v in transition["marker"])
+                        or transition["marker"][2:4] != [stat.S_IFREG, 32] or transition["marker"][6:] != [1, 0o600]):
+                    raise ValueError("Invalid directory removal transition")
             if identity is not None:
                 keys = {"device", "inode"} if item["kind"] == "directory" else (
                     {"id", "name", "image_id", "image", "labels", "mounts"} if item["kind"] == "container" else
@@ -454,9 +478,17 @@ class OwnedDocker:
                         or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
                     raise CleanupUnconfirmed("Disposable directory identity changed")
                 marker = directory.read(".owner", limit=32)
-                if marker is None or marker.content != self.nonce.encode() or marker.mode != 0o600:
-                    raise CleanupUnconfirmed("Disposable directory ownership changed")
                 entries = os.listdir(directory.handle)
+                transition = item.get("directory_removal")
+                if marker is None:
+                    saved = _read(self.manifest, private=True)
+                    journal = json.loads(saved.content)
+                    if (not transition or entries or saved.identity != self._journal_identity
+                            or journal.get("nonce") != self.nonce or journal.get("resources") != self.resources):
+                        raise CleanupUnconfirmed("Unproved marker-less directory")
+                elif (marker.content != self.nonce.encode() or marker.mode != 0o600
+                      or transition and transition["marker"] != list(marker.identity)):
+                    raise CleanupUnconfirmed("Disposable directory ownership changed")
                 if len(entries) > 2 or set(entries) - {".owner", "payload"}:
                     raise CleanupUnconfirmed("Unexpected disposable payload")
                 snapshots = {name: marker if name == ".owner" else directory.read(name, limit=_LIMIT) for name in entries}
@@ -467,6 +499,13 @@ class OwnedDocker:
                     directory.check()
                     if directory.read(name, limit=_LIMIT) != snapshot:
                         raise CleanupUnconfirmed("Disposable payload changed")
+                    if name == ".owner" and not transition:
+                        item["directory_removal"] = {"marker": list(marker.identity), "nonce": self.nonce}
+                        try:
+                            self._save()
+                        except (OSError, ValueError):
+                            item.pop("directory_removal", None)
+                            raise
                     if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
                         raise CleanupUnconfirmed("Cleanup deadline exhausted")
                     if directory.read(".owner", limit=32) != marker:
