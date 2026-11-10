@@ -22,6 +22,109 @@ from getzilla import ci_evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class JournalClosedMetadataTests(unittest.TestCase):
+    @contextmanager
+    def owned_run(self):
+        with tempfile.TemporaryDirectory(prefix='owned-closed-metadata-', dir=ROOT / '.getzilla/runtime') as directory:
+            run = journal.Run(Path(directory), None, 'owned-tests')
+            index = run.path / 'index.json'
+            original = index.read_bytes()
+            try:
+                yield run, index, json.loads(original)
+            finally:
+                index.write_bytes(original)
+                run.close()
+
+    def test_malformed_index_shapes_never_block_primary_or_publish(self):
+        from getzilla import python_test_runner as runner
+        for shape in ('null', 'list', 'scalar', 'dict', 'expected-null', 'expected-dict', 'nested', 'duplicate'):
+            with self.subTest(shape=shape), self.owned_run() as (run, index, good):
+                bad = {'null': None, 'list': [], 'scalar': 7, 'dict': {},
+                    'expected-null': dict(good, expected=None), 'expected-dict': dict(good, expected={}),
+                    'nested': dict(good, expected=[['worker-0']]),
+                    'duplicate': dict(good, expected=['worker-0', 'worker-0'])}[shape]
+                index.write_text(json.dumps(bad))
+                before = index.read_bytes()
+                with journal.activate(run), patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                    try:
+                        result = runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1)
+                    except Exception as exc:
+                        result = type(exc).__name__
+                self.assertIsInstance(result, runner.ProcessResult)
+                self.assertEqual(result.returncode, 127)
+                launch.assert_called_once()
+                self.assertEqual(run.status, 'unavailable')
+                self.assertEqual(index.read_bytes(), before)
+
+    def test_matched_index_preserves_exact_expected_union(self):
+        with self.owned_run() as (run, index, good):
+            index.write_text(json.dumps(dict(good, expected=['worker-2'])))
+            run.expect_workers(2)
+            self.assertEqual(json.loads(index.read_text())['expected'], ['worker-0', 'worker-1', 'worker-2'])
+            run.bind_source('a' * 64)
+            self.assertEqual(json.loads(index.read_text())['source'], 'a' * 64)
+
+    def test_foreign_or_stale_index_never_gets_source_publication(self):
+        for field, value in [('nonce', 'b' * 32), ('run_id', 'c' * 32), ('status', 'closed')]:
+            with self.subTest(field=field), self.owned_run() as (run, index, good):
+                index.write_text(json.dumps({**good, field: value}))
+                before = index.read_bytes()
+                run.bind_source('a' * 64)
+                self.assertEqual(index.read_bytes(), before)
+                self.assertEqual(run.status, 'unavailable')
+
+    def test_bind_source_io_refusal_keeps_primary_callback(self):
+        for stage in ('acquire', 'close'):
+            with self.subTest(stage=stage), self.owned_run() as (run, index, good):
+                real_close = journal.fsx.close_dir
+                def close_then_fail(handle):
+                    real_close(handle)
+                    raise OSError('PRIVATE_CLOSE')
+                target = patch.object(journal, '_directory', side_effect=OSError('PRIVATE_OPEN')) if stage == 'acquire' else patch.object(journal.fsx, 'close_dir', side_effect=close_then_fail)
+                marker = object()
+                with target:
+                    try:
+                        run.bind_source('a' * 64)
+                        result = marker
+                    except Exception as exc:
+                        result = type(exc).__name__
+                self.assertIs(result, marker)
+                self.assertEqual(run.status, 'unavailable')
+
+    def test_malformed_finalization_keeps_primary_result_and_exception(self):
+        for failure in (None, ValueError('owned-primary'), KeyboardInterrupt(), SystemExit(9)):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory(prefix='owned-final-metadata-', dir=ROOT / '.getzilla/runtime') as directory:
+                marker, held = object(), []
+                def primary():
+                    with journal.session(Path(directory), 'owned-tests') as run:
+                        held.append(run)
+                        index = run.path / 'index.json'
+                        document = json.loads(index.read_text())
+                        document['expected'] = None
+                        index.write_text(json.dumps(document))
+                        if failure is not None:
+                            raise failure
+                        return marker
+                try:
+                    actual = primary()
+                except BaseException as exc:
+                    actual = exc
+                self.assertIs(actual, marker if failure is None else failure)
+                self.assertEqual(held[0].status, 'unavailable')
+
+    def test_metadata_interrupt_identity_is_not_suppressed(self):
+        for interrupt in (KeyboardInterrupt(), SystemExit(4)):
+            with self.subTest(interrupt=type(interrupt).__name__), self.owned_run() as (run, index, good):
+                with patch.object(journal, '_directory', side_effect=interrupt):
+                    try:
+                        run.bind_source('a' * 64)
+                    except BaseException as exc:
+                        actual = exc
+                    else:
+                        actual = None
+                self.assertIs(actual, interrupt)
+
+
 class JournalPostStartLossTests(unittest.TestCase):
     @contextmanager
     def owned_run(self, lost):

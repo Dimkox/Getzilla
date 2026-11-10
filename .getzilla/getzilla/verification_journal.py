@@ -342,12 +342,7 @@ class Run:
                 if not _regular(os.fstat(lock)):
                     raise OSError('journal-registry-lock')
                 fsx.lock_file(lock, blocking=False)
-                try:
-                    registry = json.loads(_read(handle, 'registry.json', 16384))
-                except FileNotFoundError:
-                    registry = {'version': 1, 'runs': []}
-                if set(registry) != {'version', 'runs'} or registry['version'] != 1 or len(registry['runs']) > RUNS:
-                    raise ValueError('journal-registry')
+                registry, _ = self._registry(handle, create=True)
                 admitted = {r['run_id'] for r in registry['runs'] if _RUN.fullmatch(r['run_id'])}
                 if set(os.listdir(history)) - admitted - {'registry.json', 'registry.lock'}:
                     raise ValueError('journal-unknown-storage')
@@ -395,15 +390,15 @@ class Run:
                           GETZILLA_JOURNAL_NONCE=self.nonce, GETZILLA_JOURNAL_ACTOR=str(actor))
         return values
 
-    def expect_workers(self, workers):
-        if self.path is None or type(workers) is not int or not 1 <= workers <= 64:
-            return
+    @contextmanager
+    def _metadata(self, path):
         handle = None
         try:
-            handle = _directory(self.path)
-            value = json.loads(_read(handle, 'index.json', 16384))
-            value['expected'] = sorted(set(value['expected']) | {'worker-' + str(i) for i in range(workers)})
-            _publish(handle, 'index.json', value, 16384)
+            try:
+                handle = _directory(path)
+            except (OSError, ValueError):
+                self.status = 'unavailable'
+            yield handle
         except (OSError, ValueError, KeyError):
             self.status = 'unavailable'
         finally:
@@ -411,6 +406,61 @@ class Run:
                 fsx.close_dir(handle)
             except OSError:
                 self.status = 'unavailable'
+
+    def _index(self, handle):
+        value = json.loads(_read(handle, 'index.json', 16384))
+        fields = {'version', 'run_id', 'nonce', 'source', 'source_status', 'session_id',
+                  'session_status', 'entrypoint', 'status', 'expected'}
+        if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
+                or value['version'] != 1 or value['run_id'] != self.run_id or value['nonce'] != self.nonce
+                or value['status'] != 'active' or value['entrypoint'] != self.entrypoint
+                or value['source'] != self.source or value['session_id'] != self.session_id
+                or value['source_status'] != ('reported-integrity-only' if self.source else 'unavailable')
+                or value['session_status'] != ('canonical-route-observation' if self.session_id else 'unavailable')):
+            raise ValueError('journal-index-binding')
+        expected = value['expected']
+        if (type(expected) is not list or len(expected) > 64
+                or any(type(actor) is not str or not _ACTOR.fullmatch(actor) or actor == 'controller'
+                       for actor in expected) or len(set(expected)) != len(expected)):
+            raise ValueError('journal-index-expected')
+        return value
+
+    def _registry(self, handle, create=False):
+        try:
+            value = json.loads(_read(handle, 'registry.json', 16384))
+        except FileNotFoundError:
+            if not create:
+                raise
+            value = {'version': 1, 'runs': []}
+        if (type(value) is not dict or set(value) != {'version', 'runs'}
+                or type(value['version']) is not int or value['version'] != 1
+                or type(value['runs']) is not list or len(value['runs']) > RUNS):
+            raise ValueError('journal-registry')
+        seen, own = set(), None
+        for row in value['runs']:
+            if (type(row) is not dict or set(row) != {'run_id', 'nonce', 'status'}
+                    or any(type(row[key]) is not str or not _RUN.fullmatch(row[key]) for key in ('run_id', 'nonce'))
+                    or type(row['status']) is not str or row['status'] not in {'active', 'closed', 'incomplete', 'unavailable'}
+                    or row['run_id'] in seen):
+                raise ValueError('journal-registry-row')
+            seen.add(row['run_id'])
+            if row['run_id'] == self.run_id:
+                if row['nonce'] != self.nonce or row['status'] != 'active':
+                    raise ValueError('journal-registry-binding')
+                own = row
+        if own is None and not create:
+            raise ValueError('journal-registry-missing')
+        return value, own
+
+    def expect_workers(self, workers):
+        if self.path is None or type(workers) is not int or not 1 <= workers <= 64:
+            return
+        with self._metadata(self.path) as handle:
+            if handle is None:
+                return
+            value = self._index(handle)
+            value['expected'] = sorted(set(value['expected']) | {'worker-' + str(i) for i in range(workers)})
+            _publish(handle, 'index.json', value, 16384)
 
     def summary(self):
         return {'version': 1, 'run_id': self.run_id, 'index': self.relative_index if self.path else None,
@@ -422,9 +472,10 @@ class Run:
     def bind_source(self, digest, session_id=None):
         if self.path is None or type(digest) is not str or not _DIGEST.fullmatch(digest):
             return
-        handle = _directory(self.path)
-        try:
-            value = json.loads(_read(handle, 'index.json', 16384))
+        with self._metadata(self.path) as handle:
+            if handle is None:
+                return
+            value = self._index(handle)
             value['source'] = digest
             value['source_status'] = 'reported-integrity-only'
             value['session_id'] = session_id if type(session_id) is str and _SESSION.fullmatch(session_id) else None
@@ -432,55 +483,59 @@ class Run:
             _publish(handle, 'index.json', value, 16384)
             self.source = digest
             self.session_id = value['session_id']
-        except (OSError, ValueError):
-            self.status = 'unavailable'
-        finally:
-            fsx.close_dir(handle)
 
     def close(self):
         if self.writer is None:
             return
-        self.writer.close()
-        self.status = 'closed' if not self.writer.disabled and self.status == 'active' else 'unavailable'
-        handle = _directory(self.path)
         try:
-            value = json.loads(_read(handle, 'index.json', 16384))
+            self.writer.close()
+        except OSError:
+            self.status = 'unavailable'
+        terminal = 'closed' if not self.writer.disabled and self.status == 'active' else 'unavailable'
+        self.status = 'unavailable'
+        with self._metadata(self.path) as handle:
+            if handle is None:
+                return
+            value = self._index(handle)
             expected = value['expected']
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = json.loads(_read(handle, actor + '.json', 2048))
-                    if (health.get('status') != 'closed' or health.get('open_spans', 0)
-                            or health.get('run_id') != self.run_id or health.get('nonce') != self.nonce):
-                        self.status = 'incomplete' if self.status == 'closed' else self.status
+                    if (type(health) is not dict or health.get('run_id') != self.run_id
+                            or health.get('nonce') != self.nonce or health.get('actor') != actor
+                            or type(health.get('open_spans')) is not int or health['open_spans'] < 0
+                            or type(health.get('status')) is not str
+                            or health['status'] not in {'active', 'closed', 'unavailable'}):
+                        raise ValueError('journal-health-binding')
+                    if health['status'] != 'closed' or health['open_spans']:
+                        terminal = 'incomplete' if terminal == 'closed' else terminal
                 except FileNotFoundError:
-                    if actor in expected:
-                        self.status = 'incomplete' if self.status == 'closed' else self.status
+                    if actor == 'controller' or actor in expected:
+                        terminal = 'incomplete' if terminal == 'closed' else terminal
                     continue
-            value['status'] = self.status
-            _publish(handle, 'index.json', value, 16384)
-        except (OSError, ValueError):
-            self.status = 'unavailable'
-        finally:
-            fsx.close_dir(handle)
-        handle = _directory(self.path.parent)
-        lock = None
-        try:
-            lock = fsx.open_at(handle, 'registry.lock', os.O_RDWR | fsx.O_NOFOLLOW)
-            fsx.lock_file(lock, blocking=False)
-            value = json.loads(_read(handle, 'registry.json', 16384))
-            for row in value['runs']:
-                if row['run_id'] == self.run_id and row['nonce'] == self.nonce:
-                    row['status'] = self.status
-                    value['runs'].remove(row)
-                    value['runs'].append(row)
-                    break
-            _publish(handle, 'registry.json', value, 16384)
-        except (OSError, ValueError, KeyError):
-            self.status = 'unavailable'
-        finally:
-            if lock is not None:
-                os.close(lock)
-            fsx.close_dir(handle)
+            with self._metadata(self.path.parent) as registry_handle:
+                if registry_handle is None:
+                    return
+                lock = None
+                try:
+                    lock = fsx.open_at(registry_handle, 'registry.lock', os.O_RDWR | fsx.O_NOFOLLOW)
+                    if not _regular(os.fstat(lock)):
+                        raise OSError('journal-registry-lock')
+                    fsx.lock_file(lock, blocking=False)
+                    registry, row = self._registry(registry_handle)
+                    row['status'] = terminal
+                    registry['runs'].remove(row)
+                    registry['runs'].append(row)
+                    _publish(registry_handle, 'registry.json', registry, 16384)
+                    value['status'] = terminal
+                    _publish(handle, 'index.json', value, 16384)
+                    self.status = terminal
+                finally:
+                    if lock is not None:
+                        try:
+                            os.close(lock)
+                        except OSError:
+                            self.status = 'unavailable'
 
 
 def _remove_run(history, record):
@@ -823,7 +878,8 @@ def export_entries(root, *, binding=None):
         try:
             index = json.loads(_read(handle, 'index.json', 16384))
             if (index['run_id'] != row['run_id'] or index['nonce'] != row['nonce']
-                    or index['status'] not in {'active', 'closed', 'incomplete', 'unavailable'}):
+                    or index['status'] not in {'active', 'closed', 'incomplete', 'unavailable'}
+                    or index['status'] != row.get('status')):
                 raise ValueError('journal-export-identity')
             source, session = index.get('source'), index.get('session_id')
             if (source is not None and (type(source) is not str or not _DIGEST.fullmatch(source))
