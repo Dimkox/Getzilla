@@ -41,6 +41,13 @@ def _json(value):
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')
 
 
+def _decode(raw, **options):
+    try:
+        return json.loads(raw, **options)
+    except RecursionError:
+        raise ValueError('journal-json-depth') from None
+
+
 def _regular(info):
     return (stat.S_ISREG(info.st_mode) and not fsx.is_link(info) and info.st_nlink == 1
             and (os.name == 'nt' or info.st_uid == os.getuid() and not info.st_mode & 0o077))
@@ -166,7 +173,7 @@ class Writer:
         self.identity = None
         self.active = {}
         try:
-            header = json.loads(_read(self.handle, 'index.json', 16384))
+            header = _decode(_read(self.handle, 'index.json', 16384))
             if header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active':
                 raise ValueError('journal-run-binding')
             if require_expected and (type(header.get('expected')) is not list or actor not in header['expected']):
@@ -176,7 +183,7 @@ class Writer:
                 raise OSError('journal-lock-unavailable')
             fsx.lock_file(self.lock, blocking=False)
             try:
-                prior = json.loads(_read(self.handle, actor + '.json', 2048))
+                prior = _decode(_read(self.handle, actor + '.json', 2048))
                 if (prior['run_id'] != run_id or prior['nonce'] != nonce or prior['actor'] != actor
                         or prior['status'] != 'closed' or prior.get('open_spans', 0)):
                     raise ValueError('journal-stream-not-closed')
@@ -408,7 +415,7 @@ class Run:
                 self.status = 'unavailable'
 
     def _index(self, handle):
-        value = json.loads(_read(handle, 'index.json', 16384))
+        value = _decode(_read(handle, 'index.json', 16384))
         fields = {'version', 'run_id', 'nonce', 'source', 'source_status', 'session_id',
                   'session_status', 'entrypoint', 'status', 'expected'}
         if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
@@ -427,7 +434,7 @@ class Run:
 
     def _registry(self, handle, create=False):
         try:
-            value = json.loads(_read(handle, 'registry.json', 16384))
+            value = _decode(_read(handle, 'registry.json', 16384))
         except FileNotFoundError:
             if not create:
                 raise
@@ -500,7 +507,7 @@ class Run:
             expected = value['expected']
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
-                    health = json.loads(_read(handle, actor + '.json', 2048))
+                    health = _decode(_read(handle, actor + '.json', 2048))
                     if (type(health) is not dict or health.get('run_id') != self.run_id
                             or health.get('nonce') != self.nonce or health.get('actor') != actor
                             or type(health.get('open_spans')) is not int or health['open_spans'] < 0
@@ -546,7 +553,7 @@ def _remove_run(history, record):
     handle = _directory(path)
     locks = []
     try:
-        index = json.loads(_read(handle, 'index.json', 16384))
+        index = _decode(_read(handle, 'index.json', 16384))
         if index['run_id'] != record['run_id'] or index['nonce'] != record['nonce'] or index['status'] != 'closed':
             raise ValueError('journal-retention-identity')
         names = os.listdir(path)
@@ -561,7 +568,7 @@ def _remove_run(history, record):
                 locks.append(descriptor)
                 fsx.lock_file(descriptor, blocking=False)
             elif name.endswith('.json') and name != 'index.json':
-                health = json.loads(_read(handle, name, 2048))
+                health = _decode(_read(handle, name, 2048))
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
                         or health['status'] != 'closed' or health.get('open_spans', 0)):
                     raise ValueError('journal-retention-active-stream')
@@ -586,7 +593,7 @@ def child_writer(environment=None, ordinal=None, worker_count=None):
         actor = 'worker-' + ordinal
         handle = _directory(path)
         try:
-            header = json.loads(_read(handle, 'index.json', 16384))
+            header = _decode(_read(handle, 'index.json', 16384))
             expected = header.get('expected')
             if (header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active'
                     or type(expected) is not list or len(expected) > 64
@@ -815,7 +822,7 @@ def _validated_events(raw, run_id, actor):
     for line in raw.splitlines():
         if len(line) > EVENT_BYTES:
             raise ValueError('journal-record-bound')
-        row = json.loads(line, object_pairs_hook=closed)
+        row = _decode(line, object_pairs_hook=closed)
         if (type(row) is not dict or set(row) - allowed or row.get('version') != 1
                 or row.get('run_id') != run_id or row.get('actor') != actor
                 or row.get('stage') not in _STAGES or row.get('state') not in _STATES
@@ -868,7 +875,7 @@ def export_entries(root, *, binding=None):
     try:
         handle = _directory(history)
         try:
-            registry = json.loads(_read(handle, 'registry.json', 16384))
+            registry = _decode(_read(handle, 'registry.json', 16384))
         finally:
             fsx.close_dir(handle)
         row = registry['runs'][-1]
@@ -876,7 +883,7 @@ def export_entries(root, *, binding=None):
             raise ValueError('journal-export-identity')
         handle = _directory(history / row['run_id'])
         try:
-            index = json.loads(_read(handle, 'index.json', 16384))
+            index = _decode(_read(handle, 'index.json', 16384))
             if (index['run_id'] != row['run_id'] or index['nonce'] != row['nonce']
                     or index['status'] not in {'active', 'closed', 'incomplete', 'unavailable'}
                     or index['status'] != row.get('status')):
@@ -903,7 +910,7 @@ def export_entries(root, *, binding=None):
                 summary['association'] = 'source-run-matched'
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
-                    health = json.loads(_read(handle, actor + '.json', 2048))
+                    health = _decode(_read(handle, actor + '.json', 2048))
                     if (set(health) != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}

@@ -22,6 +22,90 @@ from getzilla import ci_evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class JournalDecoderBoundaryTests(unittest.TestCase):
+    @contextmanager
+    def owned_run(self):
+        with tempfile.TemporaryDirectory(prefix='owned-decoder-', dir=ROOT / '.getzilla/runtime') as directory:
+            run = journal.Run(Path(directory), None, 'owned-tests')
+            try:
+                yield run
+            finally:
+                run.close()
+
+    def observe(self, callback):
+        try:
+            return callback()
+        except Exception as error:
+            return error
+
+    def test_decoder_resource_failure_preserves_primary_dispatch(self):
+        from getzilla import python_test_runner as runner
+        with self.owned_run() as run:
+            with journal.activate(run), patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
+                with patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                    result = self.observe(lambda: runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1))
+            self.assertIsInstance(result, runner.ProcessResult)
+            self.assertEqual(result.returncode, 127)
+            launch.assert_called_once()
+            self.assertEqual(run.status, 'unavailable')
+
+    def test_decoder_resource_failure_keeps_final_primary_identity(self):
+        for failure in (None, ValueError('owned-primary')):
+            with self.subTest(failure=type(failure).__name__), self.owned_run() as run:
+                marker = object()
+                def primary():
+                    with journal.session(run.root, 'owned-tests'):
+                        if failure is not None:
+                            raise failure
+                        return marker
+                with patch.object(journal, 'Run', return_value=run):
+                    with patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
+                        result = self.observe(primary)
+                self.assertIs(result, marker if failure is None else failure)
+                self.assertEqual(run.status, 'unavailable')
+
+    def test_decoder_resource_failure_refuses_constructor_child_and_export(self):
+        with self.owned_run() as run:
+            environment = run.child_environment({}, 0)
+            with patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
+                constructed = self.observe(lambda: journal.Run(run.root, None, 'owned-tests'))
+                child = self.observe(lambda: journal.child_writer(environment))
+                exported = self.observe(lambda: journal.export_entries(run.root))
+                writer = self.observe(lambda: journal.Writer(run.path, run.run_id, 'worker-0', run.nonce, require_expected=True))
+            self.assertIsInstance(constructed, journal.Run)
+            self.assertEqual(constructed.status, 'unavailable')
+            self.assertIsNone(child)
+            self.assertIsInstance(exported, list)
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0][0], 'journal/index.json')
+            self.assertEqual(json.loads(exported[0][1])['status'], 'unavailable')
+            self.assertIs(type(writer), ValueError)
+
+    def test_normal_event_decode_and_closed_resource_refusal(self):
+        event = {'version': 1, 'run_id': 'a' * 32, 'actor': 'controller', 'actor_attempt': 1,
+                 'sequence': 1, 'stage': 'collection', 'state': 'start', 'pid': 1,
+                 'elapsed_ns': 0, 'utc': '2026-11-10T00:00:00.000+00:00'}
+        raw = json.dumps(event).encode() + b'\n'
+        accepted = journal._validated_events(raw, event['run_id'], 'controller')
+        self.assertEqual(json.loads(accepted), event)
+        with patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
+            refused = self.observe(lambda: journal._validated_events(raw, event['run_id'], 'controller'))
+        self.assertIs(type(refused), ValueError)
+        self.assertEqual(str(refused), 'journal-json-depth')
+
+    def test_decoder_does_not_absorb_interrupt_identity(self):
+        for interrupt in (KeyboardInterrupt(), SystemExit(3)):
+            with self.subTest(interrupt=type(interrupt).__name__), self.owned_run() as run:
+                with patch.object(journal.json, 'loads', side_effect=interrupt):
+                    try:
+                        run.bind_source('a' * 64)
+                    except BaseException as error:
+                        observed = error
+                    else:
+                        observed = None
+                self.assertIs(observed, interrupt)
+
+
 class JournalClosedMetadataTests(unittest.TestCase):
     @contextmanager
     def owned_run(self):
