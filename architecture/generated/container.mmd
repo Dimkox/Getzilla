@@ -37,6 +37,7 @@ flowchart LR
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
   node_11778b266a5a56fd["NODE-OPTIONAL-DESIGN-PREVIEW | local_component | repository engineering; explicit optional fixture capture only"]
+  node_2b4705308adeeb3e["NODE-OPTIONAL-SEARCH-GATEWAY | local_component | repository engineering"]
   node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
   node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
   node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
@@ -47,6 +48,13 @@ flowchart LR
   node_dd1c01e42bec9cba["NODE-PILOT-SANDBOX | runner | single local pilot operator"]
   node_814a7fe70af9f16d["NODE-PILOT-SQLITE | datastore | single local pilot operator"]
   node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
+  node_78f2d5f6399441fd["NODE-SEARCH-BRAVE | external_system | api.search.brave.com"]
+  node_f40e05000fb3838a["NODE-SEARCH-FIRECRAWL | external_system | api.firecrawl.dev"]
+  node_4cb2764870a21f3e["NODE-SEARCH-SCRAPINGDOG | external_system | api.scrapingdog.com"]
+  node_4646462869ac5f17["NODE-SEARCH-SEARXNG | external_system | operator configured SearXNG endpoint"]
+  node_5f139c55723ea515["NODE-SEARCH-SERPAPI | external_system | serpapi.com"]
+  node_b0214d69d31a7432["NODE-SEARCH-SERPER | external_system | google.serper.dev"]
+  node_86424fd6464e012a["NODE-SEARCH-TAVILY | external_system | api.tavily.com"]
   node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
   node_e1da543fa66b0086["NODE-STAGED-DELIVERY-SOURCE | local_component | repository engineering"]
   node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
@@ -113,6 +121,13 @@ flowchart LR
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-WORKSPACE | data_flow | filesystem"| node_2e8a7072de3f3743
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-MIRROR-DOWNLOAD | dependency | https"| node_7b13ed12e8efab1c
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-QUERY | dependency | https"| node_8acae282d21dd9c2
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-BRAVE | secret_flow | https"| node_78f2d5f6399441fd
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-FIRECRAWL | secret_flow | https"| node_f40e05000fb3838a
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SCRAPINGDOG | secret_flow | https"| node_4cb2764870a21f3e
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SEARXNG | dependency | http"| node_4646462869ac5f17
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPAPI | secret_flow | https"| node_5f139c55723ea515
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPER | secret_flow | https"| node_b0214d69d31a7432
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-TAVILY | secret_flow | https"| node_86424fd6464e012a
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8
