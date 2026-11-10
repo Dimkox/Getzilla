@@ -1,4 +1,4 @@
-"""NEW closed callback integration controls; no real runner/scanner/backend is used."""
+"""Owned contract controls; only opted-in tiny projects execute native runners."""
 from __future__ import annotations
 
 import copy
@@ -12,6 +12,160 @@ import unittest
 from unittest import mock
 
 from getzilla import verification
+
+
+class OwnedReceiptFixtureTests(unittest.TestCase):
+    """The shared fixture proves current contracts without borrowing real inputs."""
+
+    def reporter(self):
+        from tests import _support
+        reporter = getattr(_support, 'owned_verification_report', None)
+        self.assertTrue(callable(reporter), 'missing source-bound owned report fixture')
+        return reporter
+
+    def prepare(self, root):
+        from getzilla import state
+        from getzilla.continuity import submit
+        from getzilla.change import start_change
+        from tests._support import prepare_review_source, synchronize_fixture_scope
+        state.bind_session('owned-receipt')
+        submit(root, 'Fix owned report boundary', 'owned-receipt')
+        state.update_route(root, delivery_lane='full')
+        start_change(root)
+        synchronize_fixture_scope(root)
+        prepare_review_source(root)
+
+    def test_owned_project_declares_an_empty_security_world_before_initial_commit(self):
+        from tests._support import project_copy
+        self.assertIn('verification_fixture', inspect.signature(project_copy).parameters)
+        from getzilla.security_inventory import collect_inventory
+        with project_copy(git=True, verification_fixture=True) as root:
+            inventory = collect_inventory(root)
+            self.assertTrue(inventory['complete'], inventory['gaps'])
+            self.assertEqual([inventory[key] for key in ('dependencies', 'images', 'tools')], [[], [], []])
+            self.assertEqual([path.name for path in (root / '.getzilla/templates').iterdir()], ['change'])
+            self.assertTrue((root / '.getzilla/owned-verification-fixture.json').is_file())
+
+    def test_current_report_and_receipt_bind_then_reject_a_same_tree_new_head(self):
+        reporter = self.reporter()
+        from tests._support import project_copy, observed_context
+        from getzilla import receipts, state
+        from getzilla.verification_plan import report_gaps
+        import subprocess
+        with project_copy(git=True, verification_fixture=True) as root:
+            self.prepare(root)
+            report = reporter(root)
+            self.assertEqual(report['check_status'], 'pass', report['checks'])
+            self.assertEqual(report_gaps(root, report), [])
+            receipts.write_receipt(root, 'verification', 'pass', details=report, expected_context=observed_context(root))
+            self.assertEqual(receipts.get_receipt(root, state.get_active_route(root)['route_id'], 'verification')['details'], report)
+            subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'new owned head'], cwd=root, check=True)
+            self.assertTrue(report_gaps(root, report))
+
+    def test_real_validation_refuses_missing_duplicate_unplanned_and_forged_security_results(self):
+        reporter = self.reporter()
+        from tests._support import project_copy
+        from getzilla.verification_plan import report_gaps
+        with project_copy(git=True, verification_fixture=True) as root:
+            self.prepare(root)
+            original = reporter(root)
+            self.assertEqual(report_gaps(root, original), [])
+            variants = []
+            missing = copy.deepcopy(original)
+            missing.pop('required_plan')
+            variants.append(missing)
+            forged_plan = copy.deepcopy(original)
+            forged_plan['required_plan']['digest'] = 'f' * 64
+            variants.append(forged_plan)
+            for field in ('source', 'context'):
+                stale = copy.deepcopy(original)
+                stale['required_plan']['binding'][field] = {'owned_stale': True}
+                variants.append(stale)
+            duplicate = copy.deepcopy(original)
+            duplicate['checks'].append(copy.deepcopy(duplicate['checks'][0]))
+            variants.append(duplicate)
+            unplanned = copy.deepcopy(original)
+            unplanned['checks'].append({'name': 'invented-producer', 'status': 'pass', 'summary': 'not owned', 'details': []})
+            variants.append(unplanned)
+            absent = copy.deepcopy(original)
+            absent['checks'] = [row for row in absent['checks'] if row['name'] != 'security-inventory']
+            variants.append(absent)
+            for field in ('family', 'inventory_sha256', 'policy_sha256', 'data_sources'):
+                forged = copy.deepcopy(original)
+                row = next(row for row in forged['checks'] if row['name'] == 'security-inventory')
+                detail = next(detail for detail in row['details'] if detail.get('kind') == 'security-result')
+                detail[field] = [{'unavailable': True}] if field == 'data_sources' else 'forged'
+                variants.append(forged)
+            for variant in variants:
+                with self.subTest(variant=len(variant['checks'])):
+                    self.assertTrue(report_gaps(root, variant))
+
+    def test_historical_status_only_storage_remains_readable_but_unqualified(self):
+        self.reporter()
+        from tests._support import project_copy, observed_context
+        from getzilla import receipts, state
+        from getzilla.verification_plan import report_gaps
+        with project_copy(git=True, verification_fixture=True) as root:
+            self.prepare(root)
+            historical = {'captured': 'historical fixture bytes\n' * 3000}
+            receipts.write_receipt(root, 'verification', 'pass', details=historical, expected_context=observed_context(root))
+            actual = receipts.get_receipt(root, state.get_active_route(root)['route_id'], 'verification')
+            self.assertEqual(actual['details'], historical)
+            self.assertTrue(report_gaps(root, actual['details']))
+
+    def test_owned_provider_failure_cannot_be_replaced_with_all_pass_results(self):
+        reporter = self.reporter()
+        from tests._support import project_copy
+        from getzilla.verification_plan import report_gaps
+        import subprocess
+        with project_copy(git=True, verification_fixture=True) as root:
+            (root / 'broken.py').write_text('def broken(:\n')
+            subprocess.run(['git', 'add', 'broken.py'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'owned syntax refusal'], cwd=root, check=True)
+            self.prepare(root)
+            report = reporter(root)
+            self.assertEqual(report['check_status'], 'fail')
+            self.assertTrue(any(row['name'] == 'ruff' and row['status'] == 'fail' for row in report['checks']))
+            self.assertTrue(report_gaps(root, report))
+
+    def test_added_declared_dependency_restores_required_security_sources(self):
+        reporter = self.reporter()
+        from tests._support import project_copy
+        import subprocess
+        with project_copy(git=True, verification_fixture=True) as root:
+            (root / 'requirements.txt').write_text('owned-fixture-package==1.0.0\n')
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'declared owned dependency'], cwd=root, check=True)
+            self.prepare(root)
+            report = reporter(root)
+            plan = report['required_plan']
+            security = {row['check_id']: row for row in plan['obligations'] if row['check_id'].startswith('security-')
+                        or row['check_id'] == 'known-vulnerabilities'}
+            self.assertEqual(security['known-vulnerabilities']['applicability'], 'required')
+            self.assertEqual(security['security-licenses']['evidence']['dependency_count'], 1)
+            self.assertTrue(security['known-vulnerabilities']['data_sources'][0]['unavailable'])
+            self.assertEqual(report['check_status'], 'fail')
+
+    def test_owned_provider_scope_restores_environment_and_callbacks_after_failure(self):
+        import os
+        from tests._support import owned_verification_providers, project_copy
+        keys = ('GETZILLA_SECURITY_DB', 'GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE',
+                'GETZILLA_SECURITY_TOOLS', 'GETZILLA_SECURITY_ARTIFACTS', 'GETZILLA_TEST_WORKERS')
+        outer = {key: 'owned-outer-selector' for key in keys}
+        original_ruff, original_bandit = verification._ruff, verification._bandit
+        with mock.patch.dict(os.environ, outer):
+            with self.assertRaisesRegex(RuntimeError, 'owned interruption'):
+                with project_copy(git=True, verification_fixture=True) as root:
+                    with owned_verification_providers(root):
+                        self.assertEqual(os.environ['GETZILLA_TEST_WORKERS'], '1')
+                        self.assertEqual(os.environ['GETZILLA_OSV_ONLINE'], '0')
+                        for key in keys:
+                            if key not in ('GETZILLA_TEST_WORKERS', 'GETZILLA_OSV_ONLINE'):
+                                self.assertTrue(Path(os.environ[key]).is_relative_to(root))
+                        raise RuntimeError('owned interruption')
+            self.assertEqual({key: os.environ[key] for key in keys}, outer)
+        self.assertIs(verification._ruff, original_ruff)
+        self.assertIs(verification._bandit, original_bandit)
 
 
 class RequiredDispatchTests(unittest.TestCase):

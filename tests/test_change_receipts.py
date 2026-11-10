@@ -768,7 +768,7 @@ class ReceiptTests(unittest.TestCase):
 
 class ContourTests(unittest.TestCase):
     def test_contour_route_change_verify_review_has_no_evidence_gaps(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
             base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
             route['base_commit'] = base
@@ -782,7 +782,7 @@ class ContourTests(unittest.TestCase):
             self.assertIsNotNone(active)
             change = root / str(active['path'])
             tests_dir = root / 'tests'
-            tests_dir.mkdir()
+            tests_dir.mkdir(exist_ok=True)
             (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
             evidence = change / 'evidence'
             evidence.mkdir(parents=True, exist_ok=True)

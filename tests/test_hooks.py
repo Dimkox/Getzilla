@@ -1399,16 +1399,20 @@ class HookTests(unittest.TestCase):
             self.assertIn('missing/stale evidence', message.lower())
 
     def test_stop_allows_current_evidence(self) -> None:
-        with project_copy(git=True) as root:
+        from tests._support import owned_verification_report
+        with project_copy(git=True, verification_fixture=True) as root:
             from tests.test_package_status import PackageStatusTests
             _, _, _, package = PackageStatusTests().prepare(root, complete=True)
             # Structural package completeness does not finish its native task list.
             (package / 'tasks.md').write_text('# Tasks\n\n- [x] Complete fixture work.\n', encoding='utf-8')
             (root / 'feature.txt').write_text('changed')
             review = prepare_review_source(root)
+            report = owned_verification_report(root)
+            self.assertEqual(report['check_status'], 'pass', report['checks'])
             current = get_active_route(root)
             for kind in current['required_evidence']:
-                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {'expected_context': observed_context(root)}))
+                write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {
+                    'expected_context': observed_context(root), 'details': report}))
             self.assertEqual(validate_evidence(root, current), [])
             _, data, err = run_hook(root, 'stop_gate.py', {
                 'cwd': str(root), 'sessionId': current['session_id'], 'stopHookActive': False,
