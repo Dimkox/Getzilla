@@ -250,6 +250,8 @@ class JournalRuntimeRepairTests(unittest.TestCase):
         self.assertTrue(all(row['run_id'] == run.run_id and row['actor'] == 'worker-0' for row in events))
         health = json.loads((run.path / 'worker-0.json').read_text())
         self.assertEqual((health['run_id'], health['nonce'], health['actor']), (run.run_id, run.nonce, 'worker-0'))
+        index = json.loads((run.path / 'index.json').read_text())
+        self.assertEqual((index['run_id'], index['nonce']), (run.run_id, run.nonce))
         run.close()
         self.assertEqual(run.status, 'closed')
 
