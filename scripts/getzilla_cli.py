@@ -98,7 +98,8 @@ def test_workers() -> int:
 
 
 def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
-    with diagnostics.session(HOME, 'test-cli') as history:
+    from getzilla.util import find_root
+    with diagnostics.session(find_root(), 'test-cli') as history:
         return _run_tests(args, require_parallel=require_parallel, history=history)
 
 

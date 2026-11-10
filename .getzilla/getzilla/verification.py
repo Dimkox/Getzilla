@@ -3143,9 +3143,9 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     report = state.report
     cancellation.check()
     checked_fingerprint = tree_fingerprint(root)
-    if diagnostics.current():
-        diagnostics.current().bind_source(checked_fingerprint)
     route = get_active_route(root)
+    if diagnostics.current():
+        diagnostics.current().bind_source(checked_fingerprint, session_id=(route or {}).get('session_id'))
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     state.context_route_id = (route or {}).get('route_id')
     if route and not legacy_evidence_allowed(route):

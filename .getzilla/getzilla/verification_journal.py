@@ -28,6 +28,7 @@ _CURRENT = ContextVar('verification_journal', default=None)
 _ID = re.compile(r'(?:[a-z][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_-]{0,63})\Z')
 _DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 _RUN = re.compile(r'[0-9a-f]{32}\Z')
+_SESSION = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 _ACTOR = re.compile(r'controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3])\Z')
 _STAGES = {'action', 'command', 'check', 'collection', 'setup', 'call', 'teardown', 'test', 'run', 'cleanup'}
 _STATES = {'start', 'end', 'pass', 'fail', 'skip', 'error', 'cancelled', 'timeout', 'unknown', 'expected-failure', 'unexpected-success'}
@@ -318,6 +319,7 @@ class Run:
         self.run_id, self.nonce = uuid.uuid4().hex, uuid.uuid4().hex
         self.status, self.path = 'unavailable', None
         self.source = source if type(source) is str and _DIGEST.fullmatch(source) else None
+        self.session_id = None
         self.entrypoint = entrypoint
         try:
             if not _ID.fullmatch(entrypoint):
@@ -359,7 +361,9 @@ class Run:
                 run_handle = _directory(path)
                 try:
                     _publish(run_handle, 'index.json', {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
-                        'source': self.source, 'entrypoint': entrypoint, 'status': 'active', 'expected': []}, 16384)
+                        'source': self.source, 'source_status': 'reported-integrity-only' if self.source else 'unavailable',
+                        'session_id': None, 'session_status': 'unavailable',
+                        'entrypoint': entrypoint, 'status': 'active', 'expected': []}, 16384)
                 finally:
                     fsx.close_dir(run_handle)
                 registry['runs'].append({'run_id': self.run_id, 'nonce': self.nonce, 'status': 'active'})
@@ -404,17 +408,23 @@ class Run:
     def summary(self):
         return {'version': 1, 'run_id': self.run_id, 'index': self.relative_index if self.path else None,
                 'status': 'unavailable' if self.writer is None or self.writer.disabled else self.status,
+                'source_status': 'reported-integrity-only' if self.source is not None else 'unavailable',
+                'session_status': 'canonical-route-observation' if self.session_id is not None else 'unavailable',
                 'completeness': 'unknown-until-terminal-and-all-actors-validated'}
 
-    def bind_source(self, digest):
+    def bind_source(self, digest, session_id=None):
         if self.path is None or type(digest) is not str or not _DIGEST.fullmatch(digest):
             return
         handle = _directory(self.path)
         try:
             value = json.loads(_read(handle, 'index.json', 16384))
             value['source'] = digest
+            value['source_status'] = 'reported-integrity-only'
+            value['session_id'] = session_id if type(session_id) is str and _SESSION.fullmatch(session_id) else None
+            value['session_status'] = 'canonical-route-observation' if value['session_id'] is not None else 'unavailable'
             _publish(handle, 'index.json', value, 16384)
             self.source = digest
+            self.session_id = value['session_id']
         except (OSError, ValueError):
             self.status = 'unavailable'
         finally:

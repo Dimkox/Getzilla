@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import io
+import importlib.util
 import json
 import os
 import subprocess
@@ -196,8 +197,62 @@ class JournalStorageTests(unittest.TestCase):
             run.close()
             self.assertEqual(run.status, 'closed')
 
+    def test_actual_pytest_plugin_loads_and_records_owned_current_run_phases(self):
+        root = self.root()
+        (root / 'tests').mkdir(mode=0o700)
+        (root / 'pytest.ini').write_text('[pytest]\n')
+        (root / 'tests/test_owned.py').write_text("import sys\nsys.addaudithook(lambda e,a: (_ for _ in ()).throw(RuntimeError('network denied')) if e.startswith('socket.') else None)\ndef test_ok():\n    assert True\n")
+        run = journal.Run(root, None, 'owned-tests')
+        environment = run.child_environment({'PATH': os.environ.get('PATH', ''), 'HOME': str(root),
+            'PYTHONPATH': str(ROOT / '.getzilla'), 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'})
+        result = subprocess.run([sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+            '-p', 'getzilla.pytest_progress', '-c', str(root / 'pytest.ini'), '--rootdir', str(root),
+            '--noconftest', 'tests/test_owned.py'], cwd=root, env=environment,
+            capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0)
+        records = [json.loads(line) for p in run.path.glob('worker-*.jsonl') for line in p.read_bytes().splitlines()]
+        self.assertTrue(records)
+        self.assertTrue(all(r['run_id'] == run.run_id for r in records))
+        for stage in ('collection', 'setup', 'call', 'teardown'):
+            self.assertTrue(any(r['stage'] == stage and r['state'] == 'start' for r in records), stage)
+            self.assertTrue(any(r['stage'] == stage and r['state'] == 'end' for r in records), stage)
+        run.close()
+        self.assertEqual(run.status, 'closed')
+
 
 class JournalIntegrationTests(unittest.TestCase):
+    def test_installed_sdk_and_selected_project_keep_history_separate(self):
+        with tempfile.TemporaryDirectory(prefix='owned-sdk-project-', dir=ROOT / '.getzilla/runtime') as temporary:
+            root = Path(temporary)
+            sdk, project = root / 'sdk', root / 'project'
+            sdk.mkdir(mode=0o700)
+            project.mkdir(mode=0o700)
+            (project / '.getzilla').mkdir(mode=0o700)
+            spec = importlib.util.spec_from_file_location('owned_logging_cli', ROOT / 'scripts/getzilla_cli.py')
+            cli = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cli)
+            def backend(args, *, require_parallel=False, history=None):
+                self.assertEqual(history.root, project)
+                self.assertIsNotNone(history.writer)
+                self.assertEqual(history.summary()['source_status'], 'unavailable')
+                self.assertEqual(history.summary()['session_status'], 'unavailable')
+                return 0
+            with patch.object(cli, 'HOME', sdk), patch.object(os, 'getcwd', return_value=str(project)), \
+                    patch.object(cli, '_run_tests', side_effect=backend):
+                self.assertEqual(cli.run_tests([]), 0)
+            self.assertTrue((project / '.getzilla/runtime/verification-history').is_dir())
+            self.assertFalse((sdk / '.getzilla').exists())
+
+    def test_reported_source_and_canonical_session_are_explicit_integrity_observations(self):
+        with tempfile.TemporaryDirectory(prefix='owned-source-binding-', dir=ROOT / '.getzilla/runtime') as temporary:
+            run = journal.Run(Path(temporary), None, 'owned-tests')
+            run.bind_source('a' * 64, '01a1a6ba-10e8-7bc1-81b1-684978be3580')
+            index = json.loads((run.path / 'index.json').read_text())
+            self.assertEqual(index['source'], 'a' * 64)
+            self.assertEqual(index['source_status'], 'reported-integrity-only')
+            self.assertEqual(index['session_status'], 'canonical-route-observation')
+            run.close()
+
     def test_util_command_preserves_exact_result_and_arguments_with_safe_observation(self):
         with tempfile.TemporaryDirectory(prefix='owned-command-', dir=ROOT / '.getzilla/runtime') as temporary:
             root = Path(temporary)
