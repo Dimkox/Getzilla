@@ -2738,7 +2738,7 @@
       "secrets": [
         "SECRET-GITHUB-APP"
       ],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "trust_domain": "TD-TRUST-CI-CONTROL",
       "type": "local_component"
     },
     {
