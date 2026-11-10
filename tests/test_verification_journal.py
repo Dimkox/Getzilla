@@ -247,7 +247,9 @@ class JournalRuntimeRepairTests(unittest.TestCase):
         self.assertEqual(json.loads((progress / 'worker-0.json').read_text())['state'], 'idle')
         events = [json.loads(line) for path in run.path.glob('worker-0-*.jsonl') for line in path.read_text().splitlines()]
         self.assertTrue({'setup', 'call', 'teardown'} <= {row['stage'] for row in events if row['state'] == 'end'})
-        self.assertTrue(all(row['nonce'] == run.nonce for row in events))
+        self.assertTrue(all(row['run_id'] == run.run_id and row['actor'] == 'worker-0' for row in events))
+        health = json.loads((run.path / 'worker-0.json').read_text())
+        self.assertEqual((health['run_id'], health['nonce'], health['actor']), (run.run_id, run.nonce, 'worker-0'))
         run.close()
         self.assertEqual(run.status, 'closed')
 
