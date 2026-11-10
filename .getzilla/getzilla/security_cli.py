@@ -580,6 +580,13 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     return report
 
 
+def _evaluation_kwargs(args, profile, run) -> dict:
+    options = {'refresh': args.refresh, 'provision': args.provision_tools}
+    if args.input_profile is not None:
+        options.update(profile=profile, run=run)
+    return options
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='Run expanded security with a separately selected trusted checker checkout.')
     parser.add_argument('--root', type=Path, required=True)
@@ -619,7 +626,7 @@ def main(argv=None) -> int:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:
             report = evaluate(args.root, args.database, args.artifacts, args.tools,
-                              refresh=args.refresh, provision=args.provision_tools, profile=profile, run=run)
+                              **_evaluation_kwargs(args, profile, run))
     except (OSError, ValueError, RuntimeError):
         report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
                   'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused'}

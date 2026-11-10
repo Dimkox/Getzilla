@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import shlex
 from pathlib import Path
 import tempfile
 import tarfile
@@ -598,3 +599,73 @@ class ActionMetadataClosureTests(unittest.TestCase):
         with patch.object(security_inventory, '_parse_inventory_yaml', side_effect=security_inventory._YamlError(
                 'yaml-parser-unavailable', 'owned missing parser contrast')):
             self.assertEqual(evaluate(prefix + '[]\n'), 'fail')
+
+
+class PublicInputCliCompatibilityTests(unittest.TestCase):
+    def arguments(self, directory):
+        return ['--root', str(directory), '--database', str(directory / 'database'),
+                '--artifacts', str(directory / 'artifacts'), '--tools', str(directory / 'tools'),
+                '--json-out', str(directory / 'report.json')]
+
+    def test_legacy_default_dispatch_retains_original_keyword_contract(self):
+        calls = []
+        def legacy(root, database, artifacts, tools, *, refresh=False, provision=False):
+            calls.append((root, database, artifacts, tools, refresh, provision))
+            return {'status': 'pass', 'checks': [], 'qualification_gaps': []}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with patch.object(security_cli, 'evaluate', side_effect=legacy), patch('sys.stdout', io.StringIO()):
+                try:
+                    result = security_cli.main(self.arguments(directory))
+                except TypeError:
+                    result = 'legacy-keyword-contract-rejected'
+            self.assertEqual(result, 0)
+            self.assertEqual(calls, [(directory, directory / 'database', directory / 'artifacts',
+                                      directory / 'tools', False, False)])
+
+    def test_explicit_profile_dispatch_retains_profile_and_run_keywords(self):
+        selected = {'owned': 'dispatch-only profile placeholder'}
+        run = {'provider': 'owned', 'run_id': '17', 'run_attempt': '2'}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            profile = directory / 'profile.json'
+            profile.write_bytes(encoded(selected))
+            with patch.object(security_cli, 'evaluate', return_value={
+                    'status': 'pass', 'checks': [], 'qualification_gaps': []}) as evaluate, \
+                 patch.object(security_cli, 'ci_run_context', return_value=run), patch('sys.stdout', io.StringIO()):
+                self.assertEqual(security_cli.main(self.arguments(directory) + ['--input-profile', str(profile)]), 0)
+            self.assertEqual(evaluate.call_args.kwargs, {'refresh': False, 'provision': False,
+                                                        'profile': selected, 'run': run})
+
+    def test_snapshot_recovery_declares_then_prepares_an_explicit_profile(self):
+        from getzilla import security_data
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / 'database'
+            database.mkdir(mode=0o700)
+            with self.assertRaises(SecurityDataError) as caught:
+                security_data.read_snapshot(database, 'osv:PyPI', now=NOW)
+            hint = str(caught.exception)
+            self.assertIn('declare current profile with ', hint)
+            declaration = shlex.split(hint.split('declare current profile with ', 1)[1].split('; refresh with ', 1)[0])
+            preparation = shlex.split(hint.split('refresh with ', 1)[1].split(' on a network-enabled host', 1)[0])
+            self.assertLess(hint.index('declare current profile with '), hint.index('; refresh with '))
+            self.assertEqual(declaration[:2], ['python3', 'scripts/getzilla_security.py'])
+            self.assertEqual(declaration[declaration.index('--write-input-profile') + 1], 'PROFILE')
+            self.assertNotIn('--refresh', declaration)
+            self.assertNotIn('--prepare-inputs', declaration)
+            self.assertEqual(preparation[preparation.index('--input-profile') + 1], 'PROFILE')
+            self.assertIn('--prepare-inputs', preparation)
+            self.assertIn('--refresh', preparation)
+            self.assertIn('UNVERIFIED', hint)
+            self.assertIn('incomplete inputs', hint)
+
+    def test_acquisition_without_profile_refuses_before_source_callbacks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for flags in ({'refresh': True}, {'provision': True}):
+                with self.subTest(flags=flags), patch.object(security_cli, 'collect_inventory', side_effect=AssertionError(
+                        'source callback must remain unreachable')) as collect, self.assertRaisesRegex(
+                            SecurityDataError, 'explicit current public input profile'):
+                    security_cli.evaluate(directory, directory / 'database', directory / 'artifacts',
+                                          directory / 'tools', **flags)
+                collect.assert_not_called()
