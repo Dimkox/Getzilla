@@ -1708,6 +1708,122 @@ def _network_call_is_applicable(
     return bool(tokens & _NETWORK_APPLICABILITY_TOKENS)
 
 
+def _byte_only_http_imports(tree: ast.AST) -> set[str]:
+    """Prove response parsing only, not the behavior of arbitrary imported code."""
+    if not namespace_is_closed(tree, allow_instrumentation=True):
+        return set()
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    events = binding_events(tree)
+    bindings: dict[tuple[ast.AST | None, str], list[ast.AST]] = defaultdict(list)
+    for event in events:
+        bindings[(binding_owner(event.node, parents), event.name)].append(event.node)
+
+    def resolve(name: ast.Name) -> ast.AST | None:
+        scope = binding_owner(name, parents)
+        while True:
+            found = bindings.get((scope, name.id), ())
+            if found:
+                return found[0] if len(found) == 1 else None
+            if scope is None:
+                return None
+            scope = binding_owner(scope, parents)
+            # A method closes over enclosing functions/globals, never class locals.
+            while isinstance(scope, ast.ClassDef):
+                scope = binding_owner(scope, parents)
+
+    def imported(value: ast.AST) -> str | None:
+        parts = []
+        while isinstance(value, ast.Attribute):
+            if not isinstance(value.ctx, ast.Load):
+                return None
+            parts.append(value.attr)
+            value = value.value
+        if not isinstance(value, ast.Name):
+            return None
+        event = resolve(value)
+        if isinstance(event, ast.Import):
+            aliases = [a for a in event.names if (a.asname or a.name.split('.')[0]) == value.id]
+            prefix = aliases[0].name if aliases and aliases[0].asname else value.id
+        elif isinstance(event, ast.ImportFrom) and event.level == 0:
+            aliases = [a for a in event.names if (a.asname or a.name) == value.id]
+            prefix = event.module + '.' + aliases[0].name if aliases else ''
+        else:
+            return None
+        return '.'.join((prefix, *reversed(parts)))
+
+    http_events = []
+    for event in events:
+        node = event.node
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == 'http.client' and (alias.asname or alias.name.split('.')[0]) == event.name:
+                    http_events.append((event.name, node, alias.name))
+        elif isinstance(node, ast.ImportFrom) and node.module == 'http.client':
+            if node.level or any(a.name != 'HTTPResponse' for a in node.names):
+                return set()
+            http_events.extend((a.asname or a.name, node, 'http.client.' + a.name) for a in node.names)
+    if not http_events:
+        return set()
+    # A module/class alias cannot escape or be mutated into another supplier.
+    for node in ast.walk(tree):
+        if imported(node) == 'io.BytesIO' and isinstance(node, (ast.Name, ast.Attribute)):
+            parent = parents.get(node)
+            if not ((isinstance(parent, ast.Call) and parent.func is node)
+                    or (isinstance(parent, ast.ClassDef) and node in parent.bases)):
+                return set()
+        if isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
+            base = node
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name) and imported(base) in {'io', 'http', 'http.client'}:
+                return set()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and imported(node) == 'io':
+            parent = parents.get(node)
+            if not isinstance(parent, ast.Attribute) or parent.attr not in {'BytesIO', 'StringIO'}:
+                return set()
+    calls = set()
+    for name, event, _ in http_events:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != name:
+                continue
+            if resolve(node) is not event:
+                return set()
+            member = node
+            while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
+                member = parents[member]
+            call = parents.get(member)
+            if imported(member) != 'http.client.HTTPResponse' or not isinstance(call, ast.Call) or call.func is not member:
+                return set()
+            if len(call.args) != 1 or call.keywords:
+                return set()
+            supplier = call.args[0]
+            if not isinstance(supplier, ast.Call) or not isinstance(supplier.func, ast.Name) or supplier.args or supplier.keywords:
+                return set()
+            cls = resolve(supplier.func)
+            if (not isinstance(cls, ast.ClassDef) or cls.bases or cls.keywords or cls.decorator_list
+                    or getattr(cls, 'type_params', ()) or len(cls.body) != 1):
+                return set()
+            method = cls.body[0]
+            if (not isinstance(method, ast.FunctionDef) or method.name != 'makefile' or method.decorator_list or method.returns
+                    or method.args.vararg or method.args.kwarg or method.args.kwonlyargs or method.args.defaults
+                    or getattr(method, 'type_params', ())
+                    or len(method.args.posonlyargs + method.args.args) != 2
+                    or any(a.annotation for a in method.args.posonlyargs + method.args.args) or len(method.body) != 1
+                    or not isinstance(method.body[0], ast.Return)):
+                return set()
+            value = method.body[0].value
+            if (not isinstance(value, ast.Call) or imported(value.func) != 'io.BytesIO' or value.keywords
+                    or len(value.args) != 1 or not isinstance(value.args[0], ast.Constant)
+                    or type(value.args[0].value) is not bytes or len(value.args[0].value) > 65536):
+                return set()
+            uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                    and n.id == cls.name and resolve(n) is cls]
+            if uses != [supplier.func]:
+                return set()
+            calls.add(call)
+    return {item[2] for item in http_events} if calls else set()
+
+
 def _network_clients(
     snapshot: ArchitectureSnapshot,
     diff: ArchitectureDiff,
@@ -1725,10 +1841,13 @@ def _network_clients(
         try:
             tree = python.tree(path)
             imports = _import_targets(tree)
+            byte_only = _byte_only_http_imports(tree)
         except SyntaxError as exc:
             unsupported.append(f"{path}: {exc}")
             continue
         for imported in imports:
+            if imported in byte_only:
+                continue
             protocol = _network_protocol(imported)
             if protocol:
                 if imported.split(".")[0] == "httpx" and protocol == "https" and _httpx_uses_bounded_uds(tree):
@@ -1737,6 +1856,8 @@ def _network_clients(
                     protocol = "unix_http"
                 clients.append((path, protocol, owner))
         for imported, call in _called_imports(tree):
+            if imported in byte_only:
+                continue
             if _network_protocol(imported) is not None:
                 continue
             if _network_call_is_applicable(imported, call, project_roots):
@@ -1817,9 +1938,113 @@ def _production_imports(diff: ArchitectureDiff, python: _PythonInventory) -> Fit
     )
 
 
-def _trust_ci_metadata_paths(diff: ArchitectureDiff) -> tuple[str, ...]:
+def _component_metadata_head(diff: ArchitectureDiff, base: dict, head: dict, root: Path | None) -> tuple[dict, bool] | None:
+    """Closed source declarations only; network/secret/authority checks still run."""
+    old = {node['id']: node for node in base['nodes']}
+    added = {node['id']: node for node in head['nodes'] if node['id'] not in old}
+    if not added:
+        return head, False
+    if root is None or diff.head_kind == 'worktree':
+        return None
+    artifacts = {item.path: item for item in diff.artifacts}
+    domains = {d['id']: d['kind'] for d in base['trust_domains']}
+    data = {d['id'] for d in base['data_classifications'] if not d['contains_secret']}
+    secrets = {s['id'] for s in base['secret_classes']}
+    profiles = {}
+    source_paths = tuple(path for node in added.values() for path in node['repository_paths'])
+    if any(str(PurePosixPath(path)) != path or '..' in PurePosixPath(path).parts or any(c in path for c in '*?[]\\')
+           or not path.startswith('trust-ci/src/adaptive_trust_ci/') or not path.endswith('.py') for path in source_paths):
+        return None
+    try:
+        source_bytes = read_diff_files(root, diff, source_paths)
+        prior_bytes = read_diff_files(root, diff, source_paths, 'base')
+    except (ArchitectureError, OSError):
+        return None
+    for identity, node in added.items():
+        runtime = node['runtime']
+        if (node['type'] != 'local_component' or node['public_contracts'] or node['data_classification'] not in data
+                or runtime['kind'] != 'python_process' or runtime['lifecycle'] != 'on_demand'
+                or runtime['evidence'] != 'source_described' or not node['repository_paths']):
+            return None
+        local = domains.get(node['trust_domain']) == 'local_preflight' and not node['secrets'] and runtime['network'] == 'none'
+        observer = (domains.get(node['trust_domain']) == 'trust_ci_control' and runtime['network'] == 'declared_egress'
+                    and set(node['secrets']) <= secrets & {'SECRET-GITHUB-APP', 'SECRET-READ-TOKEN'})
+        if not local and not observer:
+            return None
+        profiles[identity] = 'local' if local else 'observer'
+        for path in node['repository_paths']:
+            item = artifacts.get(path)
+            if (str(PurePosixPath(path)) != path or '..' in PurePosixPath(path).parts or any(c in path for c in '*?[]\\')
+                    or not path.startswith('trust-ci/src/adaptive_trust_ci/') or not path.endswith('.py')
+                    or item is None or item.status != 'added' or item.base_digest is not None or item.base_size
+                    or item.head_digest is None or item.head_size <= 0
+                    or prior_bytes[path] is not None or source_bytes[path] is None
+                    or len(source_bytes[path]) != item.head_size or hashlib.sha256(source_bytes[path]).hexdigest() != item.head_digest
+                    or any(_matches(path, n['repository_paths']) for n in base['nodes'])
+                    or [n['id'] for n in head['nodes'] if _matches(path, n['repository_paths'])] != [identity]):
+                return None
+    old_edges = {e['id'] for e in base['edges']}
+    edges = [e for e in head['edges'] if e['id'] not in old_edges]
+    residual = {**head, 'nodes': [n for n in head['nodes'] if n['id'] not in added],
+                'edges': [e for e in head['edges'] if e['id'] in old_edges]}
+    if residual != base:
+        return None
+    all_nodes = {n['id']: n for n in head['nodes']}
+    observed = set()
+    for edge in edges:
+        failure = edge['failure_behavior']
+        if (edge['from'] not in added or edge['direction'] != 'from_to' or edge['sync_or_async'] != 'synchronous'
+                or not 1 <= len(edge['allowed_data']) <= 2 or not set(edge['allowed_data']) <= data
+                or failure['mode'] != 'fail_closed' or failure['terminal_action'] != 'reject' or failure['max_retries'] != 0
+                or not 0 <= failure['timeout_ms'] <= 20000
+                or failure['observable_signal'] not in {s['id'] for s in base['signals']} or 'secret_classes' in edge):
+            return None
+        dependency = (edge['type'] == 'dependency' and edge['protocol'] == 'python'
+                      and edge['network_policy'] == 'no_network' and edge['authentication'] == 'local_os'
+                      and all_nodes[edge['to']]['type'] == 'local_component'
+                      and all_nodes[edge['to']]['runtime']['kind'] == 'python_process'
+                      and all_nodes[edge['to']]['runtime']['lifecycle'] == 'on_demand')
+        endpoint = old.get(edge['to'], {})
+        observation = (profiles[edge['from']] == 'observer' and edge['to'] == 'NODE-GITHUB'
+                       and endpoint.get('type') == 'external_system' and domains.get(endpoint.get('trust_domain')) == 'external_platform'
+                       and edge['type'] == 'data_flow' and edge['protocol'] == 'https'
+                       and edge['network_policy'] == 'allowlisted_egress' and edge['authentication'] == 'github_app'
+                       and failure['timeout_ms'] > 0)
+        if not dependency and not observation:
+            return None
+        if observation:
+            observed.add(edge['from'])
+    if any(role == 'observer' and identity not in observed for identity, role in profiles.items()):
+        return None
+    return residual, True
+
+
+def _paired_component_views(root: Path | None, diff: ArchitectureDiff) -> tuple[str, ...] | None:
+    if root is None or diff.head_kind == 'worktree' or diff._base_state is None or diff._head_state is None:
+        return None
+    from .architecture_diagrams import DIAGRAM_NAMES, render_diagrams
+    names = tuple('architecture/generated/' + name + '.mmd' for name in DIAGRAM_NAMES)
+    artifacts = {item.path: item for item in diff.artifacts}
+    try:
+        for side, state in (('base', diff._base_state), ('head', diff._head_state)):
+            rendered = render_diagrams(state.snapshot)
+            actual = read_diff_files(root, diff, names, side)
+            for name, path in zip(DIAGRAM_NAMES, names):
+                expected = rendered[name].encode('utf-8')
+                item = artifacts.get(path)
+                if actual[path] != expected or len(expected) > 1000000:
+                    return None
+                if item is not None and (item.status != 'modified' or getattr(item, side + '_size') != len(expected)
+                        or getattr(item, side + '_digest') != hashlib.sha256(expected).hexdigest()):
+                    return None
+        return names
+    except (ArchitectureError, OSError, KeyError, UnicodeError):
+        return None
+
+
+def _trust_ci_metadata_paths(diff: ArchitectureDiff, root: Path | None = None) -> tuple[str, ...]:
     """Qualify source bindings, never runtime authority, from validated paired states."""
-    if diff._base_state is None:
+    if diff._base_state is None or diff._head_state is None:
         return ()
     base = diff._base_state.snapshot.system
     head = diff._head_state.snapshot.system
@@ -1831,6 +2056,11 @@ def _trust_ci_metadata_paths(diff: ArchitectureDiff) -> tuple[str, ...]:
         return bool(item is not None and item.status in {"added", "modified"}
                     and item.head_digest is not None and item.head_size > 0
                     and item.head_digest != item.base_digest)
+
+    component = _component_metadata_head(diff, base, head, root)
+    if component is None:
+        return ()
+    head, new_components = component
 
     # Remove only exact newly added public descriptors and owner memberships.
     # The existing envelope comparison below then checks every surrounding field.
@@ -1948,7 +2178,7 @@ def _trust_ci_metadata_paths(diff: ArchitectureDiff) -> tuple[str, ...]:
                 and api.get("trust_domain") in domains
             ):
                 bindings_valid = False
-    if bindings_valid and changed_bindings and "architecture/system.yaml" in diff.changed_paths:
+    if bindings_valid and (changed_bindings or new_components) and "architecture/system.yaml" in diff.changed_paths:
         qualified.append("architecture/system.yaml")
     if bindings_valid and same_envelope and admitted and "architecture/system.yaml" in diff.changed_paths:
         qualified.extend(("architecture/system.yaml", *public_paths))
@@ -1972,15 +2202,21 @@ def _trust_ci_metadata_paths(diff: ArchitectureDiff) -> tuple[str, ...]:
         and before["NODE-TRUST-CI-API"]["type"] == "service"
     ):
         qualified.append(contract_path)
+    if 'architecture/system.yaml' in qualified and (new_components or any(
+            path.startswith('architecture/generated/') for path in diff.changed_paths)):
+        views = _paired_component_views(root, diff)
+        if views is None:
+            return ()
+        qualified.extend(path for path in views if path in diff.changed_paths)
     return tuple(sorted(set(qualified)))
 
 
-def _change_separation(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff) -> FitnessResult:
+def _change_separation(snapshot: ArchitectureSnapshot, diff: ArchitectureDiff, root: Path | None = None) -> FitnessResult:
     rules = snapshot.rules["change_separation_policies"]
     predicate = "changed paths intersect an implementation or Trust CI separation boundary"
     if not rules:
         return _not_applicable("change_separation", predicate, diff.changed_paths, "no_declared_rules")
-    metadata = _trust_ci_metadata_paths(diff)
+    metadata = _trust_ci_metadata_paths(diff, root)
     predicate += "; qualified Trust CI metadata from paired source/owner bindings: " + repr(metadata)
     findings: list[str] = []
     applicable = False
@@ -3913,10 +4149,13 @@ def _new_import_family(
 
 
 def _network_families(tree: ast.AST, project_roots: set[str]) -> set[str]:
+    byte_only = _byte_only_http_imports(tree)
     values = {
-        imported for imported in _import_targets(tree) if _network_protocol(imported) is not None
+        imported for imported in _import_targets(tree) if imported not in byte_only and _network_protocol(imported) is not None
     }
     for imported, call in _called_imports(tree):
+        if imported in byte_only:
+            continue
         if _network_protocol(imported) is not None:
             values.add(imported)
         elif _network_call_is_applicable(imported, call, project_roots):
@@ -4082,7 +4321,7 @@ def evaluate_fitness(
                 _background_jobs(
                     repository, snapshot, diff, python, queue_provenance
                 ),
-                _change_separation(snapshot, diff),
+                _change_separation(snapshot, diff, root),
                 _code_budget(snapshot, diff, python),
                 _contract_compatibility(snapshot, diff),
                 _forbidden_edges(snapshot, diff),
