@@ -242,6 +242,8 @@ class Scope:
                 return io.BytesIO(b"owned")
         return http.HTTPResponse(Socket())
 '''
+        default_scope = self.PARSER.replace('def parse():', 'Socket = unknown\ndef parse(value=http.client.HTTPResponse(Socket())):').replace(
+            '    response = http.client.HTTPResponse(Socket())\n    response.begin()\n    return response.read()', '    return value')
         variants = [self.PARSER.replace('Socket())', 'unknown_socket)'),
             self.PARSER.replace('return io.BytesIO(', 'return factory('),
             self.PARSER + '\nhttp.client.HTTPSConnection("example.test")\n',
@@ -251,7 +253,7 @@ class Scope:
             self.PARSER.replace('class Socket:', 'class Socket(External):'),
             self.PARSER.replace('class Socket:', '@decorator\n    class Socket:'),
             self.PARSER.replace('response = http.client', 'Socket.makefile = replacement\n    response = http.client'),
-            self.PARSER.replace('return io.BytesIO(', 'SIDE_EFFECT()\n            return io.BytesIO('), class_scope_alias]
+            self.PARSER.replace('return io.BytesIO(', 'SIDE_EFFECT()\n            return io.BytesIO('), class_scope_alias, default_scope]
         for source in variants:
             with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
                 result, families, trigger = self._network(source)

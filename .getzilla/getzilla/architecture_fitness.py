@@ -1794,13 +1794,16 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
             call = parents.get(member)
             if imported(member) != 'http.client.HTTPResponse' or not isinstance(call, ast.Call) or call.func is not member:
                 return set()
+            statement = parents.get(call)
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Return)) or statement.value is not call:
+                return set()
             if len(call.args) != 1 or call.keywords:
                 return set()
             supplier = call.args[0]
             if not isinstance(supplier, ast.Call) or not isinstance(supplier.func, ast.Name) or supplier.args or supplier.keywords:
                 return set()
             cls = resolve(supplier.func)
-            if (not isinstance(cls, ast.ClassDef) or cls.bases or cls.keywords or cls.decorator_list
+            if (not isinstance(cls, ast.ClassDef) or cls.lineno >= call.lineno or cls.bases or cls.keywords or cls.decorator_list
                     or getattr(cls, 'type_params', ()) or len(cls.body) != 1):
                 return set()
             method = cls.body[0]
