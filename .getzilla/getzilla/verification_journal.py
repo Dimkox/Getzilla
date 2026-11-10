@@ -14,6 +14,7 @@ import stat
 import sys
 import time
 import unittest
+from types import FunctionType, MethodType
 import uuid
 
 from . import fsx
@@ -622,11 +623,29 @@ def case_identity(test):
     return module.replace('.', '/') + '.py::' + type(test).__name__ + '::' + str(getattr(test, '_testMethodName', 'unknown'))
 
 
-def case_location(test):
-    method = getattr(test, getattr(test, '_testMethodName', ''), None)
-    code = getattr(method, '__code__', None)
-    if code is not None:
-        return (case_identity(test).split('::')[0], code.co_firstlineno)
+def case_location(test, root=None):
+    try:
+        method = getattr(test, getattr(test, '_testMethodName', ''), None)
+        if isinstance(method, MethodType):
+            method = method.__func__
+        seen = set()
+        for _ in range(8):
+            if not isinstance(method, FunctionType) or id(method) in seen:
+                return None
+            seen.add(id(method))
+            wrapped = method.__dict__.get('__wrapped__')
+            if wrapped is None:
+                break
+            method = wrapped
+        else:
+            return None
+        code = method.__code__
+        if root is not None:
+            path = Path(code.co_filename).relative_to(root).as_posix()
+            if test_identity(path) is not None and test_identity(path)['path'] == path and 1 <= code.co_firstlineno <= 1000000:
+                return (path, code.co_firstlineno)
+    except Exception:
+        pass  # Unsupported metadata cannot change the original skip outcome.
     return None
 
 
@@ -677,7 +696,7 @@ def unittest_runner(writer):
             super().addError(test, err)
 
         def addSkip(self, test, reason):
-            writer.emit('test', 'end', nodeid=case_identity(test), outcome='skip', skip=skip_classification(reason), location=case_location(test))
+            writer.emit('test', 'end', nodeid=case_identity(test), outcome='skip', skip=skip_classification(reason), location=case_location(test, writer.source_root))
             super().addSkip(test, reason)
 
         def addExpectedFailure(self, test, err):
@@ -727,8 +746,10 @@ def _validated_events(raw, run_id, actor):
             raise ValueError('journal-record-schema')
         if 'step' in row and (type(row['step']) is not str or not _ID.fullmatch(row['step'])):
             raise ValueError('journal-record-step')
-        if 'path' in row and test_identity(row['path']) is None:
-            raise ValueError('journal-record-path')
+        if 'path' in row:
+            canonical = test_identity(row['path'])
+            if canonical is None or canonical['path'] != row['path']:
+                raise ValueError('journal-record-path')
         if 'key' in row and (type(row['key']) is not str or not _DIGEST.fullmatch(row['key'])):
             raise ValueError('journal-record-key')
         if 'outcome' in row and row['outcome'] not in _STATES:
@@ -760,9 +781,10 @@ def _validated_events(raw, run_id, actor):
     return b''.join(result)
 
 
-def export_entries(root):
+def export_entries(root, *, binding=None):
     """A safe bounded subset; never a complete-history or authorization claim."""
-    entries, summary = [], {'version': 1, 'status': 'unavailable', 'subset': True}
+    entries, summary = [], {'version': 1, 'status': 'unavailable', 'run_status': 'unavailable',
+                           'export_status': 'unavailable', 'association': 'unbound', 'subset': True}
     history = root / '.getzilla/runtime/verification-history'
     try:
         handle = _directory(history)
@@ -779,7 +801,26 @@ def export_entries(root):
             if (index['run_id'] != row['run_id'] or index['nonce'] != row['nonce']
                     or index['status'] not in {'active', 'closed', 'incomplete', 'unavailable'}):
                 raise ValueError('journal-export-identity')
-            summary.update(run_id=row['run_id'], status=index['status'], actors=[])
+            source, session = index.get('source'), index.get('session_id')
+            if (source is not None and (type(source) is not str or not _DIGEST.fullmatch(source))
+                    or session is not None and (type(session) is not str or not _SESSION.fullmatch(session))
+                    or index.get('source_status') != ('reported-integrity-only' if source is not None else 'unavailable')
+                    or index.get('session_status') != ('canonical-route-observation' if session is not None else 'unavailable')):
+                raise ValueError('journal-export-provenance')
+            expected = index.get('expected')
+            if (type(expected) is not list or len(expected) > 64 or any(type(actor) is not str or actor == 'controller'
+                    or not _ACTOR.fullmatch(actor) for actor in expected) or len(set(expected)) != len(expected)):
+                raise ValueError('journal-export-expected')
+            summary.update(run_id=row['run_id'], status=index['status'], run_status=index['status'], actors=[],
+                source=source, source_status=index['source_status'], session_id=session, session_status=index['session_status'],
+                expected=expected, missing=list(expected))
+            if binding is not None:
+                if (type(binding) is not dict or set(binding) != {'run_id', 'source', 'session_id'}
+                        or binding['run_id'] != row['run_id'] or binding['source'] != source
+                        or binding['session_id'] != session or source is None):
+                    summary['association'] = 'unmatched'
+                    raise ValueError('journal-export-unmatched')
+                summary['association'] = 'source-run-matched'
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = json.loads(_read(handle, actor + '.json', 2048))
@@ -797,12 +838,17 @@ def export_entries(root):
                     complete = tail.rpartition(b'\n')[0] + b'\n' if b'\n' in tail else b''
                     entries.append(('journal/' + actor + '.jsonl', _validated_events(complete, row['run_id'], actor)))
                     summary['actors'].append(health)
+                    if actor in summary['missing']:
+                        summary['missing'].remove(actor)
                 except FileNotFoundError:
                     continue
         finally:
             fsx.close_dir(handle)
-        summary['status'] = 'bounded-subset'
+        if summary['status'] == 'closed' and (summary['missing'] or any(
+                actor['status'] != 'closed' or actor['open_spans'] for actor in summary['actors'])):
+            summary['status'] = summary['run_status'] = 'incomplete'
+        summary['export_status'] = 'bounded-subset'
     except (OSError, ValueError, KeyError, TypeError, IndexError):
-        summary['status'] = 'unavailable'
+        summary['export_status'] = 'unavailable'
     entries.insert(0, ('journal/index.json', _json(summary) + b'\n'))
     return entries

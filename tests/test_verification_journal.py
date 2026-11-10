@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla import pytest_progress, verification
 from getzilla import verification_journal as journal
 from getzilla import util
+from getzilla import ci_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -121,6 +122,83 @@ class JournalStorageTests(unittest.TestCase):
         self.assertIn(b'unavailable', entries[0][1])
         with self.assertRaises(ValueError):
             journal.Writer(run.path, run.run_id, 'worker-1', 'b' * 32)
+
+    def test_export_rejects_noncanonical_published_path(self):
+        run = journal.Run(self.root(), None, 'owned-tests')
+        run.writer.emit('call', 'start', nodeid='tests/test_owned.py::test_ok')
+        name = run.writer.name
+        run.close()
+        path = run.path / name
+        row = json.loads(path.read_text().splitlines()[0])
+        row['path'] = 'tests/test_owned.py[PRIVATE_PARAMETER]'
+        path.write_text(json.dumps(row) + '\n')
+        self.assertNotIn(b'PRIVATE_PARAMETER', b''.join(raw for _, raw in journal.export_entries(run.root)))
+
+    def test_export_keeps_health_provenance_and_missing_workers(self):
+        run = journal.Run(self.root(), None, 'owned-tests')
+        run.bind_source('a' * 64, '01a1a6ba-10e8-7bc1-81b1-684978be3580')
+        run.child_environment({}, actor=0)
+        run.close()
+        summary = json.loads(dict(journal.export_entries(run.root))['journal/index.json'])
+        for field, expected in [('status', 'incomplete'), ('export_status', 'bounded-subset'),
+                ('source', 'a' * 64), ('session_status', 'canonical-route-observation'),
+                ('expected', ['worker-0']), ('missing', ['worker-0'])]:
+            with self.subTest(field=field):
+                self.assertEqual(summary.get(field), expected)
+
+    def test_unittest_decorated_skip_location_pairs_real_codefile_and_line(self):
+        root = self.root()
+        (root / 'tests').mkdir(mode=0o700)
+        source = root / 'tests/test_owned.py'
+        source.write_text("import unittest\n\nclass Owned(unittest.TestCase):\n @unittest.skip('Linux only')\n def test_skip(self): pass\n\n\n")
+        namespace = {'__name__': 'tests.test_owned'}
+        exec(compile(source.read_bytes(), str(source), 'exec'), namespace)
+        run = journal.Run(root, None, 'owned-tests')
+        writer = journal.Writer(run.path, run.run_id, 'worker-0', run.nonce)
+        writer.emit('collection', 'start')
+        result = journal.unittest_runner(writer)(stream=io.StringIO()).run(namespace['Owned']('test_skip'))
+        writer.close()
+        self.assertEqual(len(result.skipped), 1)
+        records = [json.loads(line) for p in run.path.glob('worker-*.jsonl') for line in p.read_bytes().splitlines()]
+        skip = next(row for row in records if row.get('outcome') == 'skip')
+        self.assertEqual(skip.get('location'), {'path': 'tests/test_owned.py', 'line': 4})
+        run.close()
+
+    def test_ci_export_rejects_stale_journal_association(self):
+        root = self.root()
+        run = journal.Run(root, None, 'owned-tests')
+        run.bind_source('a' * 64)
+        run.close()
+        evidence = root / '.getzilla/runtime/evidence'
+        evidence.mkdir(mode=0o700)
+        (evidence / 'verification.json').write_text(json.dumps({'ci_run_id': '123', 'git_head': 'c' * 40,
+            'tree_fingerprint': 'b' * 64, 'diagnostics': {'run_id': run.run_id, 'index': run.relative_index}}))
+        logs, output = root / 'logs', root / 'artifact'
+        logs.mkdir(mode=0o700)
+        with patch.object(ci_evidence, 'git_head', return_value='c' * 40), \
+                patch.object(ci_evidence, 'git_output', return_value='d' * 40), \
+                patch.object(ci_evidence, 'tree_fingerprint', return_value='b' * 64, create=True):
+            ci_evidence.export_evidence(root, output, logs=logs, job='linux', status='failure', run_id='123')
+        metadata = json.loads((output / 'provenance.json').read_text())
+        self.assertEqual(metadata['diagnostics'].get('association'), 'unmatched')
+        self.assertFalse((output / 'journal/controller.jsonl').exists())
+
+    def test_export_matches_only_exact_run_source_session_and_labels_unbound(self):
+        run = journal.Run(self.root(), None, 'owned-tests')
+        session = '01a1a6ba-10e8-7bc1-81b1-684978be3580'
+        run.bind_source('a' * 64, session)
+        run.close()
+        binding = {'run_id': run.run_id, 'source': 'a' * 64, 'session_id': session}
+        summary = json.loads(dict(journal.export_entries(run.root, binding=binding))['journal/index.json'])
+        self.assertEqual(summary['association'], 'source-run-matched')
+        self.assertEqual(summary['run_status'], 'closed')
+        self.assertEqual(summary['export_status'], 'bounded-subset')
+        self.assertEqual(summary['missing'], [])
+        self.assertEqual(json.loads(dict(journal.export_entries(run.root))['journal/index.json'])['association'], 'unbound')
+        for key, wrong in [('run_id', 'b' * 32), ('source', 'b' * 64), ('session_id', None)]:
+            entries = dict(journal.export_entries(run.root, binding={**binding, key: wrong}))
+            self.assertEqual(json.loads(entries['journal/index.json'])['association'], 'unmatched')
+            self.assertEqual(set(entries), {'journal/index.json'})
 
     def test_unittest_preserves_actual_lifecycle_skip_and_failure_without_private_text(self):
         events = []
