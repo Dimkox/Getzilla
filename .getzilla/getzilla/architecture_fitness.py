@@ -1708,14 +1708,69 @@ def _network_call_is_applicable(
     return bool(tokens & _NETWORK_APPLICABILITY_TOKENS)
 
 
+def _instrumentation_targets_closed(tree, parents, events, resolve, imported, protected):
+    """Admit only closed instrumentor uses, never arbitrary patch factories."""
+    roots = {'unittest', 'mock', 'pytest', '_pytest'}
+    modules = set()
+    instrumentors = []
+    for event in events:
+        node = event.node
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+            if any(alias.name.split('.')[0] in roots and (alias.asname or alias.name.split('.')[0]) == event.name for alias in node.names):
+                instrumentors.append(event)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module)
+            if node.module.split('.')[0] in roots:
+                instrumentors.append(event)
+
+    def target_closed(node):
+        if not isinstance(node, ast.Constant) or type(node.value) is not str or len(node.value) > 4096:
+            return False
+        parts = node.value.split('.')
+        if not 2 <= len(parts) <= 32 or any(not p.isidentifier() or p.startswith('__') or p in protected | roots for p in parts):
+            return False
+        parent = '.'.join(parts[:-1])
+        # A flat imported module member, or a declared imported-module namespace.
+        if parent not in modules and not (len(parts) > 2 and '.'.join(parts[:-2]) in modules and parts[-2] in modules):
+            return False
+        try:
+            expression = ast.parse(node.value, mode='eval')
+        except SyntaxError:
+            return False
+        guard = ast.Module(body=[ast.Import(names=[ast.alias(name=parts[0])]), ast.Expr(value=expression.body)], type_ignores=[])
+        return namespace_is_closed(guard, allow_instrumentation=True)
+
+    for event in instrumentors:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != event.name:
+                continue
+            if resolve(node) is not event.node:
+                return False
+            member = node
+            while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
+                member = parents[member]
+            canonical = imported(member)
+            parent = parents.get(member)
+            if canonical == 'unittest.TestCase' and isinstance(parent, ast.ClassDef) and member in parent.bases:
+                continue
+            if canonical in {'unittest.mock.Mock', 'unittest.mock.MagicMock'} and isinstance(parent, ast.Call) and parent.func is member:
+                continue
+            if canonical != 'unittest.mock.patch' or not isinstance(parent, ast.Call) or parent.func is not member:
+                return False
+            use = parents.get(parent)
+            direct = isinstance(use, ast.withitem) and use.context_expr is parent
+            decorator = isinstance(use, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and parent in use.decorator_list
+            if (not (direct or decorator) or not parent.args or not target_closed(parent.args[0])
+                    or any(keyword.arg is None or keyword.arg == 'target' for keyword in parent.keywords)):
+                return False
+    return True
+
+
 def _byte_only_http_imports(tree: ast.AST) -> set[str]:
     """Prove response parsing only, not the behavior of arbitrary imported code."""
     if not namespace_is_closed(tree, allow_instrumentation=True):
         return set()
-    if any(isinstance(node, ast.Constant) and isinstance(node.value, str)
-           and (node.value in {'http', 'http.client', 'io', 'io.BytesIO', 'sys.modules'}
-                or node.value.startswith(('http.client.', 'io.BytesIO.'))) for node in ast.walk(tree)):
-        return set()  # String-based patch/reflection targets are not closed bindings.
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     events = binding_events(tree)
     bindings: dict[tuple[ast.AST | None, str], list[ast.AST]] = defaultdict(list)
@@ -1767,6 +1822,13 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
                 return set()
             http_events.extend((a.asname or a.name, node, 'http.client.' + a.name) for a in node.names)
     if not http_events:
+        return set()
+    protected = {'http', 'client', 'HTTPResponse', 'io', 'BytesIO', 'makefile'}
+    protected.update(name for name, _, _ in http_events)
+    protected.update(node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+    protected.update(event.name for event in events if isinstance(event.node, ast.Import)
+                     and any(alias.name == 'io' for alias in event.node.names))
+    if not _instrumentation_targets_closed(tree, parents, events, resolve, imported, protected):
         return set()
     # A module/class alias cannot escape or be mutated into another supplier.
     for node in ast.walk(tree):

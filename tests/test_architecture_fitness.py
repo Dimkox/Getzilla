@@ -231,6 +231,29 @@ def parse():
         self.assertEqual(families, set())
         self.assertFalse(trigger)
 
+    def test_instrumentation_requires_closed_calls_bindings_and_literal_targets(self):
+        base = self.PARSER.replace('import io', 'import io\nfrom unittest import mock')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(expression):
+            return base.replace(call, '    with mock.patch(' + expression + ', replacement):\n    ' + call)
+        safe = patched('"adaptive_trust_ci.github_observer.bounded_json"')
+        safe += '\nclock = mock.Mock(side_effect=[0, 1])\nclass Case(unittest.TestCase):\n    pass\n'
+        safe = 'import unittest\nfrom adaptive_trust_ci.github_observer import ObservationError\n' + safe
+        result, families, trigger = self._network(safe)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+        bad = [patched('"http." + "client.HTTPResponse"'),
+               patched('f"{module_name}.HTTPResponse"'), patched('unknown_target'),
+               base.replace(call, '    escaped = mock.patch\n    with escaped(unknown_target, replacement):\n    ' + call),
+               base + '\nmock.patch = replacement\n']
+        for source in bad:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
     def test_unproved_response_sources_aliases_and_connections_remain_network(self):
         class_scope_alias = '''import io
 http = unknown
