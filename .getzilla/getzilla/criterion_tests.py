@@ -280,6 +280,10 @@ def _execute_references(root, references):
                     if not inspect.isfunction(function) or Path(function.__code__.co_filename).resolve() != (root / relative).resolve():
                         raise ValueError('typed case implementation was substituted')
                     raw = inspect.getattr_static(cls, method)
+                    if any(predicate(candidate) for candidate in (function, raw)
+                           for predicate in (inspect.iscoroutinefunction, inspect.isgeneratorfunction,
+                                             inspect.isasyncgenfunction)):
+                        raise ValueError('typed deferred method execution is unsupported')
                     if raw is not function and getattr(raw, '__unittest_skip__', False) is not True:
                         raise ValueError('typed method wrapper lacks a supported exact-body execution contract')
                     declaration = next((child for node in ast.parse(contents[relative]).body

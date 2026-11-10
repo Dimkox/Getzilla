@@ -386,3 +386,44 @@ class CollectedSetupExecutionTests(unittest.TestCase):
             self.assertEqual(report['verified_references'], sorted(refs))
             self.assertEqual(len(report['tests']), 1)
             self.assertEqual(sys.modules[name].ORDER, ['setup', 'body', 'teardown'])
+
+
+class DeferredCriterionAdmissionTests(unittest.TestCase):
+    def assert_deferred_refused(self, kind, declaration, suffix=''):
+        from getzilla import criterion_tests as api
+        name = 'test_owned_deferred_' + kind
+        parent = Path(__file__).resolve().parents[1] / '.getzilla/runtime'
+        with tempfile.TemporaryDirectory(prefix='deferred-source-', dir=parent) as directory:
+            root = Path(directory)
+            (root / (name + '.py')).write_text('import unittest\nTRACE=[]\nclass Owned(unittest.TestCase):\n'
+                + declaration + '\n  TRACE.append("body")\n  self.fail("deferred body must not earn credit")\n'
+                + suffix)
+            self.addCleanup(sys.modules.pop, name, None)
+            with self.assertRaises(ValueError):
+                api._execute_references(root, [name + '.py::Owned::test_required'])
+            self.assertEqual(sys.modules[name].TRACE, [])
+
+    def test_coroutine_function_is_refused_before_execution_credit(self):
+        self.assert_deferred_refused('coroutine', ' async def test_required(self):')
+
+    def test_generator_function_is_refused_before_execution_credit(self):
+        self.assert_deferred_refused('generator', ' def test_required(self):', '  yield None\n')
+
+    def test_async_generator_function_is_refused_before_execution_credit(self):
+        self.assert_deferred_refused('async_generator', ' async def test_required(self):', '  yield None\n')
+
+    def test_synchronous_method_retains_unique_overlapping_execution_credit(self):
+        from getzilla import criterion_tests as api
+        name = 'test_owned_deferred_sync_positive'
+        parent = Path(__file__).resolve().parents[1] / '.getzilla/runtime'
+        with tempfile.TemporaryDirectory(prefix='deferred-source-', dir=parent) as directory:
+            root = Path(directory)
+            (root / (name + '.py')).write_text('import unittest\nCALLS=0\nclass Owned(unittest.TestCase):\n'
+                ' def test_required(self):\n  global CALLS\n  CALLS+=1\n  self.assertEqual(CALLS,1)\n')
+            self.addCleanup(sys.modules.pop, name, None)
+            refs = [name + '.py::Owned', name + '.py::Owned::test_required']
+            report = api._execute_references(root, refs)
+            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['verified_references'], sorted(refs))
+            self.assertEqual(len(report['tests']), 1)
+            self.assertEqual(sys.modules[name].CALLS, 1)
