@@ -9158,5 +9158,181 @@ class QueueDiagnosticProvenanceTests(unittest.TestCase):
             self.observe(classify)
 
 
+class QueueCompleteEmptyHeadTests(unittest.TestCase):
+    """Closed source fixtures; never inspect the working repository inventory."""
+
+    supplier = b'from celery import Celery\ndef make():\n    return Celery("toy")\n'
+    opaque = b'from supplier import make\nopaque(make)\nview = make.__globals__\n'
+    advisory = ('queue analysis diagnostic '
+                '(base/classify/complete_empty_head/fitness): src/consumer.py')
+
+    def setUp(self):
+        canonical = Path(subprocess.check_output(
+            ['git', 'rev-parse', '--git-common-dir'], cwd=ROOT, text=True).strip()).resolve().parent
+        private = canonical / '.getzilla/runtime/scratch/372-empty-head-tests'
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._temp = tempfile.TemporaryDirectory(dir=private)
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+
+    def observe(self, head=b'pass\n', base=None, *, extra=None, status='modified', fault=None):
+        sources = {'head': {'src/consumer.py': head, 'src/supplier.py': self.supplier},
+                   'base': {'src/consumer.py': self.opaque if base is None else base,
+                            'src/supplier.py': self.supplier}}
+        if extra:
+            for side in sources:
+                sources[side].update(extra.get(side, {}))
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path='src/consumer.py', status=status),),
+                               base_sha='owned-base', baseline_introduced=False, changes=())
+
+        def read(root, observed_diff, path, side='head'):
+            self.assertEqual(root, self.root)
+            self.assertIs(observed_diff, diff)
+            if fault and fault[:2] == (side, path):
+                raise fault[2]
+            return sources[side].get(path)
+
+        def paths(root, observed_diff, roots):
+            self.assertEqual(root, self.root)
+            return tuple(path for path, value in sources['head'].items() if value is not None)
+
+        with patch.object(FIT, 'read_diff_file', side_effect=read), \
+                patch.object(FIT, 'read_diff_files', side_effect=lambda root, d, names, side='head':
+                             {name: read(root, d, name, side) for name in names}), \
+                patch.object(FIT, '_repository_paths', side_effect=paths), \
+                patch.object(FIT, 'git_tree_paths', return_value=tuple(sources['base'])):
+            python = FIT._PythonInventory(self.root, diff)
+            provenance = FIT._new_queue_sources(self.root, diff, python, ('src',))
+        return provenance, diff, python
+
+    def background(self, provenance, diff, python, *, rules=True, edge=False, invalid=False, changed=False):
+        policy = {'id': 'TOY-JOBS', 'node_types': ['worker'], 'max_retries': 3,
+                  'require_idempotency': True, 'require_correlation_id': True,
+                  'terminal_actions': ['dead_letter']}
+        behavior = {'max_retries': 4 if invalid else 1, 'idempotency': 'required',
+                    'correlation_id': 'required', 'terminal_action': 'dead_letter',
+                    'observable_signal': 'toy.failure'}
+        snapshot = SimpleNamespace(rules={'background_job_policies': [policy] if rules else []},
+            system={'nodes': [{'id': 'toy', 'type': 'worker'}],
+                    'edges': [{'id': 'toy-edge', 'from': 'toy', 'sync_or_async': 'asynchronous',
+                               'failure_behavior': behavior}] if edge else []})
+        with patch.object(FIT, '_model_changed', return_value=changed):
+            return FIT._background_jobs(self.root, snapshot, diff, python, provenance)
+
+    def test_unsupported_base_accepts_proven_empty_head(self):
+        for source in (b'pass\n', b''):
+            with self.subTest(source=source):
+                provenance, diff, python = self.observe(head=source)
+                self.assertEqual(provenance.state, 'not_queue')
+                self.assertEqual(provenance.paths, ())
+                self.assertEqual(provenance.signals, ())
+                result = self.background(provenance, diff, python)
+                self.assertEqual(result.status, 'not_applicable')
+                self.assertIn(self.advisory, result.findings)
+        # The same semantic refusal can arise inside a transitive supplier.
+        relay = b'from supplier import make\nopaque(make)\ndef forward():\n    return make()\n'
+        provenance, diff, python = self.observe(
+            base=b'from relay import forward\nopaque(forward)\n',
+            extra={'base': {'src/relay.py': relay}})
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertIn(self.advisory, self.background(provenance, diff, python).findings)
+
+    def test_proof_requires_supported_complete_empty_source(self):
+        cache = FIT._QueueResolutionCache((), (), {}, {})
+        def classify(source=b'pass\n', complete=True, **kwargs):
+            with patch.object(FIT, 'read_diff_files', return_value={}):
+                return FIT._queue_signals(self.root, None, ast.parse('pass'), 'head', cache, '', (),
+                    source_path='toy.py', source=source, complete_module=complete, **kwargs)
+        self.assertTrue(getattr(classify(), 'complete_empty', False))
+        self.assertTrue(classify(source=b'').complete_empty)
+        self.assertFalse(classify(source=None).complete_empty)
+        self.assertFalse(classify(complete=False).complete_empty)
+        self.assertFalse(FIT._QueueProvenanceResult('not_queue', 'toy', ()).complete_empty)
+        with patch.object(FIT, '_queue_adapter_names', return_value=
+                          FIT._QueueAdapterNamesResult(frozenset(), True)):
+            self.assertFalse(classify().complete_empty)
+        for analysis in (
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset(), True),
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset({'job'}), False),
+            QUEUE_PROVENANCE.QueueTreeAnalysis((), frozenset(), False, frozenset({'make'})),
+            QUEUE_PROVENANCE.QueueTreeAnalysis(('import:celery',), frozenset(), False),
+        ):
+            with self.subTest(analysis=analysis), patch.object(FIT, 'analyze_queue_tree', return_value=analysis):
+                self.assertFalse(classify().complete_empty)
+        with patch.object(FIT, '_queue_adapter_names', return_value=
+                          FIT._QueueAdapterNamesResult(frozenset(), False, unproved_queue_callback=True)):
+            with self.assertRaises(ARCHITECTURE.ArchitectureError):
+                classify()
+
+    def test_head_failures_do_not_admit_unknown_base(self):
+        for source in (self.opaque, b'import celery\napp = celery.Celery("toy")\n',
+                       b'import celery\nif ???\n', b'import celery\n\xff', None):
+            with self.subTest(source=source):
+                provenance, _, _ = self.observe(head=source)
+                self.assertEqual(provenance.state, 'unsupported')
+                self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_BYTES', 4):
+            provenance, _, _ = self.observe(head=b'pass\n')
+        self.assertEqual(provenance.state, 'unsupported')
+        self.assertTrue(provenance.limits)
+        # Uncertain/unsupported analysis can have no signals; neither is proof.
+        real = FIT.analyze_queue_tree
+        def uncertain(tree, names, **kwargs):
+            value = real(tree, names, **kwargs)
+            return value._replace(uncertain=True) if ast.dump(tree) == ast.dump(ast.parse('pass')) else value
+        with patch.object(FIT, 'analyze_queue_tree', side_effect=uncertain):
+            provenance, _, _ = self.observe()
+        self.assertEqual(provenance.state, 'unsupported')
+
+    def test_only_callback_semantic_error_allows_fallback(self):
+        for code in ('io', 'git', 'fitness', 'limit'):
+            for path in ('src/consumer.py', 'src/supplier.py'):
+                with self.subTest(code=code, path=path):
+                    error = ARCHITECTURE.ArchitectureError('closed acquisition failure', code=code)
+                    provenance, _, _ = self.observe(fault=('base', path, error))
+                    self.assertEqual(provenance.state, 'unsupported')
+                    self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+        for source in (b'from celery import ???\n', b'import celery\n\xff'):
+            with self.subTest(base=source):
+                # Current parser heuristic sees the real queue-bearing HEAD.
+                provenance, _, _ = self.observe(head=b'import celery\n', base=source)
+                self.assertEqual(provenance.state, 'unsupported')
+        for supplier in (b'from celery import ???\n', b'import celery\n\xff'):
+            with self.subTest(supplier=supplier):
+                provenance, _, _ = self.observe(extra={'base': {'src/supplier.py': supplier}})
+                self.assertEqual(provenance.state, 'unsupported')
+                self.assertNotIn(self.advisory, FIT._queue_diagnostic_findings(provenance))
+
+    def test_known_base_and_deletions_keep_prior_behavior(self):
+        queue = b'import celery\napp = celery.Celery("toy")\n'
+        provenance, _, _ = self.observe(head=queue, base=b'pass\n')
+        self.assertEqual(provenance.state, 'resolved')
+        self.assertEqual(provenance.paths, ('src/consumer.py',))
+        self.assertTrue(provenance.signals)
+        provenance, _, _ = self.observe(head=queue, base=queue)
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertEqual(provenance.signals, ())
+        provenance, _, _ = self.observe(head=None, status='deleted')
+        self.assertEqual(provenance.state, 'not_queue')
+        self.assertEqual(provenance.causes, ())
+
+    def test_disclosure_survives_background_result_branches(self):
+        provenance, diff, python = self.observe()
+        for options, status in (({'rules': False}, 'not_applicable'), ({}, 'not_applicable'),
+            ({'changed': True}, 'not_applicable'), ({'changed': True, 'edge': True}, 'pass'),
+            ({'changed': True, 'edge': True, 'invalid': True}, 'fail')):
+            with self.subTest(options=options):
+                result = self.background(provenance, diff, python, **options)
+                self.assertEqual(result.status, status)
+                self.assertIn(self.advisory, result.findings)
+                self.assertNotIn('src/consumer.py', result.applicability.scanned_scope
+                                 if options.get('changed') or not options.get('rules', True) else ())
+        refused = provenance._replace(state='unsupported', paths=('src/other.py',),
+                                      signals=('src/other.py:unsupported:fitness',))
+        result = self.background(refused, diff, python)
+        self.assertEqual(result.status, 'unsupported')
+        self.assertIn(self.advisory, result.findings)
+
+
 if __name__ == "__main__":
     unittest.main()
