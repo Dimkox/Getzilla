@@ -1712,6 +1712,10 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
     """Prove response parsing only, not the behavior of arbitrary imported code."""
     if not namespace_is_closed(tree, allow_instrumentation=True):
         return set()
+    if any(isinstance(node, ast.Constant) and isinstance(node.value, str)
+           and (node.value in {'http', 'http.client', 'io', 'io.BytesIO', 'sys.modules'}
+                or node.value.startswith(('http.client.', 'io.BytesIO.'))) for node in ast.walk(tree)):
+        return set()  # String-based patch/reflection targets are not closed bindings.
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     events = binding_events(tree)
     bindings: dict[tuple[ast.AST | None, str], list[ast.AST]] = defaultdict(list)
