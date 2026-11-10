@@ -245,6 +245,10 @@ class FitnessReport:
     evidence_digest: str
 
 
+class _UnsupportedQueueCallbackError(ArchitectureError):
+    """Unsupported callback semantics, distinct from acquisition or analysis faults."""
+
+
 class _QueueProvenanceResult(NamedTuple):
     state: str
     reason: str
@@ -252,6 +256,7 @@ class _QueueProvenanceResult(NamedTuple):
     paths: tuple[str, ...] = ()
     limits: tuple[tuple[str, str, str], ...] = ()
     causes: tuple[tuple[str, str, str, str, str], ...] = ()
+    complete_empty: bool = False
 
 
 def _queue_diagnostic_code(code: object) -> str:
@@ -3517,7 +3522,7 @@ def _local_queue_resolution_impl(
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
         if imported.unproved_queue_callback:
-            raise ArchitectureError('queue-bearing callback return is unsupported', code='fitness')
+            raise _UnsupportedQueueCallbackError('queue-bearing callback return is unsupported', code='fitness')
         # A projection with no queue imports, values or effects cannot create a
         # queue return. Avoid reslicing every ordinary helper in that case.
         try:
@@ -3845,6 +3850,7 @@ def _queue_signals(
     budget: _QueueBudget | None = None,
 ) -> _QueueProvenanceResult:
     budget = budget if budget is not None else _QueueBudget(side)
+    source_was_supplied = source is not None
     source = source if source is not None else ast.unparse(tree).encode('utf-8')
     budget.source(source_path, source)
     budget.source(source_path, source, sum(1 for _ in ast.walk(tree)))
@@ -3867,12 +3873,16 @@ def _queue_signals(
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
     if adapters.unproved_queue_callback:
-        raise ArchitectureError('queue-bearing callback return is unsupported', code='fitness')
+        raise _UnsupportedQueueCallbackError('queue-bearing callback return is unsupported', code='fitness')
     unresolved = bool((adapters.unsupported or analysis.uncertain) and analysis.signals)
     return _QueueProvenanceResult(
         "unsupported" if unresolved else ("resolved" if analysis.signals else "not_queue"),
         "queue_provenance_unresolved" if unresolved else ("queue_signals_resolved" if analysis.signals else "no_queue_signal"),
-        analysis.signals)
+        analysis.signals,
+        complete_empty=bool(side == 'head' and complete_module and source_was_supplied
+                            and not adapters.unsupported and not adapters.unproved_queue_callback
+                            and not analysis.uncertain and not analysis.signals
+                            and not analysis.derived_names and not analysis.export_paths))
 
 
 def _new_queue_sources(
@@ -3894,7 +3904,9 @@ def _new_queue_sources(
         try:
             current_package = _module_package(path, source_roots, head_cache.paths)
             stage = 'read'
-            head_value = read_diff_file(root, diff, path, 'head') or b''
+            head_value = read_diff_file(root, diff, path, 'head')
+            if head_value is None:
+                raise ArchitectureError('changed Python source is unavailable', code='missing')
             head_budget = _QueueBudget('head')
             stage = 'admit'
             head_budget.source(path, head_value)
@@ -3926,16 +3938,22 @@ def _new_queue_sources(
                 if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
                     raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
                 stage = 'classify'
-                base = _queue_signals(
-                    root,
-                    diff,
-                    base_tree,
-                    "base",
-                    base_cache,
-                    current_package,
-                    source_roots,
-                    source_path=path, source=base_value, budget=base_budget, complete_module=True,
-                )
+                try:
+                    base = _queue_signals(
+                        root,
+                        diff,
+                        base_tree,
+                        "base",
+                        base_cache,
+                        current_package,
+                        source_roots,
+                        source_path=path, source=base_value, budget=base_budget, complete_module=True,
+                    )
+                except _UnsupportedQueueCallbackError:
+                    if not head.complete_empty:
+                        raise
+                    causes.append((path, 'base', 'classify', 'complete_empty_head', 'fitness'))
+                    continue
             stage = 'compare'
             delta = set(head.signals) - set(base.signals)
             if delta:
@@ -3980,10 +3998,23 @@ def _new_queue_sources(
             tuple(sorted(set(applicable))),
             causes=tuple(sorted(causes)),
         )
-    return _QueueProvenanceResult("not_queue", "no_queue_signal", ())
+    return _QueueProvenanceResult("not_queue", "no_queue_signal", (), causes=tuple(sorted(causes)))
 
 
 def _background_jobs(
+    root: Path,
+    snapshot: ArchitectureSnapshot,
+    diff: ArchitectureDiff,
+    python: _PythonInventory,
+    queue_provenance: _QueueProvenanceResult,
+) -> FitnessResult:
+    result = _background_jobs_policy(root, snapshot, diff, python, queue_provenance)
+    # Diagnostics are advisory; add them after policy status is determined.
+    return replace(result, findings=tuple(sorted(set(
+        (*result.findings, *_queue_diagnostic_findings(queue_provenance))))))
+
+
+def _background_jobs_policy(
     root: Path,
     snapshot: ArchitectureSnapshot,
     diff: ArchitectureDiff,
