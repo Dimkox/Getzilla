@@ -27,7 +27,7 @@
       "versions": {
         "0.1.0": {
           "manifest": ".getzilla/optional-modules/search-gateway/0.1.0/module.json",
-          "sha256": "71f06037155aead96b8b2ee72dddc1d32ef4221701d7b2f6d913a532404f13f5"
+          "sha256": "559a4637d34fcee89ef6498e22c0e38e645d86808155805d3f91403be0f49fad"
         }
       }
     }

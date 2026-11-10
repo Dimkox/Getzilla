@@ -7,6 +7,12 @@ flowchart LR
   domain_29ad83586d8fa0ed["TD-PILOT-OPERATOR | local_preflight | single local pilot operator"]
   domain_93c532f149d3e2d5["TD-PRODUCTION-TRUST | production_trust | human security approvers"]
   domain_734c10023f9857a2["TD-REPOSITORY | repository_untrusted | repository contributors"]
+  domain_815bd20bb4b72ad7["TD-SEARCH-BRAVE | external_platform | api.search.brave.com"]
+  domain_9e274d2ea621c59b["TD-SEARCH-FIRECRAWL | external_platform | api.firecrawl.dev"]
+  domain_5c6a7ad222a8854b["TD-SEARCH-SCRAPINGDOG | external_platform | api.scrapingdog.com"]
+  domain_7f826574056fcf0d["TD-SEARCH-SERPAPI | external_platform | serpapi.com"]
+  domain_393026d17617b4cb["TD-SEARCH-SERPER | external_platform | google.serper.dev"]
+  domain_81aec69c410494bb["TD-SEARCH-TAVILY | external_platform | api.tavily.com"]
   domain_7f80d82d053144ab["TD-TRUST-CI-CONTROL | trust_ci_control | Trust CI operators"]
   domain_65e7aeb3bb37c460["TD-TRUST-CI-EXECUTION | trust_ci_execution | Trust CI operators"]
   domain_734c10023f9857a2 -->|"data_flow"| domain_fa5ae843eb45e375
@@ -21,7 +27,19 @@ flowchart LR
   domain_29ad83586d8fa0ed -->|"control"| domain_ecfc7e3b9c85919c
   domain_fa5ae843eb45e375 -->|"control"| domain_734c10023f9857a2
   domain_65e7aeb3bb37c460 -->|"data_flow"| domain_ece8d94ff661d9fb
-  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_96fb748595c57dce
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_815bd20bb4b72ad7
+  domain_815bd20bb4b72ad7 -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_9e274d2ea621c59b
+  domain_9e274d2ea621c59b -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_5c6a7ad222a8854b
+  domain_5c6a7ad222a8854b -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_96fb748595c57dce -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_7f826574056fcf0d
+  domain_7f826574056fcf0d -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_393026d17617b4cb
+  domain_393026d17617b4cb -->|"data_flow"| domain_fa5ae843eb45e375
+  domain_fa5ae843eb45e375 -->|"secret_flow"| domain_81aec69c410494bb
+  domain_81aec69c410494bb -->|"data_flow"| domain_fa5ae843eb45e375
   domain_fa5ae843eb45e375 -->|"dependency"| domain_c4152908c77524f2
   domain_65e7aeb3bb37c460 -->|"publication"| domain_96fb748595c57dce
   domain_65e7aeb3bb37c460 -->|"data_flow"| domain_7f80d82d053144ab

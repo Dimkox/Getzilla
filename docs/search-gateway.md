@@ -60,6 +60,8 @@ The request object supports `query`, optional `engine`, `provider`, `country`, `
 
 Python callers load `scripts/getzilla_search_gateway.py`, call `create_gateway(project_root, operator_policy)`, then call `service.web_search("any missing context")` or pass the request object. The wrapper performs immutable module admission before loading provider source. All configured agents can use the same CLI, HTTP request or MCP tool; this release does not register any native client automatically.
 
+Each instance belongs to one operator and project; this release provides no tenant service. The architecture gives each paid provider its own credential class and recipient domain. A credential can flow only between the local gateway and that provider. These recipient declarations do not confer trust or policy authority on provider responses. Returned source evidence remains untrusted data.
+
 ## Provider and engine matrix
 
 | Provider family | Automatic search | Explicit engine support | Verified locale mapping in this implementation |

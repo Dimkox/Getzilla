@@ -122,12 +122,20 @@ flowchart LR
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-MIRROR-DOWNLOAD | dependency | https"| node_7b13ed12e8efab1c
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-QUERY | dependency | https"| node_8acae282d21dd9c2
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-BRAVE | secret_flow | https"| node_78f2d5f6399441fd
+  node_78f2d5f6399441fd -->|"EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-FIRECRAWL | secret_flow | https"| node_f40e05000fb3838a
+  node_f40e05000fb3838a -->|"EDGE-SEARCH-FIRECRAWL-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_23bed8fcbfc79861 -->|"EDGE-SEARCH-LOOPBACK-TEST-CLIENT | dependency | tcp"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SCRAPINGDOG | secret_flow | https"| node_4cb2764870a21f3e
-  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SEARXNG | dependency | http"| node_4646462869ac5f17
+  node_4cb2764870a21f3e -->|"EDGE-SEARCH-SCRAPINGDOG-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SEARXNG | dependency | tcp"| node_4646462869ac5f17
+  node_4646462869ac5f17 -->|"EDGE-SEARCH-SEARXNG-UNTRUSTED-RESULT | data_flow | tcp"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPAPI | secret_flow | https"| node_5f139c55723ea515
+  node_5f139c55723ea515 -->|"EDGE-SEARCH-SERPAPI-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPER | secret_flow | https"| node_b0214d69d31a7432
+  node_b0214d69d31a7432 -->|"EDGE-SEARCH-SERPER-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-TAVILY | secret_flow | https"| node_86424fd6464e012a
+  node_86424fd6464e012a -->|"EDGE-SEARCH-TAVILY-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8

@@ -202,7 +202,13 @@
         "TD-TRUST-CI-EXECUTION",
         "TD-EXTERNAL-POLICY",
         "TD-EXTERNAL-PLATFORM",
-        "TD-PRODUCTION-TRUST"
+        "TD-PRODUCTION-TRUST",
+        "TD-SEARCH-SERPER",
+        "TD-SEARCH-SERPAPI",
+        "TD-SEARCH-BRAVE",
+        "TD-SEARCH-TAVILY",
+        "TD-SEARCH-FIRECRAWL",
+        "TD-SEARCH-SCRAPINGDOG"
       ]
     },
     {
@@ -221,7 +227,13 @@
       "severity": "error",
       "to_trust_domains": [
         "TD-EXTERNAL-PLATFORM",
-        "TD-PRODUCTION-TRUST"
+        "TD-PRODUCTION-TRUST",
+        "TD-SEARCH-SERPER",
+        "TD-SEARCH-SERPAPI",
+        "TD-SEARCH-BRAVE",
+        "TD-SEARCH-TAVILY",
+        "TD-SEARCH-FIRECRAWL",
+        "TD-SEARCH-SCRAPINGDOG"
       ]
     },
     {
@@ -877,6 +889,72 @@
         "SECRET-ENTIRE-SESSION"
       ],
       "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-SERPER"
+      ],
+      "id": "FIT-SEARCH-SERPER-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPER"
+      ],
+      "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-SERPAPI"
+      ],
+      "id": "FIT-SEARCH-SERPAPI-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPAPI"
+      ],
+      "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-BRAVE"
+      ],
+      "id": "FIT-SEARCH-BRAVE-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-BRAVE"
+      ],
+      "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-TAVILY"
+      ],
+      "id": "FIT-SEARCH-TAVILY-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-TAVILY"
+      ],
+      "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-FIRECRAWL"
+      ],
+      "id": "FIT-SEARCH-FIRECRAWL-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-FIRECRAWL"
+      ],
+      "severity": "error"
+    },
+    {
+      "allowed_trust_domains": [
+        "TD-LOCAL-PREFLIGHT",
+        "TD-SEARCH-SCRAPINGDOG"
+      ],
+      "id": "FIT-SEARCH-SCRAPINGDOG-CREDENTIAL",
+      "secret_classes": [
+        "SECRET-SEARCH-SCRAPINGDOG"
+      ],
+      "severity": "error"
     }
   ],
   "tenant_authorization_policies": [
@@ -909,7 +987,13 @@
         "SECRET-PILOT-CODEX",
         "SECRET-PILOT-GITHUB",
         "SECRET-READ-TOKEN",
-        "SECRET-WEBHOOK"
+        "SECRET-WEBHOOK",
+        "SECRET-SEARCH-SERPER",
+        "SECRET-SEARCH-SERPAPI",
+        "SECRET-SEARCH-BRAVE",
+        "SECRET-SEARCH-TAVILY",
+        "SECRET-SEARCH-FIRECRAWL",
+        "SECRET-SEARCH-SCRAPINGDOG"
       ],
       "id": "FIT-UNTRUSTED-RUNNER-NO-SECRETS",
       "node_types": [

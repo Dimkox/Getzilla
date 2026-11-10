@@ -8,13 +8,7 @@ flowchart LR
     node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
     node_69f0245ef987c48b["NODE-PILOT-MODEL-PROVIDER | external_system | external model provider"]
     node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
-    node_78f2d5f6399441fd["NODE-SEARCH-BRAVE | external_system | api.search.brave.com"]
-    node_f40e05000fb3838a["NODE-SEARCH-FIRECRAWL | external_system | api.firecrawl.dev"]
-    node_4cb2764870a21f3e["NODE-SEARCH-SCRAPINGDOG | external_system | api.scrapingdog.com"]
     node_4646462869ac5f17["NODE-SEARCH-SEARXNG | external_system | operator configured SearXNG endpoint"]
-    node_5f139c55723ea515["NODE-SEARCH-SERPAPI | external_system | serpapi.com"]
-    node_b0214d69d31a7432["NODE-SEARCH-SERPER | external_system | google.serper.dev"]
-    node_86424fd6464e012a["NODE-SEARCH-TAVILY | external_system | api.tavily.com"]
     node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
   end
   subgraph domain_ece8d94ff661d9fb["TD-EXTERNAL-POLICY"]
@@ -72,6 +66,24 @@ flowchart LR
     node_2083f4d7618a5715["NODE-CONTROLLED-DESIGN-FIXTURE | external_system | caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source"]
     node_dfd1104494c6ab8f["NODE-GOVERNANCE-REGISTRIES | repository | repository engineering"]
     node_f52610429cb98f23["NODE-WORKFLOW-ARTIFACT-SOURCES | repository | repository contributors"]
+  end
+  subgraph domain_815bd20bb4b72ad7["TD-SEARCH-BRAVE"]
+    node_78f2d5f6399441fd["NODE-SEARCH-BRAVE | external_system | api.search.brave.com"]
+  end
+  subgraph domain_9e274d2ea621c59b["TD-SEARCH-FIRECRAWL"]
+    node_f40e05000fb3838a["NODE-SEARCH-FIRECRAWL | external_system | api.firecrawl.dev"]
+  end
+  subgraph domain_5c6a7ad222a8854b["TD-SEARCH-SCRAPINGDOG"]
+    node_4cb2764870a21f3e["NODE-SEARCH-SCRAPINGDOG | external_system | api.scrapingdog.com"]
+  end
+  subgraph domain_7f826574056fcf0d["TD-SEARCH-SERPAPI"]
+    node_5f139c55723ea515["NODE-SEARCH-SERPAPI | external_system | serpapi.com"]
+  end
+  subgraph domain_393026d17617b4cb["TD-SEARCH-SERPER"]
+    node_b0214d69d31a7432["NODE-SEARCH-SERPER | external_system | google.serper.dev"]
+  end
+  subgraph domain_81aec69c410494bb["TD-SEARCH-TAVILY"]
+    node_86424fd6464e012a["NODE-SEARCH-TAVILY | external_system | api.tavily.com"]
   end
   subgraph domain_7f80d82d053144ab["TD-TRUST-CI-CONTROL"]
     node_d0e570b2fbe52f98["NODE-TRUST-CI-API | service | Trust CI operators"]
@@ -142,12 +154,20 @@ flowchart LR
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-MIRROR-DOWNLOAD | dependency | https"| node_7b13ed12e8efab1c
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-QUERY | dependency | https"| node_8acae282d21dd9c2
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-BRAVE | secret_flow | https"| node_78f2d5f6399441fd
+  node_78f2d5f6399441fd -->|"EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-FIRECRAWL | secret_flow | https"| node_f40e05000fb3838a
+  node_f40e05000fb3838a -->|"EDGE-SEARCH-FIRECRAWL-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_23bed8fcbfc79861 -->|"EDGE-SEARCH-LOOPBACK-TEST-CLIENT | dependency | tcp"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SCRAPINGDOG | secret_flow | https"| node_4cb2764870a21f3e
-  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SEARXNG | dependency | http"| node_4646462869ac5f17
+  node_4cb2764870a21f3e -->|"EDGE-SEARCH-SCRAPINGDOG-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_2b4705308adeeb3e -->|"EDGE-SEARCH-SEARXNG | dependency | tcp"| node_4646462869ac5f17
+  node_4646462869ac5f17 -->|"EDGE-SEARCH-SEARXNG-UNTRUSTED-RESULT | data_flow | tcp"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPAPI | secret_flow | https"| node_5f139c55723ea515
+  node_5f139c55723ea515 -->|"EDGE-SEARCH-SERPAPI-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-SERPER | secret_flow | https"| node_b0214d69d31a7432
+  node_b0214d69d31a7432 -->|"EDGE-SEARCH-SERPER-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-TAVILY | secret_flow | https"| node_86424fd6464e012a
+  node_86424fd6464e012a -->|"EDGE-SEARCH-TAVILY-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8

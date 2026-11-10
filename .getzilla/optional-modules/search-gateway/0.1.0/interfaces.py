@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import socket
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 if TYPE_CHECKING:
-    from .providers import PROVIDERS, decode_json
+    # These exports are supplied by the immutable loader, without a package import.
+    PROVIDERS = cast(tuple[str, ...], None)
+    decode_json = cast(Callable[[bytes], Any], None)
 
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer

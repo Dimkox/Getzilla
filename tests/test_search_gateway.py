@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import socket
 import threading
+import time
 import types
 import unittest
 from urllib.parse import parse_qs, urlsplit
@@ -44,6 +45,37 @@ def payload(name='serper', rows=None):
     return {'searxng': {'results': rows}, 'serper': {'organic': rows}, 'serpapi': {'organic_results': rows},
             'brave': {'web': {'results': rows}}, 'tavily': {'results': rows},
             'firecrawl': {'success': True, 'data': {'web': rows}}, 'scrapingdog': {'organic_results': rows}}[name]
+
+
+def loopback_http_exchange(address, body, headers):
+    """Exchange one real HTTP/1.0 request with finite elapsed time and response bytes."""
+    if address[0] != '127.0.0.1':
+        raise ValueError('loopback_fixture_required')
+    body = body.encode('utf-8') if type(body) is str else body
+    fields = {'Host':'127.0.0.1:'+str(address[1]), 'Content-Type':'application/json',
+              'Content-Length':str(len(body)), **headers}
+    request = 'POST /search HTTP/1.0\r\n' + ''.join(name+': '+value+'\r\n' for name,value in fields.items()) + '\r\n'
+    deadline = time.monotonic()+3
+    chunks, size = [], 0
+    with socket.create_connection(address, timeout=3) as connection:
+        connection.settimeout(max(0.001, deadline-time.monotonic()))
+        connection.sendall(request.encode('ascii')+body)
+        while True:
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('loopback_response_deadline')
+            connection.settimeout(remaining)
+            chunk = connection.recv(min(65536, 1024*1024+1-size))
+            size += len(chunk)
+            if size > 1024*1024:
+                raise ValueError('loopback_response_too_large')
+            if not chunk:
+                break
+            chunks.append(chunk)
+    header, separator, response = b''.join(chunks).partition(b'\r\n\r\n')
+    if not separator or len(header) > 16384:
+        raise ValueError('invalid_loopback_response')
+    return int(header.split(b'\r\n',1)[0].split(b' ',2)[1]), response
 
 
 class SearchBehavior(unittest.TestCase):
@@ -430,7 +462,6 @@ class InterfaceBehavior(unittest.TestCase):
                 self.assertEqual(replies[1]['error']['code'],-32602)
 
     def test_http_real_loopback_auth_host_origin_and_body_limits(self):
-        from http.client import HTTPConnection
         server = self.m.http_server(self.service, 'test-token', port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -438,32 +469,25 @@ class InterfaceBehavior(unittest.TestCase):
             for headers, status in (({}, 401), ({'Authorization':'Bearer test-token','Origin':'https://evil.invalid'},403),
                                     ({'Authorization':'Bearer test-token','Host':'evil.invalid'},403),
                                     ({'Authorization':'Bearer test-token'},200)):
-                conn = HTTPConnection('127.0.0.1', server.server_port, timeout=3)
-                conn.request('POST','/search',json.dumps({'query':'generic error'}), headers)
-                response = conn.getresponse()
-                self.assertEqual(response.status,status)
-                data = response.read()
+                actual_status, data = loopback_http_exchange(
+                    server.server_address, json.dumps({'query':'generic error'}), headers)
+                self.assertEqual(actual_status,status)
                 if status == 200:
                     self.assertEqual(json.loads(data)['status'],'ok')
-                conn.close()
         finally:
             server.shutdown()
             server.server_close()
             thread.join(3)
 
     def test_http_rejects_duplicate_lengths_json_keys_and_oversized_body(self):
-        from http.client import HTTPConnection
         server = self.m.http_server(self.service,'test-token',port=0)
         thread = threading.Thread(target=server.serve_forever,daemon=True)
         thread.start()
         try:
             for body,status in ((b'{"query":"a","query":"b"}',400), (b'x'*16385,413)):
-                connection = HTTPConnection('127.0.0.1',server.server_port,timeout=3)
-                connection.request('POST','/search',body,{'Authorization':'Bearer test-token'})
-                response = connection.getresponse()
-                self.assertEqual(response.status,status)
-                response.read()
-                connection.close()
+                actual_status, _data = loopback_http_exchange(
+                    server.server_address, body, {'Authorization':'Bearer test-token'})
+                self.assertEqual(actual_status,status)
             connection = socket.create_connection(server.server_address,timeout=3)
             request = ('POST /search HTTP/1.0\r\nHost: 127.0.0.1:'+str(server.server_port)+
                        '\r\nAuthorization: Bearer test-token\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}')

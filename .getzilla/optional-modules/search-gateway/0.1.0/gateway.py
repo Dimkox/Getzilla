@@ -1,16 +1,22 @@
 """One serialized policy, admission, budget, cache and provenance path for every interface."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, cast
 import json
 import math
 import re
 import time
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
-    # Immutable source loading composes these reviewed contracts in one namespace.
-    from .providers import (PROVIDERS, MAX_RESPONSE_BYTES, eligible,
-                            guarded_transport, normalize_results, provider_request, TransportFailure, urlsplit)
+    # The immutable loader supplies these exports in its shared execution namespace.
+    PROVIDERS = cast(tuple[str, ...], None)
+    MAX_RESPONSE_BYTES = cast(int, None)
+    eligible = cast(Callable[[dict, dict], bool], None)
+    guarded_transport = cast(Callable[[dict, float], tuple[int, dict, bytes]], None)
+    normalize_results = cast(Callable[[str, bytes, dict, str | None, str], tuple[list, list]], None)
+    provider_request = cast(Callable[[dict, dict], dict], None)
+    TransportFailure = cast(type[ValueError], None)
 
 from collections import OrderedDict
 import copy
