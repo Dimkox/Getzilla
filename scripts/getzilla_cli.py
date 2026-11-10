@@ -13,6 +13,7 @@ if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
 
 import os
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
@@ -99,8 +100,19 @@ def test_workers() -> int:
 
 def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
     from getzilla.util import find_root
-    with diagnostics.session(find_root(), 'test-cli') as history:
+    cleanup = ExitStack()
+    try:
+        try:
+            history = cleanup.enter_context(diagnostics.session(find_root(), 'test-cli'))
+        except Exception:
+            history = None
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
         return _run_tests(args, require_parallel=require_parallel, history=history)
+    finally:
+        try:
+            cleanup.close()
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
 
 
 def _run_tests(args: list[str], *, require_parallel: bool = False, history=None) -> int:
@@ -114,10 +126,8 @@ def _run_tests(args: list[str], *, require_parallel: bool = False, history=None)
         probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
     if probe.returncode == 0:
         workers = test_workers()
-        if history:
-            history.expect_workers(workers)
         print(f'getzilla test: {workers} parallel workers', flush=True)
-        command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', str(workers), *targets]
+        command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
     else:
         if require_parallel:
             print('getzilla test: required pytest-xdist backend is unavailable', file=sys.stderr)
@@ -125,9 +135,17 @@ def _run_tests(args: list[str], *, require_parallel: bool = False, history=None)
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
         command = [python, str(HOME / 'scripts/getzilla_unittest.py'), '--journal-only', 'discover', '-s', 'tests', '-t', '.']
-    if history:
-        environment = history.child_environment(environment)
-        environment['PYTHONPATH'] = os.pathsep.join((str(HOME / '.getzilla'), environment.get('PYTHONPATH', '')))
+    if history is not None and history.writer is not None:
+        try:
+            history.expect_workers(workers if probe.returncode == 0 else 1)
+            configured = history.child_environment(environment)
+            configured['PYTHONPATH'] = os.pathsep.join((str(HOME / '.getzilla'), configured.get('PYTHONPATH', '')))
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+        else:
+            environment = configured
+            if probe.returncode == 0:
+                command[6:6] = ['-p', 'getzilla.pytest_progress']
     with diagnostics.span('test-command', stage='command'):
         return subprocess.run(command, env=environment, check=False).returncode
 

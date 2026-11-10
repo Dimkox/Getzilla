@@ -221,6 +221,47 @@ class JournalStorageTests(unittest.TestCase):
 
 
 class JournalIntegrationTests(unittest.TestCase):
+    def test_unavailable_diagnostic_bootstrap_preserves_primary_dispatch_and_hides_error(self):
+        spec = importlib.util.spec_from_file_location('owned_failed_logging_cli', ROOT / 'scripts/getzilla_cli.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        error = io.StringIO()
+        with patch.object(util, 'find_root', side_effect=NotImplementedError('PRIVATE_ROOT_REASON')), \
+                patch.object(cli, 'project_python', return_value='owned-python'), \
+                patch.object(cli, 'test_workers', return_value=2), \
+                patch.object(cli.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 7)]) as calls, patch.object(sys, 'stderr', error):
+            try:
+                result = cli.run_tests(['tests/test_owned.py'], require_parallel=True)
+            except Exception as exc:
+                result = ('escaped-diagnostic-error', type(exc).__name__)
+        self.assertEqual(result, 7)
+        self.assertEqual(calls.call_count, 2)
+        self.assertNotIn('getzilla.pytest_progress', calls.call_args.args[0])
+        self.assertIn('unavailable', error.getvalue())
+        self.assertNotIn('PRIVATE_ROOT_REASON', error.getvalue())
+
+    def test_saturated_owned_history_does_not_load_unconfigured_plugin(self):
+        with tempfile.TemporaryDirectory(prefix='owned-unavailable-cli-', dir=ROOT / '.getzilla/runtime') as temporary:
+            root = Path(temporary)
+            active = [journal.Run(root, None, 'owned-tests') for _ in range(4)]
+            spec = importlib.util.spec_from_file_location('owned_saturated_cli', ROOT / 'scripts/getzilla_cli.py')
+            cli = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cli)
+            try:
+                with patch.object(util, 'find_root', return_value=root), \
+                        patch.object(cli, 'project_python', return_value='owned-python'), \
+                        patch.object(cli, 'test_workers', return_value=2), \
+                        patch.object(cli.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0),
+                            subprocess.CompletedProcess([], 7)]) as calls:
+                    result = cli.run_tests(['tests/test_owned.py'])
+                self.assertEqual(result, 7)
+                self.assertNotIn('getzilla.pytest_progress', calls.call_args.args[0])
+                self.assertEqual(len(list((root / '.getzilla/runtime/verification-history').glob('*/index.json'))), 4)
+            finally:
+                for run in active:
+                    run.close()
+
     def test_installed_sdk_and_selected_project_keep_history_separate(self):
         with tempfile.TemporaryDirectory(prefix='owned-sdk-project-', dir=ROOT / '.getzilla/runtime') as temporary:
             root = Path(temporary)

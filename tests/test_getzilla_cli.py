@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -23,6 +24,23 @@ def run(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
 
 
 class GetzillaCliTests(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        temporary = tempfile.TemporaryDirectory(prefix='owned-cli-journals-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        parent = Path(temporary.name)
+        sequence = 0
+        def journal_root():
+            nonlocal sequence
+            sequence += 1
+            root = parent / str(sequence)
+            root.mkdir(mode=0o700)
+            (root / '.getzilla').mkdir(mode=0o700)
+            return root
+        selection = mock.patch('getzilla.util.find_root', side_effect=journal_root)
+        selection.start()
+        self.addCleanup(selection.stop)
+
     def test_required_parallel_backend_refuses_failed_second_probe(self) -> None:
         from unittest import mock
         options = ['tests', '--max-worker-restart=0', '--durations=20']
@@ -128,7 +146,8 @@ class GetzillaCliTests(unittest.TestCase):
 
         for name, utf8 in (('nt', '1'), ('posix', None)):
             calls.clear()
-            with mock.patch.object(cli.os, 'name', name), mock.patch.object(cli.subprocess, 'run', fake_run), \
+            platform = SimpleNamespace(name=name, environ=os.environ, pathsep=os.pathsep)
+            with mock.patch.object(cli, 'os', platform), mock.patch.object(cli.subprocess, 'run', fake_run), \
                     mock.patch.object(cli, 'project_python', return_value='python'), \
                     mock.patch.object(cli, 'test_workers', return_value=2):
                 self.assertEqual(cli.run_tests(['tests/test_x.py']), 0)
