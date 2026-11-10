@@ -29,16 +29,30 @@ def _journal_observer():
         sdk = Path(__file__).resolve().parents[1] / '.getzilla'
         archive = sdk / 'getzilla.zip'
         paths = ([str(archive / 'getzilla')] if archive.is_file() else []) + [str(sdk / 'getzilla')]
+        selected = []
+        for leaf in ('fsx', 'verification_journal'):
+            identity = name + '.' + leaf
+            spec = importlib.machinery.PathFinder.find_spec(identity, paths)
+            if spec is None or spec.loader is None or type(spec.origin) is not str:
+                raise ImportError('observer source unavailable')
+            origin = str(Path(spec.origin).resolve())
+            if (any(character in origin for character in '[]*?,\n\r$')
+                    or origin not in [str((Path(path) / (leaf + '.py')).resolve()) for path in paths]):
+                raise ValueError('observer source ambiguous')
+            selected.append((identity, leaf, spec, origin))
+        coverage = sys.modules.get('coverage')
+        active = coverage.Coverage.current() if coverage is not None else None
+        if active is not None:
+            omitted = active.get_option('run:omit')
+            if type(omitted) is not list or any(origin not in omitted for _, _, _, origin in selected):
+                print('getzilla journal: coverage conflict; observer unavailable', file=sys.stderr, flush=True)
+                return None, None
         spec = importlib.machinery.ModuleSpec(name, None, is_package=True)
         spec.submodule_search_locations = paths
         package = importlib.util.module_from_spec(spec)
         sys.modules[name] = package
         created.append((name, package))
-        for leaf in ('fsx', 'verification_journal'):
-            identity = name + '.' + leaf
-            spec = importlib.machinery.PathFinder.find_spec(identity, paths)
-            if spec is None or spec.loader is None:
-                raise ImportError('observer source unavailable')
+        for identity, leaf, spec, _ in selected:
             module = importlib.util.module_from_spec(spec)
             sys.modules[identity] = module
             created.append((identity, module))

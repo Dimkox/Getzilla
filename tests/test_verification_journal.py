@@ -22,6 +22,107 @@ from getzilla import ci_evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class JournalColocatedSDKTests(unittest.TestCase):
+    def colocated_worlds(self, archive, external=False):
+        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'python_test_runner.py',
+                   'pytest_progress.py', '_cpu_capacity.py', 'verification_scope.py')
+        with tempfile.TemporaryDirectory(prefix='owned-colocated-sdk-', dir=ROOT / '.getzilla/runtime') as temporary:
+            fixture = Path(temporary)
+            project = fixture / 'project'
+            sdk = fixture / 'sdk' if external else project
+            package = sdk / '.getzilla/getzilla'
+            package.mkdir(parents=True)
+            project.mkdir(exist_ok=True)
+            (sdk / 'scripts').mkdir()
+            (project / 'tests').mkdir()
+            (project / 'tests/__init__.py').write_text('')
+            (project / 'subject.py').write_text('VALUE=7\n')
+            initializer = ROOT / '.getzilla/getzilla/__init__.py'
+            (package / '__init__.py').write_bytes(initializer.read_bytes())
+            if archive:
+                with zipfile.ZipFile(sdk / '.getzilla/getzilla.zip', 'w') as stream:
+                    for name in members[1:]:
+                        stream.writestr('getzilla/' + name, (ROOT / '.getzilla/getzilla' / name).read_bytes())
+            else:
+                for name in members[1:]:
+                    (package / name).write_bytes((ROOT / '.getzilla/getzilla' / name).read_bytes())
+            (sdk / 'scripts/getzilla_unittest.py').write_bytes((ROOT / 'scripts/getzilla_unittest.py').read_bytes())
+            (project / '.coveragerc').write_text('[run]\nbranch=True\n[report]\nfail_under=100\n')
+            driver = fixture / 'driver.py'
+            driver.write_text('''import io,json,os,subprocess,sys
+from pathlib import Path
+from coverage import Coverage
+project=Path(sys.argv[1])
+sdk=Path(sys.argv[2])
+sys.path.insert(0,str(sdk/'.getzilla'))
+from getzilla import python_test_runner as runner,pytest_progress
+from getzilla import verification_journal as diagnostics
+from getzilla import fsx
+origins={'runner':runner.__file__,'journal':diagnostics.__file__,'fsx':fsx.__file__,'progress':pytest_progress.__file__}
+assert all(Path(value).is_relative_to(sdk) for value in origins.values())
+home=project.parent/'home';home.mkdir(mode=0o700)
+rows=[]
+for mode in ('absent','unlocked','held','application')+(('unproved',) if sdk!=project else ()):
+    (project/'tests/test_owned.py').write_text('import unittest,subject\\n'+('import getzilla\\n' if mode=='application' else '')+'class Owned(unittest.TestCase):\\n def test_value(self): self.assertEqual(subject.VALUE,7)\\n')
+    output=project/('output-'+mode);output.mkdir(mode=0o700)
+    overlay=runner._application_coverage_config(project/'.coveragerc',output,root=project)
+    if mode=='unproved':
+        overlay=output/'unproved.coveragerc'
+        overlay.write_text('[run]\\nbranch=True\\nomit='+str(sdk/'scripts/getzilla_unittest.py')+'\\n[report]\\nfail_under=100\\n')
+    journal_root=project.parent/('journal-'+mode);journal_root.mkdir(mode=0o700)
+    run=diagnostics.Run(journal_root,None,'owned-tests')
+    writer=None
+    try:
+        base=runner._environment(project,output/'.coverage',temporary_root=output/'tmp')
+        base.update(HOME=str(home),PYTHONUTF8='1',PYTHONIOENCODING='utf-8')
+        base['PYTHONPATH']=str(sdk/'.getzilla')+os.pathsep+base['PYTHONPATH']
+        environment=run.child_environment(base,0)
+        if mode in ('absent','application'):
+            environment=base
+        elif mode=='held':
+            writer=diagnostics.Writer(run.path,run.run_id,'worker-0',run.nonce,require_expected=True)
+        result_path=output/'count.json'
+        command=[sys.executable,'-B','-m','coverage','run','--rcfile='+str(overlay),str(sdk/'scripts/getzilla_unittest.py'),'--result',str(result_path),'--nonce','owned-count','discover','-s','tests']
+        child=subprocess.run(command,cwd=project,env=environment,capture_output=True,text=True,timeout=30)
+        count=json.loads(result_path.read_text())
+        measured=Coverage(config_file=str(overlay),data_file=str(output/'.coverage'));measured.load()
+        files=sorted(('project/'+str(Path(path).relative_to(project)) if Path(path).is_relative_to(project) else 'sdk/'+str(Path(path).relative_to(sdk))) for path in measured.get_data().measured_files())
+        rows.append({'mode':mode,'returncode':child.returncode,'tests_run':count['tests_run'],'successful':count['successful'],'threshold':measured.get_option('report:fail_under'),'percent':measured.report(file=io.StringIO()),'files':files,'writer_unavailable':'observer unavailable' in child.stderr,'parent_origins':{key:str(Path(value).relative_to(sdk)) for key,value in origins.items()}})
+    finally:
+        if writer:writer.close()
+        run.close()
+print(json.dumps(rows))
+''')
+            child = subprocess.run([sys.executable, '-I', '-B', str(driver), str(project), str(sdk)], cwd=fixture,
+                                   env={'PATH': os.defpath, 'HOME': str(fixture), 'PYTHONUTF8': '1'},
+                                   capture_output=True, text=True, timeout=150)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            rows = json.loads(child.stdout)
+            print(json.dumps({'layout': 'zip' if archive else 'file', 'external': external, 'rows': rows}, sort_keys=True))
+            self.assertEqual([row['mode'] for row in rows], ['absent', 'unlocked', 'held', 'application'] + (['unproved'] if external else []))
+            for row in rows:
+                self.assertEqual((row['returncode'], row['tests_run'], row['successful'], row['threshold']), (0, 1, True, 100))
+            self.assertEqual(rows[0]['percent'], 100)
+            self.assertEqual(rows[1]['writer_unavailable'], not external)
+            self.assertTrue(rows[2]['writer_unavailable'])
+            self.assertTrue(any(path.endswith('getzilla/__init__.py') for path in rows[3]['files']))
+            self.assertLess(rows[3]['percent'], 100)
+            for row in rows[1:3]:
+                self.assertEqual(row['percent'], 100, row['mode'])
+            if external:
+                self.assertTrue(rows[4]['writer_unavailable'])
+                self.assertEqual(rows[4]['percent'], 100)
+
+    def test_colocated_file_sdk_keeps_primary_coverage_with_or_without_writer(self):
+        self.colocated_worlds(False)
+
+    def test_colocated_zip_sdk_keeps_primary_coverage_with_or_without_writer(self):
+        self.colocated_worlds(True)
+
+    def test_external_sdk_requires_both_exact_coverage_omissions(self):
+        self.colocated_worlds(False, external=True)
+
+
 class JournalDecoderBoundaryTests(unittest.TestCase):
     @contextmanager
     def owned_run(self):
