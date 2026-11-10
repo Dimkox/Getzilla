@@ -123,7 +123,7 @@ def provider_fixture(change=None):
                 change(path, self.calls.count(path), value)
             return Response(json.dumps(value).encode())
     router = Router()
-    client = GitHubClient(token='synthetic-fixture-not-operator', transport=fixture_transport(router))
+    client = GitHubClient(token='fixture', transport=fixture_transport(router))
     return source, authority, client, router
 
 

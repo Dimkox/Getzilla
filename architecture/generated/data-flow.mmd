@@ -18,6 +18,7 @@ flowchart LR
   node_1c3a10ba26a8e80d["NODE-ISOLATED-RUNNER | runner | Trust CI operators"]
   node_fdafbab352587936["NODE-LOCAL-ENTIRE-ADAPTER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
+  node_99c8497c4eb3c986["NODE-OPTIONAL-GITHUB-OBSERVER | local_component | repository engineering; optional GET-only adapter, source-described not activated"]
   node_fd325b0205e2e68b["NODE-PILOT-CONTROL | local_component | single local pilot operator"]
   node_c439f662476a4d4b["NODE-PILOT-GITHUB-BROKER | local_component | single local pilot operator"]
   node_814a7fe70af9f16d["NODE-PILOT-SQLITE | datastore | single local pilot operator"]
@@ -40,6 +41,7 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem | DATA-REPOSITORY-SOURCE"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem | DATA-GOVERNANCE-EVIDENCE"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https | DATA-APPROVAL"| node_d0e570b2fbe52f98
+  node_99c8497c4eb3c986 -->|"EDGE-OPTIONAL-GET-GITHUB | data_flow | https | DATA-CHECK-STATUS | DATA-REPOSITORY-SOURCE"| node_8b8a8cd21b180532
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https | DATA-PILOT-STATE"| node_8b8a8cd21b180532
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem | DATA-PILOT-STATE"| node_814a7fe70af9f16d
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem | DATA-HOLDOUT"| node_0a0fe2f046a648e9
