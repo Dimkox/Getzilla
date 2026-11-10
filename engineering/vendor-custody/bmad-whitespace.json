@@ -1,5 +1,5 @@
 {
-  "catalog_sha256": "367addf02d997ca2f02d7f658ef657cc73f23a34d2df7f147c86b1e5fb7a21a8",
+  "catalog_sha256": "f3d63edf3ea629f5940378ff997501f85ff913ec9a4179d4119fbd2bae0aa9de",
   "files": [
     {
       "diagnostics": [
@@ -513,7 +513,7 @@
   "kind": "immutable-vendored-whitespace-custody",
   "review": {
     "path": "engineering/vendor-custody/bmad-whitespace.md",
-    "sha256": "987e5ae7a8d4dd5ba08efbdf553f5aa874899baf26cd5a04835f39c2da145d28"
+    "sha256": "298a75e06c2a479ae1cc2c5c2497b83fd441d502cb058d2480a9fae1dba3e79f"
   },
   "schema_version": 1
 }

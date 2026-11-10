@@ -22,9 +22,9 @@
     "--yes"
   ],
   "binding": {
-    "dependency_lock_sha256": "7008085090efa9f320b1376178b208747c48c10370c1725f73cc1135c6a91c20",
-    "source_archive_sha256": "844dbb5bfd02be49a1aa4c6a75b542a6d2cfa5cf594b188aaa993e8184c4ea73",
-    "source_commit": "790dae9c8e2a1d73575cb2d40b14dd4963391f29"
+    "dependency_lock_sha256": "27206bc47d94738fadc0b12a728d0fa37dbb66356656f02ce5361f6aaf3da1cb",
+    "source_archive_sha256": "804bb9e22a30c64bdd4f05858236995d9e4925d8acdfa2da8db5519cfcf14576",
+    "source_commit": "bab9082c3e884e0d72c759bcd1a6d90bcc01be84"
   },
   "component": "bmad",
   "files": [
@@ -149,10 +149,10 @@
       "sha256": "d32e32a3c1d59b5612b947004f3f6fef1117a13ce9f1ffa428d616e0b5d4db69"
     },
     {
-      "bytes": 10472,
+      "bytes": 10679,
       "mode": 420,
       "path": ".agents/skills/bmad-architecture/scripts/lint_spine.py",
-      "sha256": "040e0f1c13d31e6a21c518df943d1d7de7b75d8d98a07603b0983f3f3fb500db"
+      "sha256": "dd48be20384adfa281d295e34a39c1ae55727af7e98efe42525be31d1c5c001e"
     },
     {
       "bytes": 9932,
@@ -551,10 +551,10 @@
       "sha256": "ef42ffe69d1758ee12f22d6c143262926f715dd13fecb874c8a5971916d41598"
     },
     {
-      "bytes": 8061,
+      "bytes": 8268,
       "mode": 420,
       "path": ".agents/skills/bmad-customize/scripts/list_customizable_skills.py",
-      "sha256": "8787f542930b927789e7fdf12bc5a67ff08e19865903a5ad05ff2cc8fc426b66"
+      "sha256": "9bfc913e6d23c3553096a68844823b022505f8b2ca7844eccdaf40b1b9288992"
     },
     {
       "bytes": 9244,
@@ -635,10 +635,10 @@
       "sha256": "0393ded4828fec69a4819d7236827910d641d09c3b61144c0211a9a78776fdd2"
     },
     {
-      "bytes": 12417,
+      "bytes": 12624,
       "mode": 420,
       "path": ".agents/skills/bmad-deep-recon/scripts/recon_kit.py",
-      "sha256": "8cb5187b5114b779532907383a013d40fdea1022bb9bed9a23bd8d0fdfa79e8c"
+      "sha256": "20785a881170b3d54122967041016a3986f4ebab407c979409c4f22c8b1c1d49"
     },
     {
       "bytes": 4913,
@@ -977,16 +977,16 @@
       "sha256": "a9c504c436038c7e47d08322413aa3c213d2859b36ae30e873cb8c60fd9e008e"
     },
     {
-      "bytes": 11355,
+      "bytes": 11562,
       "mode": 420,
       "path": ".agents/skills/bmad-retrospective/scripts/git_evidence.py",
-      "sha256": "6e08688d2943217b61e784c7df3508aa1502d7cecf53ea7cd530944c431c91b6"
+      "sha256": "2acbb8b5804d0680b5939629a0c3786a72cde30f5f2cecd75858325c6e778d89"
     },
     {
-      "bytes": 29799,
+      "bytes": 30006,
       "mode": 420,
       "path": ".agents/skills/bmad-retrospective/scripts/sprint_status.py",
-      "sha256": "a697eecd53cd9177657aee4cfdb2eab06d7d81f3e855b096cfe0482a74c50ebe"
+      "sha256": "7c9f0a514a6e0834182f3c30485de49e0a4decb9be51027cc8be58aecdb9fc44"
     },
     {
       "bytes": 2397,
@@ -1145,10 +1145,10 @@
       "sha256": "ac680fa0a0f945a9bc0fc89ca709b2a8e6bc3b2617cd0d3d730378c4b5edd86d"
     },
     {
-      "bytes": 28454,
+      "bytes": 28661,
       "mode": 420,
       "path": ".agents/skills/bmad-sprint-planning/scripts/sprint_plan.py",
-      "sha256": "4c30f62c261599fc1da3fd319ea6ce5092aa0332221cedee1763a1040627e6bc"
+      "sha256": "c4e4daf4200f233501a069a43db56d097c5d4e71f74cd29f132f88b83c2fc95f"
     },
     {
       "bytes": 21953,
@@ -1313,12 +1313,6 @@
       "sha256": "5bfe0f9240ae073f1b5c843d172c11e76cbe6067e8df414ea6a338c81f113f5d"
     },
     {
-      "bytes": 1572,
-      "mode": 420,
-      "path": "_bmad/LICENSE",
-      "sha256": "0aa79baf6328b4a1e694ce10a12ffc36d7666554da128dff0e8fcda0fc536a66"
-    },
-    {
       "bytes": 7329,
       "mode": 420,
       "path": "_bmad/_config/bmad-help.csv",
@@ -1328,13 +1322,13 @@
       "bytes": 32470,
       "mode": 420,
       "path": "_bmad/_config/files-manifest.csv",
-      "sha256": "969465a92a2d047bd793bb36cbb56c9969f70cacbc2ccd60b28599f6d0f2dcee"
+      "sha256": "de044687fcffdbd58bbd1fcaba38f7504432b2eecacb31845e229e6860721a7a"
     },
     {
       "bytes": 516,
       "mode": 420,
       "path": "_bmad/_config/manifest.yaml",
-      "sha256": "d993afb84670f3e64454d64ae9196c24e70b105f3c1064492e9f76e78fce7213"
+      "sha256": "fdd628725f723b24d46259749a7fee1f10075d212351c347ae2a7ee54ab9ccc7"
     },
     {
       "bytes": 9658,
@@ -1346,7 +1340,7 @@
       "bytes": 489,
       "mode": 420,
       "path": "_bmad/bmm/config.yaml",
-      "sha256": "4f89ce5bdd8792783c424c6006a62ede68f78f5ef5e5bb93bc8319e379aa66a1"
+      "sha256": "59a3b1136c5a05a1591e29c6542c6c7f606a433b5bb79ba198f196c3f35245bf"
     },
     {
       "bytes": 4893,
@@ -1376,7 +1370,7 @@
       "bytes": 239,
       "mode": 420,
       "path": "_bmad/core/config.yaml",
-      "sha256": "a8a4588cbabef4188adf3e7b964569f5a02bc9122c9758976f4051a26056c04c"
+      "sha256": "3d0b392eeeb2d96859d9f84607775b26d9f521dd2ee327fa6cd213b8c0162277"
     },
     {
       "bytes": 2562,
@@ -1421,10 +1415,10 @@
       "sha256": "48afe2bc18a29201e343cce3703be1e70df9c83ee74eeb68e57ef8ef42e8c651"
     },
     {
-      "bytes": 9187,
+      "bytes": 9394,
       "mode": 420,
       "path": "_bmad/scripts/memlog.py",
-      "sha256": "3b00f82ca33dc4227f715123b939514ee35c4f9c71150c894c3d8185df1b48df"
+      "sha256": "4916a9c63ec164568cf428ce27b44d6657933f098ee3ae3970b25f0f9d8f9240"
     },
     {
       "bytes": 15534,
