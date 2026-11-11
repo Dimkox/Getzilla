@@ -177,7 +177,7 @@ class LateInputIOTests(unittest.TestCase):
                 result = admission.evaluate(object(), authority, selector,
                     admission.Evidence(None, document['report']), now=NOW,
                     candidate_root=Path('owned-source'), snapshot_root=Path('owned-snapshots'))
-            except (OSError, zipfile.BadZipFile):
+            except (OSError, zipfile.BadZipFile, NotImplementedError):
                 self.fail('anticipated late input I/O escaped instead of a closed refusal')
             validate.assert_called_once()
             observation.assert_called_once()
@@ -208,6 +208,9 @@ class LateInputIOTests(unittest.TestCase):
 
     def test_late_snapshot_parser_refuses(self):
         self.refused('snapshot', zipfile.BadZipFile)
+
+    def test_late_snapshot_version_refuses(self):
+        self.refused('snapshot', NotImplementedError)
 
     def test_positive_and_changed_source_binding_remain_distinct(self):
         result = self.evaluate()

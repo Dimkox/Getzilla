@@ -341,5 +341,5 @@ def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, 
         current = now + timedelta(seconds=max(0, time.monotonic() - started))
         decision = bundle.evaluate_bundle(policy, source, parsed, observed, facts, now=current)
         return Decision(decision.consistent, decision.reasons)
-    except (bundle.BundleError, OSError, ValueError, TypeError, AttributeError, GitHubError, ObservationError, zipfile.BadZipFile):
+    except (bundle.BundleError, OSError, ValueError, TypeError, AttributeError, GitHubError, ObservationError, zipfile.BadZipFile, NotImplementedError):
         return Decision(False, ('protected-observation-or-validation-refused',))
