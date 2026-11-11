@@ -44,6 +44,87 @@ _STAGES = {'action', 'command', 'check', 'collection', 'setup', 'call', 'teardow
 _STATES = {'start', 'end', 'pass', 'fail', 'skip', 'error', 'cancelled', 'timeout', 'unknown', 'expected-failure', 'unexpected-success'}
 _ERRORS = {'AssertionError', 'OSError', 'ValueError', 'TypeError', 'RuntimeError', 'ImportError',
            'ModuleNotFoundError', 'TimeoutError', 'KeyboardInterrupt', 'SystemExit'}
+_OWNERSHIP_CASE = 'tests/test_python_test_runner.py::PythonTestRunnerTests::test_term_resistant_grandchild_is_killed_on_every_stop_path'
+_OWNERSHIP_FORMS = ('exit', 'flood', 'timeout', 'controller')
+_OWNERSHIP_FIELDS = {
+    'form': set(_OWNERSHIP_FORMS),
+    'phase': {'entered', 'execute', 'ready', 'term', 'grace', 'kill', 'reap', 'result',
+              'controller-stop', 'controller-reaped', 'descendant-check', 'finished'},
+    'status': {'active', 'returned', 'failed', 'cancelled', 'unknown'},
+    'cleanup': {'none-reported', 'recorded', 'unavailable'},
+    'descendant': {'absent', 'zombie', 'nonzombie', 'unavailable'},
+}
+
+
+def _validate_ownership_snapshot(value):
+    if (type(value) is not dict or set(value) != {'version', 'case', 'attempt', 'repeated', 'overflow', 'forms'}
+            or type(value['version']) is not int or value['version'] != 1
+            or type(value['case']) is not str or value['case'] != 'term-resistant-grandchild' or type(value['attempt']) is not int
+            or not 1 <= value['attempt'] <= 2**63 - 1
+            or any(type(value[key]) is not bool for key in ('repeated', 'overflow'))
+            or type(value['forms']) is not list or not 1 <= len(value['forms']) <= 4):
+        raise ValueError('ownership-snapshot-shape')
+    prior = -1
+    for row in value['forms']:
+        if (type(row) is not dict or set(row) != set(_OWNERSHIP_FIELDS)
+                or any(type(row[key]) is not str or row[key] not in allowed
+                       for key, allowed in _OWNERSHIP_FIELDS.items())):
+            raise ValueError('ownership-row-shape')
+        position = _OWNERSHIP_FORMS.index(row['form'])
+        if position <= prior:
+            raise ValueError('ownership-form-order')
+        prior = position
+    raw = _json(value)
+    if len(raw) > 1024:
+        raise ValueError('ownership-snapshot-limit')
+    return _decode(raw)
+
+
+def _ownership_projection(values, complete=True):
+    if not complete or not values:
+        return {'status': 'unavailable'}
+    if len(values) != 1:
+        return {'status': 'ambiguous'}
+    return {'status': 'reported', 'snapshot': _validate_ownership_snapshot(values[0])}
+
+
+@contextmanager
+def ownership_case(form):
+    writer, node = action_sink()
+    if writer is None or node != _OWNERSHIP_CASE:
+        yield
+        return
+    previous = getattr(writer, '_ownership_form', None)
+    try:
+        writer._ownership_form = None
+        if type(form) is str and form in _OWNERSHIP_FORMS:
+            snapshot = getattr(writer, '_ownership', None)
+            if snapshot and any(row['form'] == form for row in snapshot['forms']):
+                snapshot['repeated'] = True
+                writer._ownership_blocked = True
+            writer._ownership_form = form
+            ownership_mark('entered')
+    except Exception:
+        pass  # Optional telemetry cannot prevent the action under observation.
+    try:
+        yield
+    except BaseException as exc:
+        ownership_mark(None, status='cancelled' if isinstance(exc, (KeyboardInterrupt, SystemExit))
+                       or type(exc).__name__ == 'RunCancelled' else 'failed')
+        raise
+    else:
+        ownership_mark('finished', status='returned')
+    finally:
+        writer._ownership_form = previous
+
+
+def ownership_mark(phase, *, status='active', cleanup='unavailable', descendant='unavailable'):
+    writer, node = action_sink()
+    if writer is not None and node == _OWNERSHIP_CASE and getattr(writer, '_ownership_form', None) is not None:
+        try:
+            writer.record_ownership(phase, status=status, cleanup=cleanup, descendant=descendant)
+        except Exception:
+            pass
 
 
 def _json(value):
@@ -181,6 +262,9 @@ class Writer:
         self.generation = self.size = 0
         self.identity = None
         self.active = {}
+        self._ownership = self._ownership_form = None
+        self._ownership_blocked = False
+        self._ownership_counts = {}
         try:
             header = _decode(_read(self.handle, 'index.json', 16384))
             if header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active':
@@ -198,6 +282,9 @@ class Writer:
                     raise ValueError('journal-stream-not-closed')
                 self.sequence, self.generation, self.rotated = prior['sequence'], prior['generation'] + 1, prior['rotated']
                 self.attempt = prior['attempt'] + 1
+                if 'ownership' in prior:
+                    self._ownership = _validate_ownership_snapshot(prior['ownership'])
+                    self._ownership_blocked = True
             except FileNotFoundError:
                 pass
             self.started = time.monotonic_ns()
@@ -222,11 +309,59 @@ class Writer:
         self.identity, self.name, self.size = (info.st_dev, info.st_ino), name, 0
 
     def health(self, status):
-        _publish(self.handle, self.actor + '.json', {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
+        value = {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
             'actor': self.actor, 'sequence': self.sequence, 'generation': self.generation, 'rotated': self.rotated,
             'attempt': self.attempt,
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
-            'status': status, 'segment': self.name}, 2048)
+            'status': status, 'segment': self.name}
+        if self._ownership is not None:
+            try:
+                value['ownership'] = _validate_ownership_snapshot(self._ownership)
+                if len(_json(value)) + 1 > 2048:
+                    value.pop('ownership')
+            except ValueError:
+                value.pop('ownership', None)
+        _publish(self.handle, self.actor + '.json', value, 2048)
+
+    def record_ownership(self, phase, *, status, cleanup, descendant):
+        form = self._ownership_form
+        if form not in _OWNERSHIP_FORMS:
+            return
+        fields = {'phase': phase, 'status': status, 'cleanup': cleanup, 'descendant': descendant}
+        if any((type(value) is not str or value not in _OWNERSHIP_FIELDS[key])
+               and not (key == 'phase' and value is None) for key, value in fields.items()):
+            return
+        if self._ownership is None:
+            self._ownership = {'version': 1, 'case': 'term-resistant-grandchild', 'attempt': self.attempt,
+                               'repeated': False, 'overflow': False, 'forms': []}
+        if self._ownership_blocked:
+            self._ownership['repeated'] = True
+            self.health('active')
+            return
+        rows = self._ownership['forms']
+        row = next((row for row in rows if row['form'] == form), None)
+        if row is None:
+            row = {'form': form, 'phase': 'entered', 'status': 'active',
+                   'cleanup': 'unavailable', 'descendant': 'unavailable'}
+            rows.append(row)
+            rows.sort(key=lambda item: _OWNERSHIP_FORMS.index(item['form']))
+        count = self._ownership_counts.get(form, 0)
+        overflow = count >= 24
+        if overflow:
+            self._ownership['overflow'] = True
+        else:
+            self._ownership_counts[form] = count + 1
+        if row['status'] not in {'failed', 'cancelled'}:
+            if not overflow or status in {'failed', 'cancelled'}:
+                row.update(phase=phase or row['phase'], status=status)
+                for key in ('cleanup', 'descendant'):
+                    if fields[key] != 'unavailable':
+                        row[key] = fields[key]
+            elif status == 'returned':
+                row['status'] = 'unknown'
+        self.health('active')
+        if not overflow:
+            self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
 
     def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None):
         if self.disabled:
@@ -340,6 +475,8 @@ class Run:
         self.source = source if type(source) is str and _DIGEST.fullmatch(source) else None
         self.session_id = None
         self.entrypoint = entrypoint
+        self._ownership = []
+        self._ownership_complete = False
         try:
             if not _ID.fullmatch(entrypoint):
                 raise ValueError('journal-entrypoint')
@@ -483,6 +620,7 @@ class Run:
                 'status': 'unavailable' if self.writer is None or self.writer.disabled else self.status,
                 'source_status': 'reported-integrity-only' if self.source is not None else 'unavailable',
                 'session_status': 'canonical-route-observation' if self.session_id is not None else 'unavailable',
+                'ownership': _ownership_projection(self._ownership, self._ownership_complete),
                 'completeness': 'unknown-until-terminal-and-all-actors-validated'}
 
     def bind_source(self, digest, session_id=None):
@@ -525,10 +663,13 @@ class Run:
                         raise ValueError('journal-health-binding')
                     if health['status'] != 'closed' or health['open_spans']:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
+                    if 'ownership' in health:
+                        self._ownership.append(_validate_ownership_snapshot(health['ownership']))
                 except FileNotFoundError:
                     if actor == 'controller' or actor in expected:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
                     continue
+            self._ownership_complete = True
             with self._metadata(self.path.parent) as registry_handle:
                 if registry_handle is None:
                     return
@@ -581,6 +722,8 @@ def _remove_run(history, record):
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
                         or health['status'] != 'closed' or health.get('open_spans', 0)):
                     raise ValueError('journal-retention-active-stream')
+                if 'ownership' in health:
+                    _validate_ownership_snapshot(health['ownership'])
         for name in names:
             fsx.unlink_at(handle, name)
     finally:
@@ -897,6 +1040,7 @@ def export_entries(root, *, binding=None):
     """A safe bounded subset; never a complete-history or authorization claim."""
     entries, summary = [], {'version': 1, 'status': 'unavailable', 'run_status': 'unavailable',
                            'export_status': 'unavailable', 'association': 'unbound', 'subset': True}
+    ownership, ownership_complete = [], False
     history = root / '.getzilla/runtime/verification-history'
     try:
         handle = _directory(history)
@@ -937,13 +1081,15 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1
                                    for k in ('attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans'))
                             or health['segment'] != f'{actor}-{health["generation"] % SEGMENTS}.jsonl'):
                         raise ValueError('journal-export-actor')
+                    if 'ownership' in health:
+                        ownership.append(_validate_ownership_snapshot(health['ownership']))
                     raw = _read(handle, f'{actor}-{health["generation"] % SEGMENTS}.jsonl', SEGMENT_BYTES)
                     tail = raw[-65536:]
                     if len(raw) > len(tail):
@@ -955,6 +1101,7 @@ def export_entries(root, *, binding=None):
                         summary['missing'].remove(actor)
                 except FileNotFoundError:
                     continue
+            ownership_complete = True
         finally:
             fsx.close_dir(handle)
         if summary['status'] == 'closed' and (summary['missing'] or any(
@@ -963,5 +1110,6 @@ def export_entries(root, *, binding=None):
         summary['export_status'] = 'bounded-subset'
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         summary['export_status'] = 'unavailable'
+    summary['ownership'] = _ownership_projection(ownership, ownership_complete)
     entries.insert(0, ('journal/index.json', _json(summary) + b'\n'))
     return entries

@@ -314,12 +314,15 @@ def _stop(process: subprocess.Popen) -> None:
     """Stop only the session or Job Object created by execute; repeated calls are safe."""
     job = fsx.owned_job(process)
     if os.name == 'posix':
+        diagnostics.ownership_mark('term')
         try:
             os.killpg(process.pid, signal.SIGTERM)
+            diagnostics.ownership_mark('term', status='returned')
         except ProcessLookupError:
             pass
         else:
             # Also terminate descendants when their group leader already exited.
+            diagnostics.ownership_mark('grace')
             deadline = time.monotonic() + _TERM_GRACE
             while time.monotonic() < deadline:
                 process.poll()
@@ -328,32 +331,45 @@ def _stop(process: subprocess.Popen) -> None:
                 except ProcessLookupError:
                     break
                 time.sleep(0.01)
+            diagnostics.ownership_mark('grace', status='returned')
+            diagnostics.ownership_mark('kill')
             try:
                 os.killpg(process.pid, signal.SIGKILL)
+                diagnostics.ownership_mark('kill', status='returned')
             except ProcessLookupError:
                 pass
     elif job is not None:
         # The job holds every descendant, also those whose parent already exited;
         # Windows has no catchable SIGTERM, so termination is immediate.
+        diagnostics.ownership_mark('kill')
         try:
             emptied = job.terminate(_KILL_REAP_TIMEOUT)
+            diagnostics.ownership_mark('kill', status='returned')
         finally:
             job.close()  # kill-on-close remains the last resort if termination failed
         if not emptied:
             raise RunnerError('owned process tree refused to exit after Job Object termination')
     elif process.poll() is None:
+        diagnostics.ownership_mark('kill')
         if fsx.WINDOWS:
             # taskkill /T ends the live tree; without a Job Object, descendants that
             # outlive an already-exited child are not reachable (no group kill).
             fsx.kill_process_tree(process.pid)
         if process.poll() is None:
             process.kill()
+            diagnostics.ownership_mark('kill', status='returned')
+    diagnostics.ownership_mark('reap')
     try:
         process.wait(timeout=_KILL_REAP_TIMEOUT)
+        diagnostics.ownership_mark('reap', status='returned')
     except subprocess.TimeoutExpired:
+        diagnostics.ownership_mark('kill')
         process.kill()
+        diagnostics.ownership_mark('kill', status='returned')
+        diagnostics.ownership_mark('reap')
         try:
             process.wait(timeout=_KILL_REAP_TIMEOUT)
+            diagnostics.ownership_mark('reap', status='returned')
         except subprocess.TimeoutExpired:
             raise RunnerError('owned process refused to exit after SIGKILL') from None
 
@@ -438,6 +454,7 @@ def _output_file(retained: dict[str, ProcessResult | CleanupMetadata], label: st
 @diagnostics.observed('owned-command', stage='command')
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
+    diagnostics.ownership_mark('execute')
     run = diagnostics.current()
     if run:
         environment = run.child_environment(environment)
@@ -456,6 +473,7 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
                 detail = f'{detail}: {command[0]}'  # Windows WinError 2 names no file
             result = ProcessResult(command, 127, stderr=detail)
             retained['result'] = result
+            diagnostics.ownership_mark('result', status='returned')
             return result
         if run and run.writer:
             run.writer.emit('command', 'unknown', step='owned-process', process=process.pid)
@@ -509,7 +527,9 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
                                cleanup_metadata)
         retained.pop('cleanup_metadata', None)
         retained['result'] = result
+        diagnostics.ownership_mark('result', cleanup='recorded' if cleanup_error else 'none-reported')
         cancelled.check(result)
+        diagnostics.ownership_mark('result', status='returned', cleanup='recorded' if cleanup_error else 'none-reported')
         return result
 
 
