@@ -616,4 +616,3 @@ class DispatchBudgetBoundaryTests(SignedAdmissionMergeTests):
                              selector=self.selector, clock=lambda: self.clock)
         self.assertEqual(result.state, 'merged', result)
         self.assertEqual(backend.calls[0].valid_until, self.clock + timedelta(seconds=5))
-
