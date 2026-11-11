@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import copy
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -391,6 +392,131 @@ class ResourceTransitionTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == "linux", "Linux UID/procfs/private-FD ownership contract")
 class LiveAnchorTests(unittest.TestCase):
     setUp = ResourceRepairTests.setUp
+
+    def witness_fault(self, *, detached=True, slot="marker", stage="read", missing=False):
+        number = getattr(self, "witness_number", 0) + 1
+        self.witness_number = number
+        owner = self.module.OwnedDocker(self.root / f"journal{number}.json", f"gz-witness-{number}")
+        path = self.detached(owner) if detached else owner.directory("owned")
+        key = self.module.hashlib.sha256(("directory:" + path.name).encode()).hexdigest()
+        target = owner._anchor_path() / ("owner" if slot == "header" else key + "." + slot)
+        aside = self.root / f"original-{number}"
+        seen, changed = [], []
+        private = self.module.OwnedDocker._private
+        check = self.module.fsx.ReadOnlyBoundRoot.check
+        move, remove, unlink = self.module.fsx.replace_at, self.module.fsx.rmdir_at, self.module.fsx.unlink_at
+        def change():
+            if not changed:
+                raw = target.read_bytes()
+                target.rename(aside)
+                if not missing:
+                    target.write_bytes(raw)
+                    target.chmod(0o600)
+                changed.append(raw)
+        def read(root, name, limit=2048):
+            value = private(root, name, limit)
+            if stage == "owner-read" and root.path == owner._anchor_path() and name == "owner":
+                change()
+            if stage == "anchor-read" and root.path == owner._anchor_path() and name == key + ".record":
+                change()
+            if root.path == path and name == ".owner":
+                seen.append(True)
+                if stage == "read":
+                    change()
+            return value
+        def checked(root):
+            check(root)
+            if stage == "check" and root.path == path and seen:
+                change()
+        def moved(parent, name, destination, destination_name):
+            result = move(parent, name, destination, destination_name)
+            if stage == "move" and name == ".owner":
+                change()
+            return result
+        def removed(parent, name):
+            result = remove(parent, name)
+            if stage == "rmdir":
+                change()
+            return result
+        def unlinked(parent, name):
+            result = unlink(parent, name)
+            if stage == "marker-unlink" and name.endswith(".marker"):
+                change()
+            return result
+        actor = self.recovered(owner) if detached else owner
+        with ExitStack() as patches:
+            patches.enter_context(patch.object(self.module.OwnedDocker, "_private", staticmethod(read)))
+            patches.enter_context(patch.object(self.module.fsx.ReadOnlyBoundRoot, "check", checked))
+            patches.enter_context(patch.object(self.module.fsx, "replace_at", moved))
+            patches.enter_context(patch.object(self.module.fsx, "rmdir_at", removed))
+            patches.enter_context(patch.object(self.module.fsx, "unlink_at", unlinked))
+            try:
+                actor.cleanup()
+                outcome = "removed"
+            except self.module.CleanupUnconfirmed:
+                outcome = "refused"
+        self.assertTrue(changed, "the real filesystem boundary must be reached")
+        self.assertEqual(aside.read_bytes(), changed[0])
+        return owner, path, target, aside, outcome
+
+    def test_recovered_witness_mutation_before_rmdir_refuses(self):
+        for stage in ("read", "check"):
+            for missing in (False, True):
+                with self.subTest(stage=stage, missing=missing):
+                    _, path, marker, _, outcome = self.witness_fault(stage=stage, missing=missing)
+                    self.assertEqual(outcome, "refused")
+                    self.assertTrue(path.is_dir(), "changed witness cannot authorize rmdir")
+                    self.assertEqual(marker.exists(), not missing)
+
+    def test_newly_moved_witness_mutation_before_rmdir_refuses(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                _, path, marker, _, outcome = self.witness_fault(detached=False, stage="move", missing=missing)
+                self.assertEqual(outcome, "refused")
+                self.assertTrue(path.is_dir(), "MOVE must retain the original marker identity")
+                self.assertEqual(marker.exists(), not missing)
+
+    def test_header_and_record_identity_changes_revoke_removal(self):
+        for detached in (True, False):
+            stage = "read" if detached else "move"
+            for slot, boundary in (("header", "owner-read"), ("header", "anchor-read"), ("header", stage), ("record", stage)):
+                with self.subTest(detached=detached, slot=slot, boundary=boundary):
+                    _, path, target, _, outcome = self.witness_fault(detached=detached, slot=slot, stage=boundary)
+                    self.assertEqual(outcome, "refused")
+                    self.assertTrue(path.is_dir())
+                    self.assertTrue(target.exists())
+
+    def test_finalization_never_adopts_replacement_authority(self):
+        for detached in (True, False):
+            for slot, stage in (("marker", "rmdir"), ("record", "rmdir"), ("header", "rmdir"), ("record", "marker-unlink")):
+                with self.subTest(detached=detached, slot=slot, stage=stage):
+                    _, path, target, _, outcome = self.witness_fault(detached=detached, slot=slot, stage=stage)
+                    self.assertEqual(outcome, "refused")
+                    self.assertFalse(path.exists(), "resource removal precedes this injected change")
+                    self.assertTrue(target.exists(), "finalization must preserve the replacement")
+
+    def test_live_witness_restore_and_partial_finalization_retry(self):
+        owner, path, marker, original, outcome = self.witness_fault(missing=True)
+        self.assertEqual(outcome, "refused")
+        self.assertTrue(path.exists())
+        original.rename(marker)
+        now = [0.0]
+        unlink = self.module.fsx.unlink_at
+        def expire(parent, name):
+            result = unlink(parent, name)
+            if name.endswith(".marker"):
+                now[0] = 61.0
+            return result
+        with patch.object(self.module.time, "monotonic", lambda: now[0]), patch.object(self.module.fsx, "unlink_at", expire):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                self.recovered(owner).cleanup()
+        self.assertFalse(path.exists())
+        self.assertFalse(marker.exists())
+        recovered = self.recovered(owner)
+        recovered.cleanup()
+        recovered.cleanup()
+        self.assertEqual([p.name for p in owner._anchor_path().iterdir()], ["owner"])
+        self.assertEqual(recovered.cleanup_status, "removed")
 
     def recovered(self, owner):
         with patch.object(self.module, "_process_identity", return_value={**owner.owner_process, "start": "reused"}):
