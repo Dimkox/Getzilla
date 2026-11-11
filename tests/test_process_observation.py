@@ -1,4 +1,3 @@
-"""Closed retained-fact controls; no process workload."""
 import ast
 import copy
 import hashlib
@@ -46,10 +45,9 @@ class RetainedObservationTests(unittest.TestCase):
 
     def test_failure_phase_is_retained_through_later_forms(self):
         failure = AssertionError('PRIVATE-EXCEPTION-CANARY')
-        with self.assertRaises(AssertionError) as caught:
-            with self.admit():
-                journal.ownership_mark('descendant-check', descendant='nonzombie')
-                raise failure
+        with self.assertRaises(AssertionError) as caught, self.admit():
+            journal.ownership_mark('descendant-check', descendant='nonzombie')
+            raise failure
         self.assertIs(caught.exception, failure)
         with self.admit('flood'):
             journal.ownership_mark('result', status='returned', cleanup='none-reported')
@@ -148,18 +146,17 @@ class RetainedObservationTests(unittest.TestCase):
         self.assertEqual(self.writer.sequence, 24)
 
     def test_optional_sink_failures_preserve_original_exception(self):
+        prior = journal.action_sink()
         primary = RuntimeError('PRIVATE-CANARY')
-        with patch.object(self.writer, 'record_ownership', side_effect=OSError('private path')):
-            with self.assertRaises(RuntimeError) as caught:
-                with journal.bind_sink(self.writer, CASE), journal.ownership_case('exit'):
-                    journal.ownership_mark('execute')
-                    raise primary
-        self.assertIs(caught.exception, primary)
-        self.assertEqual(journal.action_sink(), (None, None))
-        cancelled = KeyboardInterrupt()
-        with self.assertRaises(KeyboardInterrupt) as caught:
+        with patch.object(self.writer, 'record_ownership', side_effect=OSError('private path')), self.assertRaises(RuntimeError) as caught:
             with self.admit():
-                raise cancelled
+                journal.ownership_mark('execute')
+                raise primary
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(journal.action_sink(), prior)
+        cancelled = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt) as caught, self.admit():
+            raise cancelled
         self.assertIs(caught.exception, cancelled)
         self.assertEqual(self.health()['ownership']['forms'][0]['status'], 'cancelled')
 
@@ -220,7 +217,6 @@ class RetainedObservationTests(unittest.TestCase):
 
 class PassiveAnnotationTests(unittest.TestCase):
     def test_original_control_flow_assertions_and_deadlines_are_preserved(self):
-        # Pin original semantics; remove only passive annotations before comparison.
         expected = {
             '_stop': '4913ce4ec0b26184ef8b44f29876bc6b1d0ad2fb66a0a5560ef4aa026499eed7',
             'execute': '0c0ad3051b7cd529ac8863ab0ccba44e911a9a254b7cf346f272c8ca0099ab7a',
@@ -247,6 +243,7 @@ class PassiveAnnotationTests(unittest.TestCase):
                     marks = [item for item in ast.walk(node) if diagnostic(item, 'ownership_mark')]
                     self.assertTrue(marks, 'missing passive marks: ' + node.name)
                     stripped = RemoveAnnotations().visit(node)
-                    digest = hashlib.sha256(ast.dump(stripped, include_attributes=False).encode()).hexdigest()
+                    options = {'show_empty': True} if sys.version_info >= (3, 13) else {}
+                    digest = hashlib.sha256(ast.dump(stripped, include_attributes=False, **options).encode()).hexdigest()
                     self.assertEqual(digest, expected[node.name], node.name)
         self.assertEqual(seen, set(expected))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import functools
@@ -96,7 +97,7 @@ def _retained_health(health):
             _validate_first_failure(health['first_failure']) if 'first_failure' in health else None, flags)
 
 
-def _collect_observations(health, owners, failures, omissions):
+def _collect_retained(health, owners, failures, omissions):
     owner, failure, flags = _retained_health(health)
     for item, target in ((owner, owners), (failure, failures)):
         if item is not None:
@@ -106,9 +107,10 @@ def _collect_observations(health, owners, failures, omissions):
 
 
 def _fit_observations(value, limit, *, public=False):
-    value = _decode(_json(value))
+    value = deepcopy(value)
     flags = value['observation_omissions']
-    over = lambda: len(_json(value)) + (0 if public else 1) > limit
+    def over():
+        return len(_json(value)) + (0 if public else 1) > limit
     failure = value.get('first_failure')
     rows = failure['capsules'] if public else [failure] if failure else []
     if over():
@@ -144,7 +146,7 @@ def _observe(writer, method, *args):
     try:
         getattr(writer, method)(*args)
     except Exception:
-        pass  # Preserve the primary result or exception.
+        return None
 
 
 def _validate_ownership_snapshot(value):
@@ -196,7 +198,11 @@ def ownership_case(form):
             writer._ownership_form = form
             ownership_mark('entered')
     except Exception:
-        pass  # Optional telemetry cannot prevent the action under observation.
+        try:
+            yield
+        finally:
+            writer._ownership_form = previous
+        return
     try:
         yield
     except BaseException as exc:
@@ -215,7 +221,7 @@ def ownership_mark(phase, *, status='active', cleanup='unavailable', descendant=
         try:
             writer.record_ownership(phase, status=status, cleanup=cleanup, descendant=descendant)
         except Exception:
-            pass
+            return None
 
 
 def _json(value):
@@ -787,7 +793,7 @@ class Run:
                         raise ValueError('journal-health-binding')
                     if health['status'] != 'closed' or health['open_spans']:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
-                    _collect_observations(health, self._ownership, self._failures, self._omissions)
+                    _collect_retained(health, self._ownership, self._failures, self._omissions)
                 except FileNotFoundError:
                     if actor == 'controller' or actor in expected:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
@@ -1228,7 +1234,7 @@ def export_entries(root, *, binding=None):
                                    for k in ('attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans'))
                             or health['segment'] != f'{actor}-{health["generation"] % SEGMENTS}.jsonl'):
                         raise ValueError('journal-export-actor')
-                    _collect_observations(health, ownership, failures, omissions)
+                    _collect_retained(health, ownership, failures, omissions)
                     raw = _read(handle, f'{actor}-{health["generation"] % SEGMENTS}.jsonl', SEGMENT_BYTES)
                     tail = raw[-65536:]
                     if len(raw) > len(tail):

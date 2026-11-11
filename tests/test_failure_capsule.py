@@ -1,7 +1,5 @@
-"""Generic retained-failure controls using fake boundaries and owned health files."""
 import io
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -31,9 +29,12 @@ class FailureCapsuleTests(unittest.TestCase):
     def health(self, actor='controller'):
         return json.loads((self.run.path / (actor + '.json')).read_bytes())
 
+    def capsule(self):
+        return self.health()['first_failure']
+
     def record_failure(self, node=NODE, phase='call', kind='AssertionError'):
         self.writer.record_test_failure(node, phase, kind)
-        return self.health()['first_failure']
+        return self.capsule()
 
     def report(self, *, failed=False, skipped=False, wasxfail=None, node=NODE):
         return SimpleNamespace(nodeid=node, when='call', failed=failed, skipped=skipped,
@@ -57,28 +58,28 @@ class FailureCapsuleTests(unittest.TestCase):
         self.writer.begin_test_phase(NODE, 'call')
         self.exception_hook(error=ValueError('PRIVATE'))
         pytest_progress._journal_report(self.writer, self.report(failed=True))
-        self.assertEqual(self.health()['first_failure']['exception_kind'], 'ValueError')
-        self.assertEqual(self.health()['first_failure']['phase'], 'call')
+        self.assertEqual(self.capsule()['exception_kind'], 'ValueError')
+        self.assertEqual(self.capsule()['phase'], 'call')
 
     def test_failed_report_missing_or_mismatched_exception_is_unavailable(self):
         self.exception_hook(node='tests/test_other.py::test_value', error=AssertionError())
         pytest_progress._journal_report(self.writer, self.report(failed=True))
-        self.assertEqual(self.health()['first_failure']['exception_kind'], 'unavailable')
+        self.assertEqual(self.capsule()['exception_kind'], 'unavailable')
 
     def test_first_failure_survives_passes_repeat_other_failure_and_reopen(self):
         first = self.record_failure()
         pytest_progress._journal_report(self.writer, self.report())
-        self.assertEqual(self.health()['first_failure'], first)
+        self.assertEqual(self.capsule(), first)
         self.record_failure(kind='ValueError')
         self.record_failure('tests/test_other.py::test_value')
         expected = dict(first, repeated=True, overflow=True)
-        self.assertEqual(self.health()['first_failure'], expected)
+        self.assertEqual(self.capsule(), expected)
         self.writer.close()
         self.writer = journal.Writer(self.run.path, self.run.run_id, 'controller', self.run.nonce)
         self.addCleanup(self.writer.close)
         self.run.writer = self.writer
         self.record_failure(kind='OSError')
-        self.assertEqual(self.health()['first_failure'], expected)
+        self.assertEqual(self.capsule(), expected)
         self.assertEqual(self.writer.attempt, 2)
         self.assertEqual(expected['attempt'], 1)
 
@@ -103,7 +104,7 @@ class FailureCapsuleTests(unittest.TestCase):
                 return super().__getattribute__(name)
         self.writer.note_exception(NODE + '[PRIVATE]', 'call', PrivateError())
         self.writer.record_test_failure(NODE, 'call')
-        value = self.health()['first_failure']
+        value = self.capsule()
         self.assertEqual(value['exception_kind'], 'other')
         self.assertNotIn('PrivateError', json.dumps(value))
         self.assertNotIn('PRIVATE', json.dumps(value))
@@ -190,12 +191,16 @@ class FailureCapsuleTests(unittest.TestCase):
         self.assertEqual(journal._validate_first_failure(failure), failure)
         self.assertEqual(journal._fit_observations(health, 2048), health)
         self.assertEqual(journal._fit_observations(projection, 1536, public=True), projection)
-        # Smaller owned-fixture budgets force each omission branch without raising real caps.
         for limit in (1300, 1000, 700):
             packed = journal._fit_observations(health, limit)
             self.assertLessEqual(len(journal._json(packed))+1, limit)
             self.assertTrue(any(packed['observation_omissions'].values()))
-        packed = journal._fit_observations(projection, 300, public=True)
+        before = journal._json(projection)
+        with patch.object(journal.json, 'loads', side_effect=RecursionError):
+            packed = journal._fit_observations(projection, 300, public=True)
+            exported = journal.export_entries(self.root)
+        self.assertEqual(journal._json(projection), before)
+        self.assertEqual(json.loads(exported[0][1])['status'], 'unavailable')
         self.assertLessEqual(len(journal._json(packed)), 300)
         self.assertTrue(packed['observation_omissions']['failure_omitted'])
 
@@ -210,19 +215,28 @@ class FailureCapsuleTests(unittest.TestCase):
         self.assertEqual(first['exception_kind'], 'AssertionError')
 
     def test_unittest_phase_subtest_cleanup_unexpected_success_and_forwarding(self):
-        for index, scenario in enumerate(('setup','call','teardown','subtest','cleanup','unexpected')):
+        prior = journal.action_sink()
+        cases = (('setup', 'setup', 'ValueError'), ('call', 'call', 'AssertionError'),
+                 ('teardown', 'teardown', 'OSError'), ('subtest', 'call', 'AssertionError'),
+                 ('cleanup', 'unknown', 'OSError'), ('unexpected', 'call', 'unavailable'))
+        for index, (scenario, phase, kind) in enumerate(cases):
             writer = journal.Writer(self.run.path, self.run.run_id, 'worker-' + str(index), self.run.nonce)
             class Owned(unittest.TestCase):
                 __module__ = 'test_owned'
                 def setUp(self):
-                    if scenario == 'setup': raise ValueError('PRIVATE')
-                    if scenario == 'cleanup': self.addCleanup(lambda: (_ for _ in ()).throw(OSError('PRIVATE')))
+                    if scenario == 'setup':
+                        raise ValueError('PRIVATE')
+                    if scenario == 'cleanup':
+                        self.addCleanup(lambda: (_ for _ in ()).throw(OSError('PRIVATE')))
                 def tearDown(self):
-                    if scenario == 'teardown': raise OSError('PRIVATE')
+                    if scenario == 'teardown':
+                        raise OSError('PRIVATE')
                 def test_value(self):
-                    if scenario == 'call': self.fail('PRIVATE')
+                    if scenario == 'call':
+                        self.fail('PRIVATE')
                     if scenario == 'subtest':
-                        with self.subTest(value='PRIVATE'): self.fail('PRIVATE')
+                        with self.subTest(value='PRIVATE'):
+                            self.fail('PRIVATE')
             if scenario == 'unexpected':
                 Owned.test_value = unittest.expectedFailure(Owned.test_value)
             test = Owned('test_value')
@@ -232,16 +246,16 @@ class FailureCapsuleTests(unittest.TestCase):
                 self.assertEqual(result.testsRun, 1)
                 self.assertEqual(sum(map(len,(result.failures,result.errors,result.unexpectedSuccesses))), 1)
                 capsule = self.health('worker-' + str(index))['first_failure']
-                self.assertEqual(capsule['phase'], 'unknown' if scenario=='cleanup' else 'call' if scenario in ('subtest','unexpected') else scenario)
-                self.assertEqual(capsule['exception_kind'], 'unavailable' if scenario=='unexpected' else 'ValueError' if scenario=='setup' else 'OSError' if scenario in ('cleanup','teardown') else 'AssertionError')
+                self.assertEqual(capsule['phase'], phase)
+                self.assertEqual(capsule['exception_kind'], kind)
                 self.assertNotIn('_callTestMethod', test.__dict__)
-                self.assertEqual(journal.action_sink(), (None,None))
+                self.assertEqual(journal.action_sink(), prior)
             finally:
                 writer.close()
 
     def test_unknown_identity_and_optional_failure_do_not_change_unittest_result(self):
         self.writer.record_test_failure(None, 'unknown', 'unavailable')
-        self.assertIsNone(self.health()['first_failure']['node_key'])
+        self.assertIsNone(self.capsule()['node_key'])
         class Owned(unittest.TestCase):
             def test_value(self): self.fail('original')
         with patch.object(self.writer, 'record_test_failure', side_effect=OSError('PRIVATE')):
