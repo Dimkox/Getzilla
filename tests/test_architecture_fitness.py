@@ -39,6 +39,127 @@ ARCHITECTURE = importlib.import_module("getzilla.architecture")
 QUEUE_PROVENANCE = importlib.import_module("getzilla.queue_provenance")
 
 
+class QueueSrcRootConsistencyTests(unittest.TestCase):
+    """NEW source-map controls; every read belongs to the closed fixture."""
+
+    consumer = b'from . import helper as bundle\ndef evaluate():\n    return bundle.digest({})\n'
+    helper = b'def digest(value):\n    return value\n'
+
+    def observe(self, *, folder='owned/src/pkg', ownership=None, extra=None,
+                consumer=None, helper=None, missing=False, initializer=True):
+        root = Path('closed-queue-src-fixture')
+        path = folder + '/consumer.py'
+        sources = {path: self.consumer if consumer is None else consumer,
+                   folder + '/helper.py': None if missing else self.helper if helper is None else helper}
+        if initializer:
+            sources[folder + '/__init__.py'] = b''
+        sources.update(extra or {})
+        snapshot = SimpleNamespace(system={'nodes': [{'repository_paths':
+            list(sources) if ownership is None else ownership}]})
+        roots = FIT._queue_source_roots(snapshot)
+        diff = SimpleNamespace(base_sha='owned-base', head_sha='owned-head', head_kind='commit',
+                               artifacts=(SimpleNamespace(path=path, status='added'),))
+
+        def read(observed_root, observed_diff, names, side='head'):
+            self.assertEqual(observed_root, root)
+            self.assertIs(observed_diff, diff)
+            self.assertEqual(side, 'head')
+            self.assertTrue(all(not Path(name).is_absolute() and '..' not in Path(name).parts for name in names))
+            return {name: sources.get(name) for name in names}
+
+        def paths(observed_root, observed_diff, prefixes):
+            self.assertEqual(observed_root, root)
+            self.assertIs(observed_diff, diff)
+            self.assertEqual(prefixes, roots)
+            return tuple(sorted(sources))
+
+        with patch.object(FIT, '_repository_paths', side_effect=paths), \
+             patch.object(FIT, 'git_tree_paths', side_effect=AssertionError('unexpected base read')), \
+             patch.object(FIT, 'read_diff_files', side_effect=read), \
+             patch.object(FIT, 'read_diff_file', side_effect=lambda r, d, name, side='head': read(r, d, [name], side)[name]):
+            cache = FIT._queue_module_inventory(root, diff, 'head', roots)
+            package = FIT._module_package(path, roots, cache.paths)
+            source = sources[path]
+            result = FIT._queue_signals(root, diff, ast.parse(source), 'head', cache, package, roots,
+                source_path=path, source=source, complete_module=True)
+        return roots, cache, package, result
+
+    def test_declared_python_files_resolve_nonqueue_src_whole_module(self):
+        roots, cache, package, result = self.observe()
+        self.assertEqual(result.state, 'not_queue', result)
+        self.assertIn('owned/src', roots)
+        self.assertIn('pkg.helper', cache.modules)
+        self.assertEqual(package, 'pkg')
+        self.assertEqual(result.state, 'not_queue', result)
+        self.assertEqual(result.signals, ())
+
+    def test_nested_package_ownership_uses_unique_src_root(self):
+        roots, cache, package, result = self.observe(folder='product/lib/src/acme/nested',
+            ownership=['product/lib/src/acme/nested'])
+        self.assertIn('product/lib/src', roots)
+        self.assertIn('acme.nested.helper', cache.modules)
+        self.assertEqual(package, 'acme.nested')
+        self.assertEqual(result.state, 'not_queue', result)
+
+    def test_namespace_src_files_have_canonical_module_names(self):
+        roots, cache, package, result = self.observe(initializer=False)
+        self.assertIn('owned/src', roots)
+        self.assertIn('pkg.helper', cache.modules)
+        self.assertEqual(package, 'pkg')
+        self.assertEqual(result.state, 'not_queue', result)
+
+    def test_existing_package_and_nonpackage_src_layouts_keep_resolution(self):
+        for folder, ownership, extra, expected, initializer in (
+            ('owned/src/pkg', ['owned/src/pkg'], {}, 'pkg', True),
+            ('ordinary/pkg', ['ordinary/pkg'], {'ordinary/pkg/__init__.py': b''}, 'pkg', True),
+            ('area/src', None, {}, 'area.src', False),
+            ('area/src/pkg/src/inner', None, {}, 'area.src.pkg.src.inner', False),
+            ('area/src/pkg/src/inner', ['area/src/pkg/src/inner'], {}, 'inner', True),
+        ):
+            with self.subTest(folder=folder):
+                roots, _, package, result = self.observe(folder=folder, ownership=ownership, extra=extra, initializer=initializer)
+                self.assertEqual(package, expected)
+                self.assertEqual(result.state, 'not_queue', result)
+                if ownership is None and folder in ('area/src', 'area/src/pkg/src/inner'):
+                    self.assertNotIn('area/src', roots)
+
+    def test_real_direct_queue_signals_survive_nonqueue_module_resolution(self):
+        source = (b'import celery\napp = celery.Celery("owned")\n' + self.consumer)
+        _, _, _, result = self.observe(consumer=source)
+        self.assertEqual(result.state, 'resolved', result)
+        self.assertTrue(result.signals)
+
+    def test_missing_source_stays_unproved(self):
+        _, _, _, result = self.observe(missing=True)
+        self.assertEqual(result.state, 'unsupported', result)
+        self.assertTrue(result.signals)
+
+    def test_two_roots_and_shadowed_module_are_not_arbitrarily_selected(self):
+        for extra in ({'second/src/pkg/helper.py': self.helper}, {'pkg/helper.py': self.helper}):
+            with self.subTest(extra=list(extra)):
+                _, cache, _, result = self.observe(extra=extra)
+                self.assertEqual(result.state, 'unsupported', result)
+                self.assertIn('pkg.helper', cache.values)
+                self.assertEqual(cache.values['pkg.helper'].reason, 'ambiguous_local_queue_adapter')
+
+    def test_unknown_or_nonconcrete_paths_do_not_introduce_src_roots(self):
+        paths = ['area/*/src/pkg/helper.py', 'area/../src/pkg/helper.py',
+                 'area/src/pkg/*.py', 'area/src/not-a-package/helper.py', 'area/src/pkg/helper.md']
+        snapshot = SimpleNamespace(system={'nodes': [{'repository_paths': paths}]})
+        self.assertEqual(FIT._queue_source_roots(snapshot), ('',))
+
+    def test_unknown_queue_callback_is_still_refused(self):
+        source = b'from .helper import make\nopaque(make)\n'
+        helper = b'from celery import Celery\ndef make():\n    return Celery("owned")\n'
+        with self.assertRaises(FIT._UnsupportedQueueCallbackError):
+            self.observe(consumer=source, helper=helper)
+
+    def test_new_root_does_not_waive_source_byte_budget(self):
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_BYTES', 4), self.assertRaises(ARCHITECTURE.ArchitectureError) as caught:
+            self.observe()
+        self.assertEqual(caught.exception.code, 'limit')
+
+
 class GitArchitectureRepo:
     def __init__(self, testcase: unittest.TestCase) -> None:
         self._temp = tempfile.TemporaryDirectory()
@@ -87,6 +208,222 @@ class GitArchitectureRepo:
         self.git("add", "-A")
         self.git("commit", "-qm", message)
         return self.git("rev-parse", "HEAD")
+
+
+class ArchitectureAdmissionPrerequisiteTests(unittest.TestCase):
+    PARSER = '''import http.client
+import io
+def parse():
+    class Socket:
+        def makefile(self, mode):
+            return io.BytesIO(b"HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n")
+    response = http.client.HTTPResponse(Socket())
+    response.begin()
+    return response.read()
+'''
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='architecture-admission-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        home = Path(temporary.name) / 'home'
+        home.mkdir(mode=0o700)
+        environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
+            'TMPDIR': temporary.name, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_TERMINAL_PROMPT': '0'}
+        self.environment = patch.dict(os.environ, environment, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        temporary_root = patch.object(tempfile, 'tempdir', temporary.name)
+        temporary_root.start()
+        self.addCleanup(temporary_root.stop)
+
+    def _pair(self, mutation=None):
+        diagrams = importlib.import_module('getzilla.architecture_diagrams')
+        system, rules = _system(), _rules()
+        system['trust_domains'].extend([
+            {'id': 'TD-CONTROL', 'kind': 'trust_ci_control', 'owner': 'engineering'},
+            {'id': 'TD-REMOTE', 'kind': 'external_platform', 'owner': 'provider'}])
+        system['secret_classes'] = [{'id': 'SECRET-GITHUB-APP', 'classification': 'trust_material'}]
+        system['nodes'].append({'id': 'NODE-GITHUB', 'type': 'external_system', 'owner': 'GitHub',
+            'trust_domain': 'TD-REMOTE', 'data_classification': 'DATA-INTERNAL', 'secrets': [],
+            'runtime': {'kind': 'external_managed', 'lifecycle': 'long_running', 'network': 'external_managed', 'evidence': 'source_described'},
+            'repository_paths': [], 'public_contracts': []})
+        rules['change_separation_policies'] = [{'id': 'FIT-SEPARATION', 'implementation_prefixes': ['architecture', '.getzilla'],
+            'trust_ci_prefixes': ['trust-ci'], 'severity': 'error'}]
+        repo = GitArchitectureRepo(self)
+        repo.model(system, rules)
+        def views():
+            rendered = diagrams.render_diagrams(ARCHITECTURE.load_architecture(repo.root))
+            for name, text in rendered.items():
+                repo.write_text('architecture/generated/' + name + '.mmd', text)
+        views()
+        if mutation == 'forged_base_view':
+            repo.write_text('architecture/generated/context.mmd', 'not the base model\n')
+        if mutation == 'existing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 0\n')
+        base = repo.commit('closed component metadata base')
+        component = copy.deepcopy(system['nodes'][0])
+        component.update(id='NODE-COMPONENT', repository_paths=['trust-ci/src/adaptive_trust_ci/component.py'])
+        observer = copy.deepcopy(component)
+        observer.update(id='NODE-OBSERVER', trust_domain='TD-CONTROL', secrets=['SECRET-GITHUB-APP'],
+            repository_paths=['trust-ci/src/adaptive_trust_ci/observer.py'])
+        observer['runtime']['network'] = 'declared_egress'
+        system['nodes'].extend([component, observer])
+        for identity, source, target, protocol in (
+            ('EDGE-COMPONENT-CORE', 'NODE-COMPONENT', 'NODE-A', 'python'),
+            ('EDGE-COMPONENT-OBSERVER', 'NODE-COMPONENT', 'NODE-OBSERVER', 'python'),
+            ('EDGE-OBSERVER-GITHUB', 'NODE-OBSERVER', 'NODE-GITHUB', 'https')):
+            edge = copy.deepcopy(system['edges'][0])
+            edge.update(id=identity, **{'from': source, 'to': target}, protocol=protocol)
+            edge['failure_behavior']['timeout_ms'] = 20000
+            if protocol == 'https':
+                edge.update(type='data_flow', authentication='github_app', network_policy='allowlisted_egress')
+            system['edges'].append(edge)
+        if mutation == 'old_owner':
+            system['nodes'][0]['owner'] = 'changed'
+        if mutation == 'overlap':
+            component['repository_paths'] = ['trust-ci/src/adaptive_trust_ci']
+        if mutation == 'effectful_edge':
+            system['edges'][-1]['type'] = 'publication'
+        if mutation == 'long_running':
+            observer['runtime']['lifecycle'] = 'long_running'
+        if mutation == 'local_secret':
+            component['secrets'] = ['SECRET-GITHUB-APP']
+        if mutation == 'extra_definition':
+            system['signals'].append({'id': 'SIG-NEW', 'description': 'new capability'})
+        if mutation == 'local_only':
+            system['nodes'].remove(observer)
+            system['edges'] = [e for e in system['edges'] if e['id'] not in {'EDGE-COMPONENT-OBSERVER', 'EDGE-OBSERVER-GITHUB'}]
+        repo.model(system, rules)
+        repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 1\n')
+        if mutation != 'missing_source':
+            repo.write_text('trust-ci/src/adaptive_trust_ci/observer.py', 'VALUE = 2\n')
+        views()
+        if mutation == 'forged_view':
+            repo.write_text('architecture/generated/container.mmd', 'not the head model\n')
+        if mutation == 'extra_view':
+            repo.write_text('architecture/generated/unregistered.mmd', 'extra\n')
+        if mutation == 'core_code':
+            repo.write_text('.getzilla/getzilla/changed.py', 'VALUE = 3\n')
+        head = repo.commit('source-bound component addition')
+        diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        return FIT._change_separation(ARCHITECTURE.load_architecture(repo.root), diff, root=repo.root), diff
+
+    def test_exact_new_component_and_both_generated_snapshots_qualify(self):
+        result, _ = self._pair()
+        self.assertEqual(result.status, 'pass', result.findings)
+
+    def test_local_only_component_checks_unchanged_derived_views(self):
+        result, diff = self._pair('local_only')
+        self.assertEqual(result.status, 'pass', result.findings)
+        self.assertNotIn('architecture/generated/context.mmd', diff.changed_paths)
+        self.assertNotIn('architecture/generated/data-flow.mmd', diff.changed_paths)
+
+    def test_component_metadata_negatives_preserve_separation(self):
+        for mutation in ('old_owner', 'overlap', 'effectful_edge', 'long_running', 'local_secret',
+                         'extra_definition', 'existing_source', 'forged_view', 'forged_base_view', 'extra_view', 'core_code'):
+            with self.subTest(mutation=mutation):
+                result, _ = self._pair(mutation)
+                self.assertEqual(result.status, 'fail', result.findings)
+
+    def test_missing_source_or_paired_state_never_qualifies(self):
+        missing, _ = self._pair('missing_source')
+        self.assertEqual(missing.status, 'fail', missing.findings)
+        _, diff = self._pair()
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _base_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, _head_state=None)), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(replace(diff, head_kind='worktree')), ())
+
+    def _network(self, source):
+        tree = ast.parse(source)
+        system, rules = _system(), _rules()
+        system['nodes'][0]['repository_paths'] = ['src/owned.py']
+        rules['network_policies'] = [{'id': 'FIT-NETWORK', 'node_types': ['local_component'],
+            'allowed_protocols': ['https'], 'require_declared_edge': True, 'severity': 'error'}]
+        snapshot = ARCHITECTURE.ArchitectureSnapshot(system, rules, {}, {}, '', '')
+        diff = SimpleNamespace(artifacts=(SimpleNamespace(path='src/owned.py', status='added'),))
+        python = SimpleNamespace(root=ROOT, tree=lambda path: tree)
+        with patch.object(FIT, '_project_import_roots', return_value=set()), patch.object(FIT, 'read_diff_file', return_value=None):
+            return FIT._network_clients(snapshot, diff, python), FIT._network_families(tree, set()), FIT._new_network_client(ROOT, snapshot, diff, python)
+
+    def test_literal_response_parser_is_not_a_network_client_or_trigger(self):
+        result, families, trigger = self._network(self.PARSER)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+
+    def test_instrumentation_requires_closed_calls_bindings_and_literal_targets(self):
+        base = self.PARSER.replace('import io', 'import io\nfrom unittest import mock')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(expression):
+            return base.replace(call, '    with mock.patch(' + expression + ', replacement):\n    ' + call)
+        safe = patched('"adaptive_trust_ci.github_observer.bounded_json"')
+        safe += '\nclock = mock.Mock(side_effect=[0, 1])\nclass Case(unittest.TestCase):\n    pass\n'
+        safe = 'import unittest\nfrom adaptive_trust_ci.github_observer import ObservationError\n' + safe
+        result, families, trigger = self._network(safe)
+        self.assertEqual(result.status, 'not_applicable', result.findings)
+        self.assertEqual(families, set())
+        self.assertFalse(trigger)
+        bad = [patched('"http." + "client.HTTPResponse"'),
+               patched('f"{module_name}.HTTPResponse"'), patched('unknown_target'),
+               base.replace(call, '    escaped = mock.patch\n    with escaped(unknown_target, replacement):\n    ' + call),
+               base + '\nmock.patch = replacement\n']
+        for source in bad:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
+
+    def test_imported_byte_supplier_alias_remains_protected_from_patching(self):
+        base = self.PARSER.replace('import io', 'from io import BytesIO as Buffer\nimport owned\nfrom unittest import mock')
+        base = base.replace('io.BytesIO(', 'Buffer(')
+        call = '    response = http.client.HTTPResponse(Socket())'
+        def patched(target):
+            return base.replace(call, '    with mock.patch("' + target + '", replacement):\n    ' + call)
+        for source in (base, patched('owned.unrelated')):
+            result, families, trigger = self._network(source)
+            self.assertEqual(result.status, 'not_applicable', result.findings)
+            self.assertEqual(families, set())
+            self.assertFalse(trigger)
+        result, families, trigger = self._network(patched('owned.Buffer'))
+        for consumer, actual, expected in (('network_clients', result.status, 'fail'),
+                ('network_families', bool(families), True), ('new_network_client', trigger, True)):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(actual, expected)
+
+    def test_unproved_response_sources_aliases_and_connections_remain_network(self):
+        class_scope_alias = '''import io
+http = unknown
+class Scope:
+    import http.client as http
+    def parse(self):
+        class Socket:
+            def makefile(self, mode):
+                return io.BytesIO(b"owned")
+        return http.HTTPResponse(Socket())
+'''
+        default_scope = self.PARSER.replace('def parse():', 'Socket = unknown\ndef parse(value=http.client.HTTPResponse(Socket())):').replace(
+            '    response = http.client.HTTPResponse(Socket())\n    response.begin()\n    return response.read()', '    return value')
+        patched_namespace = self.PARSER.replace('import io', 'import io\nfrom unittest import mock').replace(
+            '    response = http.client.HTTPResponse(Socket())',
+            '    with mock.patch("http.client.HTTPResponse", unknown):\n        response = http.client.HTTPResponse(Socket())')
+        variants = [self.PARSER.replace('Socket())', 'unknown_socket)'),
+            self.PARSER.replace('return io.BytesIO(', 'return factory('),
+            self.PARSER + '\nhttp.client.HTTPSConnection("example.test")\n',
+            self.PARSER + '\nhttp.client = replacement\n',
+            self.PARSER + '\nleaked = http.client\n',
+            self.PARSER + '\nleaked_buffer = io.BytesIO\n',
+            self.PARSER.replace('class Socket:', 'class Socket(External):'),
+            self.PARSER.replace('class Socket:', '@decorator\n    class Socket:'),
+            self.PARSER.replace('response = http.client', 'Socket.makefile = replacement\n    response = http.client'),
+            self.PARSER.replace('return io.BytesIO(', 'SIDE_EFFECT()\n            return io.BytesIO('), class_scope_alias, default_scope, patched_namespace]
+        for source in variants:
+            with self.subTest(source_sha256=hashlib.sha256(source.encode()).hexdigest()):
+                result, families, trigger = self._network(source)
+                self.assertEqual(result.status, 'fail', result.findings)
+                self.assertTrue(families)
+                self.assertTrue(trigger)
 
 
 class ArchitectureFitnessTests(unittest.TestCase):
