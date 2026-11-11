@@ -39,6 +39,127 @@ ARCHITECTURE = importlib.import_module("getzilla.architecture")
 QUEUE_PROVENANCE = importlib.import_module("getzilla.queue_provenance")
 
 
+class QueueSrcRootConsistencyTests(unittest.TestCase):
+    """NEW source-map controls; every read belongs to the closed fixture."""
+
+    consumer = b'from . import helper as bundle\ndef evaluate():\n    return bundle.digest({})\n'
+    helper = b'def digest(value):\n    return value\n'
+
+    def observe(self, *, folder='owned/src/pkg', ownership=None, extra=None,
+                consumer=None, helper=None, missing=False, initializer=True):
+        root = Path('closed-queue-src-fixture')
+        path = folder + '/consumer.py'
+        sources = {path: self.consumer if consumer is None else consumer,
+                   folder + '/helper.py': None if missing else self.helper if helper is None else helper}
+        if initializer:
+            sources[folder + '/__init__.py'] = b''
+        sources.update(extra or {})
+        snapshot = SimpleNamespace(system={'nodes': [{'repository_paths':
+            list(sources) if ownership is None else ownership}]})
+        roots = FIT._queue_source_roots(snapshot)
+        diff = SimpleNamespace(base_sha='owned-base', head_sha='owned-head', head_kind='commit',
+                               artifacts=(SimpleNamespace(path=path, status='added'),))
+
+        def read(observed_root, observed_diff, names, side='head'):
+            self.assertEqual(observed_root, root)
+            self.assertIs(observed_diff, diff)
+            self.assertEqual(side, 'head')
+            self.assertTrue(all(not Path(name).is_absolute() and '..' not in Path(name).parts for name in names))
+            return {name: sources.get(name) for name in names}
+
+        def paths(observed_root, observed_diff, prefixes):
+            self.assertEqual(observed_root, root)
+            self.assertIs(observed_diff, diff)
+            self.assertEqual(prefixes, roots)
+            return tuple(sorted(sources))
+
+        with patch.object(FIT, '_repository_paths', side_effect=paths), \
+             patch.object(FIT, 'git_tree_paths', side_effect=AssertionError('unexpected base read')), \
+             patch.object(FIT, 'read_diff_files', side_effect=read), \
+             patch.object(FIT, 'read_diff_file', side_effect=lambda r, d, name, side='head': read(r, d, [name], side)[name]):
+            cache = FIT._queue_module_inventory(root, diff, 'head', roots)
+            package = FIT._module_package(path, roots, cache.paths)
+            source = sources[path]
+            result = FIT._queue_signals(root, diff, ast.parse(source), 'head', cache, package, roots,
+                source_path=path, source=source, complete_module=True)
+        return roots, cache, package, result
+
+    def test_declared_python_files_resolve_nonqueue_src_whole_module(self):
+        roots, cache, package, result = self.observe()
+        self.assertEqual(result.state, 'not_queue', result)
+        self.assertIn('owned/src', roots)
+        self.assertIn('pkg.helper', cache.modules)
+        self.assertEqual(package, 'pkg')
+        self.assertEqual(result.state, 'not_queue', result)
+        self.assertEqual(result.signals, ())
+
+    def test_nested_package_ownership_uses_unique_src_root(self):
+        roots, cache, package, result = self.observe(folder='product/lib/src/acme/nested',
+            ownership=['product/lib/src/acme/nested'])
+        self.assertIn('product/lib/src', roots)
+        self.assertIn('acme.nested.helper', cache.modules)
+        self.assertEqual(package, 'acme.nested')
+        self.assertEqual(result.state, 'not_queue', result)
+
+    def test_namespace_src_files_have_canonical_module_names(self):
+        roots, cache, package, result = self.observe(initializer=False)
+        self.assertIn('owned/src', roots)
+        self.assertIn('pkg.helper', cache.modules)
+        self.assertEqual(package, 'pkg')
+        self.assertEqual(result.state, 'not_queue', result)
+
+    def test_existing_package_and_nonpackage_src_layouts_keep_resolution(self):
+        for folder, ownership, extra, expected, initializer in (
+            ('owned/src/pkg', ['owned/src/pkg'], {}, 'pkg', True),
+            ('ordinary/pkg', ['ordinary/pkg'], {'ordinary/pkg/__init__.py': b''}, 'pkg', True),
+            ('area/src', None, {}, 'area.src', False),
+            ('area/src/pkg/src/inner', None, {}, 'area.src.pkg.src.inner', False),
+            ('area/src/pkg/src/inner', ['area/src/pkg/src/inner'], {}, 'inner', True),
+        ):
+            with self.subTest(folder=folder):
+                roots, _, package, result = self.observe(folder=folder, ownership=ownership, extra=extra, initializer=initializer)
+                self.assertEqual(package, expected)
+                self.assertEqual(result.state, 'not_queue', result)
+                if ownership is None and folder in ('area/src', 'area/src/pkg/src/inner'):
+                    self.assertNotIn('area/src', roots)
+
+    def test_real_direct_queue_signals_survive_nonqueue_module_resolution(self):
+        source = (b'import celery\napp = celery.Celery("owned")\n' + self.consumer)
+        _, _, _, result = self.observe(consumer=source)
+        self.assertEqual(result.state, 'resolved', result)
+        self.assertTrue(result.signals)
+
+    def test_missing_source_stays_unproved(self):
+        _, _, _, result = self.observe(missing=True)
+        self.assertEqual(result.state, 'unsupported', result)
+        self.assertTrue(result.signals)
+
+    def test_two_roots_and_shadowed_module_are_not_arbitrarily_selected(self):
+        for extra in ({'second/src/pkg/helper.py': self.helper}, {'pkg/helper.py': self.helper}):
+            with self.subTest(extra=list(extra)):
+                _, cache, _, result = self.observe(extra=extra)
+                self.assertEqual(result.state, 'unsupported', result)
+                self.assertIn('pkg.helper', cache.values)
+                self.assertEqual(cache.values['pkg.helper'].reason, 'ambiguous_local_queue_adapter')
+
+    def test_unknown_or_nonconcrete_paths_do_not_introduce_src_roots(self):
+        paths = ['area/*/src/pkg/helper.py', 'area/../src/pkg/helper.py',
+                 'area/src/pkg/*.py', 'area/src/not-a-package/helper.py', 'area/src/pkg/helper.md']
+        snapshot = SimpleNamespace(system={'nodes': [{'repository_paths': paths}]})
+        self.assertEqual(FIT._queue_source_roots(snapshot), ('',))
+
+    def test_unknown_queue_callback_is_still_refused(self):
+        source = b'from .helper import make\nopaque(make)\n'
+        helper = b'from celery import Celery\ndef make():\n    return Celery("owned")\n'
+        with self.assertRaises(FIT._UnsupportedQueueCallbackError):
+            self.observe(consumer=source, helper=helper)
+
+    def test_new_root_does_not_waive_source_byte_budget(self):
+        with patch.object(FIT, 'MAX_QUEUE_ANALYSIS_BYTES', 4), self.assertRaises(ARCHITECTURE.ArchitectureError) as caught:
+            self.observe()
+        self.assertEqual(caught.exception.code, 'limit')
+
+
 class GitArchitectureRepo:
     def __init__(self, testcase: unittest.TestCase) -> None:
         self._temp = tempfile.TemporaryDirectory()

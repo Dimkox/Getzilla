@@ -2791,7 +2791,19 @@ def _queue_source_roots(snapshot: ArchitectureSnapshot) -> tuple[str, ...]:
     for node in snapshot.system["nodes"]:
         for prefix in node["repository_paths"]:
             name = prefix.rsplit("/", 1)[-1]
-            if PurePosixPath(prefix).suffix.lower() in file_suffixes:
+            path = PurePosixPath(prefix)
+            suffix = path.suffix.lower()
+            if suffix == '.py' or suffix not in file_suffixes:
+                directories = path.parent.parts if suffix == '.py' else path.parts
+                src = [index + 1 for index, part in enumerate(directories)
+                       if part == 'src' and index + 1 < len(directories)]
+                if (len(src) == 1 and not path.is_absolute() and str(path) == prefix
+                        and '..' not in path.parts and not any(c in prefix for c in '*?[]\\')
+                        and all(part.isidentifier() for part in directories[src[0]:])):
+                    # Match _module_package's concrete src-layout namespace,
+                    # including exact file ownership and nested package paths.
+                    roots.add('/'.join(directories[:src[0]]))
+            if suffix in file_suffixes:
                 continue
             roots.add(prefix)
             if "/" in prefix and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
