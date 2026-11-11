@@ -6,7 +6,9 @@ the live object, and a successful independent list must confirm its absence.
 from __future__ import annotations
 
 import json
+import hashlib
 import ipaddress
+from contextlib import contextmanager
 from contextvars import ContextVar
 import os
 from pathlib import Path
@@ -59,6 +61,11 @@ def _process_identity(pid: int) -> dict:
 
 class CleanupUnconfirmed(RuntimeError):
     """A resource remains, changed identity, or could not be observed."""
+
+
+def _cleanup_time():
+    if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+        raise CleanupUnconfirmed("Cleanup deadline exhausted")
 
 
 def image_pins(root: Path) -> dict:
@@ -242,6 +249,8 @@ class OwnedDocker:
         self.owner_process = _process_identity(os.getpid())
         self.cleanup_status = "not_run"
         self._save()
+        with self._anchors(create=True):
+            pass
 
     @classmethod
     def recover(cls, manifest: Path):
@@ -349,6 +358,93 @@ class OwnedDocker:
     def labels(self):
         return {"getzilla.ci.namespace": self.namespace, "getzilla.ci.nonce": self.nonce}
 
+    @staticmethod
+    def _private(root, name, limit=2048):
+        value = root.read(name, limit=limit)
+        if value is not None:
+            info = fsx.lstat_at(root.handle, name)
+            if value.mode != 0o600 or info.st_uid != os.getuid() or fsx._file_identity(info) != value.identity:
+                raise ValueError("Unowned or changed anchor file")
+        return value
+
+    def _anchor_path(self):
+        return self.manifest.parent / (".getzilla-owner-" + hashlib.sha256(os.fsencode(self.manifest.name)).hexdigest())
+
+    @contextmanager
+    def _anchors(self, create=False):
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as parent:
+            info = fsx.fstat_dir(parent.handle)
+            if (info.st_dev, info.st_ino) != self._parent_identity:
+                raise ValueError("Anchor parent changed")
+            if create:
+                fsx.mkdir_at(parent.handle, self._anchor_path().name, 0o700)
+            with fsx.ReadOnlyBoundRoot(self._anchor_path()) as root:
+                info = fsx.fstat_dir(root.handle)
+                if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                    raise ValueError("Unowned anchor root")
+                header = {"journal": [*self._parent_identity, self.manifest.name], "namespace": self.namespace,
+                          "nonce": self.nonce, "owner": self.owner_process}
+                if create:
+                    self._put_anchor(root, "owner", header)
+                value = self._private(root, "owner")
+                if value is None or value.content != json.dumps(header, sort_keys=True).encode():
+                    raise ValueError("Anchor owner binding changed")
+                parent.check()
+                yield root
+
+    def _anchor_bytes(self, root):
+        total = 0
+        with os.scandir(root.handle) as entries:
+            for count, entry in enumerate(entries, 1):
+                if count > 258 or not (entry.name == "owner" or re.fullmatch(r"[0-9a-f]{64}\.(record|marker|tmp)", entry.name)):
+                    raise ValueError("Unknown anchor metadata")
+                value = self._private(root, entry.name)
+                if value is None:
+                    raise ValueError("Anchor metadata disappeared")
+                total += len(value.content)
+        return total
+
+    def _put_anchor(self, root, name, value):
+        raw = json.dumps(value, sort_keys=True).encode()
+        if len(raw) > 2048:
+            raise ValueError("Anchor record exceeds limit")
+        current = self._private(root, name)
+        if current is not None:
+            if current.content != raw:
+                raise ValueError("Anchor record changed")
+            return
+        temporary = name.removesuffix(".record") + ".tmp"
+        pending = self._private(root, temporary)
+        if pending is not None:
+            if pending.content != raw:
+                raise ValueError("Uncertain anchor publication")
+            _cleanup_time()
+            root.check()
+            fsx.replace_at(root.handle, temporary, root.handle, name)
+            fsx.fsync_dir(root.handle)
+            return
+        if len(_read(self.manifest, private=True).content) + self._anchor_bytes(root) + len(raw) + 32 * len(self.resources) > _LIMIT:
+            raise ValueError("Combined metadata exceeds limit")
+        _cleanup_time()
+        fd = fsx.open_at(root.handle, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            root.check()
+            if self._private(root, name) is not None:
+                raise ValueError("Anchor publication raced")
+            _cleanup_time()
+            fsx.replace_at(root.handle, temporary, root.handle, name)
+            fsx.fsync_dir(root.handle)
+        finally:
+            try:
+                if _DEADLINE.get() is None or time.monotonic() < _DEADLINE.get():
+                    fsx.unlink_at(root.handle, temporary)
+            except FileNotFoundError:
+                pass
+
     def _save(self):
         self._validate()
         data = {"schema": "getzilla-disposable-owner-v1", "namespace": self.namespace,
@@ -366,6 +462,12 @@ class OwnedDocker:
                 raise ValueError("Ownership journal parent changed")
             self._parent_identity = parent_identity
             current = root.read(self.manifest.name, limit=_LIMIT)
+            usage = 0
+            if self._anchor_path().exists():
+                with self._anchors() as anchors:
+                    usage = self._anchor_bytes(anchors)
+            if len(payload) + (len(current.content) if current else 0) + usage + 32 * len(self.resources) > _LIMIT:
+                raise ValueError("Combined metadata exceeds limit")
             expected = getattr(self, "_journal_identity", None)
             if (None if current is None else current.identity) != expected:
                 raise ValueError("Ownership journal identity changed")
@@ -465,64 +567,108 @@ class OwnedDocker:
 
     def _remove_directory(self, item):
         path = self.manifest.parent / item["name"]
-        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as parent:
+        key = hashlib.sha256(("directory:" + item["name"]).encode()).hexdigest()
+        def marker_id(value):
+            return list(value.identity[:5] + value.identity[6:])
+        def expired():
+            if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                raise CleanupUnconfirmed("Cleanup deadline exhausted")
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as parent, self._anchors() as anchor:
             info = fsx.fstat_dir(parent.handle)
             if (info.st_dev, info.st_ino) != self._parent_identity:
                 raise CleanupUnconfirmed("Ownership parent changed")
+            saved = _read(self.manifest, private=True)
+            if saved.identity != self._journal_identity:
+                raise CleanupUnconfirmed("Ownership journal changed")
+            proof = self._private(anchor, key + ".record")
+            record = json.loads(proof.content) if proof else None
+            if record is not None:
+                if type(record) is not dict:
+                    raise CleanupUnconfirmed("Unknown anchor record")
+                marker = record.get("marker")
+                expected = {"kind": "directory", "name": item["name"], "identity": item.get("identity"),
+                            "nonce": self.nonce, "state": "armed", "marker": marker}
+                if (record != expected or proof.content != json.dumps(expected, sort_keys=True).encode()
+                        or type(marker) is not list or len(marker) != 7
+                        or any(type(v) is not int or v < 0 for v in marker)
+                        or marker[2:4] != [stat.S_IFREG, 32] or marker[-2:] != [1, 0o600]):
+                    raise CleanupUnconfirmed("Anchor resource binding changed")
+            retained = self._private(anchor, key + ".marker", 32)
+            if retained is not None and (not record or marker_id(retained) != record["marker"] or retained.content != self.nonce.encode()):
+                raise CleanupUnconfirmed("Live anchor marker changed")
             try:
                 named = fsx.lstat_at(parent.handle, item["name"])
             except FileNotFoundError:
-                return
-            with fsx.ReadOnlyBoundRoot(path) as directory:
-                info = fsx.fstat_dir(directory.handle)
-                if (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700
-                        or {"device": info.st_dev, "inode": info.st_ino} != item.get("identity")
-                        or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
-                    raise CleanupUnconfirmed("Disposable directory identity changed")
-                marker = directory.read(".owner", limit=32)
-                entries = os.listdir(directory.handle)
-                transition = item.get("directory_removal")
-                if marker is None:
-                    saved = _read(self.manifest, private=True)
-                    journal = json.loads(saved.content)
-                    if (not transition or entries or saved.identity != self._journal_identity
-                            or journal.get("nonce") != self.nonce or journal.get("resources") != self.resources):
-                        raise CleanupUnconfirmed("Unproved marker-less directory")
-                elif (marker.content != self.nonce.encode() or marker.mode != 0o600
-                      or transition and transition["marker"] != list(marker.identity)):
-                    raise CleanupUnconfirmed("Disposable directory ownership changed")
-                if len(entries) > 2 or set(entries) - {".owner", "payload"}:
-                    raise CleanupUnconfirmed("Unexpected disposable payload")
-                snapshots = {name: marker if name == ".owner" else directory.read(name, limit=_LIMIT) for name in entries}
-                if any(directory.read(name, limit=_LIMIT) != snapshot for name, snapshot in snapshots.items()):
-                    raise CleanupUnconfirmed("Disposable payload changed")
-                for name in sorted(snapshots, key=lambda name: name == ".owner"):
-                    snapshot = snapshots[name]
-                    directory.check()
-                    if directory.read(name, limit=_LIMIT) != snapshot:
-                        raise CleanupUnconfirmed("Disposable payload changed")
-                    if name == ".owner" and not transition:
-                        item["directory_removal"] = {"marker": list(marker.identity), "nonce": self.nonce}
+                named = None
+            if named is not None:
+                if item["status"] not in ("bound", "unconfirmed"):
+                    raise CleanupUnconfirmed("Unbound directory removal")
+                with fsx.ReadOnlyBoundRoot(path) as directory:
+                    info = fsx.fstat_dir(directory.handle)
+                    if (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700
+                            or {"device": info.st_dev, "inode": info.st_ino} != item.get("identity")
+                            or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
+                        raise CleanupUnconfirmed("Disposable directory identity changed")
+                    original = self._private(directory, ".owner", 32)
+                    entries = os.listdir(directory.handle)
+                    if len(entries) > 2 or set(entries) - {".owner", "payload"}:
+                        raise CleanupUnconfirmed("Unexpected disposable payload")
+                    if original is not None:
+                        if retained is not None or original.content != self.nonce.encode():
+                            raise CleanupUnconfirmed("Disposable marker changed")
+                        snapshots = {name: original if name == ".owner" else directory.read(name, limit=_LIMIT) for name in entries}
+                        if any(directory.read(name, limit=_LIMIT) != value for name, value in snapshots.items()):
+                            raise CleanupUnconfirmed("Disposable payload changed")
+                        if "payload" in snapshots:
+                            expired()
+                            if self._private(directory, ".owner", 32) != original:
+                                raise CleanupUnconfirmed("Disposable marker changed")
+                            directory.check()
+                            fsx.unlink_at(directory.handle, "payload")
+                        expected = {"kind": "directory", "name": item["name"], "identity": item["identity"],
+                                    "nonce": self.nonce, "state": "armed", "marker": marker_id(original)}
+                        if record is not None and record != expected:
+                            raise CleanupUnconfirmed("Original marker differs from anchor")
+                        self._put_anchor(anchor, key + ".record", expected)
+                        previous = item.get("directory_removal")
+                        item["directory_removal"] = {"marker": list(original.identity), "nonce": self.nonce}
                         try:
                             self._save()
                         except (OSError, ValueError):
-                            item.pop("directory_removal", None)
+                            if previous is None:
+                                item.pop("directory_removal", None)
+                            else:
+                                item["directory_removal"] = previous
                             raise
-                    if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
-                        raise CleanupUnconfirmed("Cleanup deadline exhausted")
-                    if directory.read(".owner", limit=32) != marker:
-                        raise CleanupUnconfirmed("Disposable ownership marker changed")
-                    fsx.unlink_at(directory.handle, name)
-                directory.check()
-                if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
-                    raise CleanupUnconfirmed("Cleanup deadline exhausted")
-                fsx.rmdir_at(parent.handle, item["name"])
-            parent.check()
-            try:
-                fsx.lstat_at(parent.handle, item["name"])
-            except FileNotFoundError:
-                return
-            raise CleanupUnconfirmed("Disposable directory removal unconfirmed")
+                        expired()
+                        if self._private(directory, ".owner", 32) != original:
+                            raise CleanupUnconfirmed("Original marker changed before move")
+                        directory.check()
+                        anchor.check()
+                        fsx.replace_at(directory.handle, ".owner", anchor.handle, key + ".marker")
+                        fsx.fsync_dir(directory.handle)
+                        fsx.fsync_dir(anchor.handle)
+                    elif record is None or retained is None or entries:
+                        raise CleanupUnconfirmed("Unproved marker-less directory")
+                    expired()
+                    directory.check()
+                    fsx.rmdir_at(parent.handle, item["name"])
+                parent.check()
+                try:
+                    fsx.lstat_at(parent.handle, item["name"])
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise CleanupUnconfirmed("Directory absence unconfirmed")
+            for suffix in (".marker", ".record"):
+                value = self._private(anchor, key + suffix)
+                if value is not None:
+                    expired()
+                    if self._private(anchor, key + suffix) != value:
+                        raise CleanupUnconfirmed("Anchor changed before finalization")
+                    anchor.check()
+                    fsx.unlink_at(anchor.handle, key + suffix)
+            fsx.fsync_dir(anchor.handle)
 
     def container(self, suffix: str, image: str, *, volume=None, network=None,
                   publish_postgres=False, environment=None, command=(),

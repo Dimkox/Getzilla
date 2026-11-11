@@ -30,6 +30,7 @@ def tearDownModule():
     child_guard.stop()
 
 
+@unittest.skipUnless(sys.platform == "linux", "Linux UID/procfs/private-FD ownership contract")
 class ResourceHardeningTests(unittest.TestCase):
     def setUp(self):
         self.module = importlib.import_module("getzilla.disposable_resources")
@@ -129,6 +130,7 @@ class ResourceHardeningTests(unittest.TestCase):
                 owner.container("c",PIN)
 
 
+@unittest.skipUnless(sys.platform == "linux", "Linux UID/procfs/private-FD ownership contract")
 class ResourceRepairTests(unittest.TestCase):
     def setUp(self):
         self.native_identity = importlib.import_module("getzilla.disposable_resources")._process_identity
@@ -205,9 +207,8 @@ class ResourceRepairTests(unittest.TestCase):
         self.assertEqual(docker.items["volume"], {})
 
     def test_recovery_requires_namespace_before_exact_target_absence(self):
-        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-repair")
-        owner.owner_process["pid"] = 424242
-        owner._save()
+        with patch.object(self.module, "_process_identity", return_value={"pid": 424242, "start": "unit-start", "boot": "unit-boot"}):
+            owner = self.module.OwnedDocker(self.root / "owner.json", "gz-repair")
         native_read = Path.read_text
         mode = ["self"]
         def proc(path, *args, **kwargs):
@@ -259,6 +260,7 @@ class ResourceRepairTests(unittest.TestCase):
         self.assertFalse(path.exists())
 
 
+@unittest.skipUnless(sys.platform == "linux", "Linux UID/procfs/private-FD ownership contract")
 class ResourceTransitionTests(unittest.TestCase):
     setUp = ResourceRepairTests.setUp
 
@@ -306,14 +308,20 @@ class ResourceTransitionTests(unittest.TestCase):
                 path = owner.directory("data" + str(ordinal))
                 (path / "payload").write_text("owned")
                 now = [0.0]
-                unlink = self.module.fsx.unlink_at
+                unlink, move = self.module.fsx.unlink_at, self.module.fsx.replace_at
                 def interrupted(parent, name):
                     result = unlink(parent, name)
                     if name == after:
                         now[0] = 61.0
                     return result
+                def moved(parent, name, target, target_name):
+                    result = move(parent, name, target, target_name)
+                    if name == after:
+                        now[0] = 61.0
+                    return result
                 with patch.object(self.module.time, "monotonic", side_effect=lambda: now[0]), \
-                        patch.object(self.module.fsx, "unlink_at", side_effect=interrupted):
+                        patch.object(self.module.fsx, "unlink_at", side_effect=interrupted), \
+                        patch.object(self.module.fsx, "replace_at", side_effect=moved):
                     with self.assertRaises(self.module.CleanupUnconfirmed):
                         owner.cleanup()
                 self.assertTrue(path.is_dir())
@@ -350,9 +358,8 @@ class ResourceTransitionTests(unittest.TestCase):
         self.assertFalse(path.exists())
 
     def test_second_boot_is_bound_before_live_reused_or_absent_target(self):
-        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-transition")
-        owner.owner_process["pid"] = 424242
-        owner._save()
+        with patch.object(self.module, "_process_identity", return_value={"pid": 424242, "start": "unit-start", "boot": "unit-boot"}):
+            owner = self.module.OwnedDocker(self.root / "owner.json", "gz-transition")
         original = Path.read_text
         for second in ("", "changed", "unit-boot"):
             for target in ("live", "reused", "absent"):
@@ -379,6 +386,161 @@ class ResourceTransitionTests(unittest.TestCase):
                         else:
                             with self.assertRaises(self.module.CleanupUnconfirmed):
                                 self.module.OwnedDocker.recover(owner.manifest)
+
+
+@unittest.skipUnless(sys.platform == "linux", "Linux UID/procfs/private-FD ownership contract")
+class LiveAnchorTests(unittest.TestCase):
+    setUp = ResourceRepairTests.setUp
+
+    def recovered(self, owner):
+        with patch.object(self.module, "_process_identity", return_value={**owner.owner_process, "start": "reused"}):
+            return self.module.OwnedDocker.recover(owner.manifest)
+
+    def detached(self, owner):
+        path = owner.directory("owned")
+        now = [0.0]
+        unlink, move = self.module.fsx.unlink_at, self.module.fsx.replace_at
+        def cut(parent, name):
+            result = unlink(parent, name)
+            if name == ".owner":
+                now[0] = 61.0
+            return result
+        def cut_move(parent, name, target, target_name):
+            result = move(parent, name, target, target_name)
+            if name == ".owner":
+                now[0] = 61.0
+            return result
+        with patch.object(self.module.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(self.module.fsx, "unlink_at", side_effect=cut), \
+                patch.object(self.module.fsx, "replace_at", side_effect=cut_move):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                owner.cleanup()
+        self.assertTrue(path.is_dir())
+        self.assertFalse((path / ".owner").exists())
+        return path
+
+    def test_invented_journal_transition_cannot_adopt_never_marked_directory(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        foreign = self.root / "gz-anchor-never"
+        foreign.mkdir(mode=0o700)
+        info = foreign.stat()
+        value = json.loads(owner.manifest.read_text())
+        value["resources"] = [{"kind": "directory", "name": foreign.name, "status": "bound",
+            "identity": {"device": info.st_dev, "inode": info.st_ino},
+            "directory_removal": {"nonce": owner.nonce, "marker": [1, 2, 32768, 32, 3, 4, 1, 384]}}]
+        owner.manifest.write_text(json.dumps(value))
+        recovered = self.recovered(owner)
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            recovered.cleanup()
+        self.assertTrue(foreign.is_dir())
+
+    def test_live_transition_cannot_be_redirected_by_journal(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        owned = self.detached(owner)
+        foreign = self.root / "gz-anchor-foreign"
+        foreign.mkdir(mode=0o700)
+        value = json.loads(owner.manifest.read_text())
+        info = foreign.stat()
+        value["resources"][0].update(name=foreign.name, identity={"device": info.st_dev, "inode": info.st_ino})
+        owner.manifest.write_text(json.dumps(value))
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            self.recovered(owner).cleanup()
+        self.assertTrue(foreign.is_dir())
+        self.assertTrue(owned.is_dir())
+
+    def test_pending_journal_cannot_claim_detached_transition(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = self.detached(owner)
+        value = json.loads(owner.manifest.read_text())
+        value["resources"][0]["status"] = "pending"
+        owner.manifest.write_text(json.dumps(value))
+        try:
+            self.recovered(owner).cleanup()
+        except (ValueError, self.module.CleanupUnconfirmed):
+            pass
+        self.assertTrue(path.is_dir(), "pending record must not authorize directory removal")
+
+    def test_live_witness_cannot_be_copied(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = self.detached(owner)
+        key = self.module.hashlib.sha256(("directory:" + path.name).encode()).hexdigest()
+        marker = owner._anchor_path() / (key + ".marker")
+        retained = self.root / "original-marker"
+        raw = marker.read_bytes()
+        marker.rename(retained)
+        marker.write_bytes(raw)
+        marker.chmod(0o600)
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            self.recovered(owner).cleanup()
+        self.assertTrue(path.exists())
+        self.assertEqual(retained.read_bytes(), raw)
+
+    def test_anchor_binds_same_name_directory_identity_independently(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = self.detached(owner)
+        original = self.root / "original-directory"
+        path.rename(original)
+        path.mkdir(mode=0o700)
+        info = path.stat()
+        value = json.loads(owner.manifest.read_text())
+        value["resources"][0]["identity"] = {"device": info.st_dev, "inode": info.st_ino}
+        owner.manifest.write_text(json.dumps(value))
+        with self.assertRaises(self.module.CleanupUnconfirmed):
+            self.recovered(owner).cleanup()
+        self.assertTrue(path.is_dir())
+        self.assertTrue(original.is_dir())
+
+    def test_atomic_metadata_peak_counts_live_anchors(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = owner.directory("owned")
+        for index in range(100):
+            record = owner._anchor_path() / (f"{index:064x}.record")
+            record.write_bytes(b"{}" + b" " * 2046)
+            record.chmod(0o600)
+        owner.resources.append({"kind": "volume", "name": "gz-anchor-v", "status": "bound", "identity": {
+            "Name": "gz-anchor-v", "Labels": owner.labels, "Driver": "local", "Options": {"note": "x" * 500000},
+            "CreatedAt": "owned", "Mountpoint": "/owned"}})
+        owner._save()
+        before = owner.manifest.read_bytes()
+        with self.assertRaises(ValueError):
+            owner._save()
+        self.assertEqual(owner.manifest.read_bytes(), before)
+        self.assertEqual((path / ".owner").read_text(), owner.nonce)
+
+    def test_publication_expiry_keeps_original_and_resumes_complete_temporary(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = owner.directory("owned")
+        now = [0.0]
+        sync = self.module.os.fsync
+        def expire(fd):
+            result = sync(fd)
+            now[0] = 61.0
+            return result
+        with patch.object(self.module.time, "monotonic", side_effect=lambda: now[0]), patch.object(self.module.os, "fsync", side_effect=expire):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                owner.cleanup()
+        self.assertEqual((path / ".owner").read_text(), owner.nonce)
+        self.recovered(owner).cleanup()
+        self.assertFalse(path.exists())
+
+    def test_final_witness_cleanup_resumes_after_resource_absence(self):
+        owner = self.module.OwnedDocker(self.root / "owner.json", "gz-anchor")
+        path = owner.directory("owned")
+        now = [0.0]
+        remove = self.module.fsx.rmdir_at
+        def expired(parent, name):
+            result = remove(parent, name)
+            now[0] = 61.0
+            return result
+        with patch.object(self.module.time, "monotonic", side_effect=lambda: now[0]), patch.object(self.module.fsx, "rmdir_at", side_effect=expired):
+            with self.assertRaises(self.module.CleanupUnconfirmed):
+                owner.cleanup()
+        self.assertFalse(path.exists())
+        recovered = self.recovered(owner)
+        recovered.cleanup()
+        recovered.cleanup()
+        self.assertEqual([p.name for p in owner._anchor_path().iterdir()], ["owner"])
+        self.assertEqual(recovered.cleanup_status, "removed")
 
 
 class ProcessIdentityTests(unittest.TestCase):
