@@ -2058,3 +2058,42 @@ def diff_architecture(
         _base_state=base_state,
         _head_state=head_state,
     )
+
+
+def _committed_worktree_diff(root: Path, diff: ArchitectureDiff) -> ArchitectureDiff | None:
+    """Prove equivalence, without relabelling the caller's worktree observation."""
+    if diff.head_kind != 'worktree' or diff._base_state is None or diff._head_state is None:
+        return None
+    try:
+        repository = Path(root).resolve(strict=True)
+        status = ['status', '--porcelain=v1', '-z', '--untracked-files=all']
+        with _GitOperation(repository) as scope:
+            head = _head_commit(repository, _scope=scope)
+            if _required_output(_git(repository, status, limit=MAX_BATCH_INPUT_BYTES, _scope=scope), operation='prove clean worktree'):
+                return None
+            paired = diff_architecture(repository, base_sha=diff.base_sha, head_sha=head)
+            fields = ('base_sha', 'baseline_introduced', 'changed_paths', 'changes', 'artifacts',
+                      'base_architecture_digest', 'head_architecture_digest', 'base_adoption_state',
+                      'head_adoption_state', 'base_adoption_digest', 'head_adoption_digest')
+            if any(getattr(diff, field) != getattr(paired, field) for field in fields):
+                return None
+            if diff.repository_inventory_digest != _tree_inventory_digest(
+                    repository, None, worktree=True, artifacts=diff.artifacts):
+                return None
+            for observed, committed in ((diff._base_state, paired._base_state), (diff._head_state, paired._head_state)):
+                if (committed is None or architecture_digests(observed.snapshot) != architecture_digests(committed.snapshot)
+                        or observed.contracts != committed.contracts or observed.adoption_state != committed.adoption_state
+                        or observed.adoption_digest != committed.adoption_digest):
+                    return None
+            actual = read_diff_files(repository, diff, diff.changed_paths)
+            for artifact in diff.artifacts:
+                raw = actual[artifact.path]
+                if ((None if raw is None else hashlib.sha256(raw).hexdigest()) != artifact.head_digest
+                        or len(raw or b'') != artifact.head_size):
+                    return None
+            if (_head_commit(repository, _scope=scope) != head or _required_output(
+                    _git(repository, status, limit=MAX_BATCH_INPUT_BYTES, _scope=scope), operation='recheck clean worktree')):
+                return None
+            return paired
+    except (ArchitectureError, OSError, ValueError, TypeError, AttributeError, KeyError):
+        return None

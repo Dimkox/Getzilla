@@ -17,6 +17,30 @@ from typing import Any, Iterable
 RUNTIME_REL = Path('.getzilla/runtime')
 
 
+def _observed_run(*args, **kwargs):
+    # No imports or extra executor when no verification context is active.
+    journal = sys.modules.get(__package__ + '.verification_journal')
+    writer, node = journal.action_sink() if journal is not None else (None, None)
+    if writer is None:
+        return subprocess.run(*args, **kwargs)
+    with journal.span('source-command', stage='command') as detail:
+        frame = sys._getframe(1)
+        try:
+            relative = Path(frame.f_code.co_filename).relative_to(writer.source_root).as_posix()
+            if (len(relative) <= 256 and re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', relative)
+                    and all(p not in {'', '.', '..'} for p in relative.split('/'))):
+                journal._emit(writer, 'command', 'unknown', nodeid=node, step='source-command', location=(relative, frame.f_lineno))
+        except (ValueError, AttributeError):
+            pass
+        finally:
+            del frame
+        result = subprocess.run(*args, **kwargs)
+        code = getattr(result, 'returncode', None)
+        if type(code) is int:
+            detail.update(code=code, outcome='pass' if code == 0 else 'fail')
+        return result
+
+
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -29,7 +53,7 @@ def find_root(start: str | Path | None = None) -> Path:
         if (candidate / '.getzilla').is_dir():
             return candidate
     try:
-        proc = subprocess.run(
+        proc = _observed_run(
             ['git', 'rev-parse', '--show-toplevel'],
             cwd=current,
             text=True,
@@ -102,7 +126,7 @@ def run(
             options['encoding'] = encoding
         if errors != 'strict':
             options['errors'] = errors
-        return subprocess.run(
+        return _observed_run(
             resolve_command(args, merged.get('PATH', '')),
             cwd=cwd,
             text=True,
@@ -231,7 +255,7 @@ def _git_paths(root: Path, *args: str) -> set[str] | None:
     try:
         # -z emits filesystem bytes, not quoted text. Binary mode also avoids
         # newline translation changing legal carriage returns in filenames.
-        proc = subprocess.run(
+        proc = _observed_run(
             ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -246,7 +270,7 @@ def _git_name_status(root: Path, *args: str) -> list[dict[str, str]] | None:
     try:
         # Name-status records use one NUL-delimited field per status/path.  A
         # rename or copy has an additional original-path field.
-        proc = subprocess.run(
+        proc = _observed_run(
             ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -407,7 +431,7 @@ def file_sha256(path: Path) -> str:
 def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
     """Bind staged blobs separately: worktree bytes can conceal a different index."""
     try:
-        proc = subprocess.run(['git', 'ls-files', '--stage', '-z'], cwd=root,
+        proc = _observed_run(['git', 'ls-files', '--stage', '-z'], cwd=root,
                               capture_output=True, timeout=60, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError('cannot establish grant index inventory') from exc

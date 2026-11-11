@@ -13,12 +13,14 @@ if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
 
 import os
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla.interpreter import project_python  # noqa: E402
+from getzilla import verification_journal as diagnostics  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
     'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
@@ -97,13 +99,31 @@ def test_workers() -> int:
 
 
 def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
+    from getzilla.util import find_root
+    cleanup = ExitStack()
+    try:
+        try:
+            history = cleanup.enter_context(diagnostics.session(find_root(), 'test-cli'))
+        except Exception:
+            history = None
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+        return _run_tests(args, require_parallel=require_parallel, history=history)
+    finally:
+        try:
+            cleanup.close()
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+
+
+def _run_tests(args: list[str], *, require_parallel: bool = False, history=None) -> int:
     targets = args or ['tests']
     python = project_python(HOME)
     # UTF-8 mode on Windows: tests decode CLI output and fixtures as UTF-8, as on POSIX; product
     # code names its encodings (tests/test_text_writes.py) so this cannot hide a product bug. The
     # environment variable reaches the xdist workers and every child, unlike -X utf8.
     environment = {**os.environ, 'PYTHONUTF8': '1'} if os.name == 'nt' else None
-    probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
+    with diagnostics.span('test-backend-probe', stage='command'):
+        probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
     if probe.returncode == 0:
         workers = test_workers()
         print(f'getzilla test: {workers} parallel workers', flush=True)
@@ -114,8 +134,20 @@ def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
             return probe.returncode
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
-        command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
-    return subprocess.run(command, env=environment, check=False).returncode
+        command = [python, str(HOME / 'scripts/getzilla_unittest.py'), '--journal-only', 'discover', '-s', 'tests', '-t', '.']
+    if history is not None and history.writer is not None:
+        try:
+            history.expect_workers(workers if probe.returncode == 0 else 1)
+            configured = history.child_environment(environment)
+            configured['PYTHONPATH'] = os.pathsep.join((str(HOME / '.getzilla'), configured.get('PYTHONPATH', '')))
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+        else:
+            environment = configured
+            if probe.returncode == 0:
+                command[6:6] = ['-p', 'getzilla.pytest_progress']
+    with diagnostics.span('test-command', stage='command'):
+        return subprocess.run(command, env=environment, check=False).returncode
 
 
 def main(argv: list[str]) -> int:
