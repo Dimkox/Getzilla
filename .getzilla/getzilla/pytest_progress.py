@@ -10,6 +10,7 @@ import stat
 import time
 
 from . import fsx
+from . import verification_journal as diagnostics
 
 MAX_WORKERS = 64
 MAX_SLOT_BYTES = 2048
@@ -194,6 +195,7 @@ class _WorkerProgress:
         self._failure_write(record, reserve)
 
     def pytest_runtest_logreport(self, report):
+        _journal_report(getattr(self, 'journal', None), report)
         if self.failure_disabled or self.failure_overflow:
             return
         try:
@@ -260,9 +262,12 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    history = _configure_journal(config)
     directory = config.getoption('getzilla_progress_dir')
     nonce = config.getoption('getzilla_progress_nonce')
     workers = config.getoption('getzilla_progress_workers')
+    if history and directory is None and nonce is None and workers is None:
+        return
     try:
         phases = config.getoption('getzilla_progress_phases')
     except (KeyError, ValueError):
@@ -303,6 +308,113 @@ def pytest_configure(config):
     config.pluginmanager.register(writer, 'getzilla-core-progress-slot')
     if phases:
         writer.configure_phases()
+
+
+def _journal_report(writer, report):
+    if writer is None:
+        return
+    phase = getattr(report, 'when', 'collection')
+    if phase not in {'setup', 'call', 'teardown', 'collection'}:
+        phase = 'collection'
+    outcome = 'fail' if report.failed else 'skip' if getattr(report, 'skipped', False) else 'pass'
+    if getattr(report, 'wasxfail', None):
+        outcome = 'expected-failure' if getattr(report, 'skipped', False) else 'unexpected-success'
+    fields = {}
+    if outcome == 'skip':
+        reason = getattr(report, 'longrepr', None)
+        fields['skip'] = diagnostics.skip_classification(reason[2] if isinstance(reason, tuple) and len(reason) == 3 else None)
+        if isinstance(reason, tuple) and len(reason) == 3 and type(reason[1]) is int:
+            location = (reason[0], reason[1], '')
+        else:
+            location = None
+    else:
+        location = None
+    location = getattr(report, 'location', None) or location
+    if isinstance(location, tuple) and len(location) == 3 and type(location[1]) is int:
+        try:
+            path = Path(location[0])
+            if path.is_absolute():
+                path = path.relative_to(writer.source_root)
+            safe = path.as_posix()
+            if diagnostics.test_identity(safe) is not None:
+                fields['location'] = (safe, location[1] + (1 if getattr(report, 'location', None) else 0))
+        except (ValueError, AttributeError, TypeError):
+            pass
+    writer.emit(phase, 'end', nodeid=report.nodeid.partition('[')[0], outcome=outcome, **fields)
+
+
+class _JournalHooks:
+    def __init__(self, writer):
+        self.journal = writer
+
+    def pytest_collection(self, session):
+        self.journal.emit('collection', 'start')
+        yield
+        self.journal.emit('collection', 'end')
+
+    def pytest_collectreport(self, report):
+        if report.failed or report.skipped:
+            _journal_report(self.journal, report)
+
+    def pytest_runtest_setup(self, item):
+        self.journal.emit('setup', 'start', nodeid=item.nodeid)
+        yield
+
+    def pytest_runtest_call(self, item):
+        self.journal.emit('call', 'start', nodeid=item.nodeid)
+        yield
+
+    def pytest_runtest_teardown(self, item):
+        self.journal.emit('teardown', 'start', nodeid=item.nodeid)
+        yield
+
+    def pytest_runtest_makereport(self, item, call):
+        yield
+        if call.excinfo is not None:
+            self.journal.emit(call.when, 'error', nodeid=item.nodeid.partition('[')[0], error=call.excinfo.value)
+
+    def pytest_runtest_logreport(self, report):
+        _journal_report(self.journal, report)
+
+    def pytest_unconfigure(self, config):
+        self.journal.close()
+
+
+def _configure_journal(config):
+    if 'GETZILLA_JOURNAL_DIR' not in os.environ:
+        return False
+    try:
+        from pytest import Config, hookimpl
+    except ImportError:
+        return False
+    if not isinstance(config, Config):
+        return False
+    # The xdist controller has no test phases; its parent owns controller history.
+    if hasattr(config, 'workerinput'):
+        worker = config.workerinput
+        if (type(worker) is not dict or not isinstance(worker.get('workerid'), str)
+                or not re.fullmatch(r'gw(?:0|[1-9][0-9]?)', worker['workerid'])
+                or type(worker.get('workercount')) is not int
+                or not 1 <= worker['workercount'] <= MAX_WORKERS
+                or int(worker['workerid'][2:]) >= worker['workercount']):
+            return True
+        writer = diagnostics.child_writer(ordinal=int(worker['workerid'][2:]), worker_count=worker['workercount'])
+    else:
+        try:
+            count = config.getoption('numprocesses')
+        except (KeyError, ValueError):
+            count = None
+        if count is not None and (type(count) is not int or not 0 <= count <= MAX_WORKERS):
+            return True
+        if count:
+            return True
+        writer = diagnostics.child_writer()
+    if writer is None:
+        return True
+    for name in ('pytest_collection', 'pytest_runtest_setup', 'pytest_runtest_call', 'pytest_runtest_teardown', 'pytest_runtest_makereport'):
+        hookimpl(hookwrapper=True, tryfirst=True)(getattr(_JournalHooks, name))
+    config.pluginmanager.register(_JournalHooks(writer), 'getzilla-verification-history')
+    return True
 
 
 def _read_slot(handle, ordinal: int, nonce: str) -> dict[str, object]:

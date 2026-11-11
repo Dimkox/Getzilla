@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -23,6 +24,23 @@ def run(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
 
 
 class GetzillaCliTests(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        temporary = tempfile.TemporaryDirectory(prefix='owned-cli-journals-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        parent = Path(temporary.name)
+        sequence = 0
+        def journal_root():
+            nonlocal sequence
+            sequence += 1
+            root = parent / str(sequence)
+            root.mkdir(mode=0o700)
+            (root / '.getzilla').mkdir(mode=0o700)
+            return root
+        selection = mock.patch('getzilla.util.find_root', side_effect=journal_root)
+        selection.start()
+        self.addCleanup(selection.stop)
+
     def test_required_parallel_backend_refuses_failed_second_probe(self) -> None:
         from unittest import mock
         options = ['tests', '--max-worker-restart=0', '--durations=20']
@@ -46,7 +64,7 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual(cli.main(['test', 'tests']), 0)
         self.assertEqual(calls.call_count, 2)
         self.assertEqual(calls.call_args_list[1].args[0],
-                         ['fixture-python', '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.'])
+                         ['fixture-python', str(cli.HOME / 'scripts/getzilla_unittest.py'), '--journal-only', 'discover', '-s', 'tests', '-t', '.'])
 
     def test_required_parallel_backend_preserves_bare_default_and_runner_status(self) -> None:
         from unittest import mock
@@ -59,7 +77,7 @@ class GetzillaCliTests(unittest.TestCase):
                             subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], status)]) as calls:
                     self.assertEqual(cli.main(['test', '--require-parallel', *options]), status)
                 self.assertEqual(calls.call_args_list[1].args[0],
-                    ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', '2',
+                    ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', '2',
                      *(options or ['tests'])])
 
     def test_parallel_workers_use_measured_capacity_with_two_cpu_reserve(self) -> None:
@@ -82,7 +100,7 @@ class GetzillaCliTests(unittest.TestCase):
             selected.assert_called_once_with(cli.HOME)
             self.assertEqual(run_call.call_args_list[0].args[0], ['fixture-python', '-c', 'import pytest, xdist'])
             self.assertEqual(run_call.call_args_list[1].args[0],
-                ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', '2', *arguments])
+                ['fixture-python', '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-p', 'getzilla.pytest_progress', '-n', '2', *arguments])
             self.assertFalse(run_call.call_args_list[1].kwargs['check'])
 
     def test_help_lists_every_command(self) -> None:
@@ -128,7 +146,8 @@ class GetzillaCliTests(unittest.TestCase):
 
         for name, utf8 in (('nt', '1'), ('posix', None)):
             calls.clear()
-            with mock.patch.object(cli.os, 'name', name), mock.patch.object(cli.subprocess, 'run', fake_run), \
+            platform = SimpleNamespace(name=name, environ=os.environ, pathsep=os.pathsep)
+            with mock.patch.object(cli, 'os', platform), mock.patch.object(cli.subprocess, 'run', fake_run), \
                     mock.patch.object(cli, 'project_python', return_value='python'), \
                     mock.patch.object(cli, 'test_workers', return_value=2):
                 self.assertEqual(cli.run_tests(['tests/test_x.py']), 0)
