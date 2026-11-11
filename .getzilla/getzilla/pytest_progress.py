@@ -357,16 +357,19 @@ class _JournalHooks:
             _journal_report(self.journal, report)
 
     def pytest_runtest_setup(self, item):
-        self.journal.emit('setup', 'start', nodeid=item.nodeid)
-        yield
+        with diagnostics.bind_sink(self.journal, item.nodeid):
+            self.journal.emit('setup', 'start', nodeid=item.nodeid)
+            yield
 
     def pytest_runtest_call(self, item):
-        self.journal.emit('call', 'start', nodeid=item.nodeid)
-        yield
+        with diagnostics.bind_sink(self.journal, item.nodeid):
+            self.journal.emit('call', 'start', nodeid=item.nodeid)
+            yield
 
     def pytest_runtest_teardown(self, item):
-        self.journal.emit('teardown', 'start', nodeid=item.nodeid)
-        yield
+        with diagnostics.bind_sink(self.journal, item.nodeid):
+            self.journal.emit('teardown', 'start', nodeid=item.nodeid)
+            yield
 
     def pytest_runtest_makereport(self, item, call):
         yield

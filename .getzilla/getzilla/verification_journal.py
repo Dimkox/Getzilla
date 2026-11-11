@@ -26,6 +26,7 @@ ACTORS = 65
 RUN_BYTES = 33 * 1024 * 1024
 RUNS = 4
 _CURRENT = ContextVar('verification_journal', default=None)
+_SINK = ContextVar('verification_action_sink', default=None)
 _ID = re.compile(r'(?:[a-z][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_-]{0,63})\Z')
 _DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 _RUN = re.compile(r'[0-9a-f]{32}\Z')
@@ -627,6 +628,27 @@ def current():
 
 
 @contextmanager
+def bind_sink(writer, nodeid):
+    node = nodeid.partition('[')[0].replace('\\', '/') if test_identity(nodeid) else ''
+    token = _SINK.set((writer, node))
+    try:
+        yield
+    finally:
+        _SINK.reset(token)
+
+
+def action_sink():
+    return _SINK.get() or (getattr(current(), 'writer', None), None)
+
+
+def _emit(writer, *args, **fields):
+    try:
+        writer.emit(*args, **fields)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+@contextmanager
 def session(root, entrypoint, report=None):
     existing = current()
     if existing is not None:
@@ -686,20 +708,19 @@ def observed(name, stage='check'):
 
 @contextmanager
 def span(step, *, stage='check'):
-    run = current()
-    writer = run.writer if run else None
+    writer, node = action_sink()
     if writer:
-        writer.emit(stage, 'start', step=step)
+        _emit(writer, stage, 'start', step=step, nodeid=node)
     try:
         details = {}
         yield details
     except BaseException as exc:
         if writer:
-            writer.emit(stage, 'end', step=step, outcome='error', error=exc)
+            _emit(writer, stage, 'end', step=step, nodeid=node, outcome='error', error=exc)
         raise
     else:
         if writer:
-            writer.emit(stage, 'end', step=step, **details)
+            _emit(writer, stage, 'end', step=step, nodeid=node, **details)
 
 
 def case_identity(test):
@@ -747,15 +768,16 @@ def unittest_runner(writer):
                 original = getattr(test, name)
                 originals[name] = (name in test.__dict__, test.__dict__.get(name))
                 def observed(*args, _original=original, _stage=stage, **kwargs):
-                    writer.emit(_stage, 'start', nodeid=node)
-                    try:
-                        value = _original(*args, **kwargs)
-                    except BaseException as exc:
-                        writer.emit(_stage, 'end', nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error',
-                                    error=exc, skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
-                        raise
-                    writer.emit(_stage, 'end', nodeid=node, outcome='pass')
-                    return value
+                    with bind_sink(writer, node):
+                        writer.emit(_stage, 'start', nodeid=node)
+                        try:
+                            value = _original(*args, **kwargs)
+                        except BaseException as exc:
+                            writer.emit(_stage, 'end', nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error',
+                                        error=exc, skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
+                            raise
+                        writer.emit(_stage, 'end', nodeid=node, outcome='pass')
+                        return value
                 setattr(test, name, observed)
             self._journal_originals = (test, originals)
 

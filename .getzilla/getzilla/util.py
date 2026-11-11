@@ -20,22 +20,24 @@ RUNTIME_REL = Path('.getzilla/runtime')
 def _observed_run(*args, **kwargs):
     # No imports or extra executor when no verification context is active.
     journal = sys.modules.get(__package__ + '.verification_journal')
-    active = journal.current() if journal is not None else None
-    if active is None:
+    writer, node = journal.action_sink() if journal is not None else (None, None)
+    if writer is None:
         return subprocess.run(*args, **kwargs)
     with journal.span('source-command', stage='command') as detail:
         frame = sys._getframe(1)
         try:
-            relative = Path(frame.f_code.co_filename).relative_to(active.root).as_posix()
+            relative = Path(frame.f_code.co_filename).relative_to(writer.source_root).as_posix()
             if (len(relative) <= 256 and re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', relative)
                     and all(p not in {'', '.', '..'} for p in relative.split('/'))):
-                active.writer.emit('command', 'unknown', step='source-command', location=(relative, frame.f_lineno))
+                journal._emit(writer, 'command', 'unknown', nodeid=node, step='source-command', location=(relative, frame.f_lineno))
         except (ValueError, AttributeError):
             pass
         finally:
             del frame
         result = subprocess.run(*args, **kwargs)
-        detail.update(code=result.returncode, outcome='pass' if result.returncode == 0 else 'fail')
+        code = getattr(result, 'returncode', None)
+        if type(code) is int:
+            detail.update(code=code, outcome='pass' if code == 0 else 'fail')
         return result
 
 
