@@ -54,6 +54,97 @@ _OWNERSHIP_FIELDS = {
     'cleanup': {'none-reported', 'recorded', 'unavailable'},
     'descendant': {'absent', 'zombie', 'nonzombie', 'unavailable'},
 }
+_FAILURE_PHASES = {'setup', 'call', 'teardown', 'unknown'}
+_FAILURE_OPS = {'action', 'command', 'check', 'cleanup', 'owned-command'}
+_OMISSIONS = ('ownership_omitted', 'failure_omitted', 'action_omitted')
+
+
+def _exception_kind(error):
+    kind = type(error).__name__
+    return 'unavailable' if error is None else kind if kind in _ERRORS else 'other'
+
+
+def _test_key(node):
+    return (test_identity(node) or {}).get('key')
+
+
+def _validate_first_failure(value):
+    fields = {'version', 'attempt', 'node_key', 'phase', 'exception_kind', 'repeated', 'overflow', 'action_status', 'action'}
+    if (type(value) is not dict or set(value) != fields or type(value['version']) is not int or value['version'] != 1
+            or type(value['attempt']) is not int or not 1 <= value['attempt'] <= 2**63 - 1
+            or value['node_key'] is not None and (type(value['node_key']) is not str or not _DIGEST.fullmatch(value['node_key']))
+            or any(type(value[key]) is not bool for key in ('repeated', 'overflow'))
+            or any(type(value[k]) is not str or value[k] not in choices for k, choices in (
+                ('phase', _FAILURE_PHASES), ('exception_kind', _ERRORS | {'other', 'unavailable'}),
+                ('action_status', {'correlated', 'unavailable', 'omitted'})))):
+        raise ValueError('failure-capsule-shape')
+    action = value['action']
+    if action is not None and (type(action) is not dict or set(action) != {'op', 'sequence'}
+            or type(action['op']) is not str or action['op'] not in _FAILURE_OPS
+            or type(action['sequence']) is not int or not 1 <= action['sequence'] <= 2**63 - 1):
+        raise ValueError('failure-action-shape')
+    if (action is not None) != (value['action_status'] == 'correlated') or len(_json(value)) > 384:
+        raise ValueError('failure-capsule-bound')
+    return _decode(_json(value))
+
+
+def _retained_health(health):
+    flags = health.get('observation_omissions', dict.fromkeys(_OMISSIONS, False))
+    if type(flags) is not dict or set(flags) != set(_OMISSIONS) or any(type(v) is not bool for v in flags.values()):
+        raise ValueError('observation-omissions')
+    return (_validate_ownership_snapshot(health['ownership']) if 'ownership' in health else None,
+            _validate_first_failure(health['first_failure']) if 'first_failure' in health else None, flags)
+
+
+def _collect_observations(health, owners, failures, omissions):
+    owner, failure, flags = _retained_health(health)
+    for item, target in ((owner, owners), (failure, failures)):
+        if item is not None:
+            target.append(item)
+    for flag in flags:
+        omissions[flag] |= flags[flag]
+
+
+def _fit_observations(value, limit, *, public=False):
+    value = _decode(_json(value))
+    flags = value['observation_omissions']
+    over = lambda: len(_json(value)) + (0 if public else 1) > limit
+    failure = value.get('first_failure')
+    rows = failure['capsules'] if public else [failure] if failure else []
+    if over():
+        for row in rows:
+            if row['action'] is not None:
+                row.update(action=None, action_status='omitted')
+                flags['action_omitted'] = True
+    if over() and 'ownership' in value:
+        value.pop('ownership')
+        if public:
+            value['ownership'] = {'status': 'unavailable'}
+        flags['ownership_omitted'] = True
+    while over() and rows:
+        rows.pop()
+        flags['failure_omitted'] = True
+        if public:
+            failure.update(overflow=True, status='reported' if rows else 'unavailable')
+        else:
+            value.pop('first_failure', None)
+    return value
+
+
+def _observation_projection(owners, failures, complete, flags):
+    rows = failures[:2] if complete else []
+    value = {'ownership': _ownership_projection(owners, complete),
+             'first_failure': {'status': 'reported' if rows else 'unavailable', 'ambiguous': len(failures) > 1,
+                               'overflow': len(failures) > 2, 'capsules': rows},
+             'observation_omissions': dict(flags, failure_omitted=flags['failure_omitted'] or len(failures) > 2)}
+    return _fit_observations(value, 1536, public=True)
+
+
+def _observe(writer, method, *args):
+    try:
+        getattr(writer, method)(*args)
+    except Exception:
+        pass  # Preserve the primary result or exception.
 
 
 def _validate_ownership_snapshot(value):
@@ -265,6 +356,9 @@ class Writer:
         self._ownership = self._ownership_form = None
         self._ownership_blocked = False
         self._ownership_counts = {}
+        self._first_failure = self._pending = self._action = None
+        self._test_phase = (None, 'unknown')
+        self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
             header = _decode(_read(self.handle, 'index.json', 16384))
             if header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active':
@@ -282,9 +376,8 @@ class Writer:
                     raise ValueError('journal-stream-not-closed')
                 self.sequence, self.generation, self.rotated = prior['sequence'], prior['generation'] + 1, prior['rotated']
                 self.attempt = prior['attempt'] + 1
-                if 'ownership' in prior:
-                    self._ownership = _validate_ownership_snapshot(prior['ownership'])
-                    self._ownership_blocked = True
+                self._ownership, self._first_failure, self._omissions = _retained_health(prior)
+                self._ownership_blocked = self._ownership is not None
             except FileNotFoundError:
                 pass
             self.started = time.monotonic_ns()
@@ -314,14 +407,39 @@ class Writer:
             'attempt': self.attempt,
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
             'status': status, 'segment': self.name}
-        if self._ownership is not None:
+        value['observation_omissions'] = dict(self._omissions)
+        for key, item, validate, flag in (('ownership', self._ownership, _validate_ownership_snapshot, 'ownership_omitted'),
+                ('first_failure', self._first_failure, _validate_first_failure, 'failure_omitted')):
+            if item is None:
+                continue
             try:
-                value['ownership'] = _validate_ownership_snapshot(self._ownership)
-                if len(_json(value)) + 1 > 2048:
-                    value.pop('ownership')
+                value[key] = validate(item)
             except ValueError:
-                value.pop('ownership', None)
-        _publish(self.handle, self.actor + '.json', value, 2048)
+                value['observation_omissions'][flag] = True
+        _publish(self.handle, self.actor + '.json', _fit_observations(value, 2048), 2048)
+
+    def begin_test_phase(self, nodeid, phase):
+        self._test_phase = (_test_key(nodeid), phase)
+        self._pending = self._action = None
+
+    def note_exception(self, nodeid, phase, error):
+        self._pending = (_test_key(nodeid), phase, _exception_kind(error))
+
+    def record_test_failure(self, nodeid, phase=None, kind=None):
+        key = _test_key(nodeid)
+        pending = self._pending if key is not None and self._pending and self._pending[0] == key else None
+        phase = phase if phase is not None else pending[1] if pending else 'unknown'
+        kind = kind if kind is not None else pending[2] if pending and pending[1] == phase else 'unavailable'
+        if self._first_failure is None:
+            action = self._action[1] if self._action and self._action[0] == (key, phase) else None
+            value = {'version': 1, 'attempt': self.attempt, 'node_key': key, 'phase': phase, 'exception_kind': kind,
+                     'repeated': False, 'overflow': False, 'action_status': 'correlated' if action else 'unavailable', 'action': action}
+            self._first_failure = _validate_first_failure(value)
+        else:
+            self._first_failure['repeated'] |= key is not None and key == self._first_failure['node_key']
+            self._first_failure['overflow'] = True
+        self._pending = None
+        self.health('unavailable' if self.disabled else 'active')
 
     def record_ownership(self, phase, *, status, cleanup, descendant):
         form = self._ownership_form
@@ -439,6 +557,10 @@ class Writer:
                 raise OSError('journal-short-write')
             self.size += len(raw)
             self.sequence += 1
+            if (stage in {'action', 'command', 'check', 'cleanup'} and row.get('outcome', state) in {'fail', 'error', 'timeout', 'cancelled'}
+                    and self._test_phase[0] is not None and row.get('key') == self._test_phase[0]
+                    and action_sink()[0] is self and _test_key(action_sink()[1]) == row.get('key')):
+                self._action = (self._test_phase, {'op': 'owned-command' if step == 'owned-command' else stage, 'sequence': self.sequence})
             self.health('active')
             return True
         except (OSError, ValueError, TypeError):
@@ -477,6 +599,8 @@ class Run:
         self.entrypoint = entrypoint
         self._ownership = []
         self._ownership_complete = False
+        self._failures = []
+        self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
             if not _ID.fullmatch(entrypoint):
                 raise ValueError('journal-entrypoint')
@@ -620,7 +744,7 @@ class Run:
                 'status': 'unavailable' if self.writer is None or self.writer.disabled else self.status,
                 'source_status': 'reported-integrity-only' if self.source is not None else 'unavailable',
                 'session_status': 'canonical-route-observation' if self.session_id is not None else 'unavailable',
-                'ownership': _ownership_projection(self._ownership, self._ownership_complete),
+                **_observation_projection(self._ownership, self._failures, self._ownership_complete, self._omissions),
                 'completeness': 'unknown-until-terminal-and-all-actors-validated'}
 
     def bind_source(self, digest, session_id=None):
@@ -663,8 +787,7 @@ class Run:
                         raise ValueError('journal-health-binding')
                     if health['status'] != 'closed' or health['open_spans']:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
-                    if 'ownership' in health:
-                        self._ownership.append(_validate_ownership_snapshot(health['ownership']))
+                    _collect_observations(health, self._ownership, self._failures, self._omissions)
                 except FileNotFoundError:
                     if actor == 'controller' or actor in expected:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
@@ -722,8 +845,7 @@ def _remove_run(history, record):
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
                         or health['status'] != 'closed' or health.get('open_spans', 0)):
                     raise ValueError('journal-retention-active-stream')
-                if 'ownership' in health:
-                    _validate_ownership_snapshot(health['ownership'])
+                _retained_health(health)
         for name in names:
             fsx.unlink_at(handle, name)
     finally:
@@ -851,7 +973,7 @@ def observed(name, stage='check'):
                     outcome = getattr(result, 'status', None)
                     code = getattr(result, 'returncode', None)
                     if code is not None:
-                        outcome = 'pass' if code == 0 else 'timeout' if code == 124 else 'fail'
+                        outcome = 'pass' if code == 0 else 'fail'
                     if outcome in _STATES:
                         details.update(outcome=outcome, code=code)
                 return result
@@ -916,15 +1038,21 @@ def unittest_runner(writer):
         def startTest(self, test):
             super().startTest(test)
             node = case_identity(test)
+            _observe(writer, 'begin_test_phase', node, 'unknown')
             writer.emit('test', 'start', nodeid=node)
             originals = {}
             for name, stage in (('_callSetUp', 'setup'), ('_callTestMethod', 'call'), ('_callTearDown', 'teardown')):
                 original = getattr(test, name)
                 originals[name] = (name in test.__dict__, test.__dict__.get(name))
                 def observed(*args, _original=original, _stage=stage, **kwargs):
-                    with bind_sink(writer, node), span(None, stage=_stage) as detail:
-                        detail['outcome'] = 'pass'
-                        return _original(*args, **kwargs)
+                    _observe(writer, 'begin_test_phase', node, _stage)
+                    try:
+                        with bind_sink(writer, node), span(None, stage=_stage) as detail:
+                            detail['outcome'] = 'pass'
+                            return _original(*args, **kwargs)
+                    except BaseException as error:
+                        _observe(writer, 'note_exception', node, _stage, error)
+                        raise
                 setattr(test, name, observed)
             self._journal_originals = (test, originals)
 
@@ -945,10 +1073,17 @@ def unittest_runner(writer):
         def addFailure(self, test, err):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='fail', error=err[1])
             super().addFailure(test, err)
+            _observe(self, '_retain', test, err)
 
         def addError(self, test, err):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='error', error=err[1])
             super().addError(test, err)
+            _observe(self, '_retain', test, err)
+
+        def _retain(self, test, err=None, phase=None):
+            started = getattr(self, '_journal_originals', (None,))[0] is test
+            node = case_identity(test) if started else None
+            _observe(writer, 'record_test_failure', node, phase if started else 'unknown', _exception_kind(err[1] if err else None))
 
         def addSkip(self, test, reason):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='skip', skip=skip_classification(reason), location=case_location(test, writer.source_root))
@@ -961,11 +1096,15 @@ def unittest_runner(writer):
         def addUnexpectedSuccess(self, test):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='unexpected-success')
             super().addUnexpectedSuccess(test)
+            if self.unexpectedSuccesses and self.unexpectedSuccesses[-1] is test:
+                _observe(self, '_retain', test, None, 'call')
 
         def addSubTest(self, test, subtest, err):
             writer.emit('call', 'unknown', nodeid=case_identity(test), outcome='pass' if err is None else 'fail',
                         error=None if err is None else err[1])
             super().addSubTest(test, subtest, err)
+            if err is not None:
+                _observe(self, '_retain', test, err, 'call')
 
     class Runner(unittest.TextTestRunner):
         resultclass = Result
@@ -1041,6 +1180,7 @@ def export_entries(root, *, binding=None):
     entries, summary = [], {'version': 1, 'status': 'unavailable', 'run_status': 'unavailable',
                            'export_status': 'unavailable', 'association': 'unbound', 'subset': True}
     ownership, ownership_complete = [], False
+    failures, omissions = [], dict.fromkeys(_OMISSIONS, False)
     history = root / '.getzilla/runtime/verification-history'
     try:
         handle = _directory(history)
@@ -1081,22 +1221,21 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) - {'ownership'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1
                                    for k in ('attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans'))
                             or health['segment'] != f'{actor}-{health["generation"] % SEGMENTS}.jsonl'):
                         raise ValueError('journal-export-actor')
-                    if 'ownership' in health:
-                        ownership.append(_validate_ownership_snapshot(health['ownership']))
+                    _collect_observations(health, ownership, failures, omissions)
                     raw = _read(handle, f'{actor}-{health["generation"] % SEGMENTS}.jsonl', SEGMENT_BYTES)
                     tail = raw[-65536:]
                     if len(raw) > len(tail):
                         tail = tail.partition(b'\n')[2]
                     complete = tail.rpartition(b'\n')[0] + b'\n' if b'\n' in tail else b''
                     entries.append(('journal/' + actor + '.jsonl', _validated_events(complete, row['run_id'], actor)))
-                    summary['actors'].append(health)
+                    summary['actors'].append({key: value for key, value in health.items() if key not in {'first_failure', 'observation_omissions'}})
                     if actor in summary['missing']:
                         summary['missing'].remove(actor)
                 except FileNotFoundError:
@@ -1110,6 +1249,6 @@ def export_entries(root, *, binding=None):
         summary['export_status'] = 'bounded-subset'
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         summary['export_status'] = 'unavailable'
-    summary['ownership'] = _ownership_projection(ownership, ownership_complete)
+    summary.update(_observation_projection(ownership, failures, ownership_complete, omissions))
     entries.insert(0, ('journal/index.json', _json(summary) + b'\n'))
     return entries
