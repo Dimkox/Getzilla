@@ -33,6 +33,7 @@ from .architecture_diff import (
     ArchitectureChange,
     ArchitectureDiff,
     ChangedArtifact,
+    _committed_worktree_diff,
     diff_architecture,
     git_tree_paths,
     read_diff_file,
@@ -2120,6 +2121,13 @@ def _trust_ci_metadata_paths(diff: ArchitectureDiff, root: Path | None = None) -
     """Qualify source bindings, never runtime authority, from validated paired states."""
     if diff._base_state is None or diff._head_state is None:
         return ()
+    if diff.head_kind == 'worktree' and root is not None and (
+            {node['id'] for node in diff._head_state.snapshot.system['nodes']}
+            - {node['id'] for node in diff._base_state.snapshot.system['nodes']}):
+        equivalent = _committed_worktree_diff(root, diff)
+        if equivalent is None:
+            return ()
+        diff = equivalent
     base = diff._base_state.snapshot.system
     head = diff._head_state.snapshot.system
     before = {node["id"]: node for node in base["nodes"]}
