@@ -2,7 +2,7 @@ import copy
 import importlib.util
 import json
 import os
-import socket
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -182,12 +182,11 @@ class SnapshotInputTests(unittest.TestCase):
                 module.read_snapshot(path)
             with self.assertRaises(ValueError):
                 module.read_snapshot(directory)
-            if hasattr(socket, 'AF_UNIX'):
-                with socket.socket(socket.AF_UNIX) as sock:
-                    endpoint = Path(directory) / 'owned.sock'
-                    sock.bind(str(endpoint))
-                    with self.assertRaises(ValueError):
-                        module.read_snapshot(endpoint)
+            socket_info = os.stat_result((stat.S_IFSOCK | 0o600, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+            with patch.object(module.os, 'stat', return_value=socket_info), \
+                    patch.object(module.os, 'open', side_effect=AssertionError('nonregular path opened')):
+                with self.assertRaisesRegex(ValueError, '^snapshot-invalid$'):
+                    module.read_snapshot(path)
 
     def test_close_error_is_a_fixed_value_error_after_fd_is_closed(self):
         with tempfile.TemporaryDirectory(dir=fixture_root()) as directory:
