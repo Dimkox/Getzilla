@@ -409,6 +409,33 @@ class SnapshotContentBoundsTests(unittest.TestCase):
                     path.unlink()
 
 
+class CanonicalLifetimeTests(unittest.TestCase):
+    def test_no_validated_horizon_is_the_compatible_default(self):
+        from adaptive_trust_ci.public_admission import Decision
+        missing = object()
+        self.assertIsNone(getattr(Decision(False, ('owned',)), 'valid_until', missing))
+
+    def test_pure_horizon_is_clamped_and_never_becomes_external_authority(self):
+        document = local_document()
+        facts = facts_for(document)
+        self.assertIn('valid_until', facts.__dataclass_fields__)
+        horizon = NOW + timedelta(seconds=8)
+        facts = replace(facts, valid_until=horizon.isoformat())
+        source = bundle.source_from(document['source'])
+        result = bundle.evaluate_bundle(bundle.BundlePolicy(POLICY), source,
+            bundle.parse_bundle(bundle.canonical_json(document)),
+            bundle.ObservedState('local', bundle.digest(document['source'])), facts, now=NOW)
+        self.assertTrue(result.consistent)
+        self.assertEqual(result.valid_until, horizon)
+        self.assertFalse(result.external_eligible)
+        document['report']['valid_until'] = (NOW + timedelta(seconds=3)).isoformat()
+        facts = replace(facts, report_digest=bundle.digest(document['report']))
+        result = bundle.evaluate_bundle(bundle.BundlePolicy(POLICY), source,
+            bundle.parse_bundle(bundle.canonical_json(document)),
+            bundle.ObservedState('local', bundle.digest(document['source'])), facts, now=NOW)
+        self.assertEqual(result.valid_until, NOW + timedelta(seconds=3))
+
+
 class SourceCoverageBindingTests(unittest.TestCase):
     """Synthetic inventory seam; no collector, scanner or provider executes."""
 
