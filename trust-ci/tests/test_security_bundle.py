@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import ast
 import json
 import base64
 import contextlib
@@ -333,3 +334,138 @@ class SnapshotContentBoundsTests(unittest.TestCase):
                             self.assertEqual(len(public_admission._snapshot_preflight(root)), 1)
                 finally:
                     path.unlink()
+
+
+class SourceCoverageBindingTests(unittest.TestCase):
+    """Synthetic inventory seam; no collector, scanner or provider executes."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[2]
+        tree = ast.parse((root / '.getzilla/getzilla/security_tools.py').read_text())
+        cls.constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
+                         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                         and node.targets[0].id in {'_SAST_SUFFIXES', '_SAST_EXCLUDED'}}
+        scan = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'scan_source')
+        selected = [node for node in scan.body if isinstance(node, ast.Assign)
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in {'selected', 'python', 'sast', 'config', 'targets'}]
+        cls.selection = compile(ast.Module(body=selected, type_ignores=[]), 'accepted-pure-targets', 'exec')
+        report = ast.parse((root / '.getzilla/getzilla/security_cli.py').read_text())
+        functions = [node for node in report.body if isinstance(node, ast.FunctionDef)
+                     and node.name in {'_detail_consistent', '_findings_consistent'}]
+        namespace = {'CHECK_FAMILIES': {}, 'datetime': datetime}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), 'accepted-pure-marker', 'exec'), namespace)
+        cls.marker_consistent = staticmethod(namespace['_detail_consistent'])
+
+    def evaluate_source(self, filenames, *, coverage=None, skipped=()):
+        from adaptive_trust_ci import public_admission
+        runtime = Path(__file__).resolve().parents[2] / '.getzilla/runtime'
+        with tempfile.TemporaryDirectory(prefix='326-source-coverage-', dir=runtime) as directory:
+            source, snapshots = Path(directory) / 'source', Path(directory) / 'snapshots'
+            source.mkdir(mode=0o700)
+            snapshots.mkdir(mode=0o700)
+            for name in filenames:
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('owned = 1\n')
+            manifest = public_admission.content_manifest(source)
+            inventory = {'complete': True, 'digest': bundle.digest(manifest),
+                         'files': [row['path'] for row in manifest]}
+            namespace = {'inventory': inventory, 'Path': Path, **self.constants}
+            exec(self.selection, namespace)
+            targets = namespace['targets']
+            core = SimpleNamespace(policy_root=source,
+                inventory=SimpleNamespace(collect_inventory=lambda _: inventory),
+                security=SimpleNamespace(_policy_digest=lambda _: POLICY,
+                    security_obligations=lambda *a, **kw: [
+                        {'check_id': 'security-inventory', 'applicability': 'required', 'data_sources': []}]),
+                tools=SimpleNamespace(**self.constants),
+                report=SimpleNamespace(_detail_consistent=self.marker_consistent))
+            required = {'security-inventory': True, 'secret-scan': True,
+                        **{name: bool(paths) for name, paths in targets.items()}}
+            records, checks = [], []
+            for name, applies in required.items():
+                applies = applies and name not in skipped
+                marker = {'kind': 'security-result', 'schema_version': 1,
+                    'outcome': 'pass' if applies else 'not_applicable',
+                    'inventory_sha256': inventory['digest'], 'policy_sha256': POLICY,
+                    'data_sources': [], 'findings': [], 'gaps': [], 'assurance': 'local-input-integrity-only'}
+                if name in targets and applies:
+                    marker['coverage'] = {'expected': list(targets[name]), 'observed': list(targets[name])}
+                if coverage and name in coverage:
+                    marker['coverage'] = coverage[name]
+                status = 'pass' if applies else 'skip'
+                records.append({'name': name, 'status': status, 'details': [marker]})
+                checks.append({'name': name, 'status': status, 'outcome': marker['outcome'],
+                    'finding_count': 0, 'gap_count': 0, 'source_ids': [], 'coverage_sha256': inventory['digest']})
+            descriptors = {'checks': records, 'source_descriptors': []}
+            document = {'version': 1, 'source': {'mode': 'local', 'candidate_digest': bundle.digest(manifest)},
+                'policy_sha256': POLICY, 'binding': None, 'integration': None,
+                'report': {'inventory_sha256': inventory['digest'], 'created_at': NOW.isoformat(),
+                    'valid_until': (NOW + timedelta(hours=1)).isoformat(), 'checks': checks,
+                    'evidence_sha256': bundle.digest(descriptors)}}
+            parsed = bundle.parse_bundle(bundle.canonical_json(document))
+            facts = public_admission.validate_local_inputs(bundle.BundlePolicy(POLICY), parsed,
+                source_root=source, snapshot_root=snapshots, descriptors=descriptors, now=NOW, core=core)
+            decision = bundle.evaluate_bundle(bundle.BundlePolicy(POLICY), parsed.source, parsed,
+                bundle.ObservedState('local', bundle.digest(document['source'])), facts, now=NOW)
+            return facts, decision
+
+    def assert_refused(self, facts, decision):
+        self.assertFalse(facts.source_validated)
+        self.assertFalse(decision.consistent)
+        self.assertFalse(decision.external_eligible)
+
+    def test_omitted_source_file_cannot_be_normalized_as_complete(self):
+        for scanner in ('bandit', 'opengrep'):
+            with self.subTest(scanner=scanner):
+                self.assert_refused(*self.evaluate_source(['first.py', 'second.py'], coverage={
+                    scanner: {'expected': ['first.py'], 'observed': ['first.py']}}))
+
+    def test_invented_source_file_cannot_be_normalized_as_complete(self):
+        for scanner in ('bandit', 'opengrep'):
+            with self.subTest(scanner=scanner):
+                self.assert_refused(*self.evaluate_source(['first.py', 'second.py'], coverage={
+                    scanner: {'expected': ['absent.py'], 'observed': ['absent.py']}}))
+
+    def test_duplicate_source_file_cannot_be_normalized_as_complete(self):
+        for scanner in ('bandit', 'opengrep'):
+            with self.subTest(scanner=scanner):
+                self.assert_refused(*self.evaluate_source(['first.py', 'second.py'], coverage={
+                    scanner: {'expected': ['first.py', 'first.py'], 'observed': ['first.py', 'first.py']}}))
+
+    def test_dockerfile_suffix_cannot_claim_not_applicable(self):
+        self.assert_refused(*self.evaluate_source(['service.Dockerfile'], skipped=('trivy-config',)))
+
+    def test_complete_source_coverage_and_real_empty_inventory_are_consistent(self):
+        for names in (['first.py', 'second.py'], [], ['README.md']):
+            with self.subTest(names=names):
+                facts, decision = self.evaluate_source(names)
+                self.assertTrue(facts.source_validated)
+                self.assertTrue(decision.consistent)
+                self.assertFalse(decision.external_eligible)
+
+    def test_accepted_selector_boundaries_share_applicability_and_coverage(self):
+        names = ['Dockerfile', 'dOcKeRfIlE.dev', 'service.Dockerfile', 'main.tf', 'nested/a.py',
+                 'source/a.js', 'source/a.TF', 'service.dockerfile', 'tests/ignored.py',
+                 'vendor/ignored.tf', '.getzilla/sast/ignored.py', '.getzilla/sast-extra/kept.py']
+        facts, decision = self.evaluate_source(names)
+        self.assertTrue(facts.source_validated)
+        self.assertTrue(decision.consistent)
+        for name in ('Dockerfile', 'dOcKeRfIlE.dev', 'service.Dockerfile', 'main.tf'):
+            with self.subTest(name=name):
+                self.assert_refused(*self.evaluate_source([name], skipped=('trivy-config',)))
+
+    def test_observed_coverage_must_be_exact_unique_and_complete(self):
+        for scanner, expected in (('bandit', ['first.py', 'second.py']),
+                                  ('opengrep', ['first.py', 'second.py']),
+                                  ('trivy-config', ['Dockerfile', 'main.tf'])):
+            for observed in (expected[:1], expected + ['absent.py'], expected + expected[:1]):
+                with self.subTest(scanner=scanner, observed=observed):
+                    self.assert_refused(*self.evaluate_source(expected, coverage={
+                        scanner: {'expected': expected, 'observed': observed}}))
+
+    def test_nonapplicable_scanner_cannot_smuggle_coverage_claims(self):
+        self.assert_refused(*self.evaluate_source(['README.md'], coverage={
+            'bandit': {'expected': ['absent.py'], 'observed': ['absent.py']}}))

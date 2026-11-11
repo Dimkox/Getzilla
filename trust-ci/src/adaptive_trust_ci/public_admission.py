@@ -210,6 +210,18 @@ def _integration(core, source, value, root):
     return bundle.digest(value), valid
 
 
+def _scanner_targets(inventory, tools):
+    # Keep exact parity with security_tools.scan_source and its normalized markers.
+    selected = [value for value in inventory['files'] if not value.startswith('.getzilla/sast/')
+                and not tools._SAST_EXCLUDED.intersection(Path(value).parts)]
+    paths = {'opengrep': [value for value in selected if Path(value).suffix in tools._SAST_SUFFIXES],
+             'bandit': [value for value in selected if Path(value).suffix == '.py'],
+             'trivy-config': [value for value in selected if Path(value).name.lower().startswith('dockerfile')
+                              or Path(value).name.endswith('.Dockerfile') or Path(value).suffix == '.tf']}
+    return {name: {value.replace('\\', '/').removeprefix('./') for value in values}
+            for name, values in paths.items()}
+
+
 def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descriptors, now, core=None):
     """Real boundary validation outside pure evaluation; JSON claims never set facts."""
     value = evidence.document()
@@ -262,11 +274,8 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
                 actual_descriptors[identifier] = descriptor
                 ids.append(identifier)
             required.append(bundle.Requirement(obligation['check_id'], applies == 'required', tuple(ids), inventory['digest']))
-        files = [Path(name) for name in inventory['files'] if not name.startswith('.getzilla/sast/')
-                 and not core.tools._SAST_EXCLUDED.intersection(Path(name).parts)]
-        for name, applies in (('secret-scan', True), ('opengrep', any(p.suffix in core.tools._SAST_SUFFIXES for p in files)),
-                              ('bandit', any(p.suffix == '.py' for p in files)),
-                              ('trivy-config', any(p.name.lower().startswith('dockerfile') or p.suffix == '.tf' for p in files))):
+        targets = _scanner_targets(inventory, core.tools)
+        for name, applies in [('secret-scan', True), *[(name, bool(paths)) for name, paths in targets.items()]]:
             required.append(bundle.Requirement(name, applies, (), inventory['digest']))
         supplied = descriptors['checks']
         if type(supplied) is not list or len(supplied) != len(required):
@@ -277,6 +286,13 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             if len(markers) != 1:
                 return refused()
             marker = markers[0]
+            if check['name'] in targets:
+                coverage = marker.get('coverage', {'expected': [], 'observed': []})
+                if (type(coverage) is not dict or set(coverage) != {'expected', 'observed'}
+                        or any(type(paths) is not list or any(type(path) is not str or not path for path in paths)
+                               or len(paths) != len(set(paths)) or set(paths) != targets[check['name']]
+                               for paths in coverage.values())):
+                    return refused()
             if not core.report._detail_consistent(check['name'], marker, inventory['digest'], actual_policy, now):
                 return refused()
             if any(item != actual_descriptors.get(item.get('source_id')) for item in marker['data_sources']):
