@@ -149,7 +149,7 @@ class SecurityBundleTests(unittest.TestCase):
 
 
 class LateInputIOTests(unittest.TestCase):
-    def evaluate(self, failure=None, changed=False):
+    def evaluate(self, failure=None, changed=False, error=FileNotFoundError):
         from adaptive_trust_ci import public_admission as admission
         selector = admission.Selector('owner/project', 1, 7, '1' * 40, '2' * 40, '3' * 40, 11, 2)
         document = local_document()
@@ -170,14 +170,14 @@ class LateInputIOTests(unittest.TestCase):
             engine = stack.enter_context(mock.patch.object(bundle, 'evaluate_bundle',
                 return_value=bundle.BundleDecision(True, ())))
             if failure is not None:
-                {'source': source_read, 'snapshot': snapshot_read, 'policy': policy_read}[failure].side_effect = FileNotFoundError('owned fixture')
+                {'source': source_read, 'snapshot': snapshot_read, 'policy': policy_read}[failure].side_effect = error('owned fixture')
             if changed:
                 source_read.return_value = ['different-source']
             try:
                 result = admission.evaluate(object(), authority, selector,
                     admission.Evidence(None, document['report']), now=NOW,
                     candidate_root=Path('owned-source'), snapshot_root=Path('owned-snapshots'))
-            except OSError:
+            except (OSError, zipfile.BadZipFile):
                 self.fail('anticipated late input I/O escaped instead of a closed refusal')
             validate.assert_called_once()
             observation.assert_called_once()
@@ -192,8 +192,8 @@ class LateInputIOTests(unittest.TestCase):
                 engine.assert_called_once()
             return result
 
-    def refused(self, source):
-        result = self.evaluate(source)
+    def refused(self, source, error=FileNotFoundError):
+        result = self.evaluate(source, error=error)
         self.assertFalse(result.eligible)
         self.assertEqual(result.blockers, ('protected-observation-or-validation-refused',))
 
@@ -205,6 +205,9 @@ class LateInputIOTests(unittest.TestCase):
 
     def test_late_policy_io_is_a_closed_refusal(self):
         self.refused('policy')
+
+    def test_late_snapshot_parser_refuses(self):
+        self.refused('snapshot', zipfile.BadZipFile)
 
     def test_positive_and_changed_source_binding_remain_distinct(self):
         result = self.evaluate()
