@@ -1178,6 +1178,77 @@
     },
     {
       "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 0
+      },
+      "from": "NODE-LOCAL-SECURITY-BUNDLE",
+      "id": "EDGE-BUNDLE-CORE-VALIDATION",
+      "network_policy": "no_network",
+      "protocol": "python",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-ROUTE-POLICY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 20000
+      },
+      "from": "NODE-LOCAL-SECURITY-BUNDLE",
+      "id": "EDGE-BUNDLE-OPTIONAL-GITHUB-OBSERVATION",
+      "network_policy": "no_network",
+      "protocol": "python",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-GITHUB-OBSERVER",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "github_app",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 20000
+      },
+      "from": "NODE-OPTIONAL-GITHUB-OBSERVER",
+      "id": "EDGE-OPTIONAL-GET-GITHUB",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
         "DATA-CHECK-STATUS"
       ],
       "authentication": "github_app",
@@ -2630,6 +2701,45 @@
       ],
       "trust_domain": "TD-TRUST-CI-CONTROL",
       "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-LOCAL-SECURITY-BUNDLE",
+      "owner": "repository engineering; local validation only, no App, DB or mandatory observer",
+      "public_contracts": [],
+      "repository_paths": [
+        "trust-ci/src/adaptive_trust_ci/public_admission.py",
+        "trust-ci/src/adaptive_trust_ci/security_bundle.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-OPTIONAL-GITHUB-OBSERVER",
+      "owner": "repository engineering; optional GET-only adapter, source-described not activated",
+      "public_contracts": [],
+      "repository_paths": [
+        "trust-ci/src/adaptive_trust_ci/github_observer.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-GITHUB-APP"
+      ],
+      "trust_domain": "TD-TRUST-CI-CONTROL",
+      "type": "local_component"
     },
     {
       "data_classification": "DATA-ATTESTATION",
