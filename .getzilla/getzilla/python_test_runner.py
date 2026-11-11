@@ -1,6 +1,8 @@
 """Isolated Core and Trust CI test sharding; local verification evidence only."""
 from __future__ import annotations
 
+from . import verification_journal as diagnostics
+
 import argparse
 import configparser
 from contextlib import contextmanager
@@ -433,8 +435,12 @@ def _output_file(retained: dict[str, ProcessResult | CleanupMetadata], label: st
             yield handle
 
 
+@diagnostics.observed('owned-command', stage='command')
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
+    run = diagnostics.current()
+    if run:
+        environment = run.child_environment(environment)
     started = time.monotonic()
     retained: dict[str, ProcessResult | CleanupMetadata] = {}
     with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled,
@@ -451,6 +457,8 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
             result = ProcessResult(command, 127, stderr=detail)
             retained['result'] = result
             return result
+        if run and run.writer:
+            run.writer.emit('command', 'unknown', step='owned-process', process=process.pid)
         reason = ''
         cleanup_error = ''
         cleanup_metadata = CleanupMetadata()
@@ -540,7 +548,7 @@ def _application_coverage_config(config: Path, directory: Path, *, root: Path) -
         raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
     omissions = [harness]  # Retain the existing bootstrap-only exception.
     consumer = root.resolve()
-    for origin in (fsx.__file__, pytest_progress.__file__):
+    for origin in (fsx.__file__, pytest_progress.__file__, diagnostics.__file__):
         path = Path(origin).resolve()
         if path.is_relative_to(consumer):
             continue
@@ -595,6 +603,7 @@ def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
     return result
 
 
+@diagnostics.entrypoint('named-tests')
 def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> ProcessResult:
     """Run explicit Core unittest names as a bounded observation, without coverage."""
     if type(budget) is not int or not 1 <= budget <= 180:
@@ -693,6 +702,14 @@ def _read_limited(path: Path) -> str:
         return f'{type(exc).__name__}: {exc}'
 
 
+def _diagnostic_pid(process):
+    try:
+        value = getattr(process, 'pid', None)
+    except Exception:
+        return None
+    return value if type(value) is int and value > 0 else None
+
+
 def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, workers: int, environment: dict[str, str], *,
                                 test_files: list[str] | None = None) -> ProcessResult:
     if test_files is None:
@@ -706,6 +723,8 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
     completed: list[ProcessResult] = []
     cleanup_errors: list[str] = []
     next_file = 0
+    run = diagnostics.current()
+    actors = {}
     workers = max(1, min(workers, len(test_files)))
     with _cancellation() as cancelled, tempfile.TemporaryDirectory(prefix='grok-core-parallel-') as out_dir:
         output_root = Path(out_dir)
@@ -720,6 +739,12 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     result_file = output_root / f'{test_file}.result.json'
                     out_handle = stdout.open('wb')
                     err_handle = stderr.open('wb')
+                    actor = next(i for i in range(workers) if i not in actors.values())
+                    child_env = {**environment, '_GETZILLA_TEST_CHILD': '1'}
+                    if run:
+                        child_env = run.child_environment(child_env, actor)
+                        if run.writer:
+                            run.writer.emit('command', 'start', step='unittest-shard')
                     try:
                         process = fsx.owned_popen(
                             [
@@ -728,7 +753,7 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                                 *_unittest_command(result_file, 'discover', '-s', 'tests', '-p', test_file)[1:],
                             ],
                             cwd=root,
-                            env={**environment, '_GETZILLA_TEST_CHILD': '1'},
+                            env=child_env,
                             stdout=out_handle,
                             stderr=err_handle,
                         )
@@ -739,12 +764,21 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                         continue
                     out_handle.close()
                     err_handle.close()
+                    actors[id(process)] = actor
+                    if run and run.writer:
+                        run.writer.emit('command', 'unknown', step='unittest-shard',
+                                        process=_diagnostic_pid(process))
                     active.append((test_file, process, stdout, stderr, result_file))
                 for item in list(active):
                     test_file, process, stdout, stderr, result_file = item
                     if process.poll() is None:
                         continue
                     active.remove(item)
+                    actors.pop(id(process), None)
+                    if run and run.writer:
+                        run.writer.emit('command', 'end', step='unittest-shard', code=process.returncode,
+                                        outcome='pass' if process.returncode == 0 else 'fail',
+                                        process=_diagnostic_pid(process))
                     job = fsx.owned_job(process)
                     if job is not None:
                         job.close()  # a finished shard's leftover descendants end with its job
@@ -757,6 +791,9 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                 if time.monotonic() - started > TIMEOUT:
                     for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
+                        if run and run.writer:
+                            run.writer.emit('command', 'end', step='unittest-shard', outcome='timeout',
+                                            process=_diagnostic_pid(process))
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
                                          seconds=time.monotonic() - started, terminal_state='timeout',
                                          cleanup_metadata=_merge_cleanup(*(
@@ -826,6 +863,7 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
                 primary.add_note(f'coverage scratch cleanup failed: {cleanup}')
 
 
+@diagnostics.entrypoint('core-tests')
 def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
     measured = mode in {'pr', 'release'}
     workers, engine = select_engine(workers, measured)
@@ -855,6 +893,8 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         progress_root = Path(directory) / 'progress'
         progress_nonce = uuid.uuid4().hex
         if workers and engine == 'pytest-xdist':
+            if diagnostics.current():
+                diagnostics.current().expect_workers(workers)
             command = _pytest_command(workers, 'worksteal')
             if 1 <= workers <= 64:
                 # The source CLI also serves uninstalled consumer roots. Load
