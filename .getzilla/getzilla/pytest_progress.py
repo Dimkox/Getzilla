@@ -343,6 +343,14 @@ def _journal_report(writer, report):
     writer.emit(phase, 'end', nodeid=report.nodeid.partition('[')[0], outcome=outcome, **fields)
 
 
+def _journal_phase(stage):
+    def phase(self, item):
+        with diagnostics.bind_sink(self.journal, item.nodeid):
+            self.journal.emit(stage, 'start', nodeid=item.nodeid)
+            yield
+    return phase
+
+
 class _JournalHooks:
     def __init__(self, writer):
         self.journal = writer
@@ -356,20 +364,9 @@ class _JournalHooks:
         if report.failed or report.skipped:
             _journal_report(self.journal, report)
 
-    def pytest_runtest_setup(self, item):
-        with diagnostics.bind_sink(self.journal, item.nodeid):
-            self.journal.emit('setup', 'start', nodeid=item.nodeid)
-            yield
-
-    def pytest_runtest_call(self, item):
-        with diagnostics.bind_sink(self.journal, item.nodeid):
-            self.journal.emit('call', 'start', nodeid=item.nodeid)
-            yield
-
-    def pytest_runtest_teardown(self, item):
-        with diagnostics.bind_sink(self.journal, item.nodeid):
-            self.journal.emit('teardown', 'start', nodeid=item.nodeid)
-            yield
+    pytest_runtest_setup = _journal_phase('setup')
+    pytest_runtest_call = _journal_phase('call')
+    pytest_runtest_teardown = _journal_phase('teardown')
 
     def pytest_runtest_makereport(self, item, call):
         yield

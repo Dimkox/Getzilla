@@ -23,94 +23,84 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkerActionSinkTests(unittest.TestCase):
-    class Sink:
-        source_root = ROOT
-
-        def __init__(self, broken=False):
-            self.events, self.broken = [], broken
-
-        def emit(self, stage, state, **fields):
-            if self.broken and stage == 'check':
-                raise OSError('PRIVATE-ERROR')
-            self.events.append((stage, state, fields))
-
-    @contextmanager
-    def binding(self, writer, node):
-        bind = getattr(journal, 'bind_sink', None)
-        if bind is None:
-            yield
-        else:
-            with bind(writer, node):
-                yield
-
-    def action(self):
-        with journal.span('owned-action'):
-            return 7
-
-    def test_pytest_all_phases_emit_nested_actions_without_creating_run(self):
-        sink = self.Sink()
-        hooks = pytest_progress._JournalHooks(sink)
-        node = 'tests/test_owned.py::test_value[PRIVATE-PARAM]'
-        for name in ('setup', 'call', 'teardown'):
-            phase = getattr(hooks, 'pytest_runtest_' + name)(SimpleNamespace(nodeid=node))
-            next(phase)
-            self.assertIsNone(journal.current())
-            self.assertEqual(self.action(), 7)
-            with self.assertRaises(StopIteration):
-                next(phase)
-        actions = [row for row in sink.events if row[0] == 'check']
-        self.assertEqual(len(actions), 6)
-        self.assertEqual({row[2]['nodeid'] for row in actions}, {'tests/test_owned.py::test_value'})
-        self.assertNotIn('PRIVATE-PARAM', repr(actions))
-        self.action()
-        self.assertEqual(len(sink.events), 9)
-
-    def test_unittest_setup_call_teardown_actions_share_existing_writer(self):
-        sink, action = self.Sink(), self.action
-        class Owned(unittest.TestCase):
-            def setUp(self): action()
-            def test_value(self): self.assertEqual(action(), 7)
-            def tearDown(self): action()
-        result = journal.unittest_runner(sink)(stream=io.StringIO()).run(unittest.defaultTestLoader.loadTestsFromTestCase(Owned))
-        self.assertTrue(result.wasSuccessful())
-        self.assertEqual(len([row for row in sink.events if row[0] == 'check']), 6)
-        self.assertIsNone(journal.current())
-
-    def test_nested_disabled_binding_preserves_run_and_opaque_command_result(self):
-        parent, child = self.Sink(), self.Sink()
-        run = SimpleNamespace(writer=parent, root=ROOT)
-        opaque = object()
-        with journal.activate(run), self.binding(child, 'tests/test_owned.py::outer'):
-            self.assertIs(journal.current(), run)
-            self.action()
-            with self.binding(None, 'tests/test_owned.py::disabled'):
-                self.action()
-            with patch.object(util.subprocess, 'run', return_value=opaque):
+    def test_actual_loader_routes_public_actions_in_both_loading_orders(self):
+        code = '''import importlib.util,io,json,sys,unittest
+from pathlib import Path
+from unittest.mock import patch
+def guard(event,args):
+ if event.startswith('socket.') or event=='subprocess.Popen':raise AssertionError('external-effect')
+sys.addaudithook(guard)
+root=Path(sys.argv[1]);sys.path.insert(0,str(root/'.getzilla'))
+if sys.argv[2]=='public-first':
+ from getzilla import verification_journal as public
+spec=importlib.util.spec_from_file_location('owned_harness',root/'scripts/getzilla_unittest.py')
+harness=importlib.util.module_from_spec(spec);spec.loader.exec_module(harness)
+private,writer=harness._journal_observer()
+assert private is not None and writer is not None
+from getzilla import verification_journal as public,util
+opaque=object()
+def action():
+ assert public.current() is None
+ with public.span('public-action'):pass
+ with private.span('private-action'):pass
+ with patch.object(util.subprocess,'run',return_value=opaque):
+  assert util._observed_run(['owned-command']) is opaque
+class Owned(unittest.TestCase):
+ def setUp(self):action()
+ def test_value(self):action()
+ def tearDown(self):action()
+Owned.__module__='tests.test_owned'
+try:
+ result=private.unittest_runner(writer)(stream=io.StringIO()).run(Owned('test_value'))
+ assert result.testsRun==1 and result.wasSuccessful()
+ before=writer.sequence
+ with public.span('after-phase'):pass
+ assert writer.sequence==before and public.current() is None
+finally:writer.close()
+'''
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as name:
+            root = Path(name)
+            program = root / 'owned.py'
+            program.write_text(code)
+            for order in ('public-first', 'private-first'):
+                run = journal.Run(root, None, 'owned-tests')
                 try:
-                    actual = util._observed_run(['private-argument'])
-                except AttributeError:
-                    actual = None
-                self.assertIs(actual, opaque)
-        self.action()
-        self.assertEqual(parent.events, [])
-        self.assertEqual(len([row for row in child.events if row[0] == 'check']), 2)
-        self.assertEqual(len([row for row in child.events if row[0] == 'command' and row[1] == 'start']), 1)
-        self.assertNotIn('private-argument', repr(child.events))
+                    env = run.child_environment({'PATH': os.defpath, 'HOME': name}, 0)
+                    result = subprocess.run([sys.executable, '-B', str(program), str(ROOT), order],
+                                            env=env, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0)
+                    rows = [json.loads(line) for path in run.path.glob('worker-0-*.jsonl') for line in path.read_text().splitlines()]
+                    for step in ('private-action', 'public-action', 'source-command'):
+                        self.assertEqual(sum(row.get('step') == step for row in rows), 6, (order, step))
+                finally:
+                    run.close()
 
-    def test_logging_errors_and_cancellation_keep_primary_identity_and_restore(self):
-        for error in (ValueError('PRIVATE'), KeyboardInterrupt(), SystemExit(7)):
-            sink = self.Sink(broken=True)
-            with self.binding(sink, 'tests/test_owned.py::test_value'):
-                self.assertEqual(self.action(), 7)
-            caught = None
-            try:
-                with journal.activate(SimpleNamespace(writer=sink)), self.binding(sink, 'tests/test_owned.py::test_value'):
-                    with journal.span('owned-action'):
+    def test_scoped_phase_and_exception_identity(self):
+        events = []
+        writer = SimpleNamespace(emit=lambda *args, **fields: events.append((args, fields)))
+        run = SimpleNamespace(writer=writer)
+        for phase in ('setup', 'call', 'teardown'):
+            hook = getattr(pytest_progress._JournalHooks(writer), 'pytest_runtest_' + phase)(
+                SimpleNamespace(nodeid='tests/test_owned.py::test_value[PRIVATE]'))
+            next(hook)
+            with journal.span('owned-action'):
+                self.assertIsNone(journal.current())
+            hook.close()
+        self.assertEqual(sum(args[0] == 'check' for args, _ in events), 6)
+        self.assertNotIn('PRIVATE', repr([fields for args, fields in events if args[0] == 'check']))
+        with journal.activate(run), journal.bind_sink(None, 'tests/test_owned.py'):
+            with journal.span('disabled'):
+                pass
+            self.assertIs(journal.current(), run)
+        self.assertFalse(any(fields.get('step') == 'disabled' for _, fields in events))
+        for error in (ValueError(), KeyboardInterrupt(), SystemExit()):
+            with journal.bind_sink(writer, 'tests/test_owned.py'):
+                try:
+                    with journal.span('error'):
                         raise error
-            except BaseException as actual:
-                caught = actual
-            self.assertIs(caught, error)
-            self.assertIsNone(journal.current())
+                except BaseException as actual:
+                    self.assertIs(actual, error)
+        self.assertIsNone(journal.action_sink()[0])
 
 
 class JournalColocatedSDKTests(unittest.TestCase):

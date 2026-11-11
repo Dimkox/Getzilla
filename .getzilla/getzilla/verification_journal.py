@@ -26,10 +26,18 @@ ACTORS = 65
 RUN_BYTES = 33 * 1024 * 1024
 RUNS = 4
 _CURRENT = ContextVar('verification_journal', default=None)
-_SINK = ContextVar('verification_action_sink', default=None)
 _ID = re.compile(r'(?:[a-z][a-z0-9-]{0,63}|tool:[a-z][a-z0-9_-]{0,63})\Z')
 _DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 _RUN = re.compile(r'[0-9a-f]{32}\Z')
+_peer = sys.modules.get('getzilla.verification_journal')
+if __package__ == 'getzilla':
+    _run = os.environ.get('GETZILLA_JOURNAL_RUN', '')
+    _peer = sys.modules.get('_getzilla_observer_' + _run + '.verification_journal') if _RUN.fullmatch(_run) else None
+_SINK = getattr(_peer, '_SINK', None)
+if (not isinstance(_SINK, ContextVar) or getattr(_peer, '__file__', None) != __file__
+        or getattr(getattr(_peer, '__spec__', None), 'origin', None) != __file__
+        or getattr(__spec__, 'origin', None) != __file__):
+    _SINK = ContextVar('verification_action_sink', default=None)
 _SESSION = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 _ACTOR = re.compile(r'controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3])\Z')
 _STAGES = {'action', 'command', 'check', 'collection', 'setup', 'call', 'teardown', 'test', 'run', 'cleanup'}
@@ -716,7 +724,8 @@ def span(step, *, stage='check'):
         yield details
     except BaseException as exc:
         if writer:
-            _emit(writer, stage, 'end', step=step, nodeid=node, outcome='error', error=exc)
+            _emit(writer, stage, 'end', step=step, nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error', error=exc,
+                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
         raise
     else:
         if writer:
@@ -768,15 +777,9 @@ def unittest_runner(writer):
                 original = getattr(test, name)
                 originals[name] = (name in test.__dict__, test.__dict__.get(name))
                 def observed(*args, _original=original, _stage=stage, **kwargs):
-                    with bind_sink(writer, node):
-                        writer.emit(_stage, 'start', nodeid=node)
-                        try:
-                            value = _original(*args, **kwargs)
-                        except BaseException as exc:
-                            writer.emit(_stage, 'end', nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error',
-                                        error=exc, skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
-                            raise
-                        writer.emit(_stage, 'end', nodeid=node, outcome='pass')
+                    with bind_sink(writer, node), span(None, stage=_stage) as detail:
+                        value = _original(*args, **kwargs)
+                        detail['outcome'] = 'pass'
                         return value
                 setattr(test, name, observed)
             self._journal_originals = (test, originals)
