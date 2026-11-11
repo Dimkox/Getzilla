@@ -148,6 +148,73 @@ class SecurityBundleTests(unittest.TestCase):
         self.assertFalse(evaluate().consistent)
 
 
+class LateInputIOTests(unittest.TestCase):
+    def evaluate(self, failure=None, changed=False):
+        from adaptive_trust_ci import public_admission as admission
+        selector = admission.Selector('owner/project', 1, 7, '1' * 40, '2' * 40, '3' * 40, 11, 2)
+        document = local_document()
+        document['source'] = selector.source().as_dict()
+        manifest, snapshots = ['owned-source'], ['owned-snapshot']
+        facts = replace(facts_for(document), content_digest=bundle.digest(manifest),
+                        snapshot_digest=bundle.digest(snapshots))
+        policy_read = mock.Mock(return_value=POLICY)
+        core = SimpleNamespace(security=SimpleNamespace(_policy_digest=policy_read), policy_root=Path('owned-policy'))
+        authority = SimpleNamespace(security_core=core, as_policy=lambda: bundle.BundlePolicy(POLICY))
+        observed = bundle.ObservedState('github', bundle.digest(document['source']))
+        with contextlib.ExitStack() as stack:
+            validate = stack.enter_context(mock.patch.object(admission, 'validate_local_inputs', return_value=facts))
+            observation = stack.enter_context(mock.patch.object(admission, 'observe', return_value=observed))
+            source_read = stack.enter_context(mock.patch.object(admission, 'content_manifest', return_value=manifest))
+            snapshot_read = stack.enter_context(mock.patch.object(admission, '_snapshot_preflight', return_value=snapshots))
+            binding = stack.enter_context(mock.patch.object(admission, '_source_binding'))
+            engine = stack.enter_context(mock.patch.object(bundle, 'evaluate_bundle',
+                return_value=bundle.BundleDecision(True, ())))
+            if failure is not None:
+                {'source': source_read, 'snapshot': snapshot_read, 'policy': policy_read}[failure].side_effect = FileNotFoundError('owned fixture')
+            if changed:
+                source_read.return_value = ['different-source']
+            try:
+                result = admission.evaluate(object(), authority, selector,
+                    admission.Evidence(None, document['report']), now=NOW,
+                    candidate_root=Path('owned-source'), snapshot_root=Path('owned-snapshots'))
+            except OSError:
+                self.fail('anticipated late input I/O escaped instead of a closed refusal')
+            validate.assert_called_once()
+            observation.assert_called_once()
+            if failure or changed:
+                engine.assert_not_called()
+                binding.assert_not_called()
+            else:
+                source_read.assert_called_once()
+                snapshot_read.assert_called_once()
+                policy_read.assert_called_once_with(core.policy_root)
+                binding.assert_called_once()
+                engine.assert_called_once()
+            return result
+
+    def refused(self, source):
+        result = self.evaluate(source)
+        self.assertFalse(result.eligible)
+        self.assertEqual(result.blockers, ('protected-observation-or-validation-refused',))
+
+    def test_late_source_io_is_a_closed_refusal(self):
+        self.refused('source')
+
+    def test_late_snapshot_io_is_a_closed_refusal(self):
+        self.refused('snapshot')
+
+    def test_late_policy_io_is_a_closed_refusal(self):
+        self.refused('policy')
+
+    def test_positive_and_changed_source_binding_remain_distinct(self):
+        result = self.evaluate()
+        self.assertTrue(result.eligible)
+        self.assertEqual(result.blockers, ())
+        changed = self.evaluate(changed=True)
+        self.assertFalse(changed.eligible)
+        self.assertEqual(changed.blockers, ('source-changed-or-unvalidated',))
+
+
 class OwnedValidationBoundaryTests(unittest.TestCase):
     def test_entrypoint_constructs_facts_by_invoking_boundary_validators(self):
         from adaptive_trust_ci import public_admission
