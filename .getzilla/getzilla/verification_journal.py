@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import functools
@@ -60,6 +61,117 @@ _FAILURE_OPS = {'action', 'command', 'check', 'cleanup', 'owned-command'}
 _OMISSIONS = ('ownership_omitted', 'failure_omitted', 'action_omitted')
 
 
+@dataclass(frozen=True)
+class StopMetadata:
+    version: int = 1
+    decision: str = 'unavailable'
+    result_policy: str = 'unavailable'
+    cancel: str = 'unavailable'
+    late_output: str = 'unavailable'
+    scope: str = 'unavailable'
+
+
+if ((getattr(_peer, '__file__', None), getattr(getattr(_peer, '__spec__', None), 'origin', None),
+        getattr(__spec__, 'origin', None)) == (__file__,) * 3
+        and isinstance(getattr(_peer, 'StopMetadata', None), type)):
+    StopMetadata = _peer.StopMetadata
+
+
+_STOP_FIELDS = {
+    'decision': {'unavailable', 'child_exit', 'child_signal', 'deadline', 'output_limit', 'owned_cancel',
+                 'primary_exception', 'spawn_error'},
+    'result_policy': {'unavailable', 'child_status', 'limit_124', 'cancel_preserve_child', 'cancel_128_signal',
+                      'fallback_1', 'spawn_127', 'aggregate', 'collection_refusal', 'coverage_refusal'},
+    'cancel': {'unavailable', 'none', 'sigint', 'sigterm'},
+    'late_output': {'unavailable', 'not_exceeded', 'exceeded'},
+    'scope': {'process', 'parallel_batch', 'selected_shard', 'coverage_combine', 'unavailable'},
+}
+
+
+def _validate_stop(value):
+    if (type(value) is not dict or set(value) != {'version', *_STOP_FIELDS}
+            or type(value['version']) is not int or value['version'] != 1
+            or any(type(value[k]) is not str or value[k] not in choices for k, choices in _STOP_FIELDS.items())
+            or len(_json(value)) > 256):
+        raise ValueError('stop-metadata-shape')
+    return dict(value)
+
+
+def stop_details(value):
+    try:
+        metadata = getattr(value, 'stop_metadata', None)
+        if metadata is None:
+            metadata = getattr(value, '_getzilla_stop_metadata', None)
+        if type(metadata) is not StopMetadata:
+            return vars(StopMetadata()).copy()
+        return _validate_stop(vars(metadata))
+    except BaseException:
+        return vars(StopMetadata()).copy()
+
+
+def updated_stop(value, **changes):
+    return replace(StopMetadata(**stop_details(value)), **changes)
+
+
+def retain_stop(value, metadata):
+    try:
+        value._getzilla_stop_metadata = metadata
+    except BaseException:
+        return None
+
+
+def child_stop(code, *, scope='process'):
+    decision = ('child_signal' if code < 0 and os.name != 'nt' else 'child_exit') if type(code) is int else 'unavailable'
+    return StopMetadata(decision=decision, result_policy='child_status' if code is not None else 'fallback_1',
+                        cancel='none', scope=scope)
+
+
+def cancelled_stop(value, number):
+    metadata = updated_stop(value, cancel={2: 'sigint', 15: 'sigterm'}.get(number, 'unavailable'))
+    return replace(metadata, decision='owned_cancel') if metadata.decision == 'unavailable' else metadata
+
+
+_CORE_STOP = ContextVar('core_stop_origin', default=None)
+
+
+@contextmanager
+def core_stop_scope():
+    try:
+        run = current()
+        writer = run.writer if run else None
+    except BaseException:
+        writer = None
+    token = _CORE_STOP.set(writer)
+    try:
+        yield
+    except BaseException as exc:
+        record_core_stop(exc)
+        raise
+    finally:
+        _CORE_STOP.reset(token)
+
+
+def record_core_stop(value):
+    try:
+        writer = _CORE_STOP.get()
+        if writer is not None:
+            _observe(writer, 'record_core_stop', value)
+    except BaseException:
+        return None
+
+
+def _health_stop(health):
+    if 'core_stop' not in health:
+        return None
+    value = health['core_stop']
+    if (health.get('actor') != 'controller' or type(value) is not dict
+            or set(value) != {'attempt', 'repeated', 'overflow', 'metadata'}
+            or type(value['attempt']) is not int or not 1 <= value['attempt'] <= 2**63 - 1
+            or any(type(value[k]) is not bool for k in ('repeated', 'overflow')) or len(_json(value)) > 320):
+        raise ValueError('core-stop-shape')
+    return {**value, 'metadata': _validate_stop(value['metadata'])}
+
+
 def _exception_kind(error):
     kind = type(error).__name__
     return 'unavailable' if error is None else kind if kind in _ERRORS else 'other'
@@ -91,19 +203,24 @@ def _validate_first_failure(value):
 
 def _retained_health(health):
     flags = health.get('observation_omissions', dict.fromkeys(_OMISSIONS, False))
-    if type(flags) is not dict or set(flags) != set(_OMISSIONS) or any(type(v) is not bool for v in flags.values()):
+    if (type(flags) is not dict or set(flags) not in (set(_OMISSIONS), {*_OMISSIONS, 'stop_omitted'})
+            or any(type(v) is not bool for v in flags.values())):
         raise ValueError('observation-omissions')
+    _health_stop(health)
     return (_validate_ownership_snapshot(health['ownership']) if 'ownership' in health else None,
             _validate_first_failure(health['first_failure']) if 'first_failure' in health else None, flags)
 
 
-def _collect_retained(health, owners, failures, omissions):
+def _collect_retained(health, owners, failures, omissions, stops):
     owner, failure, flags = _retained_health(health)
     for item, target in ((owner, owners), (failure, failures)):
         if item is not None:
             target.append(item)
     for flag in flags:
-        omissions[flag] |= flags[flag]
+        omissions[flag] = omissions.get(flag, False) or flags[flag]
+    stop = _health_stop(health)
+    if stop is not None:
+        stops.append(stop)
 
 
 def _fit_observations(value, limit, *, public=False):
@@ -111,6 +228,11 @@ def _fit_observations(value, limit, *, public=False):
     flags = value['observation_omissions']
     def over():
         return len(_json(value)) + (0 if public else 1) > limit
+    if over() and 'core_stop' in value:
+        value.pop('core_stop')
+        if public:
+            value['core_stop'] = {'status': 'unavailable'}
+        flags['stop_omitted'] = True
     failure = value.get('first_failure')
     rows = failure['capsules'] if public else [failure] if failure else []
     if over():
@@ -133,12 +255,14 @@ def _fit_observations(value, limit, *, public=False):
     return value
 
 
-def _observation_projection(owners, failures, complete, flags):
+def _observation_projection(owners, failures, complete, flags, stops=()):
     rows = failures[:2] if complete else []
     value = {'ownership': _ownership_projection(owners, complete),
              'first_failure': {'status': 'reported' if rows else 'unavailable', 'ambiguous': len(failures) > 1,
                                'overflow': len(failures) > 2, 'capsules': rows},
              'observation_omissions': dict(flags, failure_omitted=flags['failure_omitted'] or len(failures) > 2)}
+    value['core_stop'] = ({'status': 'reported', 'snapshot': stops[0]} if complete and len(stops) == 1 else
+                          {'status': 'ambiguous' if len(stops) > 1 else 'unavailable'})
     return _fit_observations(value, 1536, public=True)
 
 
@@ -363,6 +487,7 @@ class Writer:
         self._ownership_blocked = False
         self._ownership_counts = {}
         self._first_failure = self._pending = self._action = None
+        self._core_stop = None
         self._test_phase = (None, 'unknown')
         self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
@@ -383,6 +508,7 @@ class Writer:
                 self.sequence, self.generation, self.rotated = prior['sequence'], prior['generation'] + 1, prior['rotated']
                 self.attempt = prior['attempt'] + 1
                 self._ownership, self._first_failure, self._omissions = _retained_health(prior)
+                self._core_stop = _health_stop(prior)
                 self._ownership_blocked = self._ownership is not None
             except FileNotFoundError:
                 pass
@@ -414,6 +540,8 @@ class Writer:
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
             'status': status, 'segment': self.name}
         value['observation_omissions'] = dict(self._omissions)
+        if self._core_stop is not None:
+            value['core_stop'] = _health_stop({'actor': self.actor, 'core_stop': self._core_stop})
         for key, item, validate, flag in (('ownership', self._ownership, _validate_ownership_snapshot, 'ownership_omitted'),
                 ('first_failure', self._first_failure, _validate_first_failure, 'failure_omitted')):
             if item is None:
@@ -423,6 +551,19 @@ class Writer:
             except ValueError:
                 value['observation_omissions'][flag] = True
         _publish(self.handle, self.actor + '.json', _fit_observations(value, 2048), 2048)
+
+    def record_core_stop(self, result):
+        metadata = stop_details(result)
+        if self.actor != 'controller' or metadata['decision'] == 'unavailable':
+            return
+        if metadata['decision'] == 'child_exit' and getattr(result, 'returncode', None) == 0:
+            return
+        if self._core_stop is None:
+            self._core_stop = _health_stop({'actor': self.actor, 'core_stop': {
+                'attempt': self.attempt, 'repeated': False, 'overflow': False, 'metadata': metadata}})
+        else:
+            self._core_stop.update(repeated=True, overflow=True)
+        self.health('unavailable' if self.disabled else 'active')
 
     def begin_test_phase(self, nodeid, phase):
         self._test_phase = (_test_key(nodeid), phase)
@@ -487,7 +628,7 @@ class Writer:
         if not overflow:
             self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
 
-    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None):
+    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None):
         if self.disabled:
             return False
         try:
@@ -548,6 +689,11 @@ class Writer:
                     raise ValueError('journal-location')
                 row['location'] = {'path': path, 'line': line}
             raw = _json(row) + b'\n'
+            if stop is not None:
+                row['stop'] = _validate_stop(stop)
+                if len(_json(row)) + 1 > EVENT_BYTES:
+                    row.pop('stop')
+                raw = _json(row) + b'\n'
             if len(raw) > EVENT_BYTES:
                 raise ValueError('journal-event-limit')
             if self.size + len(raw) > SEGMENT_BYTES:
@@ -604,6 +750,7 @@ class Run:
         self.session_id = None
         self.entrypoint = entrypoint
         self._ownership = []
+        self._stops = []
         self._ownership_complete = False
         self._failures = []
         self._omissions = dict.fromkeys(_OMISSIONS, False)
@@ -750,7 +897,7 @@ class Run:
                 'status': 'unavailable' if self.writer is None or self.writer.disabled else self.status,
                 'source_status': 'reported-integrity-only' if self.source is not None else 'unavailable',
                 'session_status': 'canonical-route-observation' if self.session_id is not None else 'unavailable',
-                **_observation_projection(self._ownership, self._failures, self._ownership_complete, self._omissions),
+                **_observation_projection(self._ownership, self._failures, self._ownership_complete, self._omissions, self._stops),
                 'completeness': 'unknown-until-terminal-and-all-actors-validated'}
 
     def bind_source(self, digest, session_id=None):
@@ -793,7 +940,7 @@ class Run:
                         raise ValueError('journal-health-binding')
                     if health['status'] != 'closed' or health['open_spans']:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
-                    _collect_retained(health, self._ownership, self._failures, self._omissions)
+                    _collect_retained(health, self._ownership, self._failures, self._omissions, self._stops)
                 except FileNotFoundError:
                     if actor == 'controller' or actor in expected:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
@@ -976,6 +1123,7 @@ def observed(name, stage='check'):
             with span(name, stage=stage) as details:
                 result = function(*args, **kwargs)
                 if details is not None:
+                    details['stop'] = stop_details(result)
                     outcome = getattr(result, 'status', None)
                     code = getattr(result, 'returncode', None)
                     if code is not None:
@@ -998,7 +1146,7 @@ def span(step, *, stage='check'):
     except BaseException as exc:
         if writer:
             _emit(writer, stage, 'end', step=step, nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error', error=exc,
-                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
+                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None, stop=stop_details(exc))
         raise
     else:
         if writer:
@@ -1124,7 +1272,7 @@ def unittest_runner(writer):
 def _validated_events(raw, run_id, actor):
     allowed = {'version', 'run_id', 'actor', 'actor_attempt', 'sequence', 'stage', 'state', 'pid', 'elapsed_ns', 'utc',
                'step', 'path', 'key', 'invocation', 'unmatched_end', 'outcome', 'exit', 'error_class',
-               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status'}
+               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop'}
     def closed(pairs):
         result = {}
         for key, value in pairs:
@@ -1146,6 +1294,8 @@ def _validated_events(raw, run_id, actor):
             raise ValueError('journal-record-schema')
         if 'step' in row and (type(row['step']) is not str or not _ID.fullmatch(row['step'])):
             raise ValueError('journal-record-step')
+        if 'stop' in row:
+            _validate_stop(row['stop'])
         if 'path' in row:
             canonical = test_identity(row['path'])
             if canonical is None or canonical['path'] != row['path']:
@@ -1187,6 +1337,7 @@ def export_entries(root, *, binding=None):
                            'export_status': 'unavailable', 'association': 'unbound', 'subset': True}
     ownership, ownership_complete = [], False
     failures, omissions = [], dict.fromkeys(_OMISSIONS, False)
+    stops = []
     history = root / '.getzilla/runtime/verification-history'
     try:
         handle = _directory(history)
@@ -1227,21 +1378,21 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1
                                    for k in ('attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans'))
                             or health['segment'] != f'{actor}-{health["generation"] % SEGMENTS}.jsonl'):
                         raise ValueError('journal-export-actor')
-                    _collect_retained(health, ownership, failures, omissions)
+                    _collect_retained(health, ownership, failures, omissions, stops)
                     raw = _read(handle, f'{actor}-{health["generation"] % SEGMENTS}.jsonl', SEGMENT_BYTES)
                     tail = raw[-65536:]
                     if len(raw) > len(tail):
                         tail = tail.partition(b'\n')[2]
                     complete = tail.rpartition(b'\n')[0] + b'\n' if b'\n' in tail else b''
                     entries.append(('journal/' + actor + '.jsonl', _validated_events(complete, row['run_id'], actor)))
-                    summary['actors'].append({key: value for key, value in health.items() if key not in {'first_failure', 'observation_omissions'}})
+                    summary['actors'].append({key: value for key, value in health.items() if key not in {'first_failure', 'observation_omissions', 'core_stop'}})
                     if actor in summary['missing']:
                         summary['missing'].remove(actor)
                 except FileNotFoundError:
@@ -1255,6 +1406,6 @@ def export_entries(root, *, binding=None):
         summary['export_status'] = 'bounded-subset'
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         summary['export_status'] = 'unavailable'
-    summary.update(_observation_projection(ownership, failures, ownership_complete, omissions))
+    summary.update(_observation_projection(ownership, failures, ownership_complete, omissions, stops))
     entries.insert(0, ('journal/index.json', _json(summary) + b'\n'))
     return entries

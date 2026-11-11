@@ -243,6 +243,8 @@ class PassiveAnnotationTests(unittest.TestCase):
                     marks = [item for item in ast.walk(node) if diagnostic(item, 'ownership_mark')]
                     self.assertTrue(marks, 'missing passive marks: ' + node.name)
                     stripped = RemoveAnnotations().visit(node)
+                    from tests.test_stop_metadata import strip_stop_annotations
+                    stripped = strip_stop_annotations(stripped)
                     options = {'show_empty': True} if sys.version_info >= (3, 13) else {}
                     digest = hashlib.sha256(ast.dump(stripped, include_attributes=False, **options).encode()).hexdigest()
                     self.assertEqual(digest, expected[node.name], node.name)

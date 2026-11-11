@@ -566,6 +566,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         exc.checks = [CheckResult(
             name, 'cancelled', f'cancelled exit={exc.code}', command=command,
             stdout=proc.stdout[-12000:] if proc else '', stderr=proc.stderr[-12000:] if proc else '',
+            details=[{'stop': diagnostics.stop_details(proc if proc is not None else exc)}],
         )]
         raise
     return CheckResult(
@@ -575,6 +576,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         command=command,
         stdout=proc.stdout[-12000:],
         stderr=(proc.stderr + ('\ncleanup failed: ' + proc.cleanup_error if proc.cleanup_error else ''))[-12000:],
+        details=[{'stop': diagnostics.stop_details(proc)}],
     )
 
 
@@ -2146,13 +2148,13 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
             exc.checks.append(CheckResult('python-unittest', 'pass' if process.returncode == 0 else 'fail',
                                           f'exit={process.returncode}', command=process.command,
                                           stdout=process.stdout[-12000:], stderr=process.stderr[-12000:],
-                                          details=[{'cleanup': cleanup_details(process, origin='tests')}]))
+                                          details=[{'stop': diagnostics.stop_details(process), 'cleanup': cleanup_details(process, origin='tests')}]))
             process = exc.result
             exc.checks.append(CheckResult('coverage', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
                                           stderr=process.stderr[-12000:] if process else '',
-                                          details=[{'cleanup': cleanup_details(process if process is not None else exc,
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(process if process is not None else exc,
                                               origin=('coverage_export' if process is not None and
                                                       process is getattr(completed, 'coverage_export', None)
                                                       else 'coverage_report' if process is not None else 'process'))}]))
@@ -2162,7 +2164,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
                                           stderr=process.stderr[-12000:] if process else '',
-                                          details=[{'cleanup': cleanup_details(
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(
                                               process if process is not None else exc, origin='tests')}]))
         raise
 
@@ -2650,7 +2652,7 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                 cleanup_attached = True
             message = 'Core runner unavailable; private cleanup details omitted' if cleanup_attached else str(exc)
             results.append(CheckResult('python-unittest', 'fail', message,
-                                       details=[{'cleanup': cleanup_details(exc, origin='tests')}]))
+                                       details=[{'stop': diagnostics.stop_details(exc), 'cleanup': cleanup_details(exc, origin='tests')}]))
             if mode in {'pr', 'release'}:
                 results.append(CheckResult('coverage', 'fail', 'required Core run unavailable'))
             core, workers = None, -1
@@ -2704,6 +2706,8 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  'stop': diagnostics.stop_details(process),
+                                  **({'coverage_export_stop': diagnostics.stop_details(exported)} if exported is not None else {}),
                                   'cleanup': cleanup_details(process,
                                       origin='tests' if name == 'python-unittest' else 'coverage_report',
                                       extra=exported),
@@ -2942,7 +2946,8 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'python-named-smoke', 'cancelled' if cancelled else ('pass' if process.returncode == 0 and not process.cleanup_error else 'fail'),
         f'exit={process.returncode} seconds={process.seconds:.3f} budget={budget}', command=process.command,
         stdout=process.stdout[-12000:], stderr=(process.stderr + process.cleanup_error)[-12000:],
-        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt'}],
+        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt',
+                  'stop': diagnostics.stop_details(process)}],
     ), CheckResult(
         'source-stability', 'pass' if head_before == head_after and fingerprint == final_fingerprint else 'fail',
         'repository fingerprint remained stable' if head_before == head_after and fingerprint == final_fingerprint
