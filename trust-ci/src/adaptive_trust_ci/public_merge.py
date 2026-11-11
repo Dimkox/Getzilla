@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
 import threading
 from contextlib import closing, contextmanager
@@ -321,6 +322,16 @@ class ObservationSessions:
         self._sessions, self._gets, self._publications = int(transport.calls > 0), transport.calls, 0
         self._clients = [original] if transport.calls else []
         self._evidence, self._active, self._lock = None, False, threading.RLock()
+        self._nonce, self._publication, self._persist = secrets.token_hex(16), None, None
+
+    def _snapshot(self):
+        # This is a continuity comparison, never a deserialized source of authority.
+        return review_bytes([self._nonce, self.deadline, self._sessions, self._gets,
+                             self._publications, self._left])
+
+    def _record(self, before):
+        if self._persist is not None:
+            self._persist(before, self._snapshot())
 
     @property
     def remaining_bytes(self):
@@ -330,6 +341,7 @@ class ObservationSessions:
         if not self._lock.acquire(blocking=False):
             raise ValueError('observation budget busy')
         try:
+            before = self._snapshot()
             if self.clock() >= self.deadline or self._left <= 0:
                 raise ValueError('observation budget exhausted')
             if publication:
@@ -344,15 +356,18 @@ class ObservationSessions:
             if type(amount) is not int or amount <= 0:
                 raise ValueError('observation reservation malformed')
             self._left -= amount
+            self._record(before)
             return amount
         finally:
             self._lock.release()
 
     def finish(self, reserved, actual):
         with self._lock:
+            before = self._snapshot()
             if type(actual) is not int or not 0 <= actual <= reserved:
                 raise ValueError('observation raw bound violated')
             self._left += reserved - actual
+            self._record(before)
 
     @contextmanager
     def session(self, evidence_id):
@@ -367,7 +382,11 @@ class ObservationSessions:
                     or self._evidence is not None and self._evidence != evidence_id):
                 raise ValueError('observation session unavailable')
             self._evidence, self._active, entered = evidence_id, True, True
+            before = self._snapshot()
             self._sessions += 1
+            self._record(before)
+            if self.clock() >= self.deadline:
+                raise ValueError('observation deadline exhausted during durable reservation')
             client = self._factory(self.deadline, self._left)
             if (type(client) is not GitHubClient or type(client.transport) is not BoundedGetTransport
                     or client.token_provider is not None or not isinstance(client.token, str) or not client.token
@@ -479,9 +498,11 @@ class BoundPublicVerifier:
         return result
 
 
-def execute(backend: AtomicBackend, verifier: Verifier, *, owner_id: int, owner_key: bytes,
+def execute(backend: AtomicBackend, verifier: BoundPublicVerifier, *, owner_id: int, owner_key: bytes,
             selector: Selector, clock: Callable[[], datetime], window: timedelta = _MAX_WINDOW) -> Result:
     try:
+        if type(verifier) is not BoundPublicVerifier:
+            return Result('blocked', 'canonical-bound-verifier-required')
         start = _utc(clock())
         if not timedelta(0) <= window <= _MAX_WINDOW:
             return Result('blocked', 'invalid-dispatch-window')
@@ -512,7 +533,7 @@ def execute(backend: AtomicBackend, verifier: Verifier, *, owner_id: int, owner_
             return Result('blocked', 'independent-admission-denied')
         # A verified, frozen bundle has an absolute lifetime independent of the
         # cost of validation. Generic readers can certify only the short window.
-        horizon = (verifier.deadline(start) if isinstance(verifier, BoundPublicVerifier) else start + window)
+        horizon = verifier.deadline(start)
         sampled = _utc(clock())
         horizon = min(horizon, approval_expires)
         if not start <= sampled <= horizon:

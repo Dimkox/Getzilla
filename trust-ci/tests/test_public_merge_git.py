@@ -19,6 +19,7 @@ from adaptive_trust_ci.public_admission import Decision, Selector, _integration
 from adaptive_trust_ci.public_merge import (
     DispatchFence, Receipt, SignedReview, Snapshot, execute, reconcile, review_bytes, review_payload,
 )
+from test_public_merge import controlled_canonical, model_evidence_id
 
 
 class GitTransactionTests(unittest.TestCase):
@@ -56,7 +57,7 @@ class GitTransactionTests(unittest.TestCase):
         key = Ed25519PrivateKey.generate()
         self.private = key
         self.pubkey = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        self.proof = 'd' * 64
+        self.proof = model_evidence_id(self.merged)
         payload = review_payload(self.selector, self.owner, 1, 'approve', self.start, evidence_id=self.proof, target_generation=1, merge_oid=self.merged)
         self.review = SignedReview(payload, base64.b64encode(key.sign(review_bytes(payload))).decode('ascii'))
         self.before_write = lambda: None
@@ -125,7 +126,8 @@ class GitTransactionTests(unittest.TestCase):
         def verifier(selector, observed):
             return Decision(selector == self.selector and observed <= self.start + timedelta(hours=1), ())
         verifier.evidence_id = self.proof
-        return execute(self, verifier, selector=self.selector, owner_id=self.owner, owner_key=self.pubkey, clock=lambda: self.now)
+        with controlled_canonical(verifier, self.merged, self.start + timedelta(hours=1)) as bound:
+            return execute(self, bound, selector=self.selector, owner_id=self.owner, owner_key=self.pubkey, clock=lambda: self.now)
 
     def test_approved_change_updates_only_local_main_and_records_one_receipt(self):
         self.assertEqual(self.run_once().state, 'merged')
@@ -190,6 +192,7 @@ class GitTransactionTests(unittest.TestCase):
         self.selector = replace(self.selector, base_sha=self.base, head_sha=self.head, tree_sha=head_tree)
         self.git('update-ref', 'refs/heads/main', self.base)
         self.git('update-ref', 'refs/heads/candidate', self.head)
+        self.proof = model_evidence_id(self.merged)
         payload = review_payload(self.selector, self.owner, 1, 'approve', self.start,
                                  evidence_id=self.proof, target_generation=1, merge_oid=self.merged)
         self.review = SignedReview(payload, base64.b64encode(self.private.sign(review_bytes(payload))).decode())

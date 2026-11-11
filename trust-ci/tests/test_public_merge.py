@@ -1,26 +1,58 @@
 """All authority, keys, target PRs and provider effects in these tests are local fixtures."""
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
+from contextlib import contextmanager
 from threading import Barrier, Event
 from datetime import datetime, timedelta, timezone
 import base64
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from adaptive_trust_ci.public_merge import (
-    DispatchFence, Receipt, Snapshot, SignedReview, execute, reconcile, review_bytes, review_payload,
+    BoundPublicVerifier, DispatchFence, Receipt, Snapshot, SignedReview, execute, reconcile, review_bytes, review_payload,
 )
+from adaptive_trust_ci.public_admission import Decision, Evidence
 
 NOW = datetime(2026, 11, 4, 4, tzinfo=timezone.utc)
 SHA = 'a' * 40
-EVIDENCE = 'f' * 64
 OWNER = 17
 MERGE = 'd' * 40
+
+
+def model_evidence(merge_oid, variant=None):
+    return Evidence({}, {}, {'merge_sha': merge_oid}, {} if variant is None else {'variant': variant})
+
+
+def model_evidence_id(merge_oid):
+    return hashlib.sha256(review_bytes(model_evidence(merge_oid).__dict__)).hexdigest()
+
+
+EVIDENCE = model_evidence_id(MERGE)
+
+
+def model_verifier(check, merge_oid, horizon, *, variant=None):
+    """Non-authorizing protocol double at evaluate, never a runtime dispatch bypass."""
+    producer = Ed25519PrivateKey.generate().public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return BoundPublicVerifier(None, SimpleNamespace(public_key_pem=producer, check=check, horizon=horizon),
+                               model_evidence(merge_oid, variant))
+
+
+def controlled_evaluate(client, authority, selector, evidence, *, now, **kwargs):
+    decision = authority.check(selector, now)
+    return Decision(decision.eligible, decision.blockers, valid_until=authority.horizon)
+
+
+@contextmanager
+def controlled_canonical(check, merge_oid, horizon, *, variant=None):
+    with patch('adaptive_trust_ci.public_admission.evaluate', side_effect=controlled_evaluate):
+        yield model_verifier(check, merge_oid, horizon, variant=variant)
 
 
 @dataclass(frozen=True)
@@ -93,6 +125,9 @@ class FinalMergeTests(TestCase):
         self.decision = SimpleNamespace(eligible=True, blockers=())
         self.verify = Mock(return_value=self.decision)
         self.verify.evidence_id = EVIDENCE
+        boundary = patch('adaptive_trust_ci.public_admission.evaluate', side_effect=controlled_evaluate)
+        boundary.start()
+        self.addCleanup(boundary.stop)
 
     def review(self, sequence=1, action='approve', selector=None, owner=OWNER, key=None, **kw):
         payload = review_payload(selector or self.selector, owner, sequence, action,
@@ -101,7 +136,9 @@ class FinalMergeTests(TestCase):
         return SignedReview(payload, base64.b64encode((key or self.private).sign(review_bytes(payload))).decode())
 
     def run_controller(self, **kwargs):
-        return execute(self.backend, self.verify, owner_id=OWNER, owner_key=self.pem,
+        variant = None if self.verify.evidence_id == EVIDENCE else self.verify.evidence_id
+        verifier = model_verifier(self.verify, MERGE, self.now + timedelta(seconds=5), variant=variant)
+        return execute(self.backend, verifier, owner_id=OWNER, owner_key=self.pem,
                        selector=self.selector, clock=lambda: self.now, **kwargs)
 
     def change(self, **kwargs):

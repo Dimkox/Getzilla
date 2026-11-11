@@ -616,3 +616,18 @@ class DispatchBudgetBoundaryTests(SignedAdmissionMergeTests):
                              selector=self.selector, clock=lambda: self.clock)
         self.assertEqual(result.state, 'merged', result)
         self.assertEqual(backend.calls[0].valid_until, self.clock + timedelta(seconds=5))
+
+
+class CanonicalDispatchRefusalTests(unittest.TestCase):
+    def test_generic_positive_without_validated_horizon_never_dispatches(self):
+        from test_public_merge import FinalMergeTests, OWNER
+        fixture = FinalMergeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        for claimed_horizon in (False, True):
+            if claimed_horizon:
+                fixture.verify.deadline = lambda now: now + timedelta(seconds=5)
+            result = execute(fixture.backend, fixture.verify, owner_id=OWNER, owner_key=fixture.pem,
+                             selector=fixture.selector, clock=lambda: fixture.now)
+            self.assertEqual(result.state, 'blocked')
+            self.assertEqual(fixture.backend.calls, [])

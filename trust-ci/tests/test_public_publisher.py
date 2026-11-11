@@ -29,6 +29,7 @@ class PublicationPortFixture:
         self.selector = Selector('owner/project', 1, 7, '1' * 40, '2' * 40, '3' * 40, 11, 2)
         self.config = PublisherConfig('owner/project', 1, 9, 10, 'a' * 64)
         self.verifier = BoundPublicVerifier(None, SimpleNamespace(security_core=None), Evidence({}, {}, None, {}))
+        self.verifier.observations = producer.CompositeObservationBudgetTests().budget('publisher')
         self.journal = PublicationJournal.create(Path(directory) / 'model.sqlite')
         self.calls, self.checks, self.broker_calls, self.closed = [], [], [], []
         self.raw_change = raw_change
@@ -72,9 +73,10 @@ class PublicationPortFixture:
 
     def run(self, **kwargs):
         from datetime import timedelta
+        from adaptive_trust_ci.public_admission import Decision
         with patch.object(BoundPublicVerifier, 'matches_publisher', return_value=True), \
-             patch.object(BoundPublicVerifier, '__call__', return_value=
-                          SimpleNamespace(eligible=True, blockers=(), valid_until=self.now + timedelta(hours=1))):
+             patch('adaptive_trust_ci.public_admission.evaluate', return_value=
+                   Decision(True, (), valid_until=self.now + timedelta(hours=1))):
             return publish(self.config, self.journal, self.verifier, self.selector,
                            client_factory=self.factory, clock=lambda: self.now,
                            enabled=True, request_port=self, **kwargs)
@@ -196,6 +198,138 @@ class SharedPublicationBudgetTests(BoundedPublicationPortTests):
             self.assertEqual(sum(method == 'POST' for method, _ in fixture.calls), 1)
 
 
+class DurablePublicationBoundaryTests(BoundedPublicationPortTests):
+    def composed(self):
+        fixture = self.fixture()
+        model = producer.CompositeObservationBudgetTests()
+        fixture.verifier.observations = model.budget('publisher')
+        fixture.clock_model = model
+        return fixture
+
+    def delayed_patch(self, fixture):
+        ordinary = fixture.model
+        def model(method, path, body):
+            if method == 'PATCH':
+                fixture.calls.append((method, path))
+                raise TimeoutError('owned unresolved completion, old readback still visible')
+            return ordinary(method, path, body)
+        fixture.model = model
+
+    def test_missing_allocation_refuses_before_broker_and_reads(self):
+        fixture = self.fixture()
+        fixture.verifier.observations = None
+        self.assertEqual(fixture.run().state, 'blocked')
+        self.assertEqual(fixture.broker_calls, [])
+        self.assertEqual(fixture.calls, [])
+
+    def test_lost_delayed_completion_is_lookup_only_after_journal_reopen(self):
+        fixture = self.composed()
+        self.delayed_patch(fixture)
+        self.assertEqual(fixture.run().state, 'unknown')
+        self.assertEqual(fixture.checks[0]['status'], 'in_progress')
+        fixture.journal = PublicationJournal(fixture.journal.path)
+        self.assertEqual(fixture.run().state, 'unknown')
+        self.assertEqual(sum(method == 'POST' for method, _ in fixture.calls), 1)
+        self.assertEqual(sum(method == 'PATCH' for method, _ in fixture.calls), 1)
+
+    def test_new_allocation_cannot_resume_old_pending_operation_before_io(self):
+        fixture = self.composed()
+        self.delayed_patch(fixture)
+        self.assertEqual(fixture.run().state, 'unknown')
+        before = (len(fixture.broker_calls), len(fixture.calls))
+        fixture.journal = PublicationJournal(fixture.journal.path)
+        fresh = producer.CompositeObservationBudgetTests().budget('publisher')
+        fresh.deadline = 41
+        fixture.verifier.observations = fresh
+        self.assertEqual(fixture.run().state, 'blocked')
+        self.assertEqual((len(fixture.broker_calls), len(fixture.calls)), before)
+
+    def test_authoritative_completed_readback_resolves_only_matching_pending_effect(self):
+        fixture = self.composed()
+        self.delayed_patch(fixture)
+        self.assertEqual(fixture.run().state, 'unknown')
+        fixture.journal = PublicationJournal(fixture.journal.path)
+        self.assertEqual(fixture.run().state, 'unknown')
+        fixture.checks[0].update(status='completed', conclusion='success')
+        self.assertEqual(fixture.run().state, 'published')
+        self.assertEqual(fixture.verifier.observations._sessions, 4)
+        self.assertEqual(sum(method == 'PATCH' for method, _ in fixture.calls), 1)
+
+    def test_exhausted_operation_refuses_before_broker(self):
+        fixture = self.composed()
+        self.assertEqual(fixture.run().state, 'published')
+        before = (len(fixture.broker_calls), len(fixture.calls))
+        self.assertEqual(fixture.run().state, 'blocked')
+        self.assertEqual((len(fixture.broker_calls), len(fixture.calls)), before)
+
+    def test_malformed_or_rewound_allocation_refuses_without_io(self):
+        import sqlite3
+        for corruption in ('malformed', 'rewound'):
+            with self.subTest(corruption=corruption):
+                fixture = self.composed()
+                self.delayed_patch(fixture)
+                self.assertEqual(fixture.run().state, 'unknown')
+                before = (len(fixture.broker_calls), len(fixture.calls))
+                if corruption == 'malformed':
+                    with sqlite3.connect(fixture.journal.path) as database:
+                        database.execute('UPDATE operations SET snapshot=?', (b'null',))
+                else:
+                    fixture.verifier.observations._left += 1
+                self.assertEqual(fixture.run().state, 'blocked')
+                self.assertEqual((len(fixture.broker_calls), len(fixture.calls)), before)
+
+    def test_legacy_journal_is_not_silently_upgraded(self):
+        import sqlite3
+        fixture = self.composed()
+        with sqlite3.connect(fixture.journal.path) as database:
+            database.execute('DROP TABLE operations')
+        with self.assertRaises(ValueError):
+            PublicationJournal(fixture.journal.path)
+        self.assertEqual(fixture.calls, [])
+
+    def test_concurrent_raw_reservations_keep_one_durable_budget(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import sqlite3
+        fixture = self.composed()
+        budget = fixture.verifier.observations
+        fixture.journal._bind_allocation('owned-operation', budget)
+        def reserve(_):
+            try:
+                return budget.reserve(1048576, publication=True)
+            except ValueError:
+                return 0
+        with ThreadPoolExecutor(max_workers=6) as workers:
+            consumed = sum(workers.map(reserve, range(6)))
+        # Busy callers refuse without waiting; successful grants still share one cap.
+        self.assertGreaterEqual(consumed, 1048576)
+        self.assertLessEqual(consumed, 4194304)
+        self.assertEqual(budget.remaining_bytes, 4194304 - consumed)
+        while budget.remaining_bytes:
+            consumed += budget.reserve(1048576, publication=True)
+        self.assertEqual(consumed, 4194304)
+        with sqlite3.connect(fixture.journal.path) as database:
+            row = database.execute('SELECT snapshot FROM operations').fetchone()
+        self.assertEqual(row[0], budget._snapshot())
+        self.assertEqual(budget.remaining_bytes, 0)
+        self.assertEqual(fixture.calls, [])
+
+    def test_deadline_expiring_during_durable_credit_write_precedes_factory_io(self):
+        fixture = self.composed()
+        bind = fixture.journal._bind_allocation
+        def slow_binding(key, budget):
+            bind(key, budget)
+            persist = budget._persist
+            def slow_persist(before, after):
+                persist(before, after)
+                fixture.clock_model.elapsed = 21
+            budget._persist = slow_persist
+        fixture.journal._bind_allocation = slow_binding
+        self.assertEqual(fixture.run().state, 'blocked')
+        self.assertEqual(fixture.clock_model.allocations, [])
+        self.assertEqual(fixture.broker_calls, [])
+        self.assertEqual(fixture.calls, [])
+
+
 class PublicPublisherTests(unittest.TestCase):
     def setUp(self):
         self.fixture = producer.CanonicalProducerFixture()
@@ -267,10 +401,7 @@ class PublicPublisherTests(unittest.TestCase):
         return self.client
 
     def run_publisher(self, *, enabled=True):
-        # A completed prior operation is a new explicit fixture allocation.
-        # UNKNOWN retries retain the same object, deadline, counters and raw budget.
-        if self.terminal:
-            self.verifier = self.new_verifier(producer.Evidence(**json.loads(self.verifier._bundle)))
+        # The same operation never renews credit, including a terminal repeat.
         self.terminal = False
         with patch('adaptive_trust_ci.public_admission.time', SimpleNamespace(monotonic=lambda: 0)):
             result = publish(self.config, self.journal, self.verifier, self.fixture.selector,
@@ -291,7 +422,7 @@ class PublicPublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertEqual(self.credentials[0], (9002, {'repository_ids': [1404516308], 'permissions': {
             'checks': 'write', 'actions': 'read', 'contents': 'read', 'pull_requests': 'read'}}))
-        self.assertEqual(self.run_publisher().state, 'published')
+        self.assertEqual(self.run_publisher().state, 'blocked')
         self.assertEqual(len([item for item in self.writes if item[0] == 'POST']), 1)
 
     def test_candidate_success_and_wrong_head_never_publish(self):
