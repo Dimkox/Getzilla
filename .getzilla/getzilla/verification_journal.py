@@ -34,9 +34,9 @@ if __package__ == 'getzilla':
     _run = os.environ.get('GETZILLA_JOURNAL_RUN', '')
     _peer = sys.modules.get('_getzilla_observer_' + _run + '.verification_journal') if _RUN.fullmatch(_run) else None
 _SINK = getattr(_peer, '_SINK', None)
-if (not isinstance(_SINK, ContextVar) or getattr(_peer, '__file__', None) != __file__
-        or getattr(getattr(_peer, '__spec__', None), 'origin', None) != __file__
-        or getattr(__spec__, 'origin', None) != __file__):
+if (not isinstance(_SINK, ContextVar) or (getattr(_peer, '__file__', None),
+        getattr(getattr(_peer, '__spec__', None), 'origin', None),
+        getattr(__spec__, 'origin', None)) != (__file__,) * 3):
     _SINK = ContextVar('verification_action_sink', default=None)
 _SESSION = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 _ACTOR = re.compile(r'controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3])\Z')
@@ -625,9 +625,11 @@ def child_writer(environment=None, ordinal=None, worker_count=None):
 @contextmanager
 def activate(run):
     token = _CURRENT.set(run)
+    sink = _SINK.set((getattr(run, 'writer', None), None))
     try:
         yield run
     finally:
+        _SINK.reset(sink)
         _CURRENT.reset(token)
 
 
@@ -646,7 +648,7 @@ def bind_sink(writer, nodeid):
 
 
 def action_sink():
-    return _SINK.get() or (getattr(current(), 'writer', None), None)
+    return _SINK.get() or (None, None)
 
 
 def _emit(writer, *args, **fields):
@@ -778,9 +780,8 @@ def unittest_runner(writer):
                 originals[name] = (name in test.__dict__, test.__dict__.get(name))
                 def observed(*args, _original=original, _stage=stage, **kwargs):
                     with bind_sink(writer, node), span(None, stage=_stage) as detail:
-                        value = _original(*args, **kwargs)
                         detail['outcome'] = 'pass'
-                        return value
+                        return _original(*args, **kwargs)
                 setattr(test, name, observed)
             self._journal_originals = (test, originals)
 

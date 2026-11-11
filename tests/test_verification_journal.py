@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkerActionSinkTests(unittest.TestCase):
-    def test_actual_loader_routes_public_actions_in_both_loading_orders(self):
-        code = '''import importlib.util,io,json,sys,unittest
+    def test_real_loader_orders(self):
+        code = '''import importlib.util,io,sys,unittest
 from pathlib import Path
 from unittest.mock import patch
 def guard(event,args):
@@ -75,32 +75,33 @@ finally:writer.close()
                 finally:
                     run.close()
 
-    def test_scoped_phase_and_exception_identity(self):
+    def test_activation_precedence_and_restore(self):
+        entry, metadata = journal.action_sink(), journal.current()
         events = []
-        writer = SimpleNamespace(emit=lambda *args, **fields: events.append((args, fields)))
-        run = SimpleNamespace(writer=writer)
-        for phase in ('setup', 'call', 'teardown'):
-            hook = getattr(pytest_progress._JournalHooks(writer), 'pytest_runtest_' + phase)(
-                SimpleNamespace(nodeid='tests/test_owned.py::test_value[PRIVATE]'))
-            next(hook)
-            with journal.span('owned-action'):
-                self.assertIsNone(journal.current())
-            hook.close()
-        self.assertEqual(sum(args[0] == 'check' for args, _ in events), 6)
-        self.assertNotIn('PRIVATE', repr([fields for args, fields in events if args[0] == 'check']))
-        with journal.activate(run), journal.bind_sink(None, 'tests/test_owned.py'):
-            with journal.span('disabled'):
+        writer = SimpleNamespace(emit=lambda *a, **k: events.append((a, k)))
+        hook = pytest_progress._JournalHooks(writer).pytest_runtest_call(SimpleNamespace(nodeid='tests/test_owned.py'))
+        next(hook)
+        self.addCleanup(hook.close)
+        run = journal.Run(JournalRuntimeRepairTests.owned(self), None, 'owned-tests')
+        self.addCleanup(run.close)
+        with journal.activate(run):
+            self.assertEqual(journal.action_sink(), (run.writer, None))
+            with journal.span('inner'):
+                self.assertIn(b'"state":"start"', (run.path / run.writer.name).read_bytes())
+            with journal.bind_sink(writer, 'tests/test_owned.py'), journal.span('phase'):
+                self.assertIs(journal.current(), run)
+            with journal.activate(SimpleNamespace()), journal.span('disabled'):
                 pass
-            self.assertIs(journal.current(), run)
-        self.assertFalse(any(fields.get('step') == 'disabled' for _, fields in events))
-        for error in (ValueError(), KeyboardInterrupt(), SystemExit()):
-            with journal.bind_sink(writer, 'tests/test_owned.py'):
-                try:
+            for error in (ValueError(), KeyboardInterrupt(), SystemExit()):
+                with self.assertRaises(type(error)) as caught:
                     with journal.span('error'):
                         raise error
-                except BaseException as actual:
-                    self.assertIs(actual, error)
-        self.assertIsNone(journal.action_sink()[0])
+                self.assertIs(caught.exception, error)
+        self.assertEqual(journal.action_sink()[0], writer)
+        hook.close()
+        self.assertEqual(journal.action_sink(), entry)
+        self.assertIs(journal.current(), metadata)
+        self.assertEqual(len(events), 3)
 
 
 class JournalColocatedSDKTests(unittest.TestCase):
