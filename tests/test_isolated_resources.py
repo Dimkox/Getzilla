@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
 from getzilla.python_test_runner import ProcessResult
@@ -1089,3 +1089,175 @@ class IsolatedResourceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# P3b: original five Factory intents/helper are SHA-bound in runtime TEST-CLOSURE.
+# Adaptation: native _execute boundary and original ownership journal, never old transport.
+class FactoryCoupledTests(unittest.TestCase):
+    def setUp(self):
+        IsolatedResourceTests.setUp(self)
+        for target in ('socket.socket.connect', 'socket.create_connection', 'psycopg.connect'):
+            self.enterContext(patch(target, side_effect=AssertionError('unmocked live transport forbidden')))
+    module = IsolatedResourceTests.module
+    _endpoint_fixture = IsolatedResourceTests._endpoint_fixture
+
+    def test_factory_uses_the_owned_internal_endpoint_without_publishing_a_host_port(self):
+        from factory.tests import run_disposable_exit as runner
+        self.assertTrue(callable(getattr(runner, '_postgres', None)), 'owned Factory allocation missing')
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            owner = module.OwnedDocker(Path(raw) / "owner.json", "gz-test")
+            docker = DockerDouble()
+            with patch.object(module, "_execute", side_effect=docker), \
+                    patch.object(runner, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                    patch.object(runner, "_final_postgres_ready", return_value=True):
+                network = owner.network("db-network")
+                try:
+                    item, url = runner._postgres(owner, "db", "test-only-pw", network)
+                except subprocess.CalledProcessError:
+                    self.fail("the real runner queried a nonexistent published port on its internal bridge")
+            self.assertEqual(url, "postgresql://factory_exit:test-only-pw@172.28.0.2:5432/factory_exit")
+            self.assertEqual(docker.items["container"][item["id"]]["HostConfig"]["PortBindings"], {})
+            self.assertFalse(any(command[:2] == ["docker", "port"] for command in docker.commands))
+
+    def test_real_preflight_accepts_the_exact_internal_endpoint_and_cluster(self):
+        self._preflight_case("172.28.0.2", 5432, expect_pass=True)
+
+    def test_real_preflight_rejects_a_different_private_ip_or_port_before_database_access(self):
+        for host, port in (("172.28.0.99", 5432), ("172.28.0.2", 5433), ("127.0.0.1", 5432)):
+            with self.subTest(host=host, port=port):
+                self._preflight_case(host, port, expect_pass=False)
+
+    def test_result_dispatch_live_case_uses_the_real_bound_reader_before_mutation(self):
+        import inspect
+        from factory.tests import postgres_restart_probe as probe
+        self.assertTrue(callable(getattr(probe, '_owned_endpoint', None)), 'owned preflight missing')
+        from factory.tests import test_postgres_integration as live_case
+        module = self.module()
+
+        class BeforeMutation(RuntimeError):
+            pass
+
+        for valid_network in (True, False):
+            with self.subTest(valid_network=valid_network), tempfile.TemporaryDirectory() as raw:
+                docker = DockerDouble()
+                with patch.object(module, "_execute", side_effect=docker):
+                    arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                if not valid_network:
+                    container["NetworkSettings"]["Networks"][network["Name"]]["NetworkID"] = "e" * 64
+
+                def boundary(command, **kwargs):
+                    if command[:2] == ["docker", "inspect"]:
+                        if "--format" in command:
+                            value = "\t".join((container["Id"], container["Name"], PIN, "true", arguments["nonce"], IMAGE_ID))
+                        else:
+                            value = json.dumps([container])
+                        return subprocess.CompletedProcess(command, 0, value, "")
+                    if command[:2] == ["docker", "exec"]:
+                        return subprocess.CompletedProcess(command, 0, "bound-cluster" if "psql" in command else "", "")
+                    return docker(command, **kwargs)
+
+                case = live_case.PostgresFactoryTests("test_result_dispatch_process_and_postgres_restart_observes_without_second_post")
+                case.submit = MagicMock(side_effect=BeforeMutation())
+                # This unit control executes only the actual live fixture's
+                # preflight; stop before submission, never bypass a live gate.
+                method = inspect.unwrap(type(case).test_result_dispatch_process_and_postgres_restart_observes_without_second_post)
+                environment = {"FACTORY_TEST_POSTGRES_CONTAINER_ID": arguments["container_id"],
+                               "FACTORY_TEST_POSTGRES_NONCE": arguments["nonce"],
+                               "FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                               "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"], "FACTORY_TEST_POSTGRES_JOURNAL": str(Path(raw)/"owner.json")}
+                connection = MagicMock()
+                connection.execute.return_value.fetchone.return_value = ("factory_exit", "factory_exit", 170_006, "bound-cluster")
+                with patch.object(module, "_execute", side_effect=docker), patch.object(probe.subprocess, "run", side_effect=boundary), \
+                        patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                        patch.dict(os.environ, environment), \
+                        patch.object(live_case, "POSTGRES_CONTAINER", arguments["container_name"]), \
+                        patch.object(live_case, "DATABASE_URL", "postgresql://factory_exit:test-only@172.28.0.2:5432/factory_exit"), \
+                        patch("psycopg.connect") as connect:
+                    connect.return_value.__enter__.return_value = connection
+                    with self.assertRaises(BeforeMutation if valid_network else ValueError):
+                        method(case)
+                    if valid_network:
+                        case.submit.assert_called_once()
+                        connect.assert_called_once()
+                    else:
+                        case.submit.assert_not_called()
+                        connect.assert_not_called()
+
+    def test_restart_rechecks_live_network_and_container_before_waiting_for_database(self):
+        from factory.tests import postgres_restart_probe as probe
+        self.assertTrue(callable(getattr(probe, '_owned_endpoint', None)), 'owned preflight missing')
+        module = self.module()
+        for case in ("network", "ip", "container"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:
+                docker = DockerDouble()
+                with patch.object(module, "_execute", side_effect=docker):
+                    arguments, container, network = self._endpoint_fixture(raw, module, docker)
+                restarts = []
+
+                def boundary(command, **kwargs):
+                    if command[:2] == ["docker", "restart"]:
+                        self.assertEqual(command[2:], [arguments["container_id"]])
+                        restarts.append(command)
+                        endpoint = container["NetworkSettings"]["Networks"][network["Name"]]
+                        if case == "network":
+                            endpoint["NetworkID"] = "e" * 64
+                        elif case == "ip":
+                            endpoint["IPAddress"] = "172.28.0.99"
+                        else:
+                            container["Id"] = "e" * 64
+                        return subprocess.CompletedProcess(command, 0)
+                    return docker(command, **kwargs)
+
+                environment = {"FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                               "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"], "FACTORY_TEST_POSTGRES_JOURNAL": str(Path(raw)/"owner.json")}
+                owner_url = "postgresql://factory_exit:test-only-pw@172.28.0.2:5432/factory_exit"
+                with patch.object(module, "_execute", side_effect=docker), patch.object(probe.subprocess, "run", side_effect=boundary), \
+                        patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                        patch.dict(os.environ, environment), \
+                        patch.object(probe, "_assert_disposable_target") as initial_preflight, \
+                        patch.object(probe, "_postmaster_started_at", return_value=1), \
+                        patch.object(probe, "_wait_for_database") as wait:
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        probe._restart_database(arguments["container_name"], arguments["container_id"],
+                                                arguments["nonce"], owner_url, owner_url, owner_url)
+                    initial_preflight.assert_called_once()
+                    wait.assert_not_called()
+                self.assertEqual(len(restarts), 1)
+
+    def _preflight_case(self, host, port, *, expect_pass):
+        from factory.tests import postgres_restart_probe as probe
+        self.assertTrue(callable(getattr(probe, '_owned_endpoint', None)), 'owned preflight missing')
+        module = self.module()
+        with tempfile.TemporaryDirectory() as raw:
+            docker = DockerDouble()
+            with patch.object(module, "_execute", side_effect=docker):
+                arguments, container, _ = self._endpoint_fixture(raw, module, docker)
+            def boundary(command, **kwargs):
+                if command[:2] == ["docker", "inspect"]:
+                    value = "\t".join((container["Id"], container["Name"], PIN, "true", arguments["nonce"], IMAGE_ID))
+                    return subprocess.CompletedProcess(command, 0, value, "")
+                if command[:2] == ["docker", "exec"]:
+                    value = "cluster-bound" if "psql" in command else ""
+                    return subprocess.CompletedProcess(command, 0, value, "")
+                return docker(command, **kwargs)
+            connection = MagicMock()
+            connection.execute.return_value.fetchone.return_value = ("factory_exit", "factory_exit", 170_006, "cluster-bound")
+            environment = {"FACTORY_TEST_POSTGRES_NETWORK_ID": arguments["network_id"],
+                           "FACTORY_TEST_POSTGRES_NAMESPACE": arguments["namespace"], "FACTORY_TEST_POSTGRES_JOURNAL": str(Path(raw)/"owner.json")}
+            url = f"postgresql://factory_exit:test-only-pw@{host}:{port}/factory_exit"
+            with patch.object(module, "_execute", side_effect=docker), patch.object(probe.subprocess, "run", side_effect=boundary), \
+                    patch.object(probe, "POSTGRES", {"reference": PIN, "image_id": IMAGE_ID}), \
+                    patch.dict(os.environ, environment), patch("psycopg.connect") as connect:
+                connect.return_value.__enter__.return_value = connection
+                if expect_pass:
+                    try:
+                        probe._assert_disposable_target(url, arguments["container_name"], arguments["container_id"], arguments["nonce"])
+                    except (RuntimeError, subprocess.SubprocessError) as error:
+                        self.fail(f"valid owned endpoint was refused before real preflight checks: {type(error).__name__}")
+                    self.assertEqual(connect.call_args.args, (url,))
+                    self.assertIn("pg_control_system", connection.execute.call_args.args[0])
+                else:
+                    with self.assertRaises((RuntimeError, ValueError, subprocess.SubprocessError)):
+                        probe._assert_disposable_target(url, arguments["container_name"], arguments["container_id"], arguments["nonce"])
+                    self.assertFalse(connect.called)

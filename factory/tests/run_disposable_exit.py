@@ -12,6 +12,14 @@ import tempfile
 import time
 import uuid
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla.disposable_resources import OwnedDocker, image_pins
+from getzilla.live_acceptance import (owned_postgres_endpoint, read_document, valid_binding,
+    acknowledge_cleanup, seal_component)
+
+POSTGRES = image_pins(ROOT)['postgres']
+
 
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -164,7 +172,92 @@ def _cleanup(name: str, volume: str) -> None:
         raise RuntimeError("disposable PostgreSQL cleanup left owned resources")
 
 
+def _internal_endpoint(owner, item, network):
+    return owned_postgres_endpoint(owner.manifest, container_id=item['id'], container_name=item['name'],
+        nonce=owner.nonce, namespace=owner.namespace, network_id=network['identity']['Id'], pin=POSTGRES)
+
+
+def _postgres(owner, suffix, password, network):
+    volume = owner.volume(suffix+'-data')
+    item = owner.container(suffix, POSTGRES['reference'], volume=volume, network=network,
+        environment={'POSTGRES_DB': 'factory_exit', 'POSTGRES_USER': 'factory_exit', 'POSTGRES_PASSWORD': password})
+    if item['image_id'] != POSTGRES['image_id']:
+        raise RuntimeError('Pinned PostgreSQL image identity mismatch')
+    deadline = time.monotonic()+45
+    while not _final_postgres_ready(item['id']):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Disposable final postmaster did not become ready')
+        time.sleep(.25)
+    host, port = _internal_endpoint(owner, item, network)
+    return item, f'postgresql://factory_exit:{password}@{host}:{port}/factory_exit'
+
+
+def _live_main() -> int:
+    binding = read_document(Path(os.environ['GETZILLA_LIVE_BINDING']))
+    if not valid_binding(binding) or binding['cell'] != 'factory':
+        raise ValueError('Factory live invocation is not bound')
+    output = Path(os.environ['GETZILLA_LIVE_ARTIFACTS'])
+    owner = OwnedDocker(output/'factory-resources.json', binding['namespace'])
+    primary = None
+    cleanup_errors = []
+    phase = 'allocate'
+    venv = None
+    try:
+        network = owner.network('db-network')
+        password = uuid.uuid4().hex
+        primary_db, database_url = _postgres(owner, 'db', password, network)
+        fresh_db, fresh_url = _postgres(owner, 'fresh-db', password, network)
+        environment = dict(os.environ, FACTORY_TEST_DATABASE_URL=database_url,
+            FACTORY_FRESH_CLUSTER_DATABASE_URL=fresh_url,
+            FACTORY_TEST_POSTGRES_CONTAINER=primary_db['name'],
+            FACTORY_TEST_POSTGRES_CONTAINER_ID=primary_db['id'], FACTORY_TEST_POSTGRES_NONCE=owner.nonce,
+            FACTORY_TEST_POSTGRES_NAMESPACE=owner.namespace,
+            FACTORY_TEST_POSTGRES_NETWORK_ID=network['identity']['Id'],
+            FACTORY_TEST_POSTGRES_JOURNAL=str(owner.manifest),
+            FACTORY_FRESH_POSTGRES_CONTAINER=fresh_db['name'], FACTORY_FRESH_POSTGRES_CONTAINER_ID=fresh_db['id'],
+            PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT/'factory/src'), str(ROOT/'.getzilla'))))
+        phase = 'venv-create'
+        venv = tempfile.TemporaryDirectory(prefix='factory-live-venv-', dir=output)
+        environment['UV_PROJECT_ENVIRONMENT'] = venv.name
+        uv = ['uv', 'run', '--project', str(ROOT/'factory'), 'python']
+        phase = 'preflight'
+        _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only'], environment=environment)
+        _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only',
+              '--database-url-env', 'FACTORY_FRESH_CLUSTER_DATABASE_URL',
+              '--container-name-env', 'FACTORY_FRESH_POSTGRES_CONTAINER',
+              '--container-id-env', 'FACTORY_FRESH_POSTGRES_CONTAINER_ID'], environment=environment)
+        phase = 'suite'
+        _run([*uv, str(ROOT/'factory/tests/run_live_suite.py')], environment=environment, timeout=_FULL_SUITE_TIMEOUT_SECONDS)
+        phase = 'restart'
+        _internal_endpoint(owner, primary_db, network)
+        _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py')], environment=environment)
+    except BaseException as error:
+        primary = error
+    finally:
+        if venv is not None:
+            try:
+                venv.cleanup()
+            except BaseException as error:
+                cleanup_errors.append(('venv', error))
+        try:
+            owner.cleanup()
+            acknowledge_cleanup(owner)
+        except BaseException as error:
+            cleanup_errors.append(('resources', error))
+    if primary is not None or cleanup_errors:
+        failure = primary if primary is not None else _CleanupError(cleanup_errors)
+        BaseException.add_note(failure, f'Factory live phase={phase} {_error_detail(primary)}')
+        for kind, error in cleanup_errors:
+            BaseException.add_note(failure, f'Factory live cleanup={kind} {_error_detail(error)}')
+        raise failure
+    for name in ('factory-suite.json', 'factory-restart.json'):
+        seal_component(output, name, 'factory-resources.json', binding)
+    return 0
+
+
 def main() -> int:
+    if os.environ.get('GETZILLA_LIVE_BINDING'):
+        return _live_main()
     phase = "setup"
     primary_error: BaseException | None = None
     cleanup_errors: list[tuple[str, BaseException]] = []

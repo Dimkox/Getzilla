@@ -2195,6 +2195,52 @@
       "sync_or_async": "synchronous",
       "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-LIVE-COMPONENT-OBSERVER",
+      "id": "EDGE-LIVE-OBSERVER-DOCKER",
+      "network_policy": "local_only",
+      "protocol": "docker_api",
+      "sync_or_async": "synchronous",
+      "to": "NODE-DOCKER-ENGINE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-LIVE-COMPONENT-OBSERVER",
+      "id": "EDGE-LIVE-OBSERVER-POSTGRES",
+      "network_policy": "local_only",
+      "protocol": "postgresql",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LIVE-DISPOSABLE-POSTGRES",
+      "type": "data_flow"
     }
   ],
   "nodes": [
@@ -3466,6 +3512,47 @@
       "secrets": [],
       "trust_domain": "TD-REPOSITORY",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LIVE-COMPONENT-OBSERVER",
+      "owner": "local component test operators",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/disposable_resources.py",
+        ".getzilla/getzilla/live_acceptance.py",
+        ".getzilla/getzilla/live_lifecycle.py",
+        "factory/tests/postgres_restart_probe.py",
+        "factory/tests/run_disposable_exit.py",
+        "factory/tests/run_live_suite.py",
+        "scripts/getzilla_live.py",
+        "scripts/getzilla_live_lifecycle.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LIVE-DISPOSABLE-POSTGRES",
+      "owner": "local component test operators",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "postgresql",
+        "lifecycle": "job",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "datastore"
     }
   ],
   "schema_version": 1,

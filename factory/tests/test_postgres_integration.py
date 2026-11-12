@@ -1616,7 +1616,19 @@ class PostgresFactoryTests(unittest.TestCase):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", POSTGRES_CONTAINER):
             self.fail("invalid disposable PostgreSQL container name")
 
-        def restartable_binding():
+        original_cluster = [None]
+        def restartable_binding(*, check_database=True):
+            if os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL'):
+                from factory.tests import postgres_restart_probe as bound_probe
+                identifier = os.environ['FACTORY_TEST_POSTGRES_CONTAINER_ID']
+                nonce = os.environ['FACTORY_TEST_POSTGRES_NONCE']
+                host, port = bound_probe._owned_endpoint(POSTGRES_CONTAINER, identifier, nonce)
+                if check_database:
+                    cluster = bound_probe._assert_disposable_target(DATABASE_URL, POSTGRES_CONTAINER, identifier, nonce)
+                    if original_cluster[0] is not None and cluster != original_cluster[0]:
+                        self.fail('result dispatcher restart changed the original owned PostgreSQL cluster')
+                    original_cluster[0] = cluster
+                return identifier, host, str(port)
             inspected = subprocess.run(
                 ["docker", "inspect", POSTGRES_CONTAINER], check=True,
                 stdout=subprocess.PIPE, text=True, timeout=10,
@@ -1746,9 +1758,9 @@ class PostgresFactoryTests(unittest.TestCase):
                         "WHERE request_digest=%s", (request_digest,),
                     )
                 release_post.set()
-                subprocess.run(["docker", "stop", POSTGRES_CONTAINER], check=True, timeout=30)
-                subprocess.run(["docker", "start", POSTGRES_CONTAINER], check=True, timeout=30)
-                restarted_id, restarted_host, restarted_port = restartable_binding()
+                subprocess.run(["docker", "stop", container_id], check=True, timeout=30)
+                subprocess.run(["docker", "start", container_id], check=True, timeout=30)
+                restarted_id, restarted_host, restarted_port = restartable_binding(check_database=False)
                 if restarted_id != container_id:
                     self.fail("disposable PostgreSQL container identity changed across restart")
                 DATABASE_URL = make_conninfo(
@@ -1785,6 +1797,8 @@ class PostgresFactoryTests(unittest.TestCase):
                         if time.monotonic() >= deadline:
                             raise
                         time.sleep(0.2)
+                if os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL'):
+                    restartable_binding()  # Recheck the original cluster after readiness, before dispatch.
                 second = subprocess.run(
                     [sys.executable, "-m", "getzilla_factory.result_dispatch_cli", "--once"],
                     env=child_env, timeout=15,
