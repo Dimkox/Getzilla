@@ -414,6 +414,188 @@ class ParserApplicabilityTests(unittest.TestCase):
 
 
 class FactoryControllerTests(unittest.TestCase):
+    def test_quarantine_open_boundary_replacements_are_retained_and_all_fds_close(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        for after_open in (False,True):
+            with self.subTest(after_open=after_open),tempfile.TemporaryDirectory() as raw:
+                root=Path(raw); owned=module._FactoryEnvironment(root)
+                (owned.path/'original').write_text('original')
+                handles=set(owned.parent._handles+owned.directory._handles)
+                native=module.fsx.open_dir_at; injected=[]
+                def opened(parent,name,**kwargs):
+                    handle=native(parent,name,**kwargs) if after_open or name!='environment' else None
+                    if name=='environment':
+                        injected.append(True)
+                        os.rename(name,'retained-original',src_dir_fd=parent,dst_dir_fd=owned.parent.handle)
+                        os.mkdir(name,mode=0o700,dir_fd=parent)
+                        anchor=root/owned.outcome['recovery_anchor']
+                        (anchor/name/'replacement').write_text('replacement')
+                    if handle is None:
+                        handle=native(parent,name,**kwargs)
+                    handles.add(handle)
+                    return handle
+                with patch.object(module.fsx,'open_dir_at',side_effect=opened):
+                    result=owned.cleanup(child_exit_confirmed=True)
+                self.assertEqual(injected,[True])
+                self.assertEqual(result['status'],'unknown')
+                self.assertEqual(result['original_birth'],list(owned.birth))
+                self.assertEqual((root/'retained-original/original').read_text(),'original')
+                self.assertEqual((root/result['recovery_anchor']/'environment/replacement').read_text(),'replacement')
+                self.assertIs(owned.cleanup(child_exit_confirmed=True),result)
+                for handle in handles:
+                    with self.assertRaises(OSError): os.fstat(handle)
+
+    def test_quarantine_capture_never_overwrites_an_existing_object(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); owned=module._FactoryEnvironment(root)
+            (owned.path/'original').write_text('original')
+            native=module.fsx.open_dir_at
+            def opened(parent,name,**kwargs):
+                handle=native(parent,name,**kwargs)
+                if name.startswith('factory-cleanup-'):
+                    os.mkdir('environment',mode=0o700,dir_fd=handle)
+                return handle
+            with patch.object(module.fsx,'open_dir_at',side_effect=opened):
+                result=owned.cleanup(child_exit_confirmed=True)
+            self.assertEqual(result['status'],'unknown')
+            self.assertTrue((owned.path/'original').is_file())
+            self.assertTrue((root/result['recovery_anchor']/'environment').is_dir())
+
+    def test_original_descriptor_confirms_unlink_and_symlink_targets_survive(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); protected=root/'protected'; protected.mkdir()
+            (protected/'marker').write_text('retained')
+            owned=module._FactoryEnvironment(root)
+            nested=owned.path/'nested'; nested.mkdir()
+            (nested/'payload').write_text('owned')
+            (nested/'link').symlink_to(protected,target_is_directory=True)
+            handles=set(owned.parent._handles+owned.directory._handles)
+            result=owned.cleanup(child_exit_confirmed=True)
+            self.assertEqual(result['status'],'removed')
+            self.assertIs(result['original_unlinked'],True)
+            self.assertFalse(owned.path.exists())
+            self.assertFalse((root/result['recovery_anchor']).exists())
+            self.assertEqual((protected/'marker').read_text(),'retained')
+            for handle in handles:
+                with self.assertRaises(OSError): os.fstat(handle)
+
+    def test_late_unlink_replacement_refuses_false_original_absence(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); owned=module._FactoryEnvironment(root)
+            native=module.fsx.rmdir_at; injected=[]
+            def removed(parent,name):
+                if name=='environment':
+                    injected.append(True)
+                    os.rename(name,'retained-original',src_dir_fd=parent,dst_dir_fd=owned.parent.handle)
+                    os.mkdir(name,mode=0o700,dir_fd=parent)
+                    (root/owned.outcome['recovery_anchor']/name/'replacement').write_text('retained')
+                return native(parent,name)
+            with patch.object(module.fsx,'rmdir_at',side_effect=removed):
+                result=owned.cleanup(child_exit_confirmed=True)
+            self.assertEqual(injected,[True])
+            self.assertEqual(result['status'],'unknown')
+            self.assertTrue((root/'retained-original').is_dir())
+            self.assertEqual((root/result['recovery_anchor']/'environment/replacement').read_text(),'retained')
+
+    def test_missing_original_unlink_and_unsupported_primitive_refuse(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        for unavailable in (False,True):
+            with self.subTest(unavailable=unavailable),tempfile.TemporaryDirectory() as raw:
+                root=Path(raw); owned=module._FactoryEnvironment(root)
+                handles=set(owned.parent._handles+owned.directory._handles)
+                native=module.fsx.rmdir_at
+                def removed(parent,name):
+                    if name=='environment':
+                        os.rename(name,'retained-original',src_dir_fd=parent,dst_dir_fd=owned.parent.handle)
+                    else:
+                        native(parent,name)
+                target='libc_renameat2' if unavailable else 'rmdir_at'
+                effect=NotImplementedError('owned unavailable primitive') if unavailable else removed
+                with patch.object(module.fsx,target,side_effect=effect):
+                    result=owned.cleanup(child_exit_confirmed=True)
+                self.assertEqual(result['status'],'unknown')
+                self.assertTrue((owned.path if unavailable else root/'retained-original').is_dir())
+                self.assertNotEqual(result.get('original_unlinked'),True)
+                for handle in handles:
+                    with self.assertRaises(OSError): os.fstat(handle)
+
+    def test_primary_exception_and_cancel_close_handles_without_losing_primary(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        import os
+        for primary in (ValueError('owned primary failure'),module.RunCancelled(15)):
+            with self.subTest(primary=type(primary).__name__),tempfile.TemporaryDirectory() as raw:
+                root=Path(raw); environments=[]; native=module._FactoryEnvironment
+                def created(output):
+                    owned=native(output)
+                    environments.append((owned,set(owned.parent._handles+owned.directory._handles)))
+                    return owned
+                with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
+                        patch('socket.socket',side_effect=AssertionError('unmocked network forbidden')), \
+                        patch.object(module,'_FactoryEnvironment',side_effect=created), \
+                        patch.object(module,'observe',side_effect=primary):
+                    with self.assertRaises(type(primary)) as caught:
+                        module._run_factory_cell(['owned'],root=root,output=root,environment={},
+                            binding=LiveSourceTests.binding(self),timeout=1)
+                self.assertIs(caught.exception,primary)
+                owned,handles=environments[0]
+                self.assertTrue(owned.path.is_dir())
+                self.assertEqual(owned.outcome['status'],'unknown')
+                self.assertIn('Factory controller environment cleanup unconfirmed',primary.__notes__)
+                for handle in handles:
+                    with self.assertRaises(OSError): os.fstat(handle)
+
+    def test_postcheck_replacement_preserves_both_objects_and_refuses_cleanup(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); owned=module._FactoryEnvironment(root)
+            (owned.path/'original').write_text('original')
+            native=module._remove_factory_environment
+            def swapped(value):
+                path=getattr(value,'path',value)
+                path.rename(root/'retained-original')
+                path.mkdir(mode=0o700)
+                (path/'replacement').write_text('replacement')
+                return native(value)
+            with patch.object(module,'_remove_factory_environment',side_effect=swapped):
+                result=owned.cleanup(child_exit_confirmed=True)
+            self.assertEqual(result['status'],'unknown')
+            self.assertEqual((root/'retained-original/original').read_text(),'original')
+            self.assertEqual([p.read_text() for p in root.rglob('replacement')],['replacement'])
+
+    def test_controller_postcheck_replacement_cannot_publish_pass(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); native=module._remove_factory_environment
+            def observed(_command,**kwargs):
+                path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
+                (path/'original').write_text('original')
+                return {'status':'pass','primary_outcome':'passed','child_exit_confirmed':True}
+            def swapped(value):
+                path=getattr(value,'path',value)
+                path.rename(root/'retained-original'); path.mkdir(mode=0o700)
+                (path/'replacement').write_text('replacement')
+                return native(value)
+            with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
+                    patch('socket.socket',side_effect=AssertionError('unmocked network forbidden')), \
+                    patch.object(module,'observe',side_effect=observed), \
+                    patch.object(module,'observe_parser_applicability',return_value=object()), \
+                    patch.object(module,'validate_components',return_value=True), \
+                    patch.object(module,'_remove_factory_environment',side_effect=swapped):
+                result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
+                    binding=LiveSourceTests.binding(self),timeout=1)
+            self.assertEqual(result['status'],'fail')
+            self.assertEqual(result['venv_cleanup_outcome'],'unknown')
+            self.assertEqual([p.read_text() for p in root.rglob('replacement')],['replacement'])
+            self.assertEqual((root/'retained-original/original').read_text(),'original')
+
     def test_owned_interpreter_survives_final_measurement_and_cleanup_precedes_pass(self):
         module=importlib.import_module('getzilla.live_acceptance')
         self.assertTrue(callable(getattr(module,'_run_factory_cell',None)), 'outer interpreter lifetime missing')
@@ -454,6 +636,7 @@ class FactoryControllerTests(unittest.TestCase):
                     result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
                         binding=LiveSourceTests.binding(self),timeout=1,required_parser=True)
                 self.assertEqual(result['primary_outcome'],primary)
+                self.assertNotIn('recovery_anchor',result['venv_cleanup_evidence'])
                 self.assertEqual(result['status'],'pass' if primary=='passed' and confirmed and not cleanup_failure else 'fail')
                 self.assertEqual(paths[0].exists(),cleanup_failure or not confirmed)
                 if primary=='passed' and confirmed:

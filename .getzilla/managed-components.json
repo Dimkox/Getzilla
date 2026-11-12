@@ -2439,7 +2439,7 @@
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 436,
-          "sha256": "d22c42d1dbc34cf51183d9322c00357a09d5f06734097f7fba3b60d97aa393d4"
+          "sha256": "2ddb617cdff774283aed4987368291aef531dedd37c74ddf7e2c58425638a45b"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 436,
@@ -5171,7 +5171,7 @@
         },
         "docs/isolated-ci-acceptance.md": {
           "mode": 436,
-          "sha256": "0418e7367c2d1ef76062ec94aa8438a3d4091c8f6dcea901f2cb1bd0b1123313"
+          "sha256": "834a1c75e01d9a29c0d3807dd947f9a613452d772f265075d616be070f2e4629"
         },
         "docs/optional-modules.md": {
           "mode": 436,

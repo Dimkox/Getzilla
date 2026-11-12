@@ -16,7 +16,8 @@ import sys
 import uuid
 import tomllib
 import tempfile
-import shutil
+import stat
+import ctypes
 
 from .factory_tests import RecordedResult, cases, test_id
 from .python_test_runner import execute, cleanup_details, RunCancelled
@@ -640,8 +641,82 @@ def _require_trust_producer(root):
         raise ValueError('Trust CI source producer is unavailable; delivery and real acceptance remain OPEN')
 
 
-def _remove_factory_environment(path):
-    shutil.rmtree(path)
+def _directory_birth(info):
+    return (info.st_dev,info.st_ino,stat.S_IFMT(info.st_mode))
+
+
+def _empty_factory_directory(descriptor):
+    """Traverse the retained original object, without resolving its public name."""
+    for name in os.listdir(descriptor):
+        before=fsx.lstat_at(descriptor,name)
+        if stat.S_ISDIR(before.st_mode) and not fsx.is_link(before):
+            child=fsx.open_dir_at(descriptor,name,flags=fsx.O_CLOEXEC)
+            try:
+                if _directory_birth(before)!=_directory_birth(fsx.fstat_dir(child)):
+                    raise ValueError('Factory cleanup child changed')
+                _empty_factory_directory(child)
+                if _directory_birth(fsx.lstat_at(descriptor,name))!=_directory_birth(before):
+                    raise ValueError('Factory cleanup child binding changed')
+                fsx.rmdir_at(descriptor,name)
+                if fsx.fstat_dir(child).st_nlink!=0:
+                    raise ValueError('Factory cleanup child unlink unconfirmed')
+            finally:
+                fsx.close_dir(child)
+        else:
+            fsx.unlink_at(descriptor,name)
+
+
+def _remove_factory_environment(owned):
+    """Capture into a fresh private anchor before any destructive traversal.
+
+    The anchor is controller-owned and created only after confirmed child exit.
+    Failed captures remain intact at the recorded relative recovery name. Never
+    search for the original or recurse through a replacement/public pathname.
+    Path-only platforms cannot supply this proof and must refuse cleanup.
+    """
+    if not isinstance(owned.directory.handle,int) or not fsx.O_NOFOLLOW:
+        raise ValueError('Descriptor-bound Factory cleanup unavailable')
+    rename=fsx.libc_renameat2()
+    parent=owned.parent.handle
+    anchor_name='factory-cleanup-'+secrets.token_hex(16)
+    owned.outcome['recovery_anchor']=anchor_name
+    fsx.mkdir_at(parent,anchor_name,mode=0o700)
+    anchor_birth=_directory_birth(fsx.lstat_at(parent,anchor_name))
+    anchor=fsx.open_dir_at(parent,anchor_name,flags=fsx.O_CLOEXEC)
+    captured=None
+    try:
+        if _directory_birth(fsx.fstat_dir(anchor))!=anchor_birth:
+            raise ValueError('Factory cleanup anchor changed')
+        owned.outcome['anchor_birth']=list(anchor_birth)
+        if rename(parent,os.fsencode(owned.path.name),anchor,b'environment',fsx.RENAME_NOREPLACE)!=0:
+            raise OSError(ctypes.get_errno(),'Factory cleanup capture refused')
+        captured=fsx.open_dir_at(anchor,'environment',flags=fsx.O_CLOEXEC)
+        owned.outcome['captured_birth']=list(_directory_birth(fsx.fstat_dir(captured)))
+        if owned.outcome['captured_birth']!=list(owned.birth):
+            raise ValueError('Factory cleanup captured a replacement')
+        if _directory_birth(fsx.lstat_at(anchor,'environment'))!=owned.birth:
+            raise ValueError('Factory cleanup capture binding changed')
+        try:
+            fsx.lstat_at(parent,owned.path.name)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError('Factory environment name replaced')
+        _empty_factory_directory(owned.directory.handle)
+        if _directory_birth(fsx.lstat_at(anchor,'environment'))!=owned.birth:
+            raise ValueError('Factory cleanup unlink binding changed')
+        fsx.rmdir_at(anchor,'environment')
+        owned.outcome['original_unlinked']=fsx.fstat_dir(owned.directory.handle).st_nlink==0
+        if not owned.outcome['original_unlinked']:
+            raise ValueError('Factory original unlink unconfirmed')
+        if _directory_birth(fsx.lstat_at(parent,anchor_name))!=anchor_birth:
+            raise ValueError('Factory cleanup anchor binding changed')
+        fsx.rmdir_at(parent,anchor_name)
+        if fsx.fstat_dir(anchor).st_nlink!=0:
+            raise ValueError('Factory cleanup anchor unlink unconfirmed')
+    finally:
+        fsx.close_dir(captured)
+        fsx.close_dir(anchor)
 
 
 class _FactoryEnvironment:
@@ -656,6 +731,7 @@ class _FactoryEnvironment:
             self.path=Path(tempfile.mkdtemp(prefix='factory-live-venv-',dir=output))
             self.parent.check()
             self.directory=fsx.ReadOnlyBoundRoot(self.path).__enter__()
+            self.birth=_directory_birth(fsx.fstat_dir(self.directory.handle))
             self.python=self.path/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
             self.outcome=None
         except BaseException:
@@ -665,20 +741,21 @@ class _FactoryEnvironment:
     def cleanup(self,*,child_exit_confirmed):
         if self.outcome is not None:
             return self.outcome
-        self.outcome={'status':'unknown'}
+        self.outcome={'status':'unknown','original_birth':list(self.birth)}
         try:
             if not child_exit_confirmed:
                 return self.outcome
             self.parent.check()
             self.directory.check()
-            _remove_factory_environment(self.path)
+            _remove_factory_environment(self)
             try:
                 fsx.lstat_at(self.parent.handle,self.path.name)
             except FileNotFoundError:
-                self.outcome={'status':'removed'}
+                if self.outcome.get('original_unlinked') is True:
+                    self.outcome['status']='removed'
             self.parent.check()
         except BaseException as error:
-            self.outcome={'status':'unknown','error':type(error).__name__}
+            self.outcome.update(status='unknown',error=type(error).__name__)
         finally:
             self.directory.close()
             self.parent.close()
@@ -706,6 +783,7 @@ def _run_factory_cell(command,*,root,output,environment,binding,timeout,required
     finally:
         cleanup=owned.cleanup(child_exit_confirmed=result['child_exit_confirmed'])
         result['venv_cleanup_outcome']=cleanup['status']
+        result['venv_cleanup_evidence']={key:value for key,value in cleanup.items() if key!='recovery_anchor'}
         if cleanup['status']!='removed':
             result['status']='fail'
             if 'error' in cleanup:
