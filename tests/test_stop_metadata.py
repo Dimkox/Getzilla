@@ -103,10 +103,61 @@ class StopMetadataTests(unittest.TestCase):
             enter(patch.object(runner.fsx, 'owned_popen', side_effect=OSError('PRIVATE-SPAWN') if spawn_error else None,
                                             return_value=process))
             enter(patch.object(runner, '_stop', side_effect=stop))
-            enter(patch.object(runner.os, 'fstat', side_effect=size))
+            enter(patch.object(runner, 'os', SimpleNamespace(**dict(vars(os), fstat=size))))
             enter(patch.object(runner.time, 'monotonic', side_effect=[0, 2 if deadline else 0, 3]))
             result = runner.execute(['PRIVATE'], Path('.'), {}, timeout=1)
         return result, calls
+
+    def test_fake_runner_preserves_real_outer_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = journal.Run(Path(directory), 'a' * 64, 'owned-control')
+            try:
+                self.assertIsNotNone(run.writer)
+                with journal.bind_sink(run.writer, 'tests/test_stop_metadata.py::test_outer'):
+                    try:
+                        result, calls = self.execute(code=124)
+                    except AttributeError as exc:
+                        self.fail(f'fake runner corrupted real journal stat: {exc}')
+                rows = [json.loads(line) for line in (run.path / run.writer.name).read_text().splitlines()]
+                self.assertEqual([(row['stage'], row['state']) for row in rows],
+                                 [('command', 'start'), ('command', 'end')])
+                self.assertEqual((rows[-1]['outcome'], rows[-1]['exit']), ('fail', 124))
+                self.assertEqual(result.returncode, 124)
+                self.assertEqual(self.details(result)['decision'], 'child_exit')
+                self.assertEqual(calls, ['poll', 'stop', 'size', 'size'])
+                self.assertFalse(any(run.writer.active.values()))
+            finally:
+                run.close()
+
+    def test_factory_primary_evidence_precedes_stop_diagnostic(self):
+        from getzilla import factory_tests, verification
+        identifier = 'factory.tests.test_owned.Probe.test_owned'
+        binding = {'declared_ids': [identifier], 'source_inventory': {}, 'context': {}}
+        report = {'schema_version': 3, 'check_id': 'factory-unit', 'status': 'pass', 'binding': binding,
+                  'database_obligations': 'not_run_in_unit_mode', 'source_stable': True,
+                  'collected': 1, 'tests_run': 1, 'failures': 0, 'errors': 0, 'loader_errors': 0,
+                  'collected_ids': [identifier], 'expected_ids': [identifier], 'required_ids': [identifier],
+                  'started': [identifier], 'executed': [identifier], 'unqualified_skips': [],
+                  'missing_required': [], 'skipped': [], 'problems': []}
+        process = runner.ProcessResult(['owned-fake'], 0, stop_metadata=journal.child_stop(0))
+        def complete(command, root, environment, **kwargs):
+            self.assertEqual(json.loads(Path(command[command.index('--request') + 1]).read_text()), binding)
+            Path(command[command.index('--report') + 1]).write_text(json.dumps(report))
+            return process
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as scope:
+            root = Path(directory)
+            (root / 'factory/tests').mkdir(parents=True)
+            (root / 'factory/pyproject.toml').touch()
+            scope.enter_context(patch.object(factory_tests, 'invocation', return_value=binding))
+            scope.enter_context(patch.object(factory_tests, 'source_matches', return_value=True))
+            scope.enter_context(patch.object(verification, 'execute', side_effect=complete))
+            scope.enter_context(patch.object(verification, 'resolve_command', side_effect=lambda command, path: command))
+            result = verification._factory_unit(root)[0]
+        self.assertEqual(result.status, 'pass', result)
+        self.assertEqual(result.details[0].get('collected'), 1)
+        self.assertEqual(result.details[0]['executed'], [identifier])
+        self.assertTrue(result.details[0]['source_stable'])
+        self.assertEqual(result.details[1]['stop']['decision'], 'child_exit')
 
     def test_child124_does_not_become_deadline_or_limit(self):
         for code in (0, 3, 124, -15):

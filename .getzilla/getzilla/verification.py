@@ -2077,7 +2077,7 @@ def _factory_unit(root: Path) -> list[CheckResult]:
             validate_report(evidence, binding)
             if evidence['status'] != result.status or not source_matches(root, binding):
                 raise ValueError('Factory result does not match subprocess outcome or current source')
-            result.details.append(evidence)
+            result.details.insert(0, evidence)
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
             result.status = 'fail'
             result.summary += '; Factory result missing or invalid: ' + str(exc)
