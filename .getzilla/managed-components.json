@@ -2439,7 +2439,7 @@
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 436,
-          "sha256": "8cf5f440e4b506dce741547759bfc79380f9924a0aed0960a68b1b4388a89f76"
+          "sha256": "d22c42d1dbc34cf51183d9322c00357a09d5f06734097f7fba3b60d97aa393d4"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 436,
@@ -5171,7 +5171,7 @@
         },
         "docs/isolated-ci-acceptance.md": {
           "mode": 436,
-          "sha256": "88242fff1891814f06966af421626a89ca22e614ba8493ebad5d3960b29d14e8"
+          "sha256": "0418e7367c2d1ef76062ec94aa8438a3d4091c8f6dcea901f2cb1bd0b1123313"
         },
         "docs/optional-modules.md": {
           "mode": 436,
@@ -7031,11 +7031,11 @@
         },
         "factory/tests/run_disposable_exit.py": {
           "mode": 436,
-          "sha256": "b84aed4cb94981bbc1413b3ebe2715c529fde8aef70ace85a8ad9fd2dd7981dc"
+          "sha256": "47d74532a344145521e6f3ab91ca69d2d7fe5c974a06963a1202c6ea33d2546f"
         },
         "factory/tests/run_live_suite.py": {
           "mode": 436,
-          "sha256": "1414b0058e1d926c26c4f1c79ba58050af1e1d9abfa25771b59d274f2a72ac60"
+          "sha256": "8c12a345a4ba237e654b4b5e0047e2c2e2dd342fdd77b11f2e58b65c319195a3"
         },
         "factory/tests/test_adapters.py": {
           "mode": 436,
@@ -7079,7 +7079,7 @@
         },
         "factory/tests/test_disposable_exit.py": {
           "mode": 436,
-          "sha256": "6d02ff30dc925ae1c8c41a530697cefcd25bef8d88f77852b08516f7adb1caef"
+          "sha256": "9db7ab511bee9f364a3c2fc6b10c60266a3f99675e791c4f55ee482551e1824f"
         },
         "factory/tests/test_execution_contracts.py": {
           "mode": 436,

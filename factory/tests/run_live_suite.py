@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'factory/src'), str(ROOT / '.getzilla')]
 from getzilla import factory_tests
-from getzilla.live_acceptance import record_suite, accepted_suite, valid_binding, read_document, _write
+from getzilla.live_acceptance import record_suite, observe_parser_applicability, valid_binding, read_document, _write
 
 produce = record_suite
 
@@ -64,6 +64,10 @@ def main():
     if not valid_binding(binding) or binding['cell'] != 'factory':
         raise ValueError('Factory suite invocation mismatch')
     guard_databases(binding)
+    required=os.environ.get('GETZILLA_LIVE_PARSER_REQUIRED','0')
+    if required not in ('0','1'):
+        raise ValueError('Unknown declared parser profile')
+    parser_before=observe_parser_applicability(ROOT,binding,python=Path(sys.executable),required=required=='1')
     contents, identities = factory_tests._source_snapshot(ROOT)
     expected = factory_tests.declared_ids(ROOT, contents=contents)
     loader = unittest.TestLoader()
@@ -72,14 +76,14 @@ def main():
         return factory_tests._source_snapshot(ROOT) == (contents, identities)
     document = produce(suite, expected_ids=expected, required_ids=expected, loader_errors=loader.errors,
         binding=binding, source_stable=stable, source_root=ROOT, source_paths=contents,
-        stream=_PrivateOutput())
+        stream=_PrivateOutput(),parser_observation=parser_before)
     if not (any('FreshClusterArtifactAttestorMigrationTests.' in name for name in document['executed'])
             and any('test_postgres_integration.' in name for name in document['executed'])):
         document['status'] = 'fail'
     import hashlib
     document['source_inventory'] = {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
     _write(Path(os.environ['GETZILLA_LIVE_ARTIFACTS'])/'factory-suite.json', document)
-    return 0 if accepted_suite(document, binding) else 1
+    return 0 if document['status']=='pass' else 1
 
 
 if __name__ == '__main__':

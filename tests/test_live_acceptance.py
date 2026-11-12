@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import ast
+import copy
 import io
 import json
 from pathlib import Path
@@ -276,6 +278,7 @@ class FactorySuiteGuardTests(unittest.TestCase):
                     with patch.dict(os.environ,environment,clear=True), patch.object(probe,'POSTGRES',{'reference':PIN,'image_id':IMAGE_ID}), \
                             patch('psycopg.connect',side_effect=connect), patch.object(probe.subprocess,'run',side_effect=command), \
                             patch.object(suite_runner,'read_document',return_value=binding), \
+                            patch.object(suite_runner,'observe_parser_applicability',return_value=None), \
                             patch.object(suite_runner.factory_tests,'_source_snapshot',side_effect=RuntimeError('owned discovery boundary')) as discovery:
                         os.environ['GETZILLA_LIVE_BINDING']='owned'
                         if case=='valid':
@@ -288,6 +291,188 @@ class FactorySuiteGuardTests(unittest.TestCase):
                                 suite_runner.main()
                             discovery.assert_not_called()
                             self.assertEqual(len(queries),1 if case=='wrong-cluster' else 2 if case=='same-cluster' else 0)
+
+
+class ParserApplicabilityTests(unittest.TestCase):
+    def test_exact_source_complementary_branches_keep_all_seven_cases(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        self.assertTrue(callable(getattr(module,'observe_parser_applicability',None)), 'measured parser applicability missing')
+        from getzilla.python_test_runner import ProcessResult
+        import types
+        import tomllib
+        original=(ROOT/'factory/tests/test_landing_pdf_worker.py').read_bytes()
+        classes=[copy.deepcopy(node) for node in ast.parse(original).body if isinstance(node,ast.ClassDef)
+                 and node.name in {'PdfWorkerWithoutParser','PdfWorkerWithPinnedParser'}]
+        self.assertEqual(len(classes),2)
+        for cls in classes:
+            for method in cls.body:
+                if isinstance(method,ast.FunctionDef):
+                    identifier='factory.tests.test_landing_pdf_worker.'+cls.name+'.'+method.name
+                    method.body=[ast.Expr(ast.Call(ast.Attribute(ast.Name('owned_executed',ast.Load()),'append',ast.Load()),[ast.Constant(identifier)],[]))]
+        owned=ast.fix_missing_locations(ast.Module(body=classes,type_ignores=[]))
+        metadata=(ROOT/'factory/pyproject.toml').read_bytes()
+        pin=next(value.removeprefix('pypdf==') for value in tomllib.loads(metadata.decode())['project']['dependencies'] if value.startswith('pypdf=='))
+        for version,actual,skipped in ((None,1,6),(pin,6,1)):
+            with self.subTest(parser=version),tempfile.TemporaryDirectory() as raw:
+                root=Path(raw); target=root/'factory/tests/test_landing_pdf_worker.py'
+                target.parent.mkdir(parents=True)
+                target.write_text(ast.unparse(owned)+'\n')
+                (root/'factory/pyproject.toml').write_bytes(metadata)
+                namespace=types.ModuleType('factory.tests.test_landing_pdf_worker')
+                namespace.__file__=str(target)
+                namespace.__dict__.update(unittest=unittest,CHILD_PYPDF_VERSION=version,owned_executed=[])
+                exec(compile(owned,str(target),'exec'),namespace.__dict__)
+                suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
+                expected=[module.test_id(case) for case in module.cases(suite)]
+                binding=LiveSourceTests.binding(self)
+                def probe(command,*_args,**kwargs):
+                    self.assertEqual(command[1:4],['-B','-I','-c'])
+                    return ProcessResult(command,0,stdout=json.dumps({'pypdf_version':version}))
+                with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
+                        patch('socket.socket.connect',side_effect=AssertionError('unmocked network forbidden')), \
+                        patch.object(module,'execute',side_effect=probe), \
+                        patch.dict(sys.modules,{namespace.__name__:namespace}):
+                    observation=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    report=module.record_suite(suite,expected_ids=expected,required_ids=expected,loader_errors=(),
+                        binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
+                    final=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    self.assertTrue(module.accepted_suite(report,binding,parser_observation=final))
+                    self.assertEqual(len(report['expected_ids']),7)
+                    self.assertEqual(len(report['started']),7)
+                    self.assertEqual(len(report['executed']),actual)
+                    self.assertEqual(len(report['skipped']),skipped)
+                    self.assertEqual(len(report['allowed_skips']),skipped)
+                    self.assertEqual(set(namespace.owned_executed),set(report['executed']))
+                    self.assertFalse(module.accepted_suite(report,binding))
+                    self.assertFalse(module.accepted_suite(report,binding,parser_observation={'pypdf_version':version}))
+                    changed=copy.deepcopy(report); changed['applicability']['observations'][0]['observed_ns']=0
+                    self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
+                    changed=copy.deepcopy(report); changed['skipped'][0]['reason']='unsupported reason'
+                    self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
+                    for dimension,value in (('python','/foreign/python'),('pypdf_version','foreign'),('policy_digest','0'*64)):
+                        changed=copy.deepcopy(report)
+                        changed['applicability']['observations'][1][dimension]=value
+                        self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),dimension)
+                    changed=copy.deepcopy(report); changed['applicability']['policy']['canonical_policy_sha256']='0'*64
+                    self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
+                    changed=copy.deepcopy(report); changed['applicability']['observations'][0]['binding']['attempt']='foreign'
+                    self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
+                    from getzilla.python_test_runner import CleanupMetadata
+                    for invalid in (ProcessResult(['owned'],124,terminal_state='timeout'),
+                            ProcessResult(['owned'],0,stdout=''),ProcessResult(['owned'],0,stdout='{}'),
+                            ProcessResult(['owned'],0,stdout='{"pypdf_version":"foreign"}'),
+                            ProcessResult(['owned'],0,stdout='{"pypdf_version":null}',cleanup_metadata=CleanupMetadata(unavailable=True))):
+                        with patch.object(module,'execute',return_value=invalid),self.assertRaises(ValueError):
+                            module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    if version is None:
+                        with self.assertRaises(ValueError):
+                            module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                    else:
+                        required=module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                        self.assertTrue(required.policy['required_parser'])
+                    applicable=getattr(namespace,'PdfWorkerWithoutParser' if version is None else 'PdfWorkerWithPinnedParser')
+                    method=next(name for name in vars(applicable) if name.startswith('test_'))
+                    original_method=getattr(applicable,method)
+                    def conflicting(case):
+                        original_method(case)
+                        namespace.CHILD_PYPDF_VERSION='conflicting-after-body'
+                    with patch.object(applicable,method,conflicting):
+                        repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
+                        refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
+                            binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
+                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest),'after-body module fact conflict')
+                    namespace.CHILD_PYPDF_VERSION=version
+                    with patch.object(applicable,method,side_effect=RuntimeError('owned body did not return')):
+                        repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
+                        refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
+                            binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
+                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest))
+
+    def test_required_database_skip_and_forged_allowance_never_become_na(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        for skipped in (False,True):
+            executed=[]
+            class PostgresFactoryTests(unittest.TestCase):
+                def test_required_database(self):
+                    if skipped:
+                        self.skipTest('FACTORY_TEST_DATABASE_URL must name a disposable database')
+                    executed.append('body-returned')
+            PostgresFactoryTests.__module__='factory.tests.test_postgres_integration'
+            suite=unittest.defaultTestLoader.loadTestsFromTestCase(PostgresFactoryTests)
+            expected=[case.id() for case in suite]
+            report=module.record_suite(suite,expected_ids=expected,required_ids=expected,loader_errors=(),
+                binding=LiveSourceTests.binding(self),source_stable=lambda:True,stream=io.StringIO(),
+                allowed_skips={expected[0]:{'rule':'parser-absent','reason':'forged'}} if skipped else None)
+            self.assertEqual(module.accepted_suite(report,LiveSourceTests.binding(self)),not skipped)
+            self.assertEqual(executed,[] if skipped else ['body-returned'])
+            if skipped:
+                report.update(status='pass',required_ids=[],missing_required=[],inapplicable_ids=expected,
+                              allowed_skips={expected[0]:{'rule':'parser-absent','reason':'forged'}})
+                self.assertFalse(module.accepted_suite(report,LiveSourceTests.binding(self)))
+
+
+class FactoryControllerTests(unittest.TestCase):
+    def test_owned_interpreter_survives_final_measurement_and_cleanup_precedes_pass(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        self.assertTrue(callable(getattr(module,'_run_factory_cell',None)), 'outer interpreter lifetime missing')
+        for primary,cleanup_failure,confirmed in (('passed',False,True),('failed',False,True),
+                ('cancelled',False,True),('passed',True,True),('passed',False,False)):
+            with self.subTest(primary=primary,cleanup_failure=cleanup_failure,confirmed=confirmed), tempfile.TemporaryDirectory() as raw:
+                root=Path(raw); order=[]; paths=[]; token=object()
+                def observed(_command,**kwargs):
+                    path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
+                    self.assertEqual(kwargs['environment']['GETZILLA_LIVE_PARSER_REQUIRED'],'1')
+                    self.assertTrue(path.is_dir()); paths.append(path)
+                    (path/'bin').mkdir()
+                    (path/'bin/python').write_text('owned interpreter fixture, never executed')
+                    order.append('observe')
+                    return {'status':'pass' if primary=='passed' else 'fail','primary_outcome':primary,
+                            'child_exit_confirmed':confirmed,'python':'/foreign/report-selected-python'}
+                def measured(_root,_binding,*,python,**kwargs):
+                    self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python'))
+                    self.assertTrue(paths[0].is_dir()); order.append('final-measurement')
+                    self.assertTrue(kwargs['required'])
+                    return token
+                def validated(_output,_cell,_binding,**kwargs):
+                    self.assertIs(kwargs['parser_observation'],token)
+                    self.assertTrue(paths[0].is_dir()); order.append('validate')
+                    return True
+                native_remove=module._remove_factory_environment
+                def removed(path):
+                    order.append('cleanup')
+                    if cleanup_failure:
+                        raise PermissionError('owned cleanup failure')
+                    native_remove(path)
+                with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
+                        patch('socket.socket.connect',side_effect=AssertionError('unmocked network forbidden')), \
+                        patch.object(module,'observe',side_effect=observed), \
+                        patch.object(module,'observe_parser_applicability',side_effect=measured), \
+                        patch.object(module,'validate_components',side_effect=validated), \
+                        patch.object(module,'_remove_factory_environment',side_effect=removed):
+                    result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
+                        binding=LiveSourceTests.binding(self),timeout=1,required_parser=True)
+                self.assertEqual(result['primary_outcome'],primary)
+                self.assertEqual(result['status'],'pass' if primary=='passed' and confirmed and not cleanup_failure else 'fail')
+                self.assertEqual(paths[0].exists(),cleanup_failure or not confirmed)
+                if primary=='passed' and confirmed:
+                    self.assertEqual(order,['observe','final-measurement','validate','cleanup'])
+                else:
+                    self.assertNotIn('validate',order)
+
+    def test_replaced_environment_birth_never_deletes_the_replacement(self):
+        module=importlib.import_module('getzilla.live_acceptance')
+        self.assertTrue(callable(getattr(module,'_FactoryEnvironment',None)), 'owned environment birth missing')
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)
+            owned=module._FactoryEnvironment(root)
+            original=owned.path
+            original.rename(root/'retained-original')
+            original.mkdir(mode=0o700)
+            (original/'foreign').write_text('retained')
+            self.assertEqual(owned.cleanup(child_exit_confirmed=True)['status'],'unknown')
+            self.assertEqual((original/'foreign').read_text(),'retained')
 
 
 if __name__ == '__main__':

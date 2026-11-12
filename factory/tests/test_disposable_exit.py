@@ -33,6 +33,9 @@ class LiveProducerSourceTests(unittest.TestCase):
                 patch.object(runner,'read_document',return_value=binding), \
                 patch.object(runner,'OwnedDocker',return_value=owner), \
                 patch.object(runner,'_postgres',side_effect=primary):
+            environment=runner.Path(raw)/'factory-live-venv-owned'
+            environment.mkdir(mode=0o700)
+            runner.os.environ['UV_PROJECT_ENVIRONMENT']=str(environment)
             with self.assertRaises(RuntimeError) as caught:
                 runner.main()
         self.assertIs(caught.exception, primary)

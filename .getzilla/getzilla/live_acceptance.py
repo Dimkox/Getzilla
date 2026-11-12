@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -13,10 +14,14 @@ import time
 import secrets
 import sys
 import uuid
+import tomllib
+import tempfile
+import shutil
 
 from .factory_tests import RecordedResult, cases, test_id
 from .python_test_runner import execute, cleanup_details, RunCancelled
 from . import fsx
+from . import factory_tests
 
 OUTPUT_LIMIT = 2 * 1024 * 1024
 CELLS = {'factory': ('factory-postgres-exit',),
@@ -98,59 +103,215 @@ def _ids(value):
             and len(set(value)) == len(value))
 
 
-def accepted_suite(document, binding):
+_PARSER_MODULE = 'factory.tests.test_landing_pdf_worker'
+_PARSER_SOURCE = 'factory/tests/test_landing_pdf_worker.py'
+_PARSER_ENV = {'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','LC_ALL':'C.UTF-8'}
+_PARSER_PROBE = ("import json,importlib.metadata as m,importlib.util as u; "
+                 "print(json.dumps({'pypdf_version':m.version('pypdf') if u.find_spec('pypdf') is not None else None}))")
+_OBSERVATION_KEY = object()
+
+
+class _ParserObservation:
+    __slots__ = ('root','python','policy','data','proof')
+
+    def __init__(self,root,python,policy,data,proof):
+        self.root,self.python,self.policy,self.data,self.proof=root,python,policy,data,proof
+
+
+def _parser_policy(root, required):
+    raw = _held_bytes(root/_PARSER_SOURCE)
+    metadata = _held_bytes(root/'factory/pyproject.toml')
+    declarations = tomllib.loads(metadata.decode())['project']['dependencies']
+    pins = [value.removeprefix('pypdf==') for value in declarations if value.startswith('pypdf==')]
+    if len(pins) != 1 or type(required) is not bool:
+        raise ValueError('Unknown parser capability profile')
+    expected = {
+        'PdfWorkerWithoutParser': "unittest.skipIf(CHILD_PYPDF_VERSION is not None, 'pypdf present; unavailable branch cannot run')",
+        'PdfWorkerWithPinnedParser': "unittest.skipUnless(CHILD_PYPDF_VERSION is not None, 'requires pypdf installed for the child interpreter')"}
+    found, identifiers = set(), []
+    for node in ast.parse(raw).body:
+        if isinstance(node,ast.ClassDef) and node.name in expected:
+            if (node.name in found or len(node.decorator_list) != 1
+                    or ast.dump(node.decorator_list[0],include_attributes=False) != ast.dump(ast.parse(expected[node.name],mode='eval').body,include_attributes=False)):
+                raise ValueError('Parser applicability source decorators changed')
+            found.add(node.name)
+            identifiers.extend(_PARSER_MODULE+'.'+node.name+'.'+method.name for method in node.body
+                               if isinstance(method,ast.FunctionDef) and method.name.startswith('test_'))
+    if found != set(expected) or not identifiers:
+        raise ValueError('Incomplete parser applicability source')
+    policy = {'source_sha256':{_PARSER_SOURCE:hashlib.sha256(raw).hexdigest(),
+                              'factory/pyproject.toml':hashlib.sha256(metadata).hexdigest()},
+              'canonical_policy_sha256':hashlib.sha256(factory_tests.__loader__.get_data(factory_tests.__file__)).hexdigest(),
+              'probe_sha256':hashlib.sha256(json.dumps([_PARSER_PROBE,_PARSER_ENV],sort_keys=True).encode()).hexdigest(),
+              'eligible_ids':sorted(identifiers),'parser_pin':pins[0],'required_parser':required}
+    policy['digest'] = hashlib.sha256(json.dumps(policy,sort_keys=True).encode()).hexdigest()
+    return policy
+
+
+def _python_identity(python):
+    def identity(info):
+        return [info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+    return {'named':identity(python.lstat()),'target':identity(python.stat())}
+
+
+def observe_parser_applicability(root,binding,*,python,required=False):
+    """Observe only the isolated dependency; never import the old PDF workload."""
+    if not valid_binding(binding) or binding['cell'] != 'factory':
+        raise ValueError('Parser observation invocation mismatch')
+    root,python=Path(root).absolute(),Path(python).absolute()
+    policy=_parser_policy(root,required)
+    identity=_python_identity(python)
+    native=execute([str(python),'-B','-I','-c',_PARSER_PROBE],Path('/'),dict(_PARSER_ENV),timeout=30)
+    cleanup=cleanup_details(native)
+    if (native.returncode or native.terminal_state != 'completed' or native.stderr
+            or cleanup['facts'] or cleanup['overflow'] or cleanup['unavailable']):
+        raise ValueError('Parser capability observation unavailable')
+    observed=json.loads(native.stdout,object_pairs_hook=_pairs)
+    if not isinstance(observed,dict) or set(observed) != {'pypdf_version'}:
+        raise ValueError('Parser capability observation did not return a fact')
+    value=observed['pypdf_version']
+    if value not in (None,policy['parser_pin']) or required and value is None:
+        raise ValueError('Parser version/profile requirement not met')
+    if _python_identity(python) != identity or _parser_policy(root,required) != policy:
+        raise ValueError('Parser observation source or interpreter changed')
+    data={'binding':dict(binding),'python':str(python),'python_identity':identity,
+          'policy_digest':policy['digest'],'pypdf_version':value,'observed_ns':time.time_ns()}
+    return _ParserObservation(root,python,policy,data,_OBSERVATION_KEY)
+
+
+def _measured(observation,binding):
+    return (type(observation) is _ParserObservation and observation.proof is _OBSERVATION_KEY
+            and observation.data['binding'] == binding)
+
+
+def _parser_allowances(observation,expected):
+    context={'unit_database_bindings':'live_required','host_supported':True,'procfs_descriptor_reopen':True,
+             'jsonschema_cli':'required','pypdf_version':observation.data['pypdf_version']}
+    if not set(observation.policy['eligible_ids']) <= set(expected):
+        raise ValueError('Parser source cases are missing from complete discovery')
+    result={}
+    for identifier in observation.policy['eligible_ids']:
+        allowance=factory_tests.skip_allowance(identifier,context)
+        if allowance is not None:
+            rule,reason=allowance
+            if rule not in {'parser-present','parser-absent'}:
+                raise ValueError('Unsupported live applicability rule')
+            result[identifier]={'rule':rule,'reason':reason}
+    return result
+
+
+def _parser_module_fact(observation):
+    returned=sys.modules.get(_PARSER_MODULE)
+    value=getattr(returned,'CHILD_PYPDF_VERSION',None)
+    path=str(getattr(returned,'__file__',''))
+    observed=(returned is not None and hasattr(returned,'CHILD_PYPDF_VERSION')
+              and value in (None,observation.policy['parser_pin'])
+              and path==str(observation.root/_PARSER_SOURCE))
+    return {'module':_PARSER_MODULE,'path':path if observed else 'unavailable',
+            'pypdf_version':value if observed else 'unavailable','observed':observed}
+
+
+def _validated_applicability(document,binding,observation):
+    value=document['applicability']
+    if value is None:
+        if any(identifier.startswith(_PARSER_MODULE+'.') for identifier in document['expected_ids']):
+            raise ValueError('Source parser cases require measured applicability')
+        return {}
+    if not _measured(observation,binding) or set(value) != {'policy','observations','module_fact'}:
+        raise ValueError('Live applicability requires fresh observed facts, not caller JSON')
+    if value['policy'] != observation.policy or _parser_policy(observation.root,observation.policy['required_parser']) != observation.policy:
+        raise ValueError('Live parser source/policy binding changed')
+    rows=value['observations']
+    if not isinstance(rows,list) or len(rows) != 3:
+        raise ValueError('Missing before/discovery/after parser observations')
+    times=[]
+    for row in rows:
+        if set(row) != set(observation.data) or any(row[key] != observation.data[key] for key in row if key != 'observed_ns'):
+            raise ValueError('Conflicting parser invocation/interpreter/facts')
+        stamp=row['observed_ns']
+        if type(stamp) is not int or not 0 <= observation.data['observed_ns']-stamp <= 1800*1_000_000_000:
+            raise ValueError('Stale/future parser observation')
+        times.append(stamp)
+    expected_fact={'module':_PARSER_MODULE,'path':str(observation.root/_PARSER_SOURCE),
+                   'pypdf_version':observation.data['pypdf_version'],'observed':True}
+    if times != sorted(times) or value['module_fact'] != {'discovery':expected_fact,'after':expected_fact}:
+        raise ValueError('Parser module fact was not returned or disagrees')
+    return _parser_allowances(observation,document['expected_ids'])
+
+
+def accepted_suite(document, binding, *, parser_observation=None):
     try:
         if not valid_binding(binding) or document['schema'] != 'getzilla-live-suite-v1' or document['binding'] != binding:
             return False
-        fields = ('expected_ids', 'collected_ids', 'required_ids', 'started', 'executed', 'missing_required')
+        fields = ('expected_ids', 'collected_ids', 'required_ids', 'started', 'executed', 'missing_required','inapplicable_ids')
         if not all(_ids(document[key]) for key in fields):
             return False
         if any(type(document[key]) is not int or not 0 <= document[key] <= 10000
                for key in ('tests_run', 'failures', 'errors', 'loader_errors')):
             return False
         skipped = document['skipped']
-        if not isinstance(skipped, list) or not all(isinstance(row, dict) and set(row) == {'id', 'applicability'} for row in skipped):
+        if not isinstance(skipped, list) or not all(isinstance(row, dict) and set(row) == {'id', 'reason','applicability'} for row in skipped):
             return False
         skipped_ids = [row['id'] for row in skipped]
         if not _ids(skipped_ids) or not set(skipped_ids) <= set(document['started']):
             return False
-        # Live DB obligations never inherit the unit runner's database exemption.
-        if any(row['applicability'] not in document['allowed_skips'] or document['allowed_skips'][row['applicability']] != row['id'] for row in skipped):
+        allowances=_validated_applicability(document,binding,parser_observation)
+        if document['allowed_skips'] != allowances or set(document['inapplicable_ids']) != set(allowances):
             return False
-        if skipped or document['allowed_skips']:
+        if set(skipped_ids) != set(allowances) or any(allowances[row['id']] != {'rule':row['applicability'],'reason':row['reason']} for row in skipped):
             return False
         expected, collected, required, started, executed = (set(document[key]) for key in fields[:5])
         return bool(document['status'] == 'pass' and expected and expected == collected == started
                     and set(document['executed']) == started - set(skipped_ids)
-                    and set(document['required_ids']) == expected - set(document['allowed_skips'].values())
+                    and set(document['required_ids']) == expected - set(allowances)
                     and set(document['required_ids']) <= set(document['executed'])
                     and not document['missing_required'] and document['source_stable'] is True
                     and type(document['tests_run']) is int and document['tests_run'] == len(started)
                     and document['failures'] == document['errors'] == 0
-                    and not document['loader_errors'] and not document['problems'])
+                    and not document['loader_errors'] and not document['problems'] and document['requirements_complete'] is True)
     except (KeyError, TypeError, ValueError):
         return False
 
 
 def record_suite(suite, *, expected_ids, required_ids, loader_errors, binding, source_stable,
-                 stream, source_root=None, source_paths=(), allowed_skips=None):
+                 stream, source_root=None, source_paths=(), allowed_skips=None,parser_observation=None):
     """Execute the actual suite without clearing database environment bindings."""
     if not valid_binding(binding):
         raise ValueError('Invalid live invocation binding')
     collected = [test_id(case) for case in cases(suite)]
+    applicability=None
+    allowances={}
+    current=None
+    if parser_observation is not None:
+        if not _measured(parser_observation,binding):
+            raise ValueError('Unobserved parser applicability input')
+        current=observe_parser_applicability(parser_observation.root,binding,python=parser_observation.python,
+                                            required=parser_observation.policy['required_parser'])
+        fact=_parser_module_fact(current)
+        if not fact['observed'] or fact['pypdf_version'] != current.data['pypdf_version']:
+            raise ValueError('Parser module did not return a matching fact')
+        applicability={'policy':parser_observation.policy,'observations':[parser_observation.data,current.data],
+                       'module_fact':{'discovery':fact}}
+        allowances=_parser_allowances(current,expected_ids)
     def recorder(*args, **kwargs):
         return RecordedResult(*args, source_root=source_root, source_paths=source_paths, **kwargs)
     result = unittest.TextTestRunner(stream=stream, verbosity=0, resultclass=recorder).run(suite)
-    allowances = dict(allowed_skips or {})
+    if current is not None:
+        current=observe_parser_applicability(current.root,binding,python=current.python,required=current.policy['required_parser'])
+        applicability['observations'].append(current.data)
+        applicability['module_fact']['after']=_parser_module_fact(current)
     document = {'schema': 'getzilla-live-suite-v1', 'binding': dict(binding), 'status': 'pass',
                 'expected_ids': list(expected_ids), 'collected_ids': collected,
-                'required_ids': list(required_ids), 'started': result.started, 'executed': result.executed,
+                'required_ids': sorted(set(expected_ids)-set(allowances)), 'started': result.started, 'executed': result.executed,
+                'requirements_complete':set(required_ids)==set(expected_ids) and not allowed_skips,
+                'applicability':applicability,'inapplicable_ids':sorted(allowances),
                 'tests_run': result.testsRun, 'failures': len(result.failures) + len(result.expectedFailures) + len(result.unexpectedSuccesses),
                 'errors': len(result.errors), 'loader_errors': len(loader_errors),
                 'source_stable': source_stable(), 'allowed_skips': allowances,
-                'skipped': [{'id': test_id(case), 'applicability': next((rule for rule, identifier in allowances.items() if identifier == test_id(case)), None)} for case, _reason in result.skipped],
-                'missing_required': sorted(set(required_ids) - set(result.executed)), 'problems': result.problems}
-    if not accepted_suite(document, binding):
+                'skipped': [{'id':test_id(case),'reason':reason if allowances.get(test_id(case),{}).get('reason')==reason else 'unqualified-skip',
+                             'applicability':allowances.get(test_id(case),{}).get('rule') if allowances.get(test_id(case),{}).get('reason')==reason else None} for case,reason in result.skipped],
+                'missing_required': sorted(set(expected_ids)-set(allowances)-set(result.executed)), 'problems': result.problems}
+    if not accepted_suite(document, binding,parser_observation=current):
         document['status'] = 'fail'
     return document
 
@@ -436,7 +597,7 @@ def _trust_ci(root, output, binding):
         seal_component(output, name, 'trust-ci-resources.json', binding)
 
 
-def validate_components(output, cell, binding):
+def validate_components(output, cell, binding, *, parser_observation=None):
     try:
         if not valid_binding(binding) or binding['cell'] != cell:
             return False
@@ -454,7 +615,7 @@ def validate_components(output, cell, binding):
                     and report['resources_before'] == report['resources_after'])
         suite = read_component(output, cell+'-suite.json', binding)
         restart = read_component(output, cell+'-restart.json', binding)
-        if not accepted_suite(suite, binding) or not suite.get('source_inventory'):
+        if not accepted_suite(suite, binding,parser_observation=parser_observation) or not suite.get('source_inventory'):
             return False
         if cell == 'factory' and not (any('FreshClusterArtifactAttestorMigrationTests.' in name for name in suite['executed'])
                 and any('test_postgres_integration.' in name for name in suite['executed'])):
@@ -477,6 +638,83 @@ def _require_trust_producer(root):
     producer = Path(root)/'trust-ci/tests/run_postgres_suite.py'
     if producer.is_symlink() or not producer.is_file():
         raise ValueError('Trust CI source producer is unavailable; delivery and real acceptance remain OPEN')
+
+
+def _remove_factory_environment(path):
+    shutil.rmtree(path)
+
+
+class _FactoryEnvironment:
+    """A controller-created directory; reports never select its path or cleanup."""
+    def __init__(self,output):
+        self.parent=fsx.ReadOnlyBoundRoot(output).__enter__()
+        self.directory=None
+        try:
+            info=fsx.fstat_dir(self.parent.handle)
+            if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o700:
+                raise ValueError('Factory environment requires private owned output')
+            self.path=Path(tempfile.mkdtemp(prefix='factory-live-venv-',dir=output))
+            self.parent.check()
+            self.directory=fsx.ReadOnlyBoundRoot(self.path).__enter__()
+            self.python=self.path/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+            self.outcome=None
+        except BaseException:
+            self.parent.close()
+            raise
+
+    def cleanup(self,*,child_exit_confirmed):
+        if self.outcome is not None:
+            return self.outcome
+        self.outcome={'status':'unknown'}
+        try:
+            if not child_exit_confirmed:
+                return self.outcome
+            self.parent.check()
+            self.directory.check()
+            _remove_factory_environment(self.path)
+            try:
+                fsx.lstat_at(self.parent.handle,self.path.name)
+            except FileNotFoundError:
+                self.outcome={'status':'removed'}
+            self.parent.check()
+        except BaseException as error:
+            self.outcome={'status':'unknown','error':type(error).__name__}
+        finally:
+            self.directory.close()
+            self.parent.close()
+        return self.outcome
+
+
+def _run_factory_cell(command,*,root,output,environment,binding,timeout,required_parser=False):
+    if type(required_parser) is not bool:
+        raise ValueError('Unknown controller parser profile')
+    owned=_FactoryEnvironment(output)
+    environment=dict(environment,UV_PROJECT_ENVIRONMENT=str(owned.path),
+                     GETZILLA_LIVE_PARSER_REQUIRED='1' if required_parser else '0')
+    result={'status':'fail','primary_outcome':'unknown','child_exit_confirmed':False}
+    primary=None
+    try:
+        result=observe(command,root=root,environment=environment,output=output,timeout=timeout,
+                       namespace=binding['namespace'],require_resources=True)
+        if result['status']=='pass' and result['child_exit_confirmed']:
+            owned.directory.check()
+            measured=observe_parser_applicability(root,binding,python=owned.python,required=required_parser)
+            if not validate_components(output,'factory',binding,parser_observation=measured):
+                result.update(status='fail',component_evidence='missing_or_failed')
+    except BaseException as error:
+        primary=error
+    finally:
+        cleanup=owned.cleanup(child_exit_confirmed=result['child_exit_confirmed'])
+        result['venv_cleanup_outcome']=cleanup['status']
+        if cleanup['status']!='removed':
+            result['status']='fail'
+            if 'error' in cleanup:
+                result['venv_cleanup_error']=cleanup['error']
+    if primary is not None:
+        if cleanup['status']!='removed':
+            BaseException.add_note(primary,'Factory controller environment cleanup unconfirmed')
+        raise primary
+    return result
 
 
 def main(argv=None):
@@ -520,10 +758,17 @@ def main(argv=None):
         GETZILLA_LIVE_BINDING=str(output/'invocation.json'), GETZILLA_LIVE_ARTIFACTS=str(output))
     command = ([sys.executable,str(root/'factory/tests/run_disposable_exit.py')] if args.cell == 'factory' else
         [sys.executable,str(root/'scripts/getzilla_live.py'),'--root',str(root),'--cell',args.cell,'--output',str(output),'--worker'])
-    result = observe(command,root=root,environment=environment,output=output,timeout=args.timeout_seconds,
-                     namespace=binding['namespace'], require_resources=True)
-    if not validate_components(output,args.cell,binding):
-        result.update(status='fail',component_evidence='missing_or_failed')
+    if args.cell=='factory':
+        required=os.environ.get('GETZILLA_LIVE_PARSER_REQUIRED','0')
+        if required not in ('0','1'):
+            raise ValueError('Unknown declared parser profile')
+        result=_run_factory_cell(command,root=root,environment=environment,output=output,
+                                 timeout=args.timeout_seconds,binding=binding,required_parser=required=='1')
+    else:
+        result = observe(command,root=root,environment=environment,output=output,timeout=args.timeout_seconds,
+                         namespace=binding['namespace'], require_resources=True)
+        if not validate_components(output,args.cell,binding):
+            result.update(status='fail',component_evidence='missing_or_failed')
     if (_run(['git','rev-parse','HEAD'],root=root) != head or _run(['git','rev-parse','HEAD^{tree}'],root=root) != tree
             or _run(['git','status','--porcelain'],root=root) or _producer_digest(root,args.cell) != binding['producer_sha256']):
         result.update(status='fail',source_mutation=True)

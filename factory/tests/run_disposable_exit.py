@@ -197,11 +197,18 @@ def _live_main() -> int:
     if not valid_binding(binding) or binding['cell'] != 'factory':
         raise ValueError('Factory live invocation is not bound')
     output = Path(os.environ['GETZILLA_LIVE_ARTIFACTS'])
+    venv_path=Path(os.environ['UV_PROJECT_ENVIRONMENT']).absolute()
+    if venv_path.parent != output.absolute() or not venv_path.name.startswith('factory-live-venv-') or venv_path.is_symlink():
+        raise ValueError('Live Factory environment must be controller-owned')
+    from getzilla import fsx
+    with fsx.ReadOnlyBoundRoot(venv_path) as bound:
+        info=fsx.fstat_dir(bound.handle)
+        if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o700:
+            raise ValueError('Live Factory environment must be private')
     owner = OwnedDocker(output/'factory-resources.json', binding['namespace'])
     primary = None
     cleanup_errors = []
     phase = 'allocate'
-    venv = None
     try:
         network = owner.network('db-network')
         password = uuid.uuid4().hex
@@ -216,9 +223,8 @@ def _live_main() -> int:
             FACTORY_TEST_POSTGRES_JOURNAL=str(owner.manifest),
             FACTORY_FRESH_POSTGRES_CONTAINER=fresh_db['name'], FACTORY_FRESH_POSTGRES_CONTAINER_ID=fresh_db['id'],
             PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT/'factory/src'), str(ROOT/'.getzilla'))))
-        phase = 'venv-create'
-        venv = tempfile.TemporaryDirectory(prefix='factory-live-venv-', dir=output)
-        environment['UV_PROJECT_ENVIRONMENT'] = venv.name
+        phase = 'venv-use'
+        environment['UV_PROJECT_ENVIRONMENT'] = str(venv_path)
         uv = ['uv', 'run', '--project', str(ROOT/'factory'), 'python']
         phase = 'preflight'
         _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only'], environment=environment)
@@ -234,11 +240,6 @@ def _live_main() -> int:
     except BaseException as error:
         primary = error
     finally:
-        if venv is not None:
-            try:
-                venv.cleanup()
-            except BaseException as error:
-                cleanup_errors.append(('venv', error))
         try:
             owner.cleanup()
             acknowledge_cleanup(owner)
