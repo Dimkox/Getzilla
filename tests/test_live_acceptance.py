@@ -118,7 +118,7 @@ class LiveSourceTests(unittest.TestCase):
 
     def test_native_observer_keeps_failure_and_refuses_unknown_cleanup(self):
         module = self.module()
-        from getzilla.python_test_runner import ProcessResult, CleanupMetadata
+        from getzilla.python_test_runner import ProcessResult
         with tempfile.TemporaryDirectory() as raw:
             output = Path(raw)
             native = ProcessResult(['owned'], 124, stdout='postgresql://user:public-test-sentinel@owned/db', terminal_state='timeout')
@@ -167,9 +167,11 @@ class LiveSourceTests(unittest.TestCase):
             with self.subTest(acknowledged=acknowledged), tempfile.TemporaryDirectory() as raw:
                 output = Path(raw)
                 dead = [False]
-                identity = lambda _pid: {'pid': 12345, 'boot': 'owned-boot', 'start': 'dead' if dead[0] else 'alive'}
+                def identity(_pid):
+                    return {'pid': 12345, 'boot': 'owned-boot', 'start': 'dead' if dead[0] else 'alive'}
                 original_read = Path.read_text
-                boot = lambda path,*a,**kw: 'owned-boot' if str(path) == '/proc/sys/kernel/random/boot_id' else original_read(path,*a,**kw)
+                def boot(path, *a, **kw):
+                    return 'owned-boot' if str(path) == '/proc/sys/kernel/random/boot_id' else original_read(path, *a, **kw)
                 def child(*_args, **_kwargs):
                     owner = resources.OwnedDocker(output/'factory-resources.json', 'gz-owned-test')
                     owner.volume('data')
@@ -314,7 +316,8 @@ class ParserApplicabilityTests(unittest.TestCase):
         pin=next(value.removeprefix('pypdf==') for value in tomllib.loads(metadata.decode())['project']['dependencies'] if value.startswith('pypdf=='))
         for version,actual,skipped in ((None,1,6),(pin,6,1)):
             with self.subTest(parser=version),tempfile.TemporaryDirectory() as raw:
-                root=Path(raw); target=root/'factory/tests/test_landing_pdf_worker.py'
+                root=Path(raw)
+                target=root/'factory/tests/test_landing_pdf_worker.py'
                 target.parent.mkdir(parents=True)
                 target.write_text(ast.unparse(owned)+'\n')
                 (root/'factory/pyproject.toml').write_bytes(metadata)
@@ -345,17 +348,21 @@ class ParserApplicabilityTests(unittest.TestCase):
                     self.assertEqual(set(namespace.owned_executed),set(report['executed']))
                     self.assertFalse(module.accepted_suite(report,binding))
                     self.assertFalse(module.accepted_suite(report,binding,parser_observation={'pypdf_version':version}))
-                    changed=copy.deepcopy(report); changed['applicability']['observations'][0]['observed_ns']=0
+                    changed=copy.deepcopy(report)
+                    changed['applicability']['observations'][0]['observed_ns']=0
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
-                    changed=copy.deepcopy(report); changed['skipped'][0]['reason']='unsupported reason'
+                    changed=copy.deepcopy(report)
+                    changed['skipped'][0]['reason']='unsupported reason'
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
                     for dimension,value in (('python','/foreign/python'),('pypdf_version','foreign'),('policy_digest','0'*64)):
                         changed=copy.deepcopy(report)
                         changed['applicability']['observations'][1][dimension]=value
                         self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),dimension)
-                    changed=copy.deepcopy(report); changed['applicability']['policy']['canonical_policy_sha256']='0'*64
+                    changed=copy.deepcopy(report)
+                    changed['applicability']['policy']['canonical_policy_sha256']='0'*64
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
-                    changed=copy.deepcopy(report); changed['applicability']['observations'][0]['binding']['attempt']='foreign'
+                    changed=copy.deepcopy(report)
+                    changed['applicability']['observations'][0]['binding']['attempt']='foreign'
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
                     from getzilla.python_test_runner import CleanupMetadata
                     for invalid in (ProcessResult(['owned'],124,terminal_state='timeout'),
@@ -419,10 +426,12 @@ class FactoryControllerTests(unittest.TestCase):
         import os
         for after_open in (False,True):
             with self.subTest(after_open=after_open),tempfile.TemporaryDirectory() as raw:
-                root=Path(raw); owned=module._FactoryEnvironment(root)
+                root=Path(raw)
+                owned=module._FactoryEnvironment(root)
                 (owned.path/'original').write_text('original')
                 handles=set(owned.parent._handles+owned.directory._handles)
-                native=module.fsx.open_dir_at; injected=[]
+                native=module.fsx.open_dir_at
+                injected=[]
                 def opened(parent,name,**kwargs):
                     handle=native(parent,name,**kwargs) if after_open or name!='environment' else None
                     if name=='environment':
@@ -444,13 +453,15 @@ class FactoryControllerTests(unittest.TestCase):
                 self.assertEqual((root/result['recovery_anchor']/'environment/replacement').read_text(),'replacement')
                 self.assertIs(owned.cleanup(child_exit_confirmed=True),result)
                 for handle in handles:
-                    with self.assertRaises(OSError): os.fstat(handle)
+                    with self.assertRaises(OSError):
+                        os.fstat(handle)
 
     def test_quarantine_capture_never_overwrites_an_existing_object(self):
         module=importlib.import_module('getzilla.live_acceptance')
         import os
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); owned=module._FactoryEnvironment(root)
+            root=Path(raw)
+            owned=module._FactoryEnvironment(root)
             (owned.path/'original').write_text('original')
             native=module.fsx.open_dir_at
             def opened(parent,name,**kwargs):
@@ -468,10 +479,13 @@ class FactoryControllerTests(unittest.TestCase):
         module=importlib.import_module('getzilla.live_acceptance')
         import os
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); protected=root/'protected'; protected.mkdir()
+            root=Path(raw)
+            protected=root/'protected'
+            protected.mkdir()
             (protected/'marker').write_text('retained')
             owned=module._FactoryEnvironment(root)
-            nested=owned.path/'nested'; nested.mkdir()
+            nested=owned.path/'nested'
+            nested.mkdir()
             (nested/'payload').write_text('owned')
             (nested/'link').symlink_to(protected,target_is_directory=True)
             handles=set(owned.parent._handles+owned.directory._handles)
@@ -482,14 +496,17 @@ class FactoryControllerTests(unittest.TestCase):
             self.assertFalse((root/result['recovery_anchor']).exists())
             self.assertEqual((protected/'marker').read_text(),'retained')
             for handle in handles:
-                with self.assertRaises(OSError): os.fstat(handle)
+                with self.assertRaises(OSError):
+                    os.fstat(handle)
 
     def test_late_unlink_replacement_refuses_false_original_absence(self):
         module=importlib.import_module('getzilla.live_acceptance')
         import os
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); owned=module._FactoryEnvironment(root)
-            native=module.fsx.rmdir_at; injected=[]
+            root=Path(raw)
+            owned=module._FactoryEnvironment(root)
+            native=module.fsx.rmdir_at
+            injected=[]
             def removed(parent,name):
                 if name=='environment':
                     injected.append(True)
@@ -509,7 +526,8 @@ class FactoryControllerTests(unittest.TestCase):
         import os
         for unavailable in (False,True):
             with self.subTest(unavailable=unavailable),tempfile.TemporaryDirectory() as raw:
-                root=Path(raw); owned=module._FactoryEnvironment(root)
+                root=Path(raw)
+                owned=module._FactoryEnvironment(root)
                 handles=set(owned.parent._handles+owned.directory._handles)
                 native=module.fsx.rmdir_at
                 def removed(parent,name):
@@ -525,14 +543,17 @@ class FactoryControllerTests(unittest.TestCase):
                 self.assertTrue((owned.path if unavailable else root/'retained-original').is_dir())
                 self.assertNotEqual(result.get('original_unlinked'),True)
                 for handle in handles:
-                    with self.assertRaises(OSError): os.fstat(handle)
+                    with self.assertRaises(OSError):
+                        os.fstat(handle)
 
     def test_primary_exception_and_cancel_close_handles_without_losing_primary(self):
         module=importlib.import_module('getzilla.live_acceptance')
         import os
         for primary in (ValueError('owned primary failure'),module.RunCancelled(15)):
             with self.subTest(primary=type(primary).__name__),tempfile.TemporaryDirectory() as raw:
-                root=Path(raw); environments=[]; native=module._FactoryEnvironment
+                root=Path(raw)
+                environments=[]
+                native=module._FactoryEnvironment
                 def created(output):
                     owned=native(output)
                     environments.append((owned,set(owned.parent._handles+owned.directory._handles)))
@@ -550,12 +571,14 @@ class FactoryControllerTests(unittest.TestCase):
                 self.assertEqual(owned.outcome['status'],'unknown')
                 self.assertIn('Factory controller environment cleanup unconfirmed',primary.__notes__)
                 for handle in handles:
-                    with self.assertRaises(OSError): os.fstat(handle)
+                    with self.assertRaises(OSError):
+                        os.fstat(handle)
 
     def test_postcheck_replacement_preserves_both_objects_and_refuses_cleanup(self):
         module=importlib.import_module('getzilla.live_acceptance')
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); owned=module._FactoryEnvironment(root)
+            root=Path(raw)
+            owned=module._FactoryEnvironment(root)
             (owned.path/'original').write_text('original')
             native=module._remove_factory_environment
             def swapped(value):
@@ -573,14 +596,16 @@ class FactoryControllerTests(unittest.TestCase):
     def test_controller_postcheck_replacement_cannot_publish_pass(self):
         module=importlib.import_module('getzilla.live_acceptance')
         with tempfile.TemporaryDirectory() as raw:
-            root=Path(raw); native=module._remove_factory_environment
+            root=Path(raw)
+            native=module._remove_factory_environment
             def observed(_command,**kwargs):
                 path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
                 (path/'original').write_text('original')
                 return {'status':'pass','primary_outcome':'passed','child_exit_confirmed':True}
             def swapped(value):
                 path=getattr(value,'path',value)
-                path.rename(root/'retained-original'); path.mkdir(mode=0o700)
+                path.rename(root/'retained-original')
+                path.mkdir(mode=0o700)
                 (path/'replacement').write_text('replacement')
                 return native(value)
             with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
@@ -602,11 +627,15 @@ class FactoryControllerTests(unittest.TestCase):
         for primary,cleanup_failure,confirmed in (('passed',False,True),('failed',False,True),
                 ('cancelled',False,True),('passed',True,True),('passed',False,False)):
             with self.subTest(primary=primary,cleanup_failure=cleanup_failure,confirmed=confirmed), tempfile.TemporaryDirectory() as raw:
-                root=Path(raw); order=[]; paths=[]; token=object()
+                root=Path(raw)
+                order=[]
+                paths=[]
+                token=object()
                 def observed(_command,**kwargs):
                     path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
                     self.assertEqual(kwargs['environment']['GETZILLA_LIVE_PARSER_REQUIRED'],'1')
-                    self.assertTrue(path.is_dir()); paths.append(path)
+                    self.assertTrue(path.is_dir())
+                    paths.append(path)
                     (path/'bin').mkdir()
                     (path/'bin/python').write_text('owned interpreter fixture, never executed')
                     order.append('observe')
@@ -614,12 +643,14 @@ class FactoryControllerTests(unittest.TestCase):
                             'child_exit_confirmed':confirmed,'python':'/foreign/report-selected-python'}
                 def measured(_root,_binding,*,python,**kwargs):
                     self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python'))
-                    self.assertTrue(paths[0].is_dir()); order.append('final-measurement')
+                    self.assertTrue(paths[0].is_dir())
+                    order.append('final-measurement')
                     self.assertTrue(kwargs['required'])
                     return token
                 def validated(_output,_cell,_binding,**kwargs):
                     self.assertIs(kwargs['parser_observation'],token)
-                    self.assertTrue(paths[0].is_dir()); order.append('validate')
+                    self.assertTrue(paths[0].is_dir())
+                    order.append('validate')
                     return True
                 native_remove=module._remove_factory_environment
                 def removed(path):
@@ -656,6 +687,67 @@ class FactoryControllerTests(unittest.TestCase):
             (original/'foreign').write_text('retained')
             self.assertEqual(owned.cleanup(child_exit_confirmed=True)['status'],'unknown')
             self.assertEqual((original/'foreign').read_text(),'retained')
+
+
+class VerificationFixtureConstructionTests(unittest.TestCase):
+    def test_only_opted_in_fixture_omits_ci_payload_before_initial_commit(self):
+        from tests import _support
+        from getzilla.security_inventory import collect_inventory
+        import subprocess
+        for verification_fixture in (False, True):
+            with self.subTest(verification_fixture=verification_fixture), tempfile.TemporaryDirectory() as raw:
+                source = Path(raw) / 'mini-project'
+                config = source / '.getzilla/config/ci-images.json'
+                config.parent.mkdir(parents=True)
+                payload = json.dumps({
+                    'schema_version': 1, 'platform': 'linux/amd64',
+                    'postgres': {'reference': 'owned-postgres@sha256:' + 'a' * 64,
+                                 'image_id': 'sha256:' + 'b' * 64},
+                    'python': {'reference': 'owned-python@sha256:' + 'c' * 64,
+                               'image_id': 'sha256:' + 'd' * 64},
+                }).encode()
+                config.write_bytes(payload)
+                (source / 'schemas').mkdir()
+                (source / 'schemas/owned.json').write_text('{}')
+                retained = source / '.getzilla/config/owned-metadata.json'
+                retained.write_text('{"owned": "retain exact sibling"}\n')
+                observations = []
+                native_run = subprocess.run
+
+                def owned_git(command, **kwargs):
+                    self.assertEqual(command[0], 'git')
+                    self.assertIn(command[1], {'init', 'config', 'add', 'commit', 'ls-tree'})
+                    selected = Path(kwargs['cwd'])
+                    self.assertNotEqual(selected, ROOT)
+                    self.assertEqual(selected.name, 'project')
+                    if command[1] == 'add':
+                        observations.append((selected / '.getzilla/config/ci-images.json').exists())
+                    return native_run(command, **kwargs)
+
+                with patch.object(_support, 'PROJECT', source), \
+                        patch.object(subprocess, 'run', side_effect=owned_git), \
+                        patch('socket.socket', side_effect=AssertionError('unmocked network forbidden')), \
+                        patch('socket.create_connection', side_effect=AssertionError('unmocked network forbidden')), \
+                        _support.project_copy(git=True, verification_fixture=verification_fixture) as root:
+                    inventory = collect_inventory(root)
+                    self.assertTrue(inventory['complete'], inventory['gaps'])
+                    references = {row['reference'] for row in inventory['images']}
+                    expected = set() if verification_fixture else {
+                        'owned-postgres@sha256:' + 'a' * 64, 'owned-python@sha256:' + 'c' * 64}
+                    self.assertEqual(references, expected)
+                    self.assertEqual(observations, [not verification_fixture])
+                    tree = owned_git(['git', 'ls-tree', '-r', '--name-only', 'HEAD'], cwd=root,
+                                     check=True, capture_output=True, text=True).stdout.splitlines()
+                    self.assertEqual('.getzilla/config/ci-images.json' in tree, not verification_fixture)
+                    self.assertEqual((root / '.getzilla/config/owned-metadata.json').read_bytes(), retained.read_bytes())
+                    if not verification_fixture:
+                        self.assertEqual((root / '.getzilla/config/ci-images.json').read_bytes(), payload)
+                    (root / 'Dockerfile').write_text('FROM owned-target@sha256:' + 'e' * 64 + '\n')
+                    changed = collect_inventory(root)
+                    self.assertTrue(changed['complete'], changed['gaps'])
+                    self.assertIn('owned-target@sha256:' + 'e' * 64,
+                                  {row['reference'] for row in changed['images']})
+                self.assertEqual(config.read_bytes(), payload)
 
 
 if __name__ == '__main__':

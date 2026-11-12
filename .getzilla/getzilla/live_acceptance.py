@@ -548,7 +548,7 @@ def _trust_ci(root, output, binding):
         host, port = endpoint()
         environment = {'PYTHONPATH':'/deps:/repo/.getzilla:/repo/trust-ci/src:/repo/trust-ci/tests:/repo/trust-ci',
             'PYTHONDONTWRITEBYTECODE':'1','GETZILLA_LIVE_BINDING':'/artifacts/invocation.json',
-            'GETZILLA_LIVE_ARTIFACTS':'/tmp'}
+            'GETZILLA_LIVE_ARTIFACTS':'/tmp'}  # nosec B108: private test-container path, not a host temporary file
         for label, role in (('', 'migrator'), ('API_','api'), ('WORKER_','worker'), ('BACKUP_','backup')):
             environment['TRUST_CI_TEST_'+label+'DATABASE_URL'] = f'postgresql://trust_ci_{role}:{passwords[role]}@{host}:{port}/trust_ci_test'
         tester = owner.container('tests', pins['python']['reference'], volume=deps, volume_target='/deps', network=network,

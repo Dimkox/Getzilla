@@ -2439,7 +2439,7 @@
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 436,
-          "sha256": "2ddb617cdff774283aed4987368291aef531dedd37c74ddf7e2c58425638a45b"
+          "sha256": "e8d28504147d79f7ab41c5eb9f93db5bc3c41280d2d212a864cd77983702fbdf"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 436,
