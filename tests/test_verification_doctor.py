@@ -2201,6 +2201,35 @@ class TrustedHistoricalRangeTests(unittest.TestCase):
             self.assertEqual(migration['source_base'], route['base_commit'])
             self.assertEqual(migration['evidence_kind'], 'historical_archival')
 
+    def test_fast_pipeline_keeps_historical_comparison_evidence(self):
+        from getzilla.continuity import submit
+        from tests._support import _session_environment
+
+        class HistoricalBoundaryReached(Exception):
+            pass
+
+        with self._history() as (root, _origin, _target, _route, _ranges), _session_environment():
+            route = submit(root, 'Fix the small historical typo.', 'fixture-fast-historical')
+            self.assertEqual(route['delivery_lane'], 'light')
+            actual_change_specs = verification_module._change_specs
+            observed = {}
+
+            def finish_at_historical_boundary(*args, **kwargs):
+                observed['check'], observed['metadata'] = actual_change_specs(*args, **kwargs)
+                # The real pipeline, Git comparison selection and archival
+                # validator ran. Stop before unrelated checks or external work.
+                raise HistoricalBoundaryReached
+
+            with patch.object(verification_module, '_change_specs', side_effect=finish_at_historical_boundary), \
+                 self.assertRaises(HistoricalBoundaryReached):
+                verify(root, 'fast', record=False)
+            self.assertEqual(observed['check'].status, 'pass', observed['check'].details)
+            self.assertEqual(observed['metadata']['specs'], [])
+            migrations = observed['metadata']['historical_migrations']
+            self.assertEqual(len(migrations), 1)
+            self.assertEqual(migrations[0]['source_base'], route['base_commit'])
+            self.assertEqual(migrations[0]['evidence_kind'], 'historical_archival')
+
     def test_explicit_empty_or_failed_ranges_never_fall_back(self):
         with self._history() as (root, origin, target, route, ranges):
             invalid = (GitRangeSelection(), GitRangeSelection(bases=ranges.bases, findings=[{

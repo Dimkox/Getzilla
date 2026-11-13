@@ -67,7 +67,7 @@ class StagedReleaseModeTests(unittest.TestCase):
             'files': [{'path': name, 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
                        'mode': mode} for name, content, mode in files]}).encode()
         release = setup.VerifiedRelease('a' * 64, hashlib.sha256(manifest).hexdigest(), manifest, files)
-        for mask in (0o022, 0o077, 0o027):
+        for mask in (0o002, 0o022, 0o077, 0o027):
             with self.subTest(mask=oct(mask)), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve() / 'installation'
                 root.mkdir(mode=0o700)
