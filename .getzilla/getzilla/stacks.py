@@ -58,6 +58,8 @@ class StackContext:
     command: Callable[..., Any]
     ensure: Callable[[Stack, str], Toolchain | Blocker]
     notes: dict[str, Any] = field(default_factory=dict)
+    required_plan: dict | None = None
+    prerequisite_results: list[Any] = field(default_factory=list)
 
     def toolchain(self) -> Toolchain | Any:
         """The toolchain, or a failing check named ``toolchain:<stack>`` that says why there is none."""
@@ -69,12 +71,52 @@ class StackContext:
             self.notes['toolchain_blocker'] = result.code
             return self.make(f'toolchain:{self.stack.id}', 'fail', result.code, details=[result.detail(f'stack:{self.stack.id}')])
         self.notes['toolchain_home'] = str(result.home)
+        if self.required_plan is not None:
+            self.prerequisite_results.append(self.make(f'toolchain:{self.stack.id}', 'pass', 'pinned toolchain available'))
         return result
 
 
 Runner = Callable[[StackContext], list[Any]]
 # Stack id -> runner. A registered runner turns a detected stack from "not verified" into checks.
 RUNNERS: dict[str, Runner] = {}
+
+
+@dataclass(frozen=True)
+class StackPlanContext:
+    root: Path
+    mode: str
+    stack: Stack
+    files: list[str]
+
+
+# Each pure planner belongs to one exact registered producer, never to a same-named replacement.
+PLANNERS: dict[str, tuple[Runner, Callable[[StackPlanContext], list[str]]]] = {}
+
+
+def _registered_pair(stack_id: str, runner) -> bool:
+    pair = PLANNERS.get(stack_id)
+    return isinstance(pair, tuple) and len(pair) == 2 and pair[0] is runner and callable(runner) and callable(pair[1])
+
+
+def planned_stack_checks(root: Path, mode: str, changed: list[str], *, registry=None, files=None) -> list[dict]:
+    from . import stack_runners  # noqa: F401  registers the known producer/planner pairs
+    rows = []
+    for stack in detect_stacks(root, registry, files):
+        if stack.verified_by:
+            continue
+        touched = [path for path in changed if stack.owns(path)]
+        pair = PLANNERS.get(stack.id)
+        proved = _registered_pair(stack.id, RUNNERS.get(stack.id))
+        applicable = bool(touched)
+        names = (pair[1](StackPlanContext(root, mode, stack, touched))
+                 if applicable and pair and proved else [f'stack:{stack.id}'])
+        for name in names:
+            required = applicable and not (name == 'java' and mode not in {'pr', 'release'})
+            rows.append({'check_id': name, 'applicability': 'required' if required else 'not_applicable',
+                         'reason': 'registered stack producer' if applicable else UNTOUCHED_SUMMARY,
+                         'evidence': {'stack': stack.id, 'changed': touched, 'mode': mode,
+                                      **({'producer_declared': False} if applicable and not proved else {})}})
+    return rows
 
 
 def load_registry(root: Path | None = None) -> dict[str, Stack]:
@@ -128,7 +170,7 @@ def default_ensure(stack: Stack, version: str) -> Toolchain | Blocker:
 def stack_checks(root: Path, mode: str, changed: list[str], *, make: Callable[..., Any], command: Callable[..., Any],
                  registry: Mapping[str, Stack] | None = None, runners: Mapping[str, Runner] | None = None,
                  ensure: Callable[[Stack, str], Toolchain | Blocker] | None = None,
-                 files: list[str] | None = None) -> tuple[list[Any], dict[str, Any]]:
+                 files: list[str] | None = None, required_plan: dict | None = None) -> tuple[list[Any], dict[str, Any]]:
     """Checks for every stack the change touches, plus an honest line for every other detected stack."""
     registry = load_registry(root) if registry is None else registry
     runners = RUNNERS if runners is None else runners
@@ -153,14 +195,30 @@ def stack_checks(root: Path, mode: str, changed: list[str], *, make: Callable[..
             continue
         if stack.id not in runners:
             metadata['not_verified'].append(stack.id)
-            refused = mode in {'pr', 'release'}
+            refused = required_plan is not None or mode in {'pr', 'release'}
             results.append(make(f'stack:{stack.id}', 'fail' if refused else 'skip', f'{NOT_VERIFIED}:{stack.id}', details=[{
                 'severity': 'error' if refused else 'warning', 'code': f'{NOT_VERIFIED}:{stack.id}', 'path': touched[0],
                 'message': f'Getzilla has no checks for {stack.id} yet; {len(touched)} changed file(s) are not verified',
             }]))
             continue
-        context = StackContext(root, mode, stack, touched, make, command, ensure)
-        results.extend(runners[stack.id](context))
+        if required_plan is not None and not _registered_pair(stack.id, runners[stack.id]):
+            metadata['not_verified'].append(stack.id)
+            results.append(make(f'stack:{stack.id}', 'fail', 'registered stack producer/planner pair is unproved'))
+            continue
+        context = StackContext(root, mode, stack, touched, make, command, ensure, required_plan=required_plan)
+        observed = runners[stack.id](context)
+        if required_plan is not None:
+            pair = PLANNERS.get(stack.id)
+            expected = pair[1](StackPlanContext(root, mode, stack, touched)) if pair and pair[0] is runners[stack.id] else [f'stack:{stack.id}']
+            observed = [*context.prerequisite_results, *observed]
+            from collections import Counter
+            counts = Counter(item.name for item in observed)
+            for name in expected:
+                if counts[name] != 1:
+                    observed.append(make(name, 'fail', 'registered stack producer omitted or duplicated a required result'))
+            if any(name not in expected for name in counts):
+                observed.append(make(f'stack:{stack.id}', 'fail', 'registered stack producer returned unplanned results'))
+        results.extend(observed)
         metadata['checked'].append(stack.id)
         metadata['details'][stack.id] = context.notes
     return results, metadata

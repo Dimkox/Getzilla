@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import subprocess
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 
@@ -370,7 +370,14 @@ class NativeOsvRangeTests(unittest.TestCase):
                 return KV.scan(target,environ={'GETZILLA_OSV_DB':str(database)},today=date(2026,11,5))
             with self.assertRaises(KV.VulnerabilityError):
                 actual_scan(root)
-            with patch.object(verification,'scan_known_vulnerabilities',side_effect=actual_scan):
+            from getzilla.expanded_security import known_vulnerability_check
+            def native_producer(target):
+                return known_vulnerability_check(target, environ={'GETZILLA_OSV_DB': str(database)},
+                                                  now=datetime(2026,11,5,tzinfo=timezone.utc))
+            with patch.object(verification,'known_vulnerability_check',side_effect=native_producer):
                 result = verification._known_vulnerabilities(root)
             self.assertEqual(result.status,'fail')
-            self.assertEqual(result.details,[])
+            structured = [row for row in result.details if row.get('kind') == 'security-result']
+            self.assertEqual(len(structured),1)
+            self.assertEqual(structured[0]['outcome'],'blocked')
+            self.assertEqual(structured[0]['accepted'],[])
