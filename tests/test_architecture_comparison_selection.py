@@ -202,11 +202,13 @@ class DerivedComparisonTests(unittest.TestCase):
         self.assertEqual(self.validated_sources, set(self.sources))
         binding = receipts.active_architecture_binding(self.root, self.route)
         self.report['architecture'] = {'status': 'pass', 'fitness_status': 'pass', **binding}
-        return {'schema_version': 1, 'route_id': 'owned393', 'kind': 'verification', 'status': 'pass',
+        proof = {'schema_version': 1, 'route_id': 'owned393', 'kind': 'verification', 'status': 'pass',
                 'created_at': self.now.isoformat(), 'report': None,
                 'criterion_ids': [], 'spec_digest': None, 'spec_fingerprint': None,
                 'git_head': self.head, 'tree_fingerprint': tree_fingerprint(self.root), **binding,
                 'details': self.report}
+        self.publish_qualification(proof)
+        return proof
 
     def test_sufficient_plan_and_hydrated_report_stay_current_after_acceptance(self):
         proof = self.qualification_record()
@@ -231,6 +233,99 @@ class DerivedComparisonTests(unittest.TestCase):
             with patch.object(verification_plan, 'current_required_plan', side_effect=AssertionError('recursive compiler')):
                 self.assertEqual(receipts._qualified_architecture_comparison(self.root, self.route, self.head).comparison_base_sha,
                                  self.target)
+
+    def publish_qualification(self, proof):
+        publication = receipts._publish_verification_report(self.root, 'owned393', proof, None)
+        try:
+            envelope = {**proof, 'details': {'_verification_report': publication.reference}}
+            path = receipts.receipt_dir(self.root, 'owned393') / 'verification.json'
+            receipts._publish_receipt(path, envelope, None)
+            return path, self.root / publication.reference['path']
+        finally:
+            publication.close()
+
+    def test_normal_invalidation_during_validation_cannot_reuse_a_stored_witness(self):
+        from getzilla import expanded_security
+        proof = self.qualification_record()
+        self.publish_qualification(proof)
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        validate = expanded_security.validate_data_source
+        def invalidated(source, **kwargs):
+            result = validate(source, **kwargs)
+            receipts.invalidate_receipts(self.root, 'owned393', 'owned concurrent invalidation')
+            return result
+        with patch.object(expanded_security, 'validate_data_source', side_effect=invalidated):
+            selected = receipts._qualified_architecture_comparison(self.root, self.route, self.head)
+        self.assertIs(receipts.get_receipt(self.root, 'owned393', 'verification')['stale'], True)
+        self.assertIsNone(selected)
+
+    def test_direct_report_consumer_rechecks_policy_after_source_validation(self):
+        from getzilla import expanded_security
+        proof = self.qualification_record()
+        self.publish_qualification(proof)
+        report = receipts.get_receipt(self.root, 'owned393', 'verification')['details']
+        self.assertEqual(verification_plan.report_gaps(self.root, report), [])
+        validate = expanded_security.validate_data_source
+        def changed(source, **kwargs):
+            result = validate(source, **kwargs)
+            (self.policy_sdk / 'process_limits.py').write_bytes(b'POLICY = 2\n')
+            return result
+        with patch.object(expanded_security, 'validate_data_source', side_effect=changed):
+            self.assertTrue(verification_plan.report_gaps(self.root, report))
+
+    def test_changed_removed_or_replaced_stored_evidence_cannot_reuse_a_witness(self):
+        from getzilla import expanded_security
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        validate = expanded_security.validate_data_source
+        for mutation in ('envelope-change', 'envelope-replace', 'artifact-replace', 'envelope-remove', 'artifact-remove'):
+            path, artifact = self.publish_qualification(proof)
+            changed = []
+            def altered(source, **kwargs):
+                result = validate(source, **kwargs)
+                if not changed:
+                    if mutation == 'envelope-change':
+                        document = json.loads(path.read_bytes())
+                        document['stale'] = True
+                        receipts._publish_receipt(path, document, None)
+                    elif mutation.endswith('replace'):
+                        selected = artifact if mutation.startswith('artifact') else path
+                        temporary = selected.with_name('owned-replacement.json')
+                        temporary.write_bytes(selected.read_bytes())
+                        os.replace(temporary, selected)
+                    else:
+                        (artifact if mutation.startswith('artifact') else path).unlink()
+                    changed.append(mutation)
+                return result
+            with self.subTest(mutation=mutation), \
+                 patch.object(expanded_security, 'validate_data_source', side_effect=altered):
+                self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+                self.assertEqual(changed, [mutation])
+
+    def test_direct_report_consumer_rechecks_intent_and_source_after_validation(self):
+        from getzilla import expanded_security
+        proof = self.qualification_record()
+        self.publish_qualification(proof)
+        report = receipts.get_receipt(self.root, 'owned393', 'verification')['details']
+        source_path = self.root / 'trust-ci/owned.py'
+        original = source_path.read_bytes()
+        validate = expanded_security.validate_data_source
+        for mutation in ('intent', 'source'):
+            def changed(source, **kwargs):
+                result = validate(source, **kwargs)
+                if mutation == 'intent':
+                    self.route['task'] = 'different owned intent'
+                else:
+                    source_path.write_bytes(b'owned = 2\n')
+                return result
+            try:
+                with self.subTest(mutation=mutation), \
+                     patch.object(expanded_security, 'validate_data_source', side_effect=changed):
+                    self.assertTrue(verification_plan.report_gaps(self.root, report))
+            finally:
+                self.route.pop('task', None)
+                source_path.write_bytes(original)
+        self.assertEqual(verification_plan.report_gaps(self.root, report), [])
 
     def test_incomplete_or_unqualified_individual_results_cannot_freeze_ranges(self):
         proof = self.qualification_record()

@@ -653,7 +653,11 @@ def report_gaps(root: Path, report: Any, *, now: datetime | None = None) -> list
         if not isinstance(report, dict) or not isinstance(report.get('required_plan'), dict):
             raise ValueError('qualifying verification requires an embedded required_plan')
         current = current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'))
-        return _report_plan_gaps(root, report, current, now=now)
+        gaps = _report_plan_gaps(root, report, current, now=now)
+        if not gaps and current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles')) != current:
+            return [_finding('required-plan-changed', 'required_plan',
+                             'current complete binding changed during result validation')]
+        return gaps
     except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
         return [_finding('required-plan-unavailable', 'required_plan', 'current required plan and evidence could not be established')]
 

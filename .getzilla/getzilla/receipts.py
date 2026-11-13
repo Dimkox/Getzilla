@@ -136,7 +136,8 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
-def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
+def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str,
+                       *, _observation: list | None = None) -> tuple[dict[str, Any], bytes]:
     if fsx.WINDOWS:
         opened = _windows_open_regular(directory_fd, name, os.O_RDONLY)
         if opened is None:
@@ -178,6 +179,15 @@ def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label
                           parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
         if not isinstance(data, dict):
             raise RuntimeError(f'{label} must be a JSON object')
+        if _observation is not None:
+            named = fsx.lstat_at(directory_fd, name)
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')
+            if any(getattr(named, key) != getattr(after, key) for key in fields):
+                raise RuntimeError(f'{label} name changed while being read')
+            directory = fsx.fstat_dir(directory_fd)
+            _observation.append((label, name, directory.st_dev, directory.st_ino,
+                _metadata_identity(after), after.st_size, after.st_uid, after.st_nlink,
+                hashlib.sha256(content).hexdigest()))
         return data, content
     finally:
         os.close(descriptor)
@@ -303,7 +313,8 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
                 fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any]) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any],
+                                  *, _observation: list | None = None) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -320,7 +331,8 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, rec
     reports_fd = None
     try:
         reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
-        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
+        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES,
+                                              'verification report', _observation=_observation)
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
@@ -498,7 +510,13 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     route_id = route.get('route_id')
     if not isinstance(route_id, str):
         return None
-    receipt = get_receipt(root, route_id, 'verification')
+    try:
+        stored_identity = _receipt_storage_identity(root, route_id)
+        receipt = get_receipt(root, route_id, 'verification')
+        if stored_identity is None or _receipt_storage_identity(root, route_id) != stored_identity:
+            return None
+    except (OSError, RuntimeError):
+        return None
     required = {'schema_version', 'route_id', 'kind', 'status', 'created_at', 'tree_fingerprint',
                 'report', 'details', 'criterion_ids', 'spec_digest', 'spec_fingerprint'}
     if (not isinstance(receipt, dict) or not required.issubset(receipt)
@@ -585,6 +603,12 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
             or tree_fingerprint(root) != receipt['tree_fingerprint']
             or not receipt_context_current(root, route, receipt)):
         raise ArchitectureError('qualified comparison changed during validation', code='git')
+    try:
+        if (get_receipt(root, route_id, 'verification') != receipt
+                or _receipt_storage_identity(root, route_id) != stored_identity):
+            return None
+    except (OSError, RuntimeError):
+        return None
     return ArchitectureBaseSelection(**witness)
 
 
@@ -1090,14 +1114,26 @@ def write_receipt(
 
 
 def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
+    return _read_receipt(root, route_id, kind)
+
+
+def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
+    """Observe the bounded envelope and immutable artifact through pinned readers."""
+    observation: list = []
+    data = _read_receipt(root, route_id, 'verification', _observation=observation)
+    return tuple(observation) if data is not None else None
+
+
+def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None) -> dict[str, Any] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
         directory_fd = _open_receipt_directory(root, route_id)
-        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
+        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES,
+                                    'receipt', _observation=_observation)
         if kind == 'verification':
-            _hydrate_verification_report(directory_fd, route_id, data)
+            _hydrate_verification_report(directory_fd, route_id, data, _observation=_observation)
         return data
     except FileNotFoundError:
         return None
