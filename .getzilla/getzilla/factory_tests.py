@@ -167,7 +167,8 @@ def _input_layout(bound: ReadOnlyBoundRoot):
                     if fsx.is_link(metadata):
                         raise ValueError("Factory source inventory contains a linked input")
                     if stat.S_ISDIR(metadata.st_mode):
-                        if name not in _GENERATED_DIRECTORIES:
+                        if (name not in _GENERATED_DIRECTORIES
+                                and path != "factory/src/getzilla_factory.egg-info"):
                             walk(path)
                     elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
                         if Path(name).suffix not in _GENERATED_SUFFIXES:
