@@ -501,9 +501,7 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
-def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str, *,
-                                      _expected_receipt: dict | None = None,
-                                      _expected_storage_identity: tuple | None = None):
+def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str):
     """Reuse an exact completed qualification, never a reconcile-only assessment.
 
     This reads existing workflow evidence; it grants no new PASS or independent
@@ -516,9 +514,6 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
         stored_identity = _receipt_storage_identity(root, route_id)
         receipt = get_receipt(root, route_id, 'verification')
         if stored_identity is None or _receipt_storage_identity(root, route_id) != stored_identity:
-            return None
-        if ((_expected_receipt is not None and receipt != _expected_receipt)
-                or (_expected_storage_identity is not None and stored_identity != _expected_storage_identity)):
             return None
     except (OSError, RuntimeError):
         return None
@@ -547,27 +542,28 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     witness = receipt.get('architecture_comparison_witness')
     if witness is None:
         return None
-    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _digest as comparison_digest, _git
+    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _comparison_ranges_digest, _git
     names = set(ArchitectureBaseSelection.__dataclass_fields__)
     if (type(witness) is not dict or set(witness) != names
             or architecture.get('architecture_comparison_witness') != witness
             or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
             or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
-            or witness.get('range_mode') not in ('pr', 'release')
-            or witness.get('invocation_mode') != report['mode']
-            or witness.get('invocation_ranges_digest') != receipt.get('architecture_invocation_ranges_digest')
-            or witness.get('invocation_ranges_digest') != architecture.get('architecture_invocation_ranges_digest')
+            or witness.get('range_mode') != report['mode']
+            or witness.get('range_mode') != receipt.get('architecture_range_mode')
+            or witness.get('range_mode') != architecture.get('architecture_range_mode')
+            or 'architecture_invocation_ranges_digest' in receipt
+            or 'architecture_invocation_ranges_digest' in architecture
             or witness.get('comparison_base_sha') != witness.get('target_sha')
             or witness.get('comparison_base_sha') == head
             or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
             or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', witness[key])
                        for key in ('route_base_sha', 'comparison_base_sha', 'candidate_sha', 'target_sha'))
             or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{64}', witness[key])
-                       for key in ('ranges_digest', 'model_digest', 'invocation_ranges_digest'))
+                       for key in ('ranges_digest', 'model_digest'))
             or not isinstance(witness.get('target_ref'), str)
             or not witness['target_ref'].startswith(('refs/remotes/origin/', 'refs/heads/'))):
         raise ArchitectureError('qualified architecture comparison witness is malformed', code='git')
-    old_range = {'mode': witness['range_mode'], 'head': head, 'bases': [
+    old_range = {'bases': [
         {'kind': 'route', 'source': 'route.base_commit', 'target_sha': witness['route_base_sha'],
          'comparison_base_sha': witness['route_base_sha']},
         {'kind': 'pr-target', 'source': witness['target_ref'], 'target_sha': witness['target_sha'],
@@ -576,7 +572,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     contained = _git(root, ['merge-base', '--all', witness['target_sha'], head])
     if (anchor is None or anchor.decode().splitlines() != [witness['route_base_sha']]
             or contained is None or contained.decode().splitlines() != [witness['target_sha']]
-            or comparison_digest(old_range) != witness['ranges_digest']
+            or _comparison_ranges_digest(ArchitectureBaseSelection(**witness)) != witness['ranges_digest']
             or _comparison_model_digest(root, (witness['route_base_sha'], witness['target_sha'], head)) != witness['model_digest']):
         raise ArchitectureError('qualified architecture comparison identity is stale', code='git')
     for name in ('architecture_base_sha', 'architecture_base_kind', 'architecture_bootstrap_baseline',
@@ -592,7 +588,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     accepted = _git(root, ['merge-base', '--all', head, target[1]])
     if accepted is None or accepted.decode().splitlines() != [head]:
         return None
-    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['invocation_mode'], head_sha=head)
+    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['range_mode'], head_sha=head)
     try:
         from .verification_plan import _compile_required_plan, _report_plan_gaps
         current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
@@ -685,8 +681,7 @@ def _active_architecture_binding(
         "architecture_fingerprint": fingerprint,
         "architecture_head_commit": head,
         "architecture_head_kind": "worktree",
-        "architecture_range_mode": base_selection.invocation_mode,
-        "architecture_invocation_ranges_digest": base_selection.invocation_ranges_digest,
+        "architecture_range_mode": base_selection.range_mode,
         "architecture_route_base_sha": base_selection.route_base_sha,
         "architecture_rules_digest": digests["rules_digest"],
         "architecture_schema_digest": digests["schema_digest"],
@@ -847,7 +842,6 @@ def active_governance_binding(
                 "architecture_base_kind",
                 "architecture_comparison_witness",
                 "architecture_range_mode",
-                "architecture_invocation_ranges_digest",
             )
         ):
             raise RuntimeError(
@@ -1269,20 +1263,6 @@ def validate_evidence(
         try:
             architecture_options = _verification_architecture_options(root, route, kind, receipt.get('details'))
             architecture = active_architecture_binding(root, route, **architecture_options)
-            live_architecture = architecture
-            if kind == 'verification' and architecture is not None and receipt_identity is not None:
-                qualified = _qualified_architecture_comparison(root, route, _exact_head(root),
-                    _expected_receipt=receipt, _expected_storage_identity=receipt_identity)
-                if qualified is not None:
-                    # Validate live operands above; compare the publication's
-                    # original observation only after its full proof is current.
-                    publication = asdict(qualified)
-                    observed = dict(architecture.get('architecture_comparison_witness') or {})
-                    observed['invocation_ranges_digest'] = qualified.invocation_ranges_digest
-                    if observed != publication:
-                        raise RuntimeError('qualified receipt comparison differs from the live binding')
-                    architecture = {**architecture, 'architecture_comparison_witness': publication,
-                                    'architecture_invocation_ranges_digest': qualified.invocation_ranges_digest}
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: architecture binding stale: {exc}')
             continue
@@ -1292,7 +1272,7 @@ def validate_evidence(
         elif "architecture_digest" in receipt or "architecture_fingerprint" in receipt:
             missing.append(f'{kind}: architecture binding stale')
         try:
-            governance = active_governance_binding(root, route, live_architecture, **architecture_options)
+            governance = active_governance_binding(root, route, architecture, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: governance binding stale: {exc}')
             continue
@@ -1301,6 +1281,13 @@ def validate_evidence(
                 missing.append(f'{kind}: governance binding stale')
         elif "governance_digest" in receipt or "governance_evidence_digest" in receipt:
             missing.append(f'{kind}: governance binding stale')
+        if kind == 'verification':
+            try:
+                if (receipt_identity is None or get_receipt(root, route_id, kind) != receipt
+                        or _receipt_storage_identity(root, route_id) != receipt_identity):
+                    missing.append('verification: receipt changed during evidence validation')
+            except RuntimeError as exc:
+                missing.append(f'verification: unsafe receipt after evidence validation: {exc}')
     if escalated:
         missing = [f'{item} (required by exact-head diff risk)' if item.split(':', 1)[0] in escalated else item
                    for item in missing]

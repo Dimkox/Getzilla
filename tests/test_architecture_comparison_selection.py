@@ -249,15 +249,14 @@ class DerivedComparisonTests(unittest.TestCase):
         from dataclasses import replace
         proof = self.qualification_record()
         selected = select_architecture_comparison_base(self.root, self.route)
-        for field, value in (('candidate_sha', None), ('range_mode', 'release'),
-                             ('ranges_digest', '0' * 64), ('invocation_mode', 'release'),
-                             ('invocation_ranges_digest', '0' * 64)):
+        for field, value in (('candidate_sha', None), ('range_mode', 'release'), ('ranges_digest', '0' * 64)):
             with self.subTest(selection_field=field), self.assertRaises(ArchitectureError):
                 diff_architecture(self.root, base_sha=selected.comparison_base_sha, worktree=True,
                                   _trusted_base_selection=replace(selected, **{field: value}))
         self.git('update-ref', 'refs/remotes/origin/main', self.head)
         for field, value in (('range_mode', 'release'), ('ranges_digest', '0' * 64),
-                             ('invocation_mode', 'release'), ('invocation_ranges_digest', '0' * 64)):
+                             ('invocation_mode', 'release'), ('invocation_ranges_digest', '0' * 64),
+                             ('unknown_binding', 'owned')):
             changed = copy.deepcopy(proof)
             changed['architecture_comparison_witness'][field] = value
             changed['details']['architecture']['architecture_comparison_witness'][field] = value
@@ -280,7 +279,47 @@ class DerivedComparisonTests(unittest.TestCase):
         with patch.object(receipts, 'get_receipt', side_effect=changed_observation):
             self.assertTrue(receipts.validate_evidence(self.root,
                 {**self.route, 'required_evidence': ['verification']}),
-                'publication restoration requires the exact envelope observed by the consumer')
+                'receipt validation requires the exact envelope observed by the consumer')
+
+    def test_public_consumer_refuses_coherently_fabricated_invocation_digest(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        route = {**self.route, 'required_evidence': ['verification']}
+        self.assertEqual(receipts.validate_evidence(self.root, route), [])
+        for obsolete in (True, False):
+            changed = copy.deepcopy(proof)
+            for section in (changed, changed['details']['architecture']):
+                if obsolete:
+                    section['architecture_comparison_witness']['invocation_ranges_digest'] = '0' * 64
+                    section['architecture_invocation_ranges_digest'] = '0' * 64
+                else:
+                    section['architecture_comparison_witness']['ranges_digest'] = '0' * 64
+            self.publish_qualification(changed)
+            self.assertTrue(receipts.validate_evidence(self.root, route),
+                            'obsolete claims and a coherently copied canonical digest must both refuse')
+
+    def test_public_consumer_refuses_a_coherently_rehashed_wrong_mode(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        route = {**self.route, 'required_evidence': ['verification']}
+        self.assertEqual(receipts.validate_evidence(self.root, route), [])
+        for relabel_report in (False, True):
+            changed = copy.deepcopy(proof)
+            for section in (changed, changed['details']['architecture']):
+                witness = section['architecture_comparison_witness']
+                witness['range_mode'] = 'release'
+                witness['ranges_digest'] = architecture_diff._comparison_ranges_digest(
+                    architecture_diff.ArchitectureBaseSelection(**witness))
+                if relabel_report:
+                    section['architecture_range_mode'] = 'release'
+            if relabel_report:
+                changed['details']['mode'] = 'release'
+            self.publish_qualification(changed)
+            if not relabel_report:
+                with self.assertRaises(ArchitectureError):
+                    receipts._qualified_architecture_comparison(self.root, self.route, self.head)
+            self.assertTrue(receipts.validate_evidence(self.root, route),
+                            'a coherent mode/hash cannot replace the actual sufficient plan/report')
 
     def test_diff_rejects_target_replacement_after_selection(self):
         selected = select_architecture_comparison_base(self.root, self.route)
