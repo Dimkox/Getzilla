@@ -689,6 +689,9 @@ class _SourceTree:
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name == "__pycache__":
                     continue
+                if relative == "factory/src/getzilla_factory.egg-info":
+                    # Editable-install metadata is generated, never managed source.
+                    continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.
                     continue

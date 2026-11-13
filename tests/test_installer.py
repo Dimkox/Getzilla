@@ -1698,5 +1698,86 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertEqual(_snapshot(target), before)
 
 
+class GeneratedFactoryMetadataTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _source(self):
+        # Exercise the real builder on a new, Git-free source with only its
+        # required templates/config and representative Factory assets.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            files = {
+                MODULE.CONSUMER_AGENTS_TEMPLATE: b'fixture consumer contract\n',
+                '.getzilla/config/toolchain.json': CLOSED_BASELINE_METADATA,
+                'factory/src/getzilla_factory/resources/fixture.json': b'{"asset": true}\n',
+                'factory/src/getzilla_factory/resources/fixture.sql': b'SELECT 1;\n',
+                'factory/src/getzilla_factory/landing_pdf_worker.py': b'# owned source\n',
+                'factory/src/getzilla_factory/tests/getzilla_factory.egg-info/fixture.txt': b'test asset\n',
+                'factory/src/getzilla_factory.egg-info-assets/fixture.txt': b'required asset\n',
+            }
+            for relative, content in files.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            with patch.object(MODULE, 'MANAGED_DIRS', ('factory/src',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', (
+                     MODULE.CONSUMER_AGENTS_TEMPLATE, '.getzilla/config/toolchain.json')):
+                yield source, files
+
+    def test_generated_egg_info_does_not_change_payload_or_source_files(self):
+        with self._source() as (source, files):
+            baseline = MODULE.build_payload(source)
+            expected = {**files, 'AGENTS.md':
+                b'<!-- ADAPTIVE-GROK-PRO:START -->\nfixture consumer contract\n<!-- ADAPTIVE-GROK-PRO:END -->\n'}
+            self.assertEqual({entry.path: entry.content for entry in baseline}, expected)
+            metadata = source / 'factory/src/getzilla_factory.egg-info'
+            metadata.mkdir()
+            for name in ('PKG-INFO', 'SOURCES.txt', 'dependency_links.txt',
+                         'entry_points.txt', 'requires.txt', 'top_level.txt'):
+                (metadata / name).write_bytes((name + '\n').encode())
+            before = _snapshot(source)
+            self.assertEqual(MODULE.build_payload(source), baseline)
+            self.assertEqual(_snapshot(source), before)
+            self.assertFalse((source / '.git').exists())
+
+    def test_regular_file_at_egg_info_path_is_still_delivered(self):
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            path.write_bytes(b'regular source asset\n')
+            payload = {entry.path: entry.content for entry in MODULE.build_payload(source)}
+            self.assertEqual(payload['factory/src/getzilla_factory.egg-info'], b'regular source asset\n')
+            self.assertEqual(path.read_bytes(), b'regular source asset\n')
+
+    def test_egg_info_symlink_is_rejected_without_touching_target(self):
+        for target_kind in ('directory', 'file', 'missing'):
+            with self.subTest(target_kind=target_kind), self._source() as (source, _files):
+                target = source / 'private-target'
+                if target_kind == 'directory':
+                    target.mkdir()
+                    (target / 'sentinel').write_bytes(b'private content\n')
+                elif target_kind == 'file':
+                    target.write_bytes(b'private content\n')
+                link = source / 'factory/src/getzilla_factory.egg-info'
+                try:
+                    link.symlink_to(target, target_is_directory=target_kind == 'directory')
+                except (NotImplementedError, OSError) as exc:
+                    if os.name != 'nt':
+                        raise
+                    self.skipTest(f'symlink creation is unavailable: {exc}')
+                before = _snapshot(source)
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.build_payload(source)
+                self.assertEqual(_snapshot(source), before)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO creation requires POSIX')
+    def test_egg_info_special_file_is_rejected_without_opening(self):
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            os.mkfifo(path)
+            before = _snapshot(source)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(source)
+            self.assertEqual(_snapshot(source), before)
+
+
 if __name__ == "__main__":
     unittest.main()
