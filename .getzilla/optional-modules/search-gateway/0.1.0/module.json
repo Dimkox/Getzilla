@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "search-gateway",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {},
+  "permissions": [
+    "search.web"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "NOTICE",
+      "sha256": "90bd51beb80ebaad9b5882a0bcb3beed57ea89fb4ee13e1213e1eb72931cf22c",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "gateway.py",
+      "sha256": "7fcc340e4939cbea44e632fe276735eab4a81d133c2207a10b7800dd96c1b5f1",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "interfaces.py",
+      "sha256": "d87c677636a50bb010ad6e835ee9721a457831fdec298517fe7db129e4877eda",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "policy.example.json",
+      "sha256": "e94698deec5688e9c2198f33eec2c73e02b13a7e64cf5b86cc7d0d692b737714",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "providers.py",
+      "sha256": "a773cbf7faf0e80cf5fdf12c00bb73b73f49e49496aed04a5ef3a3e03a6179c1",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "request.schema.json",
+      "sha256": "e8131c272d525dd863cbab354ae602f7220b1ab7ec9bf518d6bb3de63f13a093",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "result.schema.json",
+      "sha256": "0162b945b12c90c4419726dcec0ac14c21014416b737c875ab5e87845d70fb8b",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

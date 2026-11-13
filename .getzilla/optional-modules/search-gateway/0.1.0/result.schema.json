@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "status",
+    "operation",
+    "results",
+    "attempts",
+    "usage",
+    "cache",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error"
+      ]
+    },
+    "operation": {
+      "const": "web_search"
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "requested_engine": {
+      "enum": [
+        "auto",
+        "google",
+        "baidu",
+        "yandex"
+      ]
+    },
+    "country": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "language": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "results": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "url",
+          "snippet",
+          "published_at",
+          "provenance"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https?://",
+            "maxLength": 8192
+          },
+          "snippet": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          },
+          "provenance": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "engine",
+                "query",
+                "fetched_at",
+                "rank",
+                "source_url",
+                "untrusted"
+              ],
+              "properties": {
+                "provider": {
+                  "enum": [
+                    "searxng",
+                    "serper",
+                    "serpapi",
+                    "brave",
+                    "tavily",
+                    "firecrawl",
+                    "scrapingdog"
+                  ]
+                },
+                "engine": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "query": {
+                  "type": "string",
+                  "maxLength": 8192
+                },
+                "fetched_at": {
+                  "type": "string"
+                },
+                "rank": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "source_url": {
+                  "type": "string",
+                  "pattern": "^https?://",
+                  "maxLength": 8192
+                },
+                "untrusted": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "http_status",
+          "outcome",
+          "reserved_estimated_cost_microusd",
+          "actual_cost_microusd",
+          "elapsed_ms",
+          "retryable",
+          "cooldown_seconds"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "reserved_estimated_cost_microusd": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "actual_cost_microusd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "cooldown_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "required": [
+        "attempted_calls",
+        "reserved_estimated_cost_microusd",
+        "actual_cost_microusd",
+        "elapsed_ms",
+        "skipped_providers"
+      ],
+      "properties": {
+        "attempted_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "reserved_estimated_cost_microusd": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actual_cost_microusd": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_providers": {
+          "type": "array",
+          "maxItems": 7
+        },
+        "limits": {
+          "type": "object"
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "required": [
+        "hit",
+        "fetched_at",
+        "origin_request_id"
+      ],
+      "properties": {
+        "hit": {
+          "type": "boolean"
+        },
+        "fetched_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

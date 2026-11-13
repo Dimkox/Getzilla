@@ -528,6 +528,22 @@
       "path": "schemas/workflow-convergence-report-v1.schema.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "exact",
+      "id": "CONTRACT-SEARCH-REQUEST-V1",
+      "kind": "json_schema",
+      "path": ".getzilla/optional-modules/search-gateway/0.1.0/request.schema.json",
+      "role": "bidirectional",
+      "version": "1"
+    },
+    {
+      "compatibility": "exact",
+      "id": "CONTRACT-SEARCH-RESULT-V1",
+      "kind": "json_schema",
+      "path": ".getzilla/optional-modules/search-gateway/0.1.0/result.schema.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -631,6 +647,24 @@
       "classification": "public",
       "contains_secret": false,
       "id": "DATA-VULNERABILITY-ADVISORY",
+      "tenant_scoped": false
+    },
+    {
+      "classification": "internal",
+      "contains_secret": false,
+      "id": "DATA-SEARCH-QUERY-EVIDENCE",
+      "tenant_scoped": false
+    },
+    {
+      "classification": "restricted",
+      "contains_secret": true,
+      "id": "DATA-SEARCH-PROVIDER-AUTH",
+      "tenant_scoped": false
+    },
+    {
+      "classification": "internal",
+      "contains_secret": false,
+      "id": "DATA-SEARCH-UNTRUSTED-RESULT",
       "tenant_scoped": false
     }
   ],
@@ -2195,6 +2229,376 @@
       "sync_or_async": "synchronous",
       "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SEARXNG",
+      "network_policy": "allowlisted_egress",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SEARXNG",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SERPER",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPER"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SERPER",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SERPAPI",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPAPI"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SERPAPI",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-BRAVE",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-BRAVE"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-BRAVE",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-TAVILY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-TAVILY"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-TAVILY",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-FIRECRAWL",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-FIRECRAWL"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-FIRECRAWL",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SCRAPINGDOG",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-SCRAPINGDOG"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SCRAPINGDOG",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-SEARXNG",
+      "id": "EDGE-SEARCH-SEARXNG-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-SERPER",
+      "id": "EDGE-SEARCH-SERPER-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-SERPAPI",
+      "id": "EDGE-SEARCH-SERPAPI-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-BRAVE",
+      "id": "EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-TAVILY",
+      "id": "EDGE-SEARCH-TAVILY-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-FIRECRAWL",
+      "id": "EDGE-SEARCH-FIRECRAWL-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-SCRAPINGDOG",
+      "id": "EDGE-SEARCH-SCRAPINGDOG-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-SEARCH-LOOPBACK-TEST-CLIENT",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -3466,6 +3870,159 @@
       "secrets": [],
       "trust_domain": "TD-REPOSITORY",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "owner": "repository engineering",
+      "public_contracts": [
+        "CONTRACT-SEARCH-REQUEST-V1",
+        "CONTRACT-SEARCH-RESULT-V1"
+      ],
+      "repository_paths": [
+        ".getzilla/optional-modules/search-gateway/0.1.0",
+        "scripts/getzilla_search_gateway.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SERPER",
+        "SECRET-SEARCH-SERPAPI",
+        "SECRET-SEARCH-BRAVE",
+        "SECRET-SEARCH-TAVILY",
+        "SECRET-SEARCH-FIRECRAWL",
+        "SECRET-SEARCH-SCRAPINGDOG"
+      ],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SEARXNG",
+      "owner": "operator configured SearXNG endpoint",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SERPER",
+      "owner": "google.serper.dev",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SERPER"
+      ],
+      "trust_domain": "TD-SEARCH-SERPER",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SERPAPI",
+      "owner": "serpapi.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SERPAPI"
+      ],
+      "trust_domain": "TD-SEARCH-SERPAPI",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-BRAVE",
+      "owner": "api.search.brave.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-BRAVE"
+      ],
+      "trust_domain": "TD-SEARCH-BRAVE",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-TAVILY",
+      "owner": "api.tavily.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-TAVILY"
+      ],
+      "trust_domain": "TD-SEARCH-TAVILY",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-FIRECRAWL",
+      "owner": "api.firecrawl.dev",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-FIRECRAWL"
+      ],
+      "trust_domain": "TD-SEARCH-FIRECRAWL",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SCRAPINGDOG",
+      "owner": "api.scrapingdog.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SCRAPINGDOG"
+      ],
+      "trust_domain": "TD-SEARCH-SCRAPINGDOG",
+      "type": "external_system"
     }
   ],
   "schema_version": 1,
@@ -3513,6 +4070,30 @@
     {
       "classification": "trust_material",
       "id": "SECRET-ENTIRE-SESSION"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-SERPER"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-SERPAPI"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-BRAVE"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-TAVILY"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-FIRECRAWL"
+    },
+    {
+      "classification": "trust_material",
+      "id": "SECRET-SEARCH-SCRAPINGDOG"
     }
   ],
   "signals": [
@@ -3631,6 +4212,36 @@
       "id": "TD-PILOT-EXECUTION",
       "kind": "local_preflight",
       "owner": "single local pilot operator"
+    },
+    {
+      "id": "TD-SEARCH-SERPER",
+      "kind": "external_platform",
+      "owner": "google.serper.dev"
+    },
+    {
+      "id": "TD-SEARCH-SERPAPI",
+      "kind": "external_platform",
+      "owner": "serpapi.com"
+    },
+    {
+      "id": "TD-SEARCH-BRAVE",
+      "kind": "external_platform",
+      "owner": "api.search.brave.com"
+    },
+    {
+      "id": "TD-SEARCH-TAVILY",
+      "kind": "external_platform",
+      "owner": "api.tavily.com"
+    },
+    {
+      "id": "TD-SEARCH-FIRECRAWL",
+      "kind": "external_platform",
+      "owner": "api.firecrawl.dev"
+    },
+    {
+      "id": "TD-SEARCH-SCRAPINGDOG",
+      "kind": "external_platform",
+      "owner": "api.scrapingdog.com"
     }
   ]
 }
