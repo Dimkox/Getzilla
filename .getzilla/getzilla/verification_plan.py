@@ -113,7 +113,10 @@ def policy_binding(root: Path) -> dict:
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
                  'expanded_security.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
-                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py'):
+                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py',
+                 'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
+                 'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
+                 'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py'):
         module = importlib.import_module('.' + name[:-3], __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR

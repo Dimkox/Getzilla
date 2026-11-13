@@ -8,7 +8,7 @@ import re
 import secrets
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -489,10 +489,77 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
+def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str):
+    """Reuse an exact completed qualification, never a reconcile-only assessment.
+
+    This reads existing workflow evidence; it grants no new PASS or independent
+    authority. Git ancestry/model/ref currentness is revalidated by the selector.
+    """
+    route_id = route.get('route_id')
+    if not isinstance(route_id, str):
+        return None
+    receipt = get_receipt(root, route_id, 'verification')
+    if not isinstance(receipt, dict) or receipt.get('status') != 'pass':
+        return None
+    from .continuity import receipt_context_current
+    if (receipt.get('route_id') != route_id or receipt.get('kind') != 'verification'
+            or receipt.get('git_head') != head or receipt.get('tree_fingerprint') != tree_fingerprint(root)
+            or receipt.get('architecture_route_base_sha') != route.get('base_commit')
+            or not receipt_context_current(root, route, receipt)
+            or receipt.get('review_plan_digest') != (route.get('review_plan') or {}).get('digest')):
+        return None
+    report = receipt.get('details')
+    if (not isinstance(report, dict) or report.get('status') != 'pass'
+            or report.get('mode') not in ('pr', 'release') or report.get('terminal_state') != 'completed'):
+        return None
+    architecture = report.get('architecture')
+    if (not isinstance(architecture, dict) or architecture.get('status') != 'pass'
+            or architecture.get('fitness_status') != 'pass'):
+        return None
+    witness = receipt.get('architecture_comparison_witness')
+    if witness is None:
+        return None
+    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _digest as comparison_digest, _git
+    names = set(ArchitectureBaseSelection.__dataclass_fields__)
+    if (type(witness) is not dict or set(witness) != names
+            or architecture.get('architecture_comparison_witness') != witness
+            or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
+            or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
+            or witness.get('comparison_base_sha') != witness.get('target_sha')
+            or witness.get('comparison_base_sha') == head
+            or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
+            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', witness[key])
+                       for key in ('route_base_sha', 'comparison_base_sha', 'candidate_sha', 'target_sha'))
+            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{64}', witness[key])
+                       for key in ('ranges_digest', 'model_digest'))
+            or not isinstance(witness.get('target_ref'), str)
+            or not witness['target_ref'].startswith(('refs/remotes/origin/', 'refs/heads/'))):
+        raise ArchitectureError('qualified architecture comparison witness is malformed', code='git')
+    old_range = {'bases': [
+        {'kind': 'route', 'source': 'route.base_commit', 'target_sha': witness['route_base_sha'],
+         'comparison_base_sha': witness['route_base_sha']},
+        {'kind': 'pr-target', 'source': witness['target_ref'], 'target_sha': witness['target_sha'],
+         'comparison_base_sha': witness['comparison_base_sha']}], 'findings': []}
+    anchor = _git(root, ['merge-base', '--all', witness['route_base_sha'], witness['target_sha']])
+    contained = _git(root, ['merge-base', '--all', witness['target_sha'], head])
+    if (anchor is None or anchor.decode().splitlines() != [witness['route_base_sha']]
+            or contained is None or contained.decode().splitlines() != [witness['target_sha']]
+            or comparison_digest(old_range) != witness['ranges_digest']
+            or _comparison_model_digest(root, (witness['route_base_sha'], witness['target_sha'], head)) != witness['model_digest']):
+        raise ArchitectureError('qualified architecture comparison identity is stale', code='git')
+    for name in ('architecture_base_sha', 'architecture_base_kind', 'architecture_bootstrap_baseline',
+                 'architecture_route_base_sha', 'architecture_head_commit'):
+        if architecture.get(name) != receipt.get(name):
+            raise ArchitectureError('qualification architecture bindings disagree', code='git')
+    return ArchitectureBaseSelection(**witness)
+
+
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],
     root_fd: int | None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     authority = _authority_presence(root, root_fd=root_fd)
     adoption = _architecture_adoption(root, present=authority.entries[0])
@@ -530,7 +597,7 @@ def _active_architecture_binding(
     head = _exact_head(root)
     if head is None:
         raise RuntimeError("architecture binding requires an exact Git HEAD")
-    base_selection = select_architecture_comparison_base(root, route)
+    base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
     fingerprint = architecture_fingerprint(
         root,
         snapshot,
@@ -538,6 +605,8 @@ def _active_architecture_binding(
         head_sha=f"worktree:{head}",
         contract_digests={record.path: record.digest for record in records},
     )
+    if select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges) != base_selection:
+        raise RuntimeError('architecture comparison changed during binding')
     return {
         "architecture_adoption_digest": adoption["digest"],
         "architecture_base_sha": base_selection.comparison_base_sha,
@@ -553,12 +622,13 @@ def _active_architecture_binding(
         "architecture_rules_digest": digests["rules_digest"],
         "architecture_schema_digest": digests["schema_digest"],
         "architecture_system_digest": digests["system_digest"],
+        **({'architecture_comparison_witness': asdict(base_selection)} if base_selection.candidate_sha else {}),
     }
 
 
-def active_architecture_binding(root: Path, route: dict[str, Any]) -> dict[str, Any] | None:
+def active_architecture_binding(root: Path, route: dict[str, Any], *, _trusted_ranges: Any = None) -> dict[str, Any] | None:
     try:
-        return _active_architecture_binding(root, route, None)
+        return _active_architecture_binding(root, route, None, _trusted_ranges=_trusted_ranges)
     except NotImplementedError as exc:
         raise ArchitectureError(
             f"architecture authority metadata is unavailable: {exc}", code="io"
@@ -687,19 +757,25 @@ def active_governance_binding(
     root: Path,
     route: dict[str, Any],
     architecture: dict[str, Any] | None = None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     if not _governance_is_configured(root):
         return None
     try:
-        current_architecture = active_architecture_binding(root, route)
+        current_architecture = (active_architecture_binding(root, route) if _trusted_ranges is None else
+                                active_architecture_binding(root, route, _trusted_ranges=_trusted_ranges))
         if current_architecture is None:
             raise RuntimeError("governance requires adopted executable architecture")
         if architecture is not None and any(
-            architecture.get(field) != current_architecture[field]
+            architecture.get(field) != current_architecture.get(field)
             for field in (
                 "architecture_digest",
                 "architecture_base_sha",
                 "architecture_head_commit",
+                "architecture_route_base_sha",
+                "architecture_base_kind",
+                "architecture_comparison_witness",
             )
         ):
             raise RuntimeError(

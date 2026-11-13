@@ -290,16 +290,19 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
-        binding = active_architecture_binding(root, route or {})
+        binding = (active_architecture_binding(root, route or {}) if _trusted_ranges is None else
+                   active_architecture_binding(root, route or {}, _trusted_ranges=_trusted_ranges))
         if binding is None:
             return (
                 CheckResult("architecture", "skip", "architecture is not configured"),
                 {"configured": False, "status": "not_configured"},
             )
         snapshot = load_architecture(root)
-        base_selection = select_architecture_comparison_base(root, route)
+        base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
         base = base_selection.comparison_base_sha
         if (
             binding["architecture_base_sha"] != base
@@ -329,6 +332,8 @@ def _architecture_check(
         diagram_status = "fail" if mismatches else "pass"
         failed = fitness.status != "pass" or bool(drift) or bool(mismatches)
         core: dict[str, object] = {
+            **({'architecture_comparison_witness': binding['architecture_comparison_witness']}
+               if 'architecture_comparison_witness' in binding else {}),
             "architecture_contract_version": 1,
             "adoption_digest": binding["architecture_adoption_digest"],
             "architecture_digest": binding["architecture_digest"],
@@ -772,6 +777,12 @@ def _git_range_selection(
                 target_sha=target_sha,
                 comparison_base_sha=bases[0],
             ))
+            if bases[0] == _resolve_commit(root, 'HEAD') and route:
+                from .receipts import _qualified_architecture_comparison
+                qualified = _qualified_architecture_comparison(root, route, bases[0])
+                if qualified is not None and qualified.comparison_base_sha not in {item.comparison_base_sha for item in selection.bases}:
+                    selection.bases.append(GitRangeBase('qualified-pr-target', qualified.target_ref,
+                                                       qualified.target_sha, qualified.comparison_base_sha))
     elif route and route.get('delivery_expected') is True:
         selection.findings.append({
             'severity': 'error',
@@ -2989,7 +3000,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             architecture_check = dispatch.run('architecture', None)
             architecture_metadata = {'status': 'not_run'}
         else:
-            architecture_check, architecture_metadata = _architecture_check(root, route)
+            architecture_check, architecture_metadata = _architecture_check(root, route, _trusted_ranges=git_ranges)
             dispatch.add(architecture_check)
         if dispatch.blocked_by:
             governance_check = dispatch.run('governance', None)
