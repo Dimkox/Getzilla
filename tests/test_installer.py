@@ -1724,11 +1724,18 @@ class GeneratedFactoryMetadataTests(unittest.TestCase):
                 yield source, files
 
     def test_generated_egg_info_does_not_change_payload_or_source_files(self):
+        from getzilla.factory_tests import source_inventory
+
         with self._source() as (source, files):
             baseline = MODULE.build_payload(source)
+            baseline_inventory = source_inventory(source)
             expected = {**files, 'AGENTS.md':
                 b'<!-- ADAPTIVE-GROK-PRO:START -->\nfixture consumer contract\n<!-- ADAPTIVE-GROK-PRO:END -->\n'}
             self.assertEqual({entry.path: entry.content for entry in baseline}, expected)
+            self.assertEqual(baseline_inventory, {
+                name: hashlib.sha256(content).hexdigest()
+                for name, content in files.items() if name.startswith('factory/')
+            })
             metadata = source / 'factory/src/getzilla_factory.egg-info'
             metadata.mkdir()
             for name in ('PKG-INFO', 'SOURCES.txt', 'dependency_links.txt',
@@ -1736,18 +1743,25 @@ class GeneratedFactoryMetadataTests(unittest.TestCase):
                 (metadata / name).write_bytes((name + '\n').encode())
             before = _snapshot(source)
             self.assertEqual(MODULE.build_payload(source), baseline)
+            self.assertEqual(source_inventory(source), baseline_inventory)
             self.assertEqual(_snapshot(source), before)
             self.assertFalse((source / '.git').exists())
 
     def test_regular_file_at_egg_info_path_is_still_delivered(self):
+        from getzilla.factory_tests import source_inventory
+
         with self._source() as (source, _files):
             path = source / 'factory/src/getzilla_factory.egg-info'
             path.write_bytes(b'regular source asset\n')
             payload = {entry.path: entry.content for entry in MODULE.build_payload(source)}
             self.assertEqual(payload['factory/src/getzilla_factory.egg-info'], b'regular source asset\n')
+            self.assertEqual(source_inventory(source)['factory/src/getzilla_factory.egg-info'],
+                             hashlib.sha256(b'regular source asset\n').hexdigest())
             self.assertEqual(path.read_bytes(), b'regular source asset\n')
 
     def test_egg_info_symlink_is_rejected_without_touching_target(self):
+        from getzilla.factory_tests import source_inventory
+
         for target_kind in ('directory', 'file', 'missing'):
             with self.subTest(target_kind=target_kind), self._source() as (source, _files):
                 target = source / 'private-target'
@@ -1766,16 +1780,22 @@ class GeneratedFactoryMetadataTests(unittest.TestCase):
                 before = _snapshot(source)
                 with self.assertRaises(MODULE.UnsafeInstallTarget):
                     MODULE.build_payload(source)
+                with self.assertRaises(ValueError):
+                    source_inventory(source)
                 self.assertEqual(_snapshot(source), before)
 
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO creation requires POSIX')
     def test_egg_info_special_file_is_rejected_without_opening(self):
+        from getzilla.factory_tests import source_inventory
+
         with self._source() as (source, _files):
             path = source / 'factory/src/getzilla_factory.egg-info'
             os.mkfifo(path)
             before = _snapshot(source)
             with self.assertRaises(MODULE.UnsafeInstallTarget):
                 MODULE.build_payload(source)
+            with self.assertRaises(ValueError):
+                source_inventory(source)
             self.assertEqual(_snapshot(source), before)
 
 
