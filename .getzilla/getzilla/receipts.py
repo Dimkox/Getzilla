@@ -29,7 +29,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _exact_commit, _git, _git_blob, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -548,6 +548,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
             or architecture.get('architecture_comparison_witness') != witness
             or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
             or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
+            or witness.get('range_mode') != report['mode']
             or witness.get('comparison_base_sha') != witness.get('target_sha')
             or witness.get('comparison_base_sha') == head
             or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
@@ -583,7 +584,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     accepted = _git(root, ['merge-base', '--all', head, target[1]])
     if accepted is None or accepted.decode().splitlines() != [head]:
         return None
-    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']])
+    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['range_mode'], head_sha=head)
     try:
         from .verification_plan import _compile_required_plan, _report_plan_gaps
         current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
@@ -629,9 +630,9 @@ def _active_architecture_binding(
         if head is None:
             _confirm_legacy_absence(root, root_fd, authority)
             return None
-        base_selection = select_architecture_comparison_base(root, route)
+        route_base = _exact_commit(root, route.get('base_commit', head), label='architecture_route_base_sha')
         exact_evidence = _exact_tree_has_architecture(root, head) or _exact_tree_has_architecture(
-            root, base_selection.route_base_sha
+            root, route_base
         )
         if not exact_evidence:
             exact_evidence = _exact_history_has_architecture(root, head)
@@ -676,6 +677,7 @@ def _active_architecture_binding(
         "architecture_fingerprint": fingerprint,
         "architecture_head_commit": head,
         "architecture_head_kind": "worktree",
+        "architecture_range_mode": base_selection.range_mode,
         "architecture_route_base_sha": base_selection.route_base_sha,
         "architecture_rules_digest": digests["rules_digest"],
         "architecture_schema_digest": digests["schema_digest"],
@@ -834,6 +836,7 @@ def active_governance_binding(
                 "architecture_route_base_sha",
                 "architecture_base_kind",
                 "architecture_comparison_witness",
+                "architecture_range_mode",
             )
         ):
             raise RuntimeError(
@@ -959,6 +962,15 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
                 pass
 
 
+def _verification_architecture_options(root: Path, route: dict[str, Any], kind: str, details: Any) -> dict[str, Any]:
+    if kind != 'verification' or not isinstance(details, dict) or 'mode' not in details:
+        return {}
+    from .verification import _git_range_selection, _RANGE_MODES
+    if type(details['mode']) is not str or details['mode'] not in {'fast', *_RANGE_MODES}:
+        raise RuntimeError('verification invocation mode is unavailable')
+    return {'_trusted_ranges': _git_range_selection(root, route, details['mode'])}
+
+
 @serialized_task
 def write_receipt(
     root: Path,
@@ -1020,9 +1032,10 @@ def write_receipt(
     ):
         raise RuntimeError("repository changed after verification checks")
     current = _active_spec_binding(root, route, kind)
-    current_architecture = active_architecture_binding(root, route)
+    architecture_options = _verification_architecture_options(root, route, kind, details)
+    current_architecture = active_architecture_binding(root, route, **architecture_options)
     current_governance = active_governance_binding(
-        root, route, current_architecture
+        root, route, current_architecture, **architecture_options
     )
     explicit = {
         'criterion_ids': sorted({str(item) for item in (criterion_ids or [])}),
@@ -1056,8 +1069,8 @@ def write_receipt(
     }
     after_tree = tree_fingerprint(root)
     after_binding = _active_spec_binding(root, route, kind)
-    after_architecture = active_architecture_binding(root, route)
-    after_governance = active_governance_binding(root, route, after_architecture)
+    after_architecture = active_architecture_binding(root, route, **architecture_options)
+    after_governance = active_governance_binding(root, route, after_architecture, **architecture_options)
     if (
         (review_source is not None and review_source_binding(root, reviewed_commit, report, reviewed_context=reviewed_context) != review_source)
         or after_tree != before_tree
@@ -1078,11 +1091,11 @@ def write_receipt(
         if spill:
             publication = _publish_verification_report(root, route['route_id'], data, interrupt_check)
             assert_context()
-            report_architecture = active_architecture_binding(root, route)
+            report_architecture = active_architecture_binding(root, route, **architecture_options)
             if (tree_fingerprint(root) != before_tree or _exact_head(root) != before_head
                     or _active_spec_binding(root, route, kind) != current
                     or report_architecture != current_architecture
-                    or active_governance_binding(root, route, report_architecture) != current_governance):
+                    or active_governance_binding(root, route, report_architecture, **architecture_options) != current_governance):
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
         assert_context()
@@ -1242,7 +1255,8 @@ def validate_evidence(
             if receipt.get('criterion_ids') != binding['criterion_ids']:
                 missing.append(f'{kind}: criterion binding stale')
         try:
-            architecture = active_architecture_binding(root, route)
+            architecture_options = _verification_architecture_options(root, route, kind, receipt.get('details'))
+            architecture = active_architecture_binding(root, route, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: architecture binding stale: {exc}')
             continue
@@ -1252,7 +1266,7 @@ def validate_evidence(
         elif "architecture_digest" in receipt or "architecture_fingerprint" in receipt:
             missing.append(f'{kind}: architecture binding stale')
         try:
-            governance = active_governance_binding(root, route, architecture)
+            governance = active_governance_binding(root, route, architecture, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: governance binding stale: {exc}')
             continue

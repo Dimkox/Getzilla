@@ -93,6 +93,105 @@ class DerivedComparisonTests(unittest.TestCase):
         self.assertEqual({row.comparison_base_sha for row in ranges.bases}, {self.anchor, self.target})
         self.assertEqual(self.route['base_commit'], self.anchor)
 
+    def test_ordinary_fast_keeps_its_worktree_binding_without_a_pr_target(self):
+        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        ranges = _git_range_selection(self.root, self.route, 'fast')
+        self.assertEqual((ranges.bases, ranges.findings), ([], []))
+        failure = None
+        try:
+            binding = receipts.active_architecture_binding(self.root, self.route, _trusted_ranges=ranges)
+        except (ArchitectureError, RuntimeError) as exc:
+            failure = str(exc)
+        self.assertIsNone(failure, 'a valid ordinary-fast invocation must retain its worktree binding')
+        self.assertEqual(binding['architecture_head_kind'], 'worktree')
+        self.assertEqual(binding['architecture_base_sha'], self.anchor)
+
+    def test_proved_adopted_deletion_is_missing_before_shallow_range_inference(self):
+        for name in ('system.yaml', 'rules.yaml', 'adoption.json'):
+            (self.root / 'architecture' / name).unlink()
+        head = self.commit('owned complete authority deletion')
+        self.write('.git/shallow', head + '\n' + self.anchor + '\n')
+        with self.assertRaises((ArchitectureError, RuntimeError)) as refusal:
+            receipts.active_architecture_binding(self.root, self.route)
+        self.assertIn('missing', str(refusal.exception))
+
+    def test_effective_fast_mode_stays_consistent_through_diff_and_governance(self):
+        from getzilla.verification import _governance_check
+        ranges = _git_range_selection(self.root, self.route, 'fast')
+        selection = select_architecture_comparison_base(self.root, self.route, _trusted_ranges=ranges)
+        self.assertEqual((selection.range_mode, selection.comparison_base_sha), ('fast', self.anchor))
+        difference = diff_architecture(self.root, base_sha=self.anchor, worktree=True,
+                                       _trusted_base_selection=selection)
+        self.assertEqual((difference.base_sha, difference.head_kind), (self.anchor, 'worktree'))
+        binding = receipts.active_architecture_binding(self.root, self.route, _trusted_ranges=ranges)
+        summary = {'ok': True, 'findings': [], 'overall_status': 'pass',
+                   **{name: 'a' * 64 for name in ('rules_digest', 'debt_digest', 'examples_digest',
+                                                 'schema_digest', 'governance_digest')},
+                   **{name: [] for name in ('active_rule_ids', 'active_example_ids_versions',
+                                           'open_debt_ids', 'overdue_debt_ids')}}
+        with patch.object(receipts, '_governance_is_configured', return_value=True), \
+             patch.object(receipts, 'load_governance', return_value=object()), \
+             patch.object(receipts, 'governance_summary', return_value=summary):
+            result, governed = _governance_check(self.root, self.route,
+                {'status': 'pass', 'configured': True, **binding}, _trusted_ranges=ranges)
+        self.assertEqual(result.status, 'pass', result.summary)
+        self.assertEqual(governed['governance_applicable_base_sha'], self.anchor)
+        options = receipts._verification_architecture_options(self.root, self.route, 'verification', {'mode': 'fast'})
+        self.assertEqual(receipts.active_architecture_binding(self.root, self.route, **options), binding)
+
+    def test_effective_mode_does_not_admit_foreign_stale_or_relabelled_ranges(self):
+        ranges = _git_range_selection(self.root, self.route, 'pr')
+        ranges.mode = 'fast'
+        with self.assertRaises(ArchitectureError):
+            select_architecture_comparison_base(self.root, self.route, _trusted_ranges=ranges)
+        empty = _git_range_selection(self.root, self.route, 'fast')
+        empty.mode = 'pr'
+        with self.assertRaises(ArchitectureError):
+            select_architecture_comparison_base(self.root, self.route, _trusted_ranges=empty)
+        strict = _git_range_selection(self.root, self.route, 'pr')
+        self.git('update-ref', 'refs/remotes/origin/main', self.anchor)
+        with self.assertRaises(ArchitectureError):
+            select_architecture_comparison_base(self.root, self.route, _trusted_ranges=strict)
+        for mode in ('unknown', None, ['fast']):
+            unproved = _git_range_selection(self.root, self.route, 'fast')
+            unproved.mode = mode
+            with self.subTest(mode=mode), self.assertRaises(ArchitectureError):
+                select_architecture_comparison_base(self.root, self.route, _trusted_ranges=unproved)
+            with self.subTest(receipt_mode=mode), self.assertRaises(RuntimeError):
+                receipts._verification_architecture_options(self.root, self.route, 'verification', {'mode': mode})
+        stale_fast = _git_range_selection(self.root, self.route, 'fast')
+        self.git('commit', '--allow-empty', '-qm', 'owned later invocation')
+        with self.assertRaises(ArchitectureError):
+            select_architecture_comparison_base(self.root, self.route, _trusted_ranges=stale_fast)
+
+    def test_fast_light_pr_and_release_keep_strict_missing_target_and_shallow_refusals(self):
+        self.git('update-ref', '-d', 'refs/remotes/origin/main')
+        for mode, route in (('fast', {**self.route, 'delivery_lane': 'light'}),
+                            ('fast', {**self.route, 'delivery_lane': 'full', 'light_lane_candidate': True}),
+                            ('pr', self.route), ('release', self.route)):
+            with self.subTest(mode=mode):
+                ranges = _git_range_selection(self.root, route, mode)
+                self.assertNotEqual(ranges.mode, 'fast')
+                self.assertTrue(ranges.findings)
+                with self.assertRaises(ArchitectureError):
+                    receipts.active_architecture_binding(self.root, route, _trusted_ranges=ranges)
+        self.git('update-ref', 'refs/remotes/origin/main', self.target)
+        self.write('.git/shallow', self.target + '\n')
+        for mode in ('pr', 'release'):
+            with self.subTest(shallow_mode=mode), self.assertRaises(ArchitectureError):
+                select_architecture_comparison_base(self.root, self.route,
+                    _trusted_ranges=_git_range_selection(self.root, self.route, mode))
+
+    def test_unknown_shallow_authority_is_not_reported_as_proved_missing(self):
+        empty = self.git('mktree', input=b'')
+        unknown = self.git('commit-tree', empty, '-m', 'owned shallow unknown history')
+        self.git('read-tree', '--reset', '-u', unknown)
+        self.git('update-ref', 'refs/heads/candidate', unknown)
+        self.write('.git/shallow', unknown + '\n')
+        with self.assertRaises((ArchitectureError, RuntimeError)) as refusal:
+            receipts.active_architecture_binding(self.root, {'base_commit': unknown})
+        self.assertIn('history is incomplete', str(refusal.exception))
+
     def test_diff_rejects_target_replacement_after_selection(self):
         selected = select_architecture_comparison_base(self.root, self.route)
         self.git('update-ref', 'refs/remotes/origin/main', self.anchor)

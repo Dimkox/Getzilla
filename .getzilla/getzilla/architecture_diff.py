@@ -952,6 +952,7 @@ class ArchitectureBaseSelection:
     target_ref: str | None = None
     ranges_digest: str | None = None
     model_digest: str | None = None
+    range_mode: str = 'pr'
 
 
 def _comparison_model_digest(root: Path, commits: tuple[str, ...]) -> str:
@@ -973,6 +974,16 @@ def select_architecture_comparison_base(
     *,
     _trusted_ranges: Any = None,
 ) -> ArchitectureBaseSelection:
+    from .verification import GitRangeSelection, _git_range_selection, _RANGE_MODES
+    range_mode = 'pr'
+    if _trusted_ranges is not None:
+        if (type(_trusted_ranges) is not GitRangeSelection
+                or type(_trusted_ranges.mode) is not str
+                or _trusted_ranges.mode not in {'fast', *_RANGE_MODES}):
+            raise ArchitectureError('architecture ranges are foreign or stale', code='git')
+        range_mode = _trusted_ranges.mode
+        if _git_range_selection(root, route, range_mode) != _trusted_ranges:
+            raise ArchitectureError('architecture ranges are foreign or stale', code='git')
     candidate = (route or {}).get("base_commit")
     route_base = _exact_commit(
         root,
@@ -1002,9 +1013,8 @@ def select_architecture_comparison_base(
         comparison_base = route_base
         base_kind = "route_model"
         bootstrap_baseline = False
-        from .verification import GitRangeSelection, _git_range_selection
         head = _head_commit(root)
-        ranges = _git_range_selection(root, route, 'pr')
+        ranges = _git_range_selection(root, route, range_mode)
         if (_trusted_ranges is not None and
                 (type(_trusted_ranges) is not GitRangeSelection or _trusted_ranges != ranges)):
             raise ArchitectureError('architecture ranges are foreign or stale', code='git')
@@ -1025,7 +1035,7 @@ def select_architecture_comparison_base(
                     if (old_base is None or old_base.decode().splitlines() != [qualified.comparison_base_sha]
                             or _comparison_model_digest(root, (route_base, qualified.target_sha, head)) != qualified.model_digest):
                         raise ArchitectureError('qualified architecture comparison is stale', code='git')
-                    if _head_commit(root) != head or _git_range_selection(root, route, 'pr') != ranges:
+                    if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
                         raise ArchitectureError('qualified comparison operands changed', code='git')
                     return qualified
             if target.comparison_base_sha != head and target.target_sha != route_base:
@@ -1035,8 +1045,8 @@ def select_architecture_comparison_base(
                 identity = _comparison_model_digest(root, (route_base, target.target_sha, head))
                 result = ArchitectureBaseSelection(route_base, target.target_sha, 'accepted_target', False,
                     head, target.target_sha, target.source, _digest({
-                        'bases': [vars(entry) for entry in ranges.bases], 'findings': ranges.findings}), identity)
-                if _head_commit(root) != head or _git_range_selection(root, route, 'pr') != ranges:
+                        'bases': [vars(entry) for entry in ranges.bases], 'findings': ranges.findings}), identity, range_mode)
+                if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
                     raise ArchitectureError('architecture comparison operands changed', code='git')
                 return result
     else:
@@ -1056,6 +1066,7 @@ def select_architecture_comparison_base(
         comparison_base_sha=comparison_base,
         base_kind=base_kind,
         bootstrap_baseline=bootstrap_baseline,
+        range_mode=range_mode,
     )
 
 
@@ -1979,10 +1990,15 @@ def diff_architecture(
         if type(_trusted_base_selection) is not ArchitectureBaseSelection:
             raise ArchitectureError('architecture base selection is foreign', code='git')
         from .state import get_active_route
+        from .verification import _git_range_selection, _RANGE_MODES
+        if (type(_trusted_base_selection.range_mode) is not str
+                or _trusted_base_selection.range_mode not in {'fast', *_RANGE_MODES}):
+            raise ArchitectureError('architecture base selection mode is foreign', code='git')
         selection_route = get_active_route(repository) or {"base_commit": _trusted_base_selection.route_base_sha}
         verified_selection = select_architecture_comparison_base(
             repository,
             selection_route,
+            _trusted_ranges=_git_range_selection(repository, selection_route, _trusted_base_selection.range_mode),
         )
         if verified_selection != _trusted_base_selection:
             raise ArchitectureError("architecture base selection is stale", code="git")

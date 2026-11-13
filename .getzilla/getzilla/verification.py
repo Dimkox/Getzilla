@@ -243,6 +243,8 @@ class GitRangeSelection:
     bases: list[GitRangeBase] = field(default_factory=list)
     findings: list[dict[str, str]] = field(default_factory=list)
     qualification_bases: tuple[GitRangeBase, ...] | None = None
+    mode: str = 'pr'
+    head_sha: str | None = None
 
 
 FOCUSED_STATIC_SEO_LANDING_MODE = 'focused-static-seo-landing'
@@ -346,6 +348,7 @@ def _architecture_check(
                 "architecture_bootstrap_baseline"
             ],
             "architecture_route_base_sha": binding["architecture_route_base_sha"],
+            "architecture_range_mode": binding["architecture_range_mode"],
             "baseline_introduced": diff.baseline_introduced,
             "base_adoption_state": diff.base_adoption_state,
             "head_adoption_state": diff.head_adoption_state,
@@ -424,22 +427,29 @@ def _governance_check(
     root: Path,
     route: dict[str, object] | None,
     architecture: dict[str, object],
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
         checked_architecture: dict[str, object] | None = None
         if architecture.get("status") == "pass" and architecture.get("configured") is True:
             checked_architecture = {
-                field: architecture[field]
+                field: architecture.get(field)
                 for field in (
                     "architecture_digest",
                     "architecture_base_sha",
                     "architecture_head_commit",
+                    "architecture_route_base_sha",
+                    "architecture_base_kind",
+                    "architecture_comparison_witness",
+                    "architecture_range_mode",
                 )
             }
         binding = active_governance_binding(
             root,
             route or {},
             checked_architecture,
+            **({'_trusted_ranges': _trusted_ranges} if _trusted_ranges is not None else {}),
         )
         if binding is None:
             return (
@@ -705,9 +715,14 @@ def _git_range_selection(
     route: dict[str, object] | None,
     mode: str,
 ) -> GitRangeSelection:
-    selection = GitRangeSelection()
+    mode = 'pr' if mode == 'fast' and ((route or {}).get('delivery_lane') == 'light'
+                                      or (route or {}).get('light_lane_candidate') is True) else mode
+    selection = GitRangeSelection(mode=mode)
     if mode not in _RANGE_MODES or not command_exists('git'):
+        if mode == 'fast' and command_exists('git'):
+            selection.head_sha = _resolve_commit(root, 'HEAD')
         return selection
+    selection.head_sha = _resolve_commit(root, 'HEAD')
 
     if route:
         raw_route_base = route.get('base_commit')
@@ -3013,7 +3028,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             governance_check = dispatch.run('governance', None)
             governance_metadata = {'status': 'not_run'}
         else:
-            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata)
+            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata,
+                                                                     _trusted_ranges=git_ranges)
             dispatch.add(governance_check)
     if architecture_check.status == 'fail' or governance_check.status == 'fail':
         state.receipt_eligible = False
