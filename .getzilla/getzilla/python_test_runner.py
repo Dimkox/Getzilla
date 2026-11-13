@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from . import verification_journal as diagnostics
+from .process_limits import OUTPUT_LIMIT as OUTPUT_LIMIT
 
 import argparse
 import configparser
@@ -30,7 +31,6 @@ from .verification_scope import FORCE_FULL_VARIABLE
 PINS = {'pytest': '9.1.1', 'pytest-xdist': '3.8.0', 'pytest-cov': '7.1.0', 'coverage': '7.15.4'}
 CONFIG = '.getzilla-test-runner.json'
 TIMEOUT = 900
-OUTPUT_LIMIT = 2 * 1024 * 1024
 DEFAULT_CORE_WORKER_CAP = 6
 DEFAULT_CORE_CPU_RESERVE = 2
 

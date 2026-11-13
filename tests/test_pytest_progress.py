@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
-from getzilla import python_test_runner as runner, verification
+from getzilla import python_test_runner as runner, verification, verification_progress_evidence
 
 NONCE = 'a' * 32
 
@@ -320,11 +320,11 @@ class ProgressTests(unittest.TestCase):
                 reads.append(command)
                 value = '# ' + 'x' * 989970 + '\ndef test_public():\n pass\n'
             return subprocess.CompletedProcess(command, 0, value, '')
-        with patch.object(verification, 'run', side_effect=git):
+        with patch.object(verification_progress_evidence, 'run', side_effect=git):
             result = verification._trusted_progress_metadata(root, paths)
         self.assertEqual(len(reads), 8)
         self.assertEqual(len(result), 8)
-        with patch.object(verification, 'run', side_effect=AssertionError('deadline must precede Git')), \
+        with patch.object(verification_progress_evidence, 'run', side_effect=AssertionError('deadline must precede Git')), \
              patch.object(verification.time, 'monotonic', side_effect=[0.0, 3.0]):
             self.assertEqual(verification._trusted_progress_metadata(root, paths), {})
 
@@ -334,7 +334,7 @@ class ProgressTests(unittest.TestCase):
         progress = {'status': 'observed', 'selected_workers': 1, 'slots': [
             {'worker': 0, 'state': 'active', 'path': 'tests/test_public.py',
              'key': hashlib.sha256(b'tests/test_public.py::test_known').hexdigest()}]}
-        with patch.object(verification, '_trusted_progress_metadata',
+        with patch.object(verification_progress_evidence, '_trusted_progress_metadata',
                           return_value={'tests/test_public.py': (2, {'test_known'})}), \
              patch.object(verification.time, 'monotonic', side_effect=[0.0, 3.0, 3.0, 3.0]):
             result = verification._core_progress_details(root, progress)

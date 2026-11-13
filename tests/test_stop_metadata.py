@@ -1,5 +1,4 @@
 import ast
-import importlib.util
 import io
 import json
 import os
@@ -11,46 +10,16 @@ import tempfile
 import unittest
 from contextlib import ExitStack, nullcontext
 from dataclasses import FrozenInstanceError, replace
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla import python_test_runner as runner
 from getzilla import verification_journal as journal
+from tests._stop_annotations import strip_stop_annotations as strip_stop_annotations
+from tests._stop_alias_control import same_origin_private_module_preserves_closed_metadata
 
 
-def strip_stop_annotations(node):
-    def pure(value):
-        allowed = {'replace', 'diagnostics.StopMetadata', 'diagnostics.child_stop', 'diagnostics.retain_stop'}
-        names = {'stop_metadata', 'diagnostics', 'replace', 'original_returncode', 'retained', 'exc'}
-        for part in ast.walk(value):
-            if isinstance(part, ast.Call) and ast.unparse(part.func) not in allowed:
-                raise AssertionError('nonmetadata call')
-            if isinstance(part, ast.Name) and part.id not in names:
-                raise AssertionError('nonmetadata input')
-            if isinstance(part, (ast.NamedExpr, ast.Lambda, ast.Yield, ast.Await)):
-                raise AssertionError('nonmetadata control')
-    class Remove(ast.NodeTransformer):
-        def visit_Assign(self, item):
-            if len(item.targets) == 1 and ast.unparse(item.targets[0]) in {'stop_metadata', "retained['stop_metadata']"}:
-                pure(item.value)
-                return None
-            return self.generic_visit(item)
-        def visit_Expr(self, item):
-            if isinstance(item.value, ast.Call) and ast.unparse(item.value.func) == 'diagnostics.retain_stop':
-                pure(item.value)
-                return None
-            return self.generic_visit(item)
-        def visit_Call(self, item):
-            if isinstance(item.func, ast.Name) and item.func.id == 'ProcessResult':
-                for keyword in item.keywords:
-                    if keyword.arg == 'stop_metadata':
-                        pure(keyword.value)
-                item.keywords = [k for k in item.keywords if k.arg != 'stop_metadata']
-                if len(item.args) == 9 and isinstance(item.args[-1], ast.Name) and item.args[-1].id == 'stop_metadata':
-                    item.args.pop()
-            return self.generic_visit(item)
-    return Remove().visit(node)
 
 class Capture(io.BytesIO):
     def fileno(self):
@@ -103,7 +72,7 @@ class StopMetadataTests(unittest.TestCase):
             enter(patch.object(runner.fsx, 'owned_popen', side_effect=OSError('PRIVATE-SPAWN') if spawn_error else None,
                                             return_value=process))
             enter(patch.object(runner, '_stop', side_effect=stop))
-            enter(patch.object(runner, 'os', SimpleNamespace(**dict(vars(os), fstat=size))))
+            enter(patch.object(runner, 'os', SimpleNamespace(fstat=size, name=os.name)))
             enter(patch.object(runner.time, 'monotonic', side_effect=[0, 2 if deadline else 0, 3]))
             result = runner.execute(['PRIVATE'], Path('.'), {}, timeout=1)
         return result, calls
@@ -169,6 +138,24 @@ class StopMetadataTests(unittest.TestCase):
                 self.assertEqual(result.returncode, code)
                 self.assertEqual(calls, ['poll', 'stop', 'size', 'size'])
                 self.assertNotIn('PRIVATE', json.dumps(record))
+
+    def test_execute_os_proxy_rejects_unowned_unlink(self):
+        execute = runner.execute
+        def checked(*args, **kwargs):
+            self.assertEqual(runner.os.name, os.name)
+            self.assertTrue(callable(runner.os.fstat))
+            with self.assertRaises(AttributeError):
+                runner.os.unlink
+            return execute(*args, **kwargs)
+        with patch.object(runner, 'execute', side_effect=checked):
+            result, _ = self.execute(code=124)
+        self.assertEqual(result.returncode, 124)
+
+    def test_output_limit_aliases_keep_the_process_bound(self):
+        from getzilla import process_limits, verification_failure_excerpt
+        self.assertIs(runner.OUTPUT_LIMIT, process_limits.OUTPUT_LIMIT)
+        self.assertIs(verification_failure_excerpt.OUTPUT_LIMIT, process_limits.OUTPUT_LIMIT)
+        self.assertEqual(process_limits.OUTPUT_LIMIT, 2 * 1024 * 1024)
 
     def test_preservation_normalizer_refuses_hidden_effects(self):
         for text in ('stop_metadata = os.kill(1, 9)', 'stop_metadata = replace(stop_metadata, decision=probe())',
@@ -362,17 +349,7 @@ class StopMetadataTests(unittest.TestCase):
         self.assertIsNone(journal._CORE_STOP.get())
 
     def test_same_origin_private_module_preserves_closed_metadata(self):
-        name = '_getzilla_observer_' + 'a' * 32
-        package = ModuleType(name)
-        package.__path__ = [str(Path(journal.__file__).parent)]
-        spec = importlib.util.spec_from_file_location(name + '.verification_journal', journal.__file__)
-        module = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {name: package, spec.name: module}):
-            spec.loader.exec_module(module)
-            result, _ = self.execute(code=124)
-            self.assertEqual(module.stop_details(result), self.details(result))
-            foreign = SimpleNamespace(stop_metadata=SimpleNamespace(**self.details(result)))
-            self.assertEqual(module.stop_details(foreign)['decision'], 'unavailable')
+        same_origin_private_module_preserves_closed_metadata(self)
 
     def test_closed_security_refusals_keep_execution_record(self):
         from getzilla import security_cli, security_tools

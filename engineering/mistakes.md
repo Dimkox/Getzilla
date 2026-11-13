@@ -32,3 +32,8 @@ Use `followup_task` for new work when a worker is completed. `send_message` queu
 ## Separate private evidence modes from test-child defaults
 
 Keep private output at umask `077`; give ordinary verification children their explicit `022` mask at launch. Check exact file-mode contracts with a new owned fixture before attributing a failure to the product. See the [local verification incident](incidents/2026-11-13-local-verification-umask.md); unrelated historical Core failures remain unexplained.
+# Source modes before qualification
+
+Check all finite owned Git inputs required by installation, including baseline
+blobs. Preparing only changed files missed inherited `0664` format refusals;
+admitted mode preparation preserves bytes and does not qualify a failed head.
