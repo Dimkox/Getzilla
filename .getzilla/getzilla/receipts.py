@@ -499,7 +499,12 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     if not isinstance(route_id, str):
         return None
     receipt = get_receipt(root, route_id, 'verification')
-    if not isinstance(receipt, dict) or receipt.get('status') != 'pass':
+    required = {'schema_version', 'route_id', 'kind', 'status', 'created_at', 'tree_fingerprint',
+                'report', 'details', 'criterion_ids', 'spec_digest', 'spec_fingerprint'}
+    if (not isinstance(receipt, dict) or not required.issubset(receipt)
+            or type(receipt.get('schema_version')) is not int or receipt['schema_version'] != 1
+            or not isinstance(receipt.get('created_at'), str) or not isinstance(receipt.get('criterion_ids'), list)
+            or receipt.get('status') != 'pass' or receipt.get('stale') is True):
         return None
     from .continuity import receipt_context_current
     if (receipt.get('route_id') != route_id or receipt.get('kind') != 'verification'
@@ -551,6 +556,35 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
                  'architecture_route_base_sha', 'architecture_head_commit'):
         if architecture.get(name) != receipt.get(name):
             raise ArchitectureError('qualification architecture bindings disagree', code='git')
+    # Prove live acceptance separately from the frozen plan's binding ranges.
+    # This lower-level compiler never calls the range/witness reader again.
+    from .verification import GitRangeBase, GitRangeSelection, _select_local_pr_target, _resolve_commit
+    target = _select_local_pr_target(root)
+    if not isinstance(target, tuple) or target[0] != witness['target_ref']:
+        return None
+    accepted = _git(root, ['merge-base', '--all', head, target[1]])
+    if accepted is None or accepted.decode().splitlines() != [head]:
+        return None
+    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']])
+    try:
+        from .verification_plan import _compile_required_plan, _report_plan_gaps
+        current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+                                         docs_scope=None, route=route, ranges=frozen)
+        if _report_plan_gaps(root, report, current):
+            return None
+        if _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+                                  docs_scope=None, route=route, ranges=frozen) != current:
+            return None
+        spec = _active_spec_binding(root, route, 'verification')
+        if spec is not None and any(receipt.get(key) != value for key, value in spec.items()):
+            return None
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        return None
+    if (_exact_head(root) != head or _select_local_pr_target(root) != target
+            or _resolve_commit(root, witness['target_ref']) != target[1]
+            or tree_fingerprint(root) != receipt['tree_fingerprint']
+            or not receipt_context_current(root, route, receipt)):
+        raise ArchitectureError('qualified comparison changed during validation', code='git')
     return ArchitectureBaseSelection(**witness)
 
 

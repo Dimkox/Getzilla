@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import copy
+import contextlib
+from datetime import datetime, timezone
+import hashlib
 import importlib.machinery
 import importlib.util
 import os
@@ -55,6 +59,9 @@ class DerivedComparisonTests(unittest.TestCase):
         self.git('update-ref', 'refs/remotes/origin/main', self.target)
         self.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
         self.write('trust-ci/owned.py', 'owned = 1\n')
+        self.write('.gitignore', '.getzilla/runtime/\n')
+        self.write('tests/test_393_bound.py', 'import unittest\nclass Bound393(unittest.TestCase):\n'
+                   '    def test_body(self):\n        self.assertEqual(2 + 2, 4)\n')
         self.head = self.commit('owned trust-only candidate')
         self.route = {'base_commit': self.anchor, 'delivery_expected': True}
 
@@ -103,14 +110,206 @@ class DerivedComparisonTests(unittest.TestCase):
                 receipts.active_architecture_binding(self.root, self.route)
 
     def qualification_record(self):
-        # Owned metadata model of an existing completed qualification; no Root
-        # receipt is written and no execution/qualification credit is claimed.
+        # Compile actual obligations and consume individual source-owned evidence.
+        # Unrelated native observations and feed bytes are explicit owned ports;
+        # this is sufficient local contract evidence, never a real-project Gate.
+        from getzilla import state, expanded_security, criterion_tests
+        import getzilla
         self.route['route_id'] = 'owned393'
+        patches = contextlib.ExitStack()
+        self.addCleanup(patches.close)
+        patches.enter_context(patch.object(state, 'get_active_route', return_value=self.route))
+        self.now = datetime.now(timezone.utc)
+        self.database = self.root / '.getzilla/runtime/owned-sources'
+        self.database.mkdir(parents=True, mode=0o700)
+        self.sources = {}
+        self.validated_sources = set()
+        ecosystems = ('PyPI', 'npm', 'Go', 'crates.io', 'Packagist', 'RubyGems', 'Maven')
+        for ordinal, ecosystem in enumerate(ecosystems):
+            source_id = 'osv:' + ecosystem
+            payload = ('owned source ' + str(ordinal)).encode()
+            (self.database / ecosystem).write_bytes(payload)
+            self.sources[source_id] = {'database': '.getzilla/runtime/owned-sources', 'source_id': source_id,
+                'source_url': 'https://owned.invalid/' + ecosystem,
+                'content_sha256': hashlib.sha256(payload).hexdigest(), 'payload_size': len(payload),
+                'acquisition': {'last_verified_sync_utc': self.now.isoformat()}, 'coverage': {'owned': ordinal}}
+        def read_source(database, source_id, now):
+            self.assertEqual(database, self.database)
+            self.validated_sources.add(source_id)
+            evidence = copy.deepcopy(self.sources[source_id])
+            payload = (database / source_id.removeprefix('osv:')).read_bytes()
+            evidence.update(content_sha256=hashlib.sha256(payload).hexdigest(), payload_size=len(payload))
+            return {}, {key: evidence[key] for key in expanded_security._SOURCE_FIELDS}
+        patches.enter_context(patch.object(expanded_security, '_database', return_value=self.database))
+        patches.enter_context(patch.object(expanded_security, '_read_source', side_effect=read_source))
+        security = []
+        for (name, _family), source in zip(verification_plan.SECURITY_FAMILIES.items(), self.sources.values()):
+            row = verification_plan.obligation(name)
+            row['data_sources'] = [source]
+            security.append(row)
+        def sources(root):
+            self.assertEqual(root, self.root)
+            return copy.deepcopy(security)
+        patches.enter_context(patch.object(expanded_security, 'security_obligations', side_effect=sources))
+        reference = 'tests/test_393_bound.py::Bound393::test_body'
+        document = {'change_id': 'owned393', 'acceptance_criteria': [
+            {'id': 'AC-OWNED', 'evidence': [{'test': reference}]}], 'invariants': [], 'forbidden_outcomes': []}
+        documents = {'path': '.getzilla/runtime/owned-package', 'spec': document,
+                     'spec_digest': verification_plan.digest(document), 'requirements_digest': 'a' * 64}
+        patches.enter_context(patch.object(verification_plan, '_plan_documents', return_value=documents))
+        # Only policy-source reads use inert owned SourceFileLoader suppliers.
+        sdk = self.directory / 'policy-sdk'
+        sdk.mkdir(mode=0o700)
+        (sdk / 'config').mkdir()
+        (sdk / 'config/stacks.json').write_text('{}\n')
+        def owned(name, package):
+            path = sdk / (name.lstrip('.') + '.py')
+            if not path.exists():
+                path.write_text('POLICY = 1\n')
+            module = ModuleType('getzilla' + name)
+            module.__file__ = str(path)
+            module.__spec__ = importlib.util.spec_from_file_location(module.__name__, path)
+            module.__loader__ = module.__spec__.loader
+            return module
+        library = SimpleNamespace(import_module=owned, machinery=importlib.machinery, util=importlib.util)
+        patches.enter_context(patch.object(verification_plan, 'importlib', library))
+        patches.enter_context(patch.object(getzilla, 'STACK_DIR', sdk))
+        self.policy_sdk = sdk
+        plan = verification_plan.current_required_plan(self.root, mode='pr')
+        execution = criterion_tests._execute_references(self.root, [reference])
+        self.addCleanup(sys.modules.pop, 'test_393_bound', None)
+        self.assertEqual(execution['verified_references'], [reference])
+        checks = []
+        for name in sorted({row['check_id'] for row in plan['obligations']}):
+            rows = [row for row in plan['obligations'] if row['check_id'] == name]
+            # Fixture-native providers report against explicit source-derived
+            # declarations; they are not vendor/tool or real-feed qualification.
+            optional = all(row['applicability'] == 'not_applicable' for row in rows)
+            details = []
+            if name in verification_plan.SECURITY_FAMILIES:
+                details = [{'schema_version': 1, 'kind': 'security-result',
+                    'family': verification_plan.SECURITY_FAMILIES[name], 'outcome': 'pass',
+                    'data_sources': rows[0]['data_sources']}]
+            elif name == 'criterion-tests':
+                details = [execution]
+            check = {'name': name, 'status': 'skip' if optional else 'pass',
+                     'summary': 'owned bounded provider observation', 'details': details}
+            verification_plan.bind_result(plan, check)
+            checks.append(check)
+        self.report = {'mode': 'pr', 'profiles': ['base'], 'status': 'pass', 'terminal_state': 'completed',
+                       'required_plan': plan, 'checks': checks}
+        self.assertEqual(verification_plan.report_gaps(self.root, self.report), [])
+        self.assertEqual(self.validated_sources, set(self.sources))
         binding = receipts.active_architecture_binding(self.root, self.route)
+        self.report['architecture'] = {'status': 'pass', 'fitness_status': 'pass', **binding}
         return {'schema_version': 1, 'route_id': 'owned393', 'kind': 'verification', 'status': 'pass',
+                'created_at': self.now.isoformat(), 'report': None,
+                'criterion_ids': [], 'spec_digest': None, 'spec_fingerprint': None,
                 'git_head': self.head, 'tree_fingerprint': tree_fingerprint(self.root), **binding,
-                'details': {'mode': 'pr', 'status': 'pass', 'terminal_state': 'completed',
-                            'architecture': {'status': 'pass', 'fitness_status': 'pass', **binding}}}
+                'details': self.report}
+
+    def test_sufficient_plan_and_hydrated_report_stay_current_after_acceptance(self):
+        proof = self.qualification_record()
+        before = copy.deepcopy(proof['details']['required_plan'])
+        publication = receipts._publish_verification_report(self.root, 'owned393', proof, None)
+        try:
+            envelope = {**proof, 'details': {'_verification_report': publication.reference}}
+            path = receipts.receipt_dir(self.root, 'owned393') / 'verification.json'
+            receipts._publish_receipt(path, envelope, None)
+        finally:
+            publication.close()
+        self.assertEqual(receipts.get_receipt(self.root, 'owned393', 'verification')['details'], proof['details'])
+        for target in (self.head, self.git('commit-tree', self.head + '^{tree}', '-p', self.head,
+                                         '-m', 'owned accepted descendant')):
+            self.git('update-ref', 'refs/remotes/origin/main', target)
+            self.assertEqual(verification_plan.current_required_plan(self.root, mode='pr'), before)
+            self.assertEqual(verification_plan.report_gaps(self.root, proof['details']), [])
+            selected = select_architecture_comparison_base(self.root, self.route)
+            self.assertEqual(selected.comparison_base_sha, self.target)
+            self.assertEqual({row.comparison_base_sha for row in _git_range_selection(self.root, self.route, 'pr').bases}
+                             - {self.head}, {self.anchor, self.target})
+            with patch.object(verification_plan, 'current_required_plan', side_effect=AssertionError('recursive compiler')):
+                self.assertEqual(receipts._qualified_architecture_comparison(self.root, self.route, self.head).comparison_base_sha,
+                                 self.target)
+
+    def test_incomplete_or_unqualified_individual_results_cannot_freeze_ranges(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        variants = []
+        for mutation in ('missing', 'duplicate', 'skip', 'unplanned', 'wrong-plan', 'unexecuted', 'wrong-family'):
+            value = copy.deepcopy(proof)
+            report = value['details']
+            criterion = next(row for row in report['checks'] if row['name'] == 'criterion-tests')
+            if mutation == 'missing':
+                report['checks'].remove(criterion)
+            elif mutation == 'duplicate':
+                report['checks'].append(copy.deepcopy(criterion))
+            elif mutation == 'skip':
+                criterion['status'] = 'skip'
+            elif mutation == 'unplanned':
+                report['checks'].append({'name': 'unplanned-owned', 'status': 'pass', 'details': []})
+            elif mutation == 'wrong-plan':
+                report['required_plan']['digest'] = 'f' * 64
+            elif mutation == 'unexecuted':
+                criterion['details'][0]['tests'][0]['status'] = 'skip'
+            else:
+                source = next(row for row in report['checks'] if row['name'] == 'security-kev')
+                source['details'][0]['family'] = 'inventory'
+            variants.append((mutation, value))
+        for mutation, value in variants:
+            with self.subTest(mutation=mutation), patch.object(receipts, 'get_receipt', return_value=value):
+                self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+
+    def test_current_policy_context_source_and_payload_still_bind_qualification(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        with patch.object(receipts, 'get_receipt', return_value=proof):
+            self.assertIsNotNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+            policy = self.policy_sdk / 'process_limits.py'
+            original = policy.read_bytes()
+            policy.write_bytes(b'POLICY = 2\n')
+            self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+            policy.write_bytes(original)
+            self.route['task'] = 'changed owned intent'
+            self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+            self.route.pop('task')
+            source = self.root / 'trust-ci/owned.py'
+            original = source.read_bytes()
+            source.write_bytes(b'owned = 2\n')
+            self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+            source.write_bytes(original)
+            payload = self.database / 'PyPI'
+            original = payload.read_bytes()
+            payload.write_bytes(b'changed owned source')
+            self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+            payload.write_bytes(original)
+            self.assertIsNotNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
+
+    def test_target_race_during_qualification_refuses_after_real_plan_validation(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        compile_plan = verification_plan._compile_required_plan
+        def changed(*args, **kwargs):
+            plan = compile_plan(*args, **kwargs)
+            self.git('update-ref', 'refs/remotes/origin/main', self.anchor)
+            return plan
+        with patch.object(receipts, 'get_receipt', return_value=proof), \
+             patch.object(verification_plan, '_compile_required_plan', side_effect=changed):
+            with self.assertRaises(ArchitectureError):
+                receipts._qualified_architecture_comparison(self.root, self.route, self.head)
+
+    def test_policy_changed_during_source_validation_cannot_supply_qualification(self):
+        from getzilla import expanded_security
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        validate = expanded_security.validate_data_source
+        def changed(source, **kwargs):
+            result = validate(source, **kwargs)
+            (self.policy_sdk / 'process_limits.py').write_bytes(b'POLICY = 2\n')
+            return result
+        with patch.object(receipts, 'get_receipt', return_value=proof), \
+             patch.object(expanded_security, 'validate_data_source', side_effect=changed):
+            self.assertIsNone(receipts._qualified_architecture_comparison(self.root, self.route, self.head))
 
     def test_current_qualified_non_head_comparison_survives_acceptance(self):
         proof = self.qualification_record()
@@ -136,6 +335,22 @@ class DerivedComparisonTests(unittest.TestCase):
             with patch.object(receipts, 'get_receipt', return_value=record):
                 selected = select_architecture_comparison_base(self.root, self.route)
             self.assertEqual(selected.comparison_base_sha, self.anchor)
+
+    def test_explicit_invalidation_cannot_supply_qualification(self):
+        proof = self.qualification_record()
+        proof['stale'] = True
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        with patch.object(receipts, 'get_receipt', return_value=proof):
+            selected = select_architecture_comparison_base(self.root, self.route)
+        self.assertEqual(selected.comparison_base_sha, self.anchor)
+
+    def test_missing_required_plan_cannot_supply_qualification(self):
+        proof = self.qualification_record()
+        proof['details'].pop('required_plan', None)
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        with patch.object(receipts, 'get_receipt', return_value=proof):
+            selected = select_architecture_comparison_base(self.root, self.route)
+        self.assertEqual(selected.comparison_base_sha, self.anchor)
 
     def test_changed_model_identity_cannot_borrow_a_qualified_witness(self):
         proof = self.qualification_record()

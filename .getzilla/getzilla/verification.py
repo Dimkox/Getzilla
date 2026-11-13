@@ -242,6 +242,7 @@ class GitRangeBase:
 class GitRangeSelection:
     bases: list[GitRangeBase] = field(default_factory=list)
     findings: list[dict[str, str]] = field(default_factory=list)
+    qualification_bases: tuple[GitRangeBase, ...] | None = None
 
 
 FOCUSED_STATIC_SEO_LANDING_MODE = 'focused-static-seo-landing'
@@ -783,6 +784,12 @@ def _git_range_selection(
                 if qualified is not None and qualified.comparison_base_sha not in {item.comparison_base_sha for item in selection.bases}:
                     selection.bases.append(GitRangeBase('qualified-pr-target', qualified.target_ref,
                                                        qualified.target_sha, qualified.comparison_base_sha))
+                    # The live target remains in the full review union. A prior
+                    # qualifying plan retains its exact range metadata separately.
+                    selection.qualification_bases = (
+                        GitRangeBase('route', 'route.base_commit', qualified.route_base_sha, qualified.route_base_sha),
+                        GitRangeBase('pr-target', qualified.target_ref, qualified.target_sha, qualified.comparison_base_sha),
+                    )
     elif route and route.get('delivery_expected') is True:
         selection.findings.append({
             'severity': 'error',
