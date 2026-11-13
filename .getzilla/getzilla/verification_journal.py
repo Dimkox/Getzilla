@@ -181,9 +181,22 @@ def _test_key(node):
     return (test_identity(node) or {}).get('key')
 
 
+def _validated_location(value):
+    if (type(value) is not dict or set(value) != {'path', 'line'}
+            or type(value['path']) is not str or len(value['path']) > 256
+            or not re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', value['path'])
+            or any(p in {'', '.', '..'} for p in value['path'].split('/'))
+            or type(value['line']) is not int or not 1 <= value['line'] <= 1000000):
+        raise ValueError('failure-location-shape')
+    return dict(value)
+
+
 def _validate_first_failure(value):
     fields = {'version', 'attempt', 'node_key', 'phase', 'exception_kind', 'repeated', 'overflow', 'action_status', 'action'}
-    if (type(value) is not dict or set(value) != fields or type(value['version']) is not int or value['version'] != 1
+    version = value.get('version') if type(value) is dict else None
+    if version == 2:
+        fields |= {'location', 'location_status'}
+    if (type(value) is not dict or set(value) != fields or type(version) is not int or version not in {1, 2}
             or type(value['attempt']) is not int or not 1 <= value['attempt'] <= 2**63 - 1
             or value['node_key'] is not None and (type(value['node_key']) is not str or not _DIGEST.fullmatch(value['node_key']))
             or any(type(value[key]) is not bool for key in ('repeated', 'overflow'))
@@ -196,6 +209,14 @@ def _validate_first_failure(value):
             or type(action['op']) is not str or action['op'] not in _FAILURE_OPS
             or type(action['sequence']) is not int or not 1 <= action['sequence'] <= 2**63 - 1):
         raise ValueError('failure-action-shape')
+    # Exact v1 records remain legacy unavailable-location data; strict old readers reject v2.
+    if version == 2:
+        location, status = value['location'], value['location_status']
+        if (type(status) is not str or status not in {'reported', 'unavailable', 'omitted'}
+                or (location is not None) != (status == 'reported')):
+            raise ValueError('failure-location-status')
+        if location is not None:
+            _validated_location(location)
     if (action is not None) != (value['action_status'] == 'correlated') or len(_json(value)) > 384:
         raise ValueError('failure-capsule-bound')
     return _decode(_json(value))
@@ -235,6 +256,10 @@ def _fit_observations(value, limit, *, public=False):
         flags['stop_omitted'] = True
     failure = value.get('first_failure')
     rows = failure['capsules'] if public else [failure] if failure else []
+    if over():
+        for row in rows:
+            if row.get('location') is not None:
+                row.update(location=None, location_status='omitted')
     if over():
         for row in rows:
             if row['action'] is not None:
@@ -486,7 +511,7 @@ class Writer:
         self._ownership = self._ownership_form = None
         self._ownership_blocked = False
         self._ownership_counts = {}
-        self._first_failure = self._pending = self._action = None
+        self._first_failure = self._pending = self._action = self._frame = None
         self._core_stop = None
         self._test_phase = (None, 'unknown')
         self._omissions = dict.fromkeys(_OMISSIONS, False)
@@ -567,7 +592,7 @@ class Writer:
 
     def begin_test_phase(self, nodeid, phase):
         self._test_phase = (_test_key(nodeid), phase)
-        self._pending = self._action = None
+        self._pending = self._action = self._frame = None
 
     def note_exception(self, nodeid, phase, error):
         self._pending = (_test_key(nodeid), phase, _exception_kind(error))
@@ -579,13 +604,17 @@ class Writer:
         kind = kind if kind is not None else pending[2] if pending and pending[1] == phase else 'unavailable'
         if self._first_failure is None:
             action = self._action[1] if self._action and self._action[0] == (key, phase) else None
-            value = {'version': 1, 'attempt': self.attempt, 'node_key': key, 'phase': phase, 'exception_kind': kind,
-                     'repeated': False, 'overflow': False, 'action_status': 'correlated' if action else 'unavailable', 'action': action}
+            location = self._frame[2] if self._frame and self._frame[:2] == ((key, phase), self.attempt) else None
+            value = {'version': 2, 'attempt': self.attempt, 'node_key': key, 'phase': phase, 'exception_kind': kind,
+                     'repeated': False, 'overflow': False, 'action_status': 'correlated' if action else 'unavailable', 'action': action,
+                     'location_status': 'reported' if location else 'unavailable', 'location': location}
+            if len(_json(value)) > 384 and location is not None:
+                value.update(location=None, location_status='omitted')
             self._first_failure = _validate_first_failure(value)
         else:
             self._first_failure['repeated'] |= key is not None and key == self._first_failure['node_key']
             self._first_failure['overflow'] = True
-        self._pending = None
+        self._pending = self._frame = None
         self.health('unavailable' if self.disabled else 'active')
 
     def record_ownership(self, phase, *, status, cleanup, descendant):
@@ -629,6 +658,8 @@ class Writer:
             self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
 
     def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None):
+        if error is not None:
+            self._frame = None
         if self.disabled:
             return False
         try:
@@ -709,6 +740,13 @@ class Writer:
                 raise OSError('journal-short-write')
             self.size += len(raw)
             self.sequence += 1
+            if (error is not None and self._test_phase[0] is not None and row.get('key') == self._test_phase[0]
+                    and stage in {self._test_phase[1], 'test', 'action', 'command', 'check', 'cleanup'}
+                    and type(row.get('frames')) is list and row['frames']):
+                try:
+                    self._frame = (self._test_phase, self.attempt, _validated_location(row['frames'][-1]))
+                except ValueError:
+                    pass
             if (stage in {'action', 'command', 'check', 'cleanup'} and row.get('outcome', state) in {'fail', 'error', 'timeout', 'cancelled'}
                     and self._test_phase[0] is not None and row.get('key') == self._test_phase[0]
                     and action_sink()[0] is self and _test_key(action_sink()[1]) == row.get('key')):

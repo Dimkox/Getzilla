@@ -32,6 +32,149 @@ class FailureCapsuleTests(unittest.TestCase):
     def capsule(self):
         return self.health()['first_failure']
 
+    def owned_error(self, path='tests/test_owned.py'):
+        space = {}
+        exec(compile("def inner(): raise ValueError('PRIVATE')\ndef outer(): inner()\n",
+                     str(self.root / path), 'exec'), space)
+        try:
+            space['outer']()
+        except ValueError as error:
+            return error
+
+    def frame_failure(self, node=NODE, phase='call'):
+        self.writer.begin_test_phase(node, phase)
+        error = self.owned_error()
+        self.writer.note_exception(node, phase, error)
+        self.assertTrue(self.writer.emit(phase, 'error', nodeid=node, error=error))
+        return self.record_failure(node, phase, 'ValueError')
+
+    def test_location_innermost_persists_rotation_reopen_and_export(self):
+        first = self.frame_failure()
+        self.assertEqual(first.get('version'), 2)
+        self.assertEqual(first['location_status'], 'reported')
+        self.assertEqual(first['location'], {'path': 'tests/test_owned.py', 'line': 1})
+        for _ in range(journal.SEGMENTS + 1):
+            self.writer._open_segment()
+        self.writer.close()
+        self.writer = journal.Writer(self.run.path, self.run.run_id, 'controller', self.run.nonce)
+        self.run.writer = self.writer
+        self.record_failure(kind='OSError')
+        expected = dict(first, repeated=True, overflow=True)
+        self.assertEqual(self.capsule(), expected)
+        self.assertEqual(self.writer.attempt, 2)
+        self.run.close()
+        view = json.loads(dict(journal.export_entries(self.root))['journal/index.json'])
+        self.assertEqual(view['first_failure']['capsules'], [expected])
+
+    def test_location_legacy_and_strict_v2_reader(self):
+        legacy = self.record_failure()
+        legacy = {k: v for k, v in legacy.items() if k not in {'location', 'location_status'}}
+        legacy['version'] = 1
+        self.assertEqual(journal._validate_first_failure(legacy), legacy)
+        new = dict(legacy, version=2, location=None, location_status='unavailable')
+        self.assertEqual(journal._validate_first_failure(new), new)
+        new.update(location={'path': 'tests/test_owned.py', 'line': 1}, location_status='reported')
+        self.assertEqual(journal._validate_first_failure(new), new)
+        for path, line in [('/tests/x.py', 1), ('tests/../x.py', 1), ('tests//x.py', 1),
+                           ('tests/./x.py', 1), ('tests\\x.py', 1), ('private/x.py', 1),
+                           ('tests/' + 'x' * 250 + '.py', 1), ('tests/x.py', True),
+                           ('tests/x.py', 0), ('tests/x.py', 1000001)]:
+            with self.subTest(path=path, line=line), self.assertRaises(ValueError):
+                journal._validate_first_failure(dict(new, location={'path': path, 'line': line}))
+        for changes in ({'location_status': 'cause'}, {'location': None}, {'version': True},
+                        {'version': 3}, {'extra': 'PRIVATE'}, {'location': {'path': 'tests/x.py', 'line': 1, 'pid': 1}}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                journal._validate_first_failure(dict(new, **changes))
+
+    def test_location_requires_current_node_phase_actor_attempt_and_write(self):
+        for scenario in ('node', 'phase', 'actor', 'attempt', 'unwritten', 'replacement', 'missing'):
+            with self.subTest(scenario=scenario):
+                self.writer._first_failure = None
+                self.writer.begin_test_phase(NODE, 'call')
+                error = self.owned_error()
+                other = 'tests/test_other.py::test_value'
+                owner = self.writer
+                if scenario == 'actor':
+                    owner = journal.Writer(self.run.path, self.run.run_id, 'worker-0', self.run.nonce)
+                    owner.begin_test_phase(NODE, 'call')
+                try:
+                    with patch.object(owner, 'fd', -1) if scenario == 'unwritten' else patch.object(owner, 'disabled', False):
+                        if scenario != 'missing':
+                            owner.emit('call', 'error', nodeid=other if scenario == 'node' else NODE, error=error)
+                    if scenario == 'phase':
+                        self.writer.begin_test_phase(NODE, 'teardown')
+                    if scenario == 'attempt':
+                        self.writer.attempt += 1
+                    if scenario == 'replacement':
+                        self.writer.emit('call', 'error', nodeid=NODE, error=ValueError())
+                    first = self.record_failure(phase='teardown' if scenario == 'phase' else 'call')
+                    self.assertEqual(first.get('location_status'), 'unavailable')
+                    self.assertIsNone(first['location'])
+                finally:
+                    if owner is not self.writer:
+                        owner.close()
+                    self.writer.disabled = False
+
+    def test_location_omitted_at_capsule_bound_without_losing_action(self):
+        self.writer.begin_test_phase(NODE, 'call')
+        path = 'tests/' + 'x' * 200 + '.py'
+        with journal.bind_sink(self.writer, NODE):
+            self.writer.emit('command', 'error', nodeid=NODE, error=self.owned_error(path), outcome='fail')
+        sequence = self.writer.sequence
+        first = self.record_failure()
+        self.assertEqual(first.get('location_status'), 'omitted')
+        self.assertIsNone(first['location'])
+        self.assertEqual(first['action'], {'op': 'command', 'sequence': sequence})
+        self.assertLessEqual(len(journal._json(first)), 384)
+        self.assertEqual(first['exception_kind'], 'AssertionError')
+        self.assertNotIn('PRIVATE', json.dumps(first))
+
+    def test_location_packing_keeps_stop_first_then_original_facts(self):
+        first = self.frame_failure()
+        first.update(action_status='correlated', action={'op': 'command', 'sequence': 1})
+        flags = {'ownership_omitted': False, 'failure_omitted': False, 'action_omitted': False}
+        for public, bound in ((False, 2048), (True, 1536)):
+            failure = {'capsules': [first], 'status': 'reported', 'overflow': False} if public else first
+            value = {'first_failure': failure, 'observation_omissions': flags, 'padding': '', 'core_stop': {'status': 'reported', 'snapshot': {'decision': 'deadline'}}}
+            value['padding'] = 'x' * (bound - len(journal._json(value)))
+            before = journal._json(value)
+            packed = journal._fit_observations(value, bound - 1, public=public)
+            row = packed['first_failure']['capsules'][0] if public else packed['first_failure']
+            self.assertEqual(row.get('location_status'), 'reported')
+            self.assertTrue(packed['observation_omissions']['stop_omitted'])
+            stop = value.pop('core_stop')
+            packed = journal._fit_observations(value, len(journal._json(value)) - 1, public=public)
+            row = packed['first_failure']['capsules'][0] if public else packed['first_failure']
+            self.assertEqual(row.get('location_status'), 'omitted')
+            self.assertIsNone(row['location'])
+            self.assertEqual(row['action'], first['action'])
+            self.assertFalse(packed['observation_omissions']['failure_omitted'])
+            self.assertLessEqual(len(journal._json(packed)) + (not public), bound)
+            value['core_stop'] = stop
+            self.assertEqual(journal._json(value), before)
+
+    def test_location_pytest_confirmation_and_unittest_forwarding(self):
+        error = self.owned_error()
+        self.writer.begin_test_phase(NODE, 'call')
+        hook = pytest_progress._JournalHooks(self.writer)
+        call = SimpleNamespace(when='call', excinfo=SimpleNamespace(value=error))
+        generator = hook.pytest_runtest_makereport(SimpleNamespace(nodeid=NODE), call)
+        next(generator)
+        with self.assertRaises(StopIteration):
+            next(generator)
+        self.assertNotIn('first_failure', self.health())
+        pytest_progress._journal_report(self.writer, self.report(failed=True))
+        self.assertEqual(self.capsule().get('location_status'), 'reported')
+        self.writer._first_failure = None
+        def fail(case):
+            raise error
+        case = type('Owned', (unittest.TestCase,), {'__module__': 'tests.test_owned', 'test_value': fail})
+        result = journal.unittest_runner(self.writer)(stream=io.StringIO()).run(case('test_value'))
+        self.assertEqual((result.testsRun, len(result.errors), len(result.failures)), (1, 1, 0))
+        self.assertEqual(self.capsule().get('location'), {'path': 'tests/test_owned.py', 'line': 1})
+        self.assertIn('ValueError: PRIVATE', result.errors[0][1])
+        self.assertIs(call.excinfo.value, error)
+
     def record_failure(self, node=NODE, phase='call', kind='AssertionError'):
         self.writer.record_test_failure(node, phase, kind)
         return self.capsule()
