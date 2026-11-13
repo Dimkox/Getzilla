@@ -186,4 +186,3 @@ class PytestFailureExcerptTests(unittest.TestCase):
         self.assertIn('tests/test_peer.py:43', result)
         self.assertNotIn('tests/test_peer.py:99', result)
         self.assertNotIn('::test_captured', result)
-

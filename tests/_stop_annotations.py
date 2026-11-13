@@ -34,4 +34,3 @@ def strip_stop_annotations(node):
                     item.args.pop()
             return self.generic_visit(item)
     return Remove().visit(node)
-

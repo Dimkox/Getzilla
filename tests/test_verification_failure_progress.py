@@ -153,4 +153,3 @@ class Low336FailureRenderTests(unittest.TestCase):
         self.assertIs(public['dropped'], True)
         self.assertIsNone(public['partial_tail'])
         self.assertEqual(public['status'], 'partial')
-

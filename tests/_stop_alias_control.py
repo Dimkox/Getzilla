@@ -20,4 +20,3 @@ def same_origin_private_module_preserves_closed_metadata(self):
         self.assertEqual(module.stop_details(result), self.details(result))
         foreign = SimpleNamespace(stop_metadata=SimpleNamespace(**self.details(result)))
         self.assertEqual(module.stop_details(foreign)['decision'], 'unavailable')
-

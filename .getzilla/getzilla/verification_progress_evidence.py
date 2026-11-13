@@ -255,4 +255,3 @@ def _core_progress_details(root: Path, progress: dict[str, object] | None) -> di
         if len(json.dumps(candidate).encode('utf-8')) <= 16000:
             output = candidate
     return output
-

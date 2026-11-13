@@ -159,4 +159,3 @@ def _core_output_excerpt(output: str, *, failed: bool,
     if omitted:
         parts.append('[additional failure locations omitted]')
     return '\n'.join(part for part in parts if part)
-
