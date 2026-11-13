@@ -5985,6 +5985,11 @@ class ArchitectureFitnessTests(unittest.TestCase):
         if baseline is not None:
             repo.git("reset", "--hard", base)
         system = copy.deepcopy(snapshot.system)
+        if not contract_indices:
+            for node in system['nodes']:
+                node['repository_paths'] = [p for p in node['repository_paths'] if p not in FIT._PUBLIC_WORKER_SOURCES]
+            repo.model(system, snapshot.rules)
+            base = repo.commit('unowned public worker membership fixture')
         descriptors = (
             ("github-public-lifecycle-projection", "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
              "NODE-TRUST-CI-API", "json_schema", "consumer", "consumer_accepts_old", "api.py"),
@@ -6141,6 +6146,25 @@ class ArchitectureFitnessTests(unittest.TestCase):
         head = repo.commit("paired lifecycle ingestion")
         diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
         self.assertEqual(FIT._change_separation(FIT.load_architecture(repo.root), diff).status, "pass")
+
+    def test_public_membership_fixture_starts_without_a_candidate_owner(self):
+        _repo, _base, system = self._public_trust_binding_repo(())
+        self.assertFalse([p for n in system['nodes'] for p in n['repository_paths'] if p in FIT._PUBLIC_WORKER_SOURCES])
+        actual = ARCHITECTURE.load_architecture(ROOT)
+        local = next(n for n in actual.system['nodes'] if n['id'] == 'NODE-LOCAL-SECURITY-BUNDLE')
+        self.assertIn('trust-ci/src/adaptive_trust_ci/public_admission.py', local['repository_paths'])
+
+    def test_duplicate_public_source_owner_is_still_rejected(self):
+        repo, _base, system = self._public_trust_binding_repo(())
+        source = 'trust-ci/src/adaptive_trust_ci/public_admission.py'
+        for identity in ('NODE-LOCAL-SECURITY-BUNDLE', 'NODE-TRUST-CI-WORKER'):
+            node = next(n for n in system['nodes'] if n['id'] == identity)
+            if source not in node['repository_paths']:
+                node['repository_paths'].append(source)
+        repo.write_json('architecture/system.yaml', system)
+        with self.assertRaises(ARCHITECTURE.ArchitectureError) as caught:
+            FIT.load_architecture(repo.root)
+        self.assertEqual(caught.exception.code, 'path')
 
     def test_public_worker_source_membership_is_exact_and_envelope_preserving(self) -> None:
         approved = ("public_models.py", "public_admission.py", "public_policy.py", "source_safety.py",

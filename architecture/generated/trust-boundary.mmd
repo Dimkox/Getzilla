@@ -38,6 +38,7 @@ flowchart LR
     node_9f1df3a916fb955a["NODE-LOCAL-DEMO-UI | local_component | repository engineering"]
     node_fdafbab352587936["NODE-LOCAL-ENTIRE-ADAPTER | local_component | repository engineering"]
     node_770cf3a1783e8525["NODE-LOCAL-ROUTE-POLICY | local_component | repository engineering"]
+    node_d3130d35cc27975a["NODE-LOCAL-SECURITY-BUNDLE | local_component | repository engineering; local validation only, no App, DB or mandatory observer"]
     node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
     node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
     node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
@@ -66,6 +67,7 @@ flowchart LR
     node_f52610429cb98f23["NODE-WORKFLOW-ARTIFACT-SOURCES | repository | repository contributors"]
   end
   subgraph domain_7f80d82d053144ab["TD-TRUST-CI-CONTROL"]
+    node_99c8497c4eb3c986["NODE-OPTIONAL-GITHUB-OBSERVER | local_component | repository engineering; optional GET-only adapter, source-described not activated"]
     node_d0e570b2fbe52f98["NODE-TRUST-CI-API | service | Trust CI operators"]
     node_1a6c7efb2d08591b["NODE-TRUST-CI-POSTGRES | datastore | Trust CI operators"]
   end
@@ -76,6 +78,8 @@ flowchart LR
     node_070dda93443dcc1f["NODE-TRUST-CI-WORKER | worker | Trust CI operators"]
   end
   node_d0e570b2fbe52f98 -->|"EDGE-API-POSTGRES | data_flow | postgresql"| node_1a6c7efb2d08591b
+  node_d3130d35cc27975a -->|"EDGE-BUNDLE-CORE-VALIDATION | dependency | python"| node_770cf3a1783e8525
+  node_d3130d35cc27975a -->|"EDGE-BUNDLE-OPTIONAL-GITHUB-OBSERVATION | dependency | python"| node_99c8497c4eb3c986
   node_8938bd3db1932751 -->|"EDGE-CHANGE-EVIDENCE-WORKFLOW-COMPILER | data_flow | filesystem"| node_05e59b1e4a9cc0f9
   node_8938bd3db1932751 -->|"EDGE-CHANGE-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_3703dbb382efdb0f -->|"EDGE-DEMO-TEST-CLIENT-LOOPBACK | dependency | https"| node_9f1df3a916fb955a
@@ -114,6 +118,7 @@ flowchart LR
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-VERIFIER-SEO-LAB | control | tcp"| node_d4421144c1dd4abe
+  node_99c8497c4eb3c986 -->|"EDGE-OPTIONAL-GET-GITHUB | data_flow | https"| node_8b8a8cd21b180532
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-CISA | dependency | https"| node_662c15ead8b897ee
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-EPSS | dependency | https"| node_57e24ded05c6433e
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS | dependency | https"| node_8b8a8cd21b180532
