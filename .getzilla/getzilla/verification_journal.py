@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import functools
@@ -44,6 +46,331 @@ _STAGES = {'action', 'command', 'check', 'collection', 'setup', 'call', 'teardow
 _STATES = {'start', 'end', 'pass', 'fail', 'skip', 'error', 'cancelled', 'timeout', 'unknown', 'expected-failure', 'unexpected-success'}
 _ERRORS = {'AssertionError', 'OSError', 'ValueError', 'TypeError', 'RuntimeError', 'ImportError',
            'ModuleNotFoundError', 'TimeoutError', 'KeyboardInterrupt', 'SystemExit'}
+_OWNERSHIP_CASE = 'tests/test_python_test_runner.py::PythonTestRunnerTests::test_term_resistant_grandchild_is_killed_on_every_stop_path'
+_OWNERSHIP_FORMS = ('exit', 'flood', 'timeout', 'controller')
+_OWNERSHIP_FIELDS = {
+    'form': set(_OWNERSHIP_FORMS),
+    'phase': {'entered', 'execute', 'ready', 'term', 'grace', 'kill', 'reap', 'result',
+              'controller-stop', 'controller-reaped', 'descendant-check', 'finished'},
+    'status': {'active', 'returned', 'failed', 'cancelled', 'unknown'},
+    'cleanup': {'none-reported', 'recorded', 'unavailable'},
+    'descendant': {'absent', 'zombie', 'nonzombie', 'unavailable'},
+}
+_FAILURE_PHASES = {'setup', 'call', 'teardown', 'unknown'}
+_FAILURE_OPS = {'action', 'command', 'check', 'cleanup', 'owned-command'}
+_OMISSIONS = ('ownership_omitted', 'failure_omitted', 'action_omitted')
+
+
+@dataclass(frozen=True)
+class StopMetadata:
+    version: int = 1
+    decision: str = 'unavailable'
+    result_policy: str = 'unavailable'
+    cancel: str = 'unavailable'
+    late_output: str = 'unavailable'
+    scope: str = 'unavailable'
+
+
+if ((getattr(_peer, '__file__', None), getattr(getattr(_peer, '__spec__', None), 'origin', None),
+        getattr(__spec__, 'origin', None)) == (__file__,) * 3
+        and isinstance(getattr(_peer, 'StopMetadata', None), type)):
+    StopMetadata = _peer.StopMetadata
+
+
+_STOP_FIELDS = {
+    'decision': {'unavailable', 'child_exit', 'child_signal', 'deadline', 'output_limit', 'owned_cancel',
+                 'primary_exception', 'spawn_error'},
+    'result_policy': {'unavailable', 'child_status', 'limit_124', 'cancel_preserve_child', 'cancel_128_signal',
+                      'fallback_1', 'spawn_127', 'aggregate', 'collection_refusal', 'coverage_refusal'},
+    'cancel': {'unavailable', 'none', 'sigint', 'sigterm'},
+    'late_output': {'unavailable', 'not_exceeded', 'exceeded'},
+    'scope': {'process', 'parallel_batch', 'selected_shard', 'coverage_combine', 'unavailable'},
+}
+
+
+def _validate_stop(value):
+    if (type(value) is not dict or set(value) != {'version', *_STOP_FIELDS}
+            or type(value['version']) is not int or value['version'] != 1
+            or any(type(value[k]) is not str or value[k] not in choices for k, choices in _STOP_FIELDS.items())
+            or len(_json(value)) > 256):
+        raise ValueError('stop-metadata-shape')
+    return dict(value)
+
+
+def stop_details(value):
+    try:
+        metadata = getattr(value, 'stop_metadata', None)
+        if metadata is None:
+            metadata = getattr(value, '_getzilla_stop_metadata', None)
+        if type(metadata) is not StopMetadata:
+            return vars(StopMetadata()).copy()
+        return _validate_stop(vars(metadata))
+    except BaseException:
+        return vars(StopMetadata()).copy()
+
+
+def updated_stop(value, **changes):
+    return replace(StopMetadata(**stop_details(value)), **changes)
+
+
+def retain_stop(value, metadata):
+    try:
+        value._getzilla_stop_metadata = metadata
+    except BaseException:
+        return None
+
+
+def child_stop(code, *, scope='process'):
+    decision = ('child_signal' if code < 0 and os.name != 'nt' else 'child_exit') if type(code) is int else 'unavailable'
+    return StopMetadata(decision=decision, result_policy='child_status' if code is not None else 'fallback_1',
+                        cancel='none', scope=scope)
+
+
+def cancelled_stop(value, number):
+    metadata = updated_stop(value, cancel={2: 'sigint', 15: 'sigterm'}.get(number, 'unavailable'))
+    return replace(metadata, decision='owned_cancel') if metadata.decision == 'unavailable' else metadata
+
+
+_CORE_STOP = ContextVar('core_stop_origin', default=None)
+
+
+@contextmanager
+def core_stop_scope():
+    try:
+        run = current()
+        writer = run.writer if run else None
+    except BaseException:
+        writer = None
+    token = _CORE_STOP.set(writer)
+    try:
+        yield
+    except BaseException as exc:
+        record_core_stop(exc)
+        raise
+    finally:
+        _CORE_STOP.reset(token)
+
+
+def record_core_stop(value):
+    try:
+        writer = _CORE_STOP.get()
+        if writer is not None:
+            _observe(writer, 'record_core_stop', value)
+    except BaseException:
+        return None
+
+
+def _health_stop(health):
+    if 'core_stop' not in health:
+        return None
+    value = health['core_stop']
+    if (health.get('actor') != 'controller' or type(value) is not dict
+            or set(value) != {'attempt', 'repeated', 'overflow', 'metadata'}
+            or type(value['attempt']) is not int or not 1 <= value['attempt'] <= 2**63 - 1
+            or any(type(value[k]) is not bool for k in ('repeated', 'overflow')) or len(_json(value)) > 320):
+        raise ValueError('core-stop-shape')
+    return {**value, 'metadata': _validate_stop(value['metadata'])}
+
+
+def _exception_kind(error):
+    kind = type(error).__name__
+    return 'unavailable' if error is None else kind if kind in _ERRORS else 'other'
+
+
+def _test_key(node):
+    return (test_identity(node) or {}).get('key')
+
+
+def _validated_location(value):
+    if (type(value) is not dict or set(value) != {'path', 'line'}
+            or type(value['path']) is not str or len(value['path']) > 256
+            or not re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', value['path'])
+            or any(p in {'', '.', '..'} for p in value['path'].split('/'))
+            or type(value['line']) is not int or not 1 <= value['line'] <= 1000000):
+        raise ValueError('failure-location-shape')
+    return dict(value)
+
+
+def _validate_first_failure(value):
+    fields = {'version', 'attempt', 'node_key', 'phase', 'exception_kind', 'repeated', 'overflow', 'action_status', 'action'}
+    version = value.get('version') if type(value) is dict else None
+    if version == 2:
+        fields |= {'location', 'location_status'}
+    if (type(value) is not dict or set(value) != fields or type(version) is not int or version not in {1, 2}
+            or type(value['attempt']) is not int or not 1 <= value['attempt'] <= 2**63 - 1
+            or value['node_key'] is not None and (type(value['node_key']) is not str or not _DIGEST.fullmatch(value['node_key']))
+            or any(type(value[key]) is not bool for key in ('repeated', 'overflow'))
+            or any(type(value[k]) is not str or value[k] not in choices for k, choices in (
+                ('phase', _FAILURE_PHASES), ('exception_kind', _ERRORS | {'other', 'unavailable'}),
+                ('action_status', {'correlated', 'unavailable', 'omitted'})))):
+        raise ValueError('failure-capsule-shape')
+    action = value['action']
+    if action is not None and (type(action) is not dict or set(action) != {'op', 'sequence'}
+            or type(action['op']) is not str or action['op'] not in _FAILURE_OPS
+            or type(action['sequence']) is not int or not 1 <= action['sequence'] <= 2**63 - 1):
+        raise ValueError('failure-action-shape')
+    # Exact v1 records remain legacy unavailable-location data; strict old readers reject v2.
+    if version == 2:
+        location, status = value['location'], value['location_status']
+        if (type(status) is not str or status not in {'reported', 'unavailable', 'omitted'}
+                or (location is not None) != (status == 'reported')):
+            raise ValueError('failure-location-status')
+        if location is not None:
+            _validated_location(location)
+    if (action is not None) != (value['action_status'] == 'correlated') or len(_json(value)) > 384:
+        raise ValueError('failure-capsule-bound')
+    return _decode(_json(value))
+
+
+def _retained_health(health):
+    flags = health.get('observation_omissions', dict.fromkeys(_OMISSIONS, False))
+    if (type(flags) is not dict or set(flags) not in (set(_OMISSIONS), {*_OMISSIONS, 'stop_omitted'})
+            or any(type(v) is not bool for v in flags.values())):
+        raise ValueError('observation-omissions')
+    _health_stop(health)
+    return (_validate_ownership_snapshot(health['ownership']) if 'ownership' in health else None,
+            _validate_first_failure(health['first_failure']) if 'first_failure' in health else None, flags)
+
+
+def _collect_retained(health, owners, failures, omissions, stops):
+    owner, failure, flags = _retained_health(health)
+    for item, target in ((owner, owners), (failure, failures)):
+        if item is not None:
+            target.append(item)
+    for flag in flags:
+        omissions[flag] = omissions.get(flag, False) or flags[flag]
+    stop = _health_stop(health)
+    if stop is not None:
+        stops.append(stop)
+
+
+def _fit_observations(value, limit, *, public=False):
+    value = deepcopy(value)
+    flags = value['observation_omissions']
+    def over():
+        return len(_json(value)) + (0 if public else 1) > limit
+    if over() and 'core_stop' in value:
+        value.pop('core_stop')
+        if public:
+            value['core_stop'] = {'status': 'unavailable'}
+        flags['stop_omitted'] = True
+    failure = value.get('first_failure')
+    rows = failure['capsules'] if public else [failure] if failure else []
+    if over():
+        for row in rows:
+            if row.get('location') is not None:
+                row.update(location=None, location_status='omitted')
+    if over():
+        for row in rows:
+            if row['action'] is not None:
+                row.update(action=None, action_status='omitted')
+                flags['action_omitted'] = True
+    if over() and 'ownership' in value:
+        value.pop('ownership')
+        if public:
+            value['ownership'] = {'status': 'unavailable'}
+        flags['ownership_omitted'] = True
+    while over() and rows:
+        rows.pop()
+        flags['failure_omitted'] = True
+        if public:
+            failure.update(overflow=True, status='reported' if rows else 'unavailable')
+        else:
+            value.pop('first_failure', None)
+    return value
+
+
+def _observation_projection(owners, failures, complete, flags, stops=()):
+    rows = failures[:2] if complete else []
+    value = {'ownership': _ownership_projection(owners, complete),
+             'first_failure': {'status': 'reported' if rows else 'unavailable', 'ambiguous': len(failures) > 1,
+                               'overflow': len(failures) > 2, 'capsules': rows},
+             'observation_omissions': dict(flags, failure_omitted=flags['failure_omitted'] or len(failures) > 2)}
+    value['core_stop'] = ({'status': 'reported', 'snapshot': stops[0]} if complete and len(stops) == 1 else
+                          {'status': 'ambiguous' if len(stops) > 1 else 'unavailable'})
+    return _fit_observations(value, 1536, public=True)
+
+
+def _observe(writer, method, *args):
+    try:
+        getattr(writer, method)(*args)
+    except Exception:
+        return None
+
+
+def _validate_ownership_snapshot(value):
+    if (type(value) is not dict or set(value) != {'version', 'case', 'attempt', 'repeated', 'overflow', 'forms'}
+            or type(value['version']) is not int or value['version'] != 1
+            or type(value['case']) is not str or value['case'] != 'term-resistant-grandchild' or type(value['attempt']) is not int
+            or not 1 <= value['attempt'] <= 2**63 - 1
+            or any(type(value[key]) is not bool for key in ('repeated', 'overflow'))
+            or type(value['forms']) is not list or not 1 <= len(value['forms']) <= 4):
+        raise ValueError('ownership-snapshot-shape')
+    prior = -1
+    for row in value['forms']:
+        if (type(row) is not dict or set(row) != set(_OWNERSHIP_FIELDS)
+                or any(type(row[key]) is not str or row[key] not in allowed
+                       for key, allowed in _OWNERSHIP_FIELDS.items())):
+            raise ValueError('ownership-row-shape')
+        position = _OWNERSHIP_FORMS.index(row['form'])
+        if position <= prior:
+            raise ValueError('ownership-form-order')
+        prior = position
+    raw = _json(value)
+    if len(raw) > 1024:
+        raise ValueError('ownership-snapshot-limit')
+    return _decode(raw)
+
+
+def _ownership_projection(values, complete=True):
+    if not complete or not values:
+        return {'status': 'unavailable'}
+    if len(values) != 1:
+        return {'status': 'ambiguous'}
+    return {'status': 'reported', 'snapshot': _validate_ownership_snapshot(values[0])}
+
+
+@contextmanager
+def ownership_case(form):
+    writer, node = action_sink()
+    if writer is None or node != _OWNERSHIP_CASE:
+        yield
+        return
+    previous = getattr(writer, '_ownership_form', None)
+    try:
+        writer._ownership_form = None
+        if type(form) is str and form in _OWNERSHIP_FORMS:
+            snapshot = getattr(writer, '_ownership', None)
+            if snapshot and any(row['form'] == form for row in snapshot['forms']):
+                snapshot['repeated'] = True
+                writer._ownership_blocked = True
+            writer._ownership_form = form
+            ownership_mark('entered')
+    except Exception:
+        try:
+            yield
+        finally:
+            writer._ownership_form = previous
+        return
+    try:
+        yield
+    except BaseException as exc:
+        ownership_mark(None, status='cancelled' if isinstance(exc, (KeyboardInterrupt, SystemExit))
+                       or type(exc).__name__ == 'RunCancelled' else 'failed')
+        raise
+    else:
+        ownership_mark('finished', status='returned')
+    finally:
+        writer._ownership_form = previous
+
+
+def ownership_mark(phase, *, status='active', cleanup='unavailable', descendant='unavailable'):
+    writer, node = action_sink()
+    if writer is not None and node == _OWNERSHIP_CASE and getattr(writer, '_ownership_form', None) is not None:
+        try:
+            writer.record_ownership(phase, status=status, cleanup=cleanup, descendant=descendant)
+        except Exception:
+            return None
 
 
 def _json(value):
@@ -181,6 +508,13 @@ class Writer:
         self.generation = self.size = 0
         self.identity = None
         self.active = {}
+        self._ownership = self._ownership_form = None
+        self._ownership_blocked = False
+        self._ownership_counts = {}
+        self._first_failure = self._pending = self._action = self._frame = None
+        self._core_stop = None
+        self._test_phase = (None, 'unknown')
+        self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
             header = _decode(_read(self.handle, 'index.json', 16384))
             if header['run_id'] != run_id or header['nonce'] != nonce or header['status'] != 'active':
@@ -198,6 +532,9 @@ class Writer:
                     raise ValueError('journal-stream-not-closed')
                 self.sequence, self.generation, self.rotated = prior['sequence'], prior['generation'] + 1, prior['rotated']
                 self.attempt = prior['attempt'] + 1
+                self._ownership, self._first_failure, self._omissions = _retained_health(prior)
+                self._core_stop = _health_stop(prior)
+                self._ownership_blocked = self._ownership is not None
             except FileNotFoundError:
                 pass
             self.started = time.monotonic_ns()
@@ -222,13 +559,107 @@ class Writer:
         self.identity, self.name, self.size = (info.st_dev, info.st_ino), name, 0
 
     def health(self, status):
-        _publish(self.handle, self.actor + '.json', {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
+        value = {'version': 1, 'run_id': self.run_id, 'nonce': self.nonce,
             'actor': self.actor, 'sequence': self.sequence, 'generation': self.generation, 'rotated': self.rotated,
             'attempt': self.attempt,
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
-            'status': status, 'segment': self.name}, 2048)
+            'status': status, 'segment': self.name}
+        value['observation_omissions'] = dict(self._omissions)
+        if self._core_stop is not None:
+            value['core_stop'] = _health_stop({'actor': self.actor, 'core_stop': self._core_stop})
+        for key, item, validate, flag in (('ownership', self._ownership, _validate_ownership_snapshot, 'ownership_omitted'),
+                ('first_failure', self._first_failure, _validate_first_failure, 'failure_omitted')):
+            if item is None:
+                continue
+            try:
+                value[key] = validate(item)
+            except ValueError:
+                value['observation_omissions'][flag] = True
+        _publish(self.handle, self.actor + '.json', _fit_observations(value, 2048), 2048)
 
-    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None):
+    def record_core_stop(self, result):
+        metadata = stop_details(result)
+        if self.actor != 'controller' or metadata['decision'] == 'unavailable':
+            return
+        if metadata['decision'] == 'child_exit' and getattr(result, 'returncode', None) == 0:
+            return
+        if self._core_stop is None:
+            self._core_stop = _health_stop({'actor': self.actor, 'core_stop': {
+                'attempt': self.attempt, 'repeated': False, 'overflow': False, 'metadata': metadata}})
+        else:
+            self._core_stop.update(repeated=True, overflow=True)
+        self.health('unavailable' if self.disabled else 'active')
+
+    def begin_test_phase(self, nodeid, phase):
+        self._test_phase = (_test_key(nodeid), phase)
+        self._pending = self._action = self._frame = None
+
+    def note_exception(self, nodeid, phase, error):
+        self._pending = (_test_key(nodeid), phase, _exception_kind(error))
+
+    def record_test_failure(self, nodeid, phase=None, kind=None):
+        key = _test_key(nodeid)
+        pending = self._pending if key is not None and self._pending and self._pending[0] == key else None
+        phase = phase if phase is not None else pending[1] if pending else 'unknown'
+        kind = kind if kind is not None else pending[2] if pending and pending[1] == phase else 'unavailable'
+        if self._first_failure is None:
+            action = self._action[1] if self._action and self._action[0] == (key, phase) else None
+            location = self._frame[2] if self._frame and self._frame[:2] == ((key, phase), self.attempt) else None
+            value = {'version': 2, 'attempt': self.attempt, 'node_key': key, 'phase': phase, 'exception_kind': kind,
+                     'repeated': False, 'overflow': False, 'action_status': 'correlated' if action else 'unavailable', 'action': action,
+                     'location_status': 'reported' if location else 'unavailable', 'location': location}
+            if len(_json(value)) > 384 and location is not None:
+                value.update(location=None, location_status='omitted')
+            self._first_failure = _validate_first_failure(value)
+        else:
+            self._first_failure['repeated'] |= key is not None and key == self._first_failure['node_key']
+            self._first_failure['overflow'] = True
+        self._pending = self._frame = None
+        self.health('unavailable' if self.disabled else 'active')
+
+    def record_ownership(self, phase, *, status, cleanup, descendant):
+        form = self._ownership_form
+        if form not in _OWNERSHIP_FORMS:
+            return
+        fields = {'phase': phase, 'status': status, 'cleanup': cleanup, 'descendant': descendant}
+        if any((type(value) is not str or value not in _OWNERSHIP_FIELDS[key])
+               and not (key == 'phase' and value is None) for key, value in fields.items()):
+            return
+        if self._ownership is None:
+            self._ownership = {'version': 1, 'case': 'term-resistant-grandchild', 'attempt': self.attempt,
+                               'repeated': False, 'overflow': False, 'forms': []}
+        if self._ownership_blocked:
+            self._ownership['repeated'] = True
+            self.health('active')
+            return
+        rows = self._ownership['forms']
+        row = next((row for row in rows if row['form'] == form), None)
+        if row is None:
+            row = {'form': form, 'phase': 'entered', 'status': 'active',
+                   'cleanup': 'unavailable', 'descendant': 'unavailable'}
+            rows.append(row)
+            rows.sort(key=lambda item: _OWNERSHIP_FORMS.index(item['form']))
+        count = self._ownership_counts.get(form, 0)
+        overflow = count >= 24
+        if overflow:
+            self._ownership['overflow'] = True
+        else:
+            self._ownership_counts[form] = count + 1
+        if row['status'] not in {'failed', 'cancelled'}:
+            if not overflow or status in {'failed', 'cancelled'}:
+                row.update(phase=phase or row['phase'], status=status)
+                for key in ('cleanup', 'descendant'):
+                    if fields[key] != 'unavailable':
+                        row[key] = fields[key]
+            elif status == 'returned':
+                row['status'] = 'unknown'
+        self.health('active')
+        if not overflow:
+            self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
+
+    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None):
+        if error is not None:
+            self._frame = None
         if self.disabled:
             return False
         try:
@@ -289,6 +720,11 @@ class Writer:
                     raise ValueError('journal-location')
                 row['location'] = {'path': path, 'line': line}
             raw = _json(row) + b'\n'
+            if stop is not None:
+                row['stop'] = _validate_stop(stop)
+                if len(_json(row)) + 1 > EVENT_BYTES:
+                    row.pop('stop')
+                raw = _json(row) + b'\n'
             if len(raw) > EVENT_BYTES:
                 raise ValueError('journal-event-limit')
             if self.size + len(raw) > SEGMENT_BYTES:
@@ -304,6 +740,17 @@ class Writer:
                 raise OSError('journal-short-write')
             self.size += len(raw)
             self.sequence += 1
+            if (error is not None and self._test_phase[0] is not None and row.get('key') == self._test_phase[0]
+                    and stage in {self._test_phase[1], 'test', 'action', 'command', 'check', 'cleanup'}
+                    and type(row.get('frames')) is list and row['frames']):
+                try:
+                    self._frame = (self._test_phase, self.attempt, _validated_location(row['frames'][-1]))
+                except ValueError:
+                    pass
+            if (stage in {'action', 'command', 'check', 'cleanup'} and row.get('outcome', state) in {'fail', 'error', 'timeout', 'cancelled'}
+                    and self._test_phase[0] is not None and row.get('key') == self._test_phase[0]
+                    and action_sink()[0] is self and _test_key(action_sink()[1]) == row.get('key')):
+                self._action = (self._test_phase, {'op': 'owned-command' if step == 'owned-command' else stage, 'sequence': self.sequence})
             self.health('active')
             return True
         except (OSError, ValueError, TypeError):
@@ -340,6 +787,11 @@ class Run:
         self.source = source if type(source) is str and _DIGEST.fullmatch(source) else None
         self.session_id = None
         self.entrypoint = entrypoint
+        self._ownership = []
+        self._stops = []
+        self._ownership_complete = False
+        self._failures = []
+        self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
             if not _ID.fullmatch(entrypoint):
                 raise ValueError('journal-entrypoint')
@@ -483,6 +935,7 @@ class Run:
                 'status': 'unavailable' if self.writer is None or self.writer.disabled else self.status,
                 'source_status': 'reported-integrity-only' if self.source is not None else 'unavailable',
                 'session_status': 'canonical-route-observation' if self.session_id is not None else 'unavailable',
+                **_observation_projection(self._ownership, self._failures, self._ownership_complete, self._omissions, self._stops),
                 'completeness': 'unknown-until-terminal-and-all-actors-validated'}
 
     def bind_source(self, digest, session_id=None):
@@ -525,10 +978,12 @@ class Run:
                         raise ValueError('journal-health-binding')
                     if health['status'] != 'closed' or health['open_spans']:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
+                    _collect_retained(health, self._ownership, self._failures, self._omissions, self._stops)
                 except FileNotFoundError:
                     if actor == 'controller' or actor in expected:
                         terminal = 'incomplete' if terminal == 'closed' else terminal
                     continue
+            self._ownership_complete = True
             with self._metadata(self.path.parent) as registry_handle:
                 if registry_handle is None:
                     return
@@ -581,6 +1036,7 @@ def _remove_run(history, record):
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
                         or health['status'] != 'closed' or health.get('open_spans', 0)):
                     raise ValueError('journal-retention-active-stream')
+                _retained_health(health)
         for name in names:
             fsx.unlink_at(handle, name)
     finally:
@@ -705,10 +1161,11 @@ def observed(name, stage='check'):
             with span(name, stage=stage) as details:
                 result = function(*args, **kwargs)
                 if details is not None:
+                    details['stop'] = stop_details(result)
                     outcome = getattr(result, 'status', None)
                     code = getattr(result, 'returncode', None)
                     if code is not None:
-                        outcome = 'pass' if code == 0 else 'timeout' if code == 124 else 'fail'
+                        outcome = 'pass' if code == 0 else 'fail'
                     if outcome in _STATES:
                         details.update(outcome=outcome, code=code)
                 return result
@@ -727,7 +1184,7 @@ def span(step, *, stage='check'):
     except BaseException as exc:
         if writer:
             _emit(writer, stage, 'end', step=step, nodeid=node, outcome='skip' if isinstance(exc, unittest.SkipTest) else 'error', error=exc,
-                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None)
+                  skip=skip_classification(str(exc)) if isinstance(exc, unittest.SkipTest) else None, stop=stop_details(exc))
         raise
     else:
         if writer:
@@ -773,15 +1230,21 @@ def unittest_runner(writer):
         def startTest(self, test):
             super().startTest(test)
             node = case_identity(test)
+            _observe(writer, 'begin_test_phase', node, 'unknown')
             writer.emit('test', 'start', nodeid=node)
             originals = {}
             for name, stage in (('_callSetUp', 'setup'), ('_callTestMethod', 'call'), ('_callTearDown', 'teardown')):
                 original = getattr(test, name)
                 originals[name] = (name in test.__dict__, test.__dict__.get(name))
                 def observed(*args, _original=original, _stage=stage, **kwargs):
-                    with bind_sink(writer, node), span(None, stage=_stage) as detail:
-                        detail['outcome'] = 'pass'
-                        return _original(*args, **kwargs)
+                    _observe(writer, 'begin_test_phase', node, _stage)
+                    try:
+                        with bind_sink(writer, node), span(None, stage=_stage) as detail:
+                            detail['outcome'] = 'pass'
+                            return _original(*args, **kwargs)
+                    except BaseException as error:
+                        _observe(writer, 'note_exception', node, _stage, error)
+                        raise
                 setattr(test, name, observed)
             self._journal_originals = (test, originals)
 
@@ -802,10 +1265,17 @@ def unittest_runner(writer):
         def addFailure(self, test, err):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='fail', error=err[1])
             super().addFailure(test, err)
+            _observe(self, '_retain', test, err)
 
         def addError(self, test, err):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='error', error=err[1])
             super().addError(test, err)
+            _observe(self, '_retain', test, err)
+
+        def _retain(self, test, err=None, phase=None):
+            started = getattr(self, '_journal_originals', (None,))[0] is test
+            node = case_identity(test) if started else None
+            _observe(writer, 'record_test_failure', node, phase if started else 'unknown', _exception_kind(err[1] if err else None))
 
         def addSkip(self, test, reason):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='skip', skip=skip_classification(reason), location=case_location(test, writer.source_root))
@@ -818,11 +1288,15 @@ def unittest_runner(writer):
         def addUnexpectedSuccess(self, test):
             writer.emit('test', 'end', nodeid=case_identity(test), outcome='unexpected-success')
             super().addUnexpectedSuccess(test)
+            if self.unexpectedSuccesses and self.unexpectedSuccesses[-1] is test:
+                _observe(self, '_retain', test, None, 'call')
 
         def addSubTest(self, test, subtest, err):
             writer.emit('call', 'unknown', nodeid=case_identity(test), outcome='pass' if err is None else 'fail',
                         error=None if err is None else err[1])
             super().addSubTest(test, subtest, err)
+            if err is not None:
+                _observe(self, '_retain', test, err, 'call')
 
     class Runner(unittest.TextTestRunner):
         resultclass = Result
@@ -836,7 +1310,7 @@ def unittest_runner(writer):
 def _validated_events(raw, run_id, actor):
     allowed = {'version', 'run_id', 'actor', 'actor_attempt', 'sequence', 'stage', 'state', 'pid', 'elapsed_ns', 'utc',
                'step', 'path', 'key', 'invocation', 'unmatched_end', 'outcome', 'exit', 'error_class',
-               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status'}
+               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop'}
     def closed(pairs):
         result = {}
         for key, value in pairs:
@@ -858,6 +1332,8 @@ def _validated_events(raw, run_id, actor):
             raise ValueError('journal-record-schema')
         if 'step' in row and (type(row['step']) is not str or not _ID.fullmatch(row['step'])):
             raise ValueError('journal-record-step')
+        if 'stop' in row:
+            _validate_stop(row['stop'])
         if 'path' in row:
             canonical = test_identity(row['path'])
             if canonical is None or canonical['path'] != row['path']:
@@ -897,6 +1373,9 @@ def export_entries(root, *, binding=None):
     """A safe bounded subset; never a complete-history or authorization claim."""
     entries, summary = [], {'version': 1, 'status': 'unavailable', 'run_status': 'unavailable',
                            'export_status': 'unavailable', 'association': 'unbound', 'subset': True}
+    ownership, ownership_complete = [], False
+    failures, omissions = [], dict.fromkeys(_OMISSIONS, False)
+    stops = []
     history = root / '.getzilla/runtime/verification-history'
     try:
         handle = _directory(history)
@@ -937,24 +1416,26 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1
                                    for k in ('attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans'))
                             or health['segment'] != f'{actor}-{health["generation"] % SEGMENTS}.jsonl'):
                         raise ValueError('journal-export-actor')
+                    _collect_retained(health, ownership, failures, omissions, stops)
                     raw = _read(handle, f'{actor}-{health["generation"] % SEGMENTS}.jsonl', SEGMENT_BYTES)
                     tail = raw[-65536:]
                     if len(raw) > len(tail):
                         tail = tail.partition(b'\n')[2]
                     complete = tail.rpartition(b'\n')[0] + b'\n' if b'\n' in tail else b''
                     entries.append(('journal/' + actor + '.jsonl', _validated_events(complete, row['run_id'], actor)))
-                    summary['actors'].append(health)
+                    summary['actors'].append({key: value for key, value in health.items() if key not in {'first_failure', 'observation_omissions', 'core_stop'}})
                     if actor in summary['missing']:
                         summary['missing'].remove(actor)
                 except FileNotFoundError:
                     continue
+            ownership_complete = True
         finally:
             fsx.close_dir(handle)
         if summary['status'] == 'closed' and (summary['missing'] or any(
@@ -963,5 +1444,6 @@ def export_entries(root, *, binding=None):
         summary['export_status'] = 'bounded-subset'
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         summary['export_status'] = 'unavailable'
+    summary.update(_observation_projection(ownership, failures, ownership_complete, omissions, stops))
     entries.insert(0, ('journal/index.json', _json(summary) + b'\n'))
     return entries

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .expanded_security import CHECK_FAMILIES, _policy_digest, known_vulnerability_check, run_checks, security_obligations
 from .python_test_runner import execute
+from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
 from .security_inventory import collect_inventory
@@ -235,6 +236,7 @@ def _supervised_preparation(args, profile):
                 return report
         return {'kind': 'public-security-input-refusal', 'status': 'unavailable', 'qualification': 'UNVERIFIED',
                 'gaps': ['input-worker-incomplete'], 'returncode': process.returncode,
+                'stop': stop_details(process),
                 'terminal_state': process.terminal_state if process.terminal_state in {'completed', 'timeout', 'interrupted'} else 'unknown',
                 'cleanup_uncertain': bool(process.cleanup_error),
                 'publication_state': 'reconcile selected roots before further publication; no automatic retry'}
@@ -251,7 +253,9 @@ def _git(root: Path, arguments: list[str], scratch: Path) -> str:
     result = execute(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(root), *arguments],
                      scratch, _environment(scratch), timeout=30)
     if result.returncode or result.terminal_state != 'completed' or result.cleanup_error:
-        raise SecurityDataError('cannot establish source identity using a completed Git observation')
+        error = SecurityDataError('cannot establish source identity using a completed Git observation; stop=' + json.dumps(stop_details(result), sort_keys=True))
+        retain_stop(error, updated_stop(result))
+        raise error
     return result.stdout.strip()
 
 
