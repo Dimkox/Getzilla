@@ -37,3 +37,9 @@ Keep private output at umask `077`; give ordinary verification children their ex
 Check all finite owned Git inputs required by installation, including baseline
 blobs. Preparing only changed files missed inherited `0664` format refusals;
 admitted mode preparation preserves bytes and does not qualify a failed head.
+
+## Execution fixtures must preserve Git and pathname boundaries
+
+Do not place no-Git execution fixtures under an existing checkout. Use the
+admitted private OS-temp exception and check AF_UNIX path bytes; keep source
+and evidence canonical, preserve exact-root guards, and retain failed runs.
