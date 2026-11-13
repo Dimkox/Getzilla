@@ -1543,7 +1543,9 @@ def _docs_micro_exempt(route: dict[str, object] | None, files: list[str]) -> boo
     )
 
 
-def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None, route: dict[str, object] | None, mode: str) -> list[dict[str, object]]:
+def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None,
+                                route: dict[str, object] | None, mode: str, *,
+                                ranges: GitRangeSelection | None = None) -> list[dict[str, object]]:
     """Bind archival retirement/strict relocation to actual comparison-base blobs."""
     manifest_rel = 'engineering/archived-change-specs.json'
     if not (root / manifest_rel).exists():
@@ -1551,7 +1553,8 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     manifest = _parse_canonical_json(read_package_file(root, manifest_rel), Path(manifest_rel))
     if set(manifest) != {'schema_version', 'source_base', 'entries'} or manifest['schema_version'] != 1 or not isinstance(manifest['entries'], list):
         raise ValueError('invalid historical spec migration manifest')
-    ranges = _git_range_selection(root, route, mode)
+    if ranges is None:
+        ranges = _git_range_selection(root, route, mode)
     if ranges.findings or not ranges.bases:
         raise ValueError('historical spec migration requires trusted comparison ranges')
     bases = {item.comparison_base_sha for item in ranges.bases}
@@ -1626,7 +1629,8 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
 
 
 @diagnostics.observed('change-specs')
-def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str) -> tuple[CheckResult, dict[str, object]]:
+def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str, *,
+                  ranges: GitRangeSelection | None = None) -> tuple[CheckResult, dict[str, object]]:
     gate = mode in {'pr', 'release'}
     exempt = bool(route and (route.get('light_diff') or {}).get('admitted')) or _docs_micro_exempt(route, files)
     selected = {
@@ -1642,7 +1646,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     records: list[dict[str, object]] = []
     migrations: list[dict[str, object]] = []
     try:
-        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode)
+        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode, ranges=ranges)
     except (OSError, ValueError) as exc:
         findings.append({'severity': 'error', 'code': 'historical-spec-migration-invalid', 'path': 'engineering/archived-change-specs.json', 'message': str(exc)})
     if gate and route and route.get('delivery_expected') and not active_rel and not exempt:
@@ -3205,7 +3209,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
                      'allowed_agents': unique_ordered([*(route.get('allowed_agents') or []), *full['review_agents']])}
         update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence', 'allowed_agents')})
         report['light_diff'] = light
-    spec_check, spec_metadata = _change_specs(root, files, route, mode)
+    spec_check, spec_metadata = _change_specs(root, files, route, mode, ranges=git_ranges)
     report['spec'] = spec_metadata
     cancellation.check()
     if mode in _RANGE_MODES - {FOCUSED_STATIC_SEO_LANDING_MODE}:

@@ -2157,6 +2157,80 @@ class VerificationTests(unittest.TestCase):
             self.assertNotIn('python-unittest', names)
 
 
+class TrustedHistoricalRangeTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _history(self):
+        # A tiny real history owns its origin and archive; no project copy or
+        # mocked range/manifest producer can stand in for comparison evidence.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            subprocess.run(['git', 'init', '-q', '--initial-branch=main'], cwd=root, check=True)
+            origin = 'engineering/changes/20260826-origin/change-spec.yaml'
+            original = root / origin
+            original.parent.mkdir(parents=True)
+            original.write_text('schema_version: 1\nchange_id: 20260826-origin\n')
+            subprocess.run(['git', 'add', origin], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'historical source'], cwd=root, check=True)
+            base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            blob = subprocess.check_output(['git', 'rev-parse', f'{base}:{origin}'], cwd=root, text=True).strip()
+            subprocess.run(['git', 'checkout', '-qb', 'candidate'], cwd=root, check=True)
+            target = 'engineering/changes/20260826-archive/historical-spec.yaml'
+            archived = root / target
+            archived.parent.mkdir(parents=True)
+            archived.write_text('schema_version: 1\nchange_id: 20260826-archive\n')
+            original.unlink()
+            manifest = {'schema_version': 1, 'source_base': base, 'entries': [{
+                'kind': 'legacy_archive', 'original_blob': blob, 'target': target,
+                'sha256': hashlib.sha256(archived.read_bytes()).hexdigest()}]}
+            (root / 'engineering/archived-change-specs.json').write_text(json.dumps(manifest))
+            route = {'base_commit': base, 'delivery_expected': True,
+                     'risk': 'low', 'complexity': 'micro', 'light_diff': {'admitted': True}}
+            ranges = verification_module._git_range_selection(root, route, 'pr')
+            self.assertEqual(ranges.findings, [])
+            self.assertTrue(ranges.bases)
+            yield root, origin, target, route, ranges
+
+    def test_fast_preserves_established_historical_comparison_ranges(self):
+        with self._history() as (root, origin, target, route, ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(metadata['specs'], [])
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+            migration = metadata['historical_migrations'][0]
+            self.assertEqual(migration['source_base'], route['base_commit'])
+            self.assertEqual(migration['evidence_kind'], 'historical_archival')
+
+    def test_explicit_empty_or_failed_ranges_never_fall_back(self):
+        with self._history() as (root, origin, target, route, ranges):
+            invalid = (GitRangeSelection(), GitRangeSelection(bases=ranges.bases, findings=[{
+                'severity': 'error', 'code': 'fixture-range-failed', 'message': 'untrusted comparison'}]))
+            for supplied in invalid:
+                with self.subTest(findings=supplied.findings):
+                    check, _ = _change_specs(root, [origin, target], route, 'pr', ranges=supplied)
+                    self.assertEqual(check.status, 'fail')
+                    self.assertIn('historical-spec-migration-invalid', {row['code'] for row in check.details})
+
+    def test_trusted_ranges_still_reject_tampered_archive(self):
+        with self._history() as (root, origin, target, route, ranges):
+            (root / target).write_text('schema_version: 1\nchange_id: tampered\n')
+            check, _ = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('digest mismatch' in row['message'] for row in check.details))
+
+    def test_legacy_callers_still_resolve_their_pr_ranges(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'pr')
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+
+    def test_fast_without_established_ranges_cannot_invent_a_base(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, _ = _change_specs(root, [origin, target], route, 'fast')
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('trusted comparison ranges' in row['message'] for row in check.details))
+
+
 class TypedSpecVerificationTests(unittest.TestCase):
     def _migration_fixture(self, root: Path, *, version: int = 1, kind: str = 'legacy_archive'):
         origin = 'engineering/changes/20260826-origin/change-spec.yaml'
