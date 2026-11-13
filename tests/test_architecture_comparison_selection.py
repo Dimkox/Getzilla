@@ -192,6 +192,96 @@ class DerivedComparisonTests(unittest.TestCase):
             receipts.active_architecture_binding(self.root, {'base_commit': unknown})
         self.assertIn('history is incomplete', str(refusal.exception))
 
+    def test_every_fast_selection_refuses_a_later_head_at_diff_consumption(self):
+        for bootstrap in (False, True):
+            with self.subTest(bootstrap=bootstrap):
+                route = self.route
+                with contextlib.ExitStack() as stack:
+                    if bootstrap:
+                        empty = self.git('mktree', input=b'')
+                        frozen = self.git('commit-tree', empty, '-m', 'new owned frozen selection')
+                        anchor = self.git('commit-tree', empty, '-p', frozen, '-m', 'new owned bootstrap anchor')
+                        adopted = self.git('commit-tree', self.head + '^{tree}', '-p', anchor,
+                                           '-m', 'new owned bootstrap adoption')
+                        self.git('update-ref', 'refs/heads/candidate', adopted)
+                        stack.enter_context(patch.object(architecture_diff, 'ADOPTION_BASE_SHA', frozen))
+                        route = {'base_commit': anchor}
+                    ranges = _git_range_selection(self.root, route, 'fast')
+                    selected = select_architecture_comparison_base(self.root, route, _trusted_ranges=ranges)
+                    unchanged = diff_architecture(self.root, base_sha=selected.comparison_base_sha,
+                        worktree=True, _trusted_base_selection=selected)
+                    self.assertEqual(unchanged.head_kind, 'worktree')
+                    self.git('commit', '--allow-empty', '-qm', 'new owned later source HEAD')
+                    with self.assertRaises(ArchitectureError):
+                        diff_architecture(self.root, base_sha=selected.comparison_base_sha,
+                                          worktree=True, _trusted_base_selection=selected)
+
+    def test_sufficient_cross_mode_qualification_survives_storage_and_acceptance(self):
+        proof = self.qualification_record()
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        for mode in ('release', 'pr'):
+            plan = verification_plan.current_required_plan(self.root, mode=mode)
+            report = copy.deepcopy(proof['details'])
+            report.update(mode=mode, required_plan=plan)
+            for check in report['checks']:
+                check['details'] = [row for row in check['details'] if row.get('kind') != 'required-plan-result']
+                verification_plan.bind_result(plan, check)
+            ranges = _git_range_selection(self.root, self.route, mode)
+            binding = receipts.active_architecture_binding(self.root, self.route, _trusted_ranges=ranges)
+            report['architecture'] = {'status': 'pass', 'fitness_status': 'pass', **binding}
+            self.assertEqual(verification_plan.report_gaps(self.root, report), [])
+            proof = {**proof, **binding, 'details': report}
+            self.publish_qualification(proof)
+            hydrated = receipts.get_receipt(self.root, 'owned393', 'verification')['details']
+            self.assertEqual(verification_plan.report_gaps(self.root, hydrated), [],
+                             'a sufficient cross-mode report must remain usable after actual storage')
+            self.assertEqual(binding['architecture_base_sha'], self.target)
+            self.assertEqual(binding['architecture_range_mode'], mode)
+            descendant = self.git('commit-tree', self.head + '^{tree}', '-p', self.head,
+                                  '-m', 'new owned accepted cross-mode descendant')
+            self.git('update-ref', 'refs/remotes/origin/main', descendant)
+            self.assertEqual(verification_plan.report_gaps(self.root, hydrated), [])
+            self.assertEqual(receipts.validate_evidence(self.root,
+                {**self.route, 'required_evidence': ['verification']}), [],
+                'the public receipt consumer must retain the proved publication provenance')
+
+    def test_historical_and_current_provenance_tampering_cannot_supply_a_selection(self):
+        from dataclasses import replace
+        proof = self.qualification_record()
+        selected = select_architecture_comparison_base(self.root, self.route)
+        for field, value in (('candidate_sha', None), ('range_mode', 'release'),
+                             ('ranges_digest', '0' * 64), ('invocation_mode', 'release'),
+                             ('invocation_ranges_digest', '0' * 64)):
+            with self.subTest(selection_field=field), self.assertRaises(ArchitectureError):
+                diff_architecture(self.root, base_sha=selected.comparison_base_sha, worktree=True,
+                                  _trusted_base_selection=replace(selected, **{field: value}))
+        self.git('update-ref', 'refs/remotes/origin/main', self.head)
+        for field, value in (('range_mode', 'release'), ('ranges_digest', '0' * 64),
+                             ('invocation_mode', 'release'), ('invocation_ranges_digest', '0' * 64)):
+            changed = copy.deepcopy(proof)
+            changed['architecture_comparison_witness'][field] = value
+            changed['details']['architecture']['architecture_comparison_witness'][field] = value
+            self.publish_qualification(changed)
+            with self.subTest(stored_field=field), self.assertRaises(ArchitectureError):
+                receipts._qualified_architecture_comparison(self.root, self.route, self.head)
+        self.publish_qualification(proof)
+        self.assertEqual(receipts._qualified_architecture_comparison(self.root, self.route, self.head).comparison_base_sha,
+                         self.target)
+        reader = receipts.get_receipt
+        reads = []
+        def changed_observation(root, route_id, kind):
+            value = reader(root, route_id, kind)
+            if kind == 'verification':
+                reads.append(kind)
+                # Escalation and waiver previews precede the consumer's read.
+                if len(reads) == 3:
+                    value['report'] = 'owned mismatched receipt observation'
+            return value
+        with patch.object(receipts, 'get_receipt', side_effect=changed_observation):
+            self.assertTrue(receipts.validate_evidence(self.root,
+                {**self.route, 'required_evidence': ['verification']}),
+                'publication restoration requires the exact envelope observed by the consumer')
+
     def test_diff_rejects_target_replacement_after_selection(self):
         selected = select_architecture_comparison_base(self.root, self.route)
         self.git('update-ref', 'refs/remotes/origin/main', self.anchor)

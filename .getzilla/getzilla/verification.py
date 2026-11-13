@@ -349,6 +349,7 @@ def _architecture_check(
             ],
             "architecture_route_base_sha": binding["architecture_route_base_sha"],
             "architecture_range_mode": binding["architecture_range_mode"],
+            "architecture_invocation_ranges_digest": binding["architecture_invocation_ranges_digest"],
             "baseline_introduced": diff.baseline_introduced,
             "base_adoption_state": diff.base_adoption_state,
             "head_adoption_state": diff.head_adoption_state,
@@ -443,6 +444,7 @@ def _governance_check(
                     "architecture_base_kind",
                     "architecture_comparison_witness",
                     "architecture_range_mode",
+                    "architecture_invocation_ranges_digest",
                 )
             }
         binding = active_governance_binding(
