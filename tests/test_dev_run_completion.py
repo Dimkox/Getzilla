@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from tests._support import observed_context, prepare_review_source, project_copy
+from tests._support import observed_context, owned_verification_report, prepare_review_source, project_copy
 import tests.test_stop_continuation as fixtures
 from getzilla import state
 from getzilla.change import transition
@@ -64,9 +64,11 @@ class DevRunCompletionTests(unittest.TestCase):
                 'recorded_at': now_utc(), 'reference': report, 'command': command}
 
     def receipts(self, root, source):
+        report = owned_verification_report(root)
+        self.assertEqual(report['check_status'], 'pass', report['checks'])
         for kind in state.get_active_route(root)['required_evidence']:
             write_receipt(root, kind, 'pass', expected_context=observed_context(root),
-                          **({} if kind == 'verification' else source))
+                          **({'details': report} if kind == 'verification' else source))
         self.assertEqual(validate_evidence(root, state.get_active_route(root)), [])
 
     def ready(self, root):
@@ -76,7 +78,7 @@ class DevRunCompletionTests(unittest.TestCase):
         return change
 
     def test_current_source_receipts_do_not_hide_pending_or_failed_dev_runs(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             path, source, _ = self.prepare(root)
             before = (path / 'state.json').read_bytes()
             route = state.get_active_route(root)
@@ -94,7 +96,7 @@ class DevRunCompletionTests(unittest.TestCase):
             self.assertIn('recorded (fail)', failed['reason'])
 
     def test_terminal_package_closure_requires_observed_dev_checks(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             path, source, destination = self.prepare(root)
             change = self.ready(root)
             before = (path / 'state.json').read_bytes()
@@ -113,7 +115,7 @@ class DevRunCompletionTests(unittest.TestCase):
             self.assertEqual(released['status'], 'released')
 
     def test_missing_passing_dev_report_still_blocks_terminal_closure(self):
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             path, source, destination = self.prepare(root)
             destination.write_text(json.dumps({'target': 'isolated-pulse-dev', 'revision': 'fixture-r2',
                                                'features': ['DEV_EXPERT', *self.REMAINING]}))

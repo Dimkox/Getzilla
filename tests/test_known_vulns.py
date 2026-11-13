@@ -334,17 +334,23 @@ class VerifierDetailTests(unittest.TestCase):
         # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
         from unittest.mock import patch
         from getzilla import verification
+        from getzilla.expanded_security import _result
         finding = KV.Finding(
             dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
             vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
             summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
         )
-        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
-                  'findings': [finding.to_dict()], 'accepted': []}
-        with patch.object(verification, 'scan_known_vulnerabilities', return_value=report):
-            result = verification._known_vulnerabilities(ROOT)
+        report = _result('known-vulnerabilities', 'finding',
+                         '1 known vulnerabilities in 1 pinned packages (owned fixture)',
+                         {'digest': 'a' * 64}, 'b' * 64, findings=[finding.to_dict()])
+        report['details'][0]['accepted'] = []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(Path(directory))
         self.assertEqual(result.status, 'fail')
-        [detail] = result.details
+        self.assertEqual(result.details[0], report['details'][0])
+        self.assertEqual(result.details[0]['kind'], 'security-result')
+        [detail] = [row for row in result.details if 'message' in row]
         self.assertEqual(detail['severity'], 'MODERATE')
         self.assertEqual(detail['path'], 'requirements.txt')
         self.assertEqual(

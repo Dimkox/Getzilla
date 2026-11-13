@@ -8,7 +8,7 @@ import re
 import secrets
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,7 +29,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _exact_commit, _git, _git_blob, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -136,7 +136,8 @@ def _open_receipt_directory(root: Path, route_id: str, *, create: bool = False) 
         raise
 
 
-def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str) -> tuple[dict[str, Any], bytes]:
+def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label: str,
+                       *, _observation: list | None = None) -> tuple[dict[str, Any], bytes]:
     if fsx.WINDOWS:
         opened = _windows_open_regular(directory_fd, name, os.O_RDONLY)
         if opened is None:
@@ -178,6 +179,15 @@ def _read_bounded_json(directory_fd: fsx.DirHandle, name: str, limit: int, label
                           parse_constant=lambda token: (_ for _ in ()).throw(RuntimeError(f'invalid {label} value: {token}')))
         if not isinstance(data, dict):
             raise RuntimeError(f'{label} must be a JSON object')
+        if _observation is not None:
+            named = fsx.lstat_at(directory_fd, name)
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')
+            if any(getattr(named, key) != getattr(after, key) for key in fields):
+                raise RuntimeError(f'{label} name changed while being read')
+            directory = fsx.fstat_dir(directory_fd)
+            _observation.append((label, name, directory.st_dev, directory.st_ino,
+                _metadata_identity(after), after.st_size, after.st_uid, after.st_nlink,
+                hashlib.sha256(content).hexdigest()))
         return data, content
     finally:
         os.close(descriptor)
@@ -303,7 +313,8 @@ def _publish_verification_report(root: Path, route_id: str, receipt: dict[str, A
                 fsx.close_dir(route_fd)
 
 
-def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any]) -> None:
+def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, receipt: dict[str, Any],
+                                  *, _observation: list | None = None) -> None:
     details = receipt.get('details')
     if not isinstance(details, dict) or '_verification_report' not in details:
         return
@@ -320,7 +331,8 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle, route_id: str, rec
     reports_fd = None
     try:
         reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
-        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report')
+        artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES,
+                                              'verification report', _observation=_observation)
     except FileNotFoundError as exc:
         raise RuntimeError('referenced verification report is missing') from exc
     finally:
@@ -489,10 +501,132 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
+def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str, *,
+                                      _expected_receipt: dict | None = None,
+                                      _expected_storage_identity: tuple | None = None):
+    """Reuse an exact completed qualification, never a reconcile-only assessment.
+
+    This reads existing workflow evidence; it grants no new PASS or independent
+    authority. Git ancestry/model/ref currentness is revalidated by the selector.
+    """
+    route_id = route.get('route_id')
+    if not isinstance(route_id, str):
+        return None
+    try:
+        stored_identity = _receipt_storage_identity(root, route_id)
+        receipt = get_receipt(root, route_id, 'verification')
+        if stored_identity is None or _receipt_storage_identity(root, route_id) != stored_identity:
+            return None
+        if ((_expected_receipt is not None and receipt != _expected_receipt)
+                or (_expected_storage_identity is not None and stored_identity != _expected_storage_identity)):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    required = {'schema_version', 'route_id', 'kind', 'status', 'created_at', 'tree_fingerprint',
+                'report', 'details', 'criterion_ids', 'spec_digest', 'spec_fingerprint'}
+    if (not isinstance(receipt, dict) or not required.issubset(receipt)
+            or type(receipt.get('schema_version')) is not int or receipt['schema_version'] != 1
+            or not isinstance(receipt.get('created_at'), str) or not isinstance(receipt.get('criterion_ids'), list)
+            or receipt.get('status') != 'pass' or receipt.get('stale') is True):
+        return None
+    from .continuity import receipt_context_current
+    if (receipt.get('route_id') != route_id or receipt.get('kind') != 'verification'
+            or receipt.get('git_head') != head or receipt.get('tree_fingerprint') != tree_fingerprint(root)
+            or receipt.get('architecture_route_base_sha') != route.get('base_commit')
+            or not receipt_context_current(root, route, receipt)
+            or receipt.get('review_plan_digest') != (route.get('review_plan') or {}).get('digest')):
+        return None
+    report = receipt.get('details')
+    if (not isinstance(report, dict) or report.get('status') != 'pass'
+            or report.get('mode') not in ('pr', 'release') or report.get('terminal_state') != 'completed'):
+        return None
+    architecture = report.get('architecture')
+    if (not isinstance(architecture, dict) or architecture.get('status') != 'pass'
+            or architecture.get('fitness_status') != 'pass'):
+        return None
+    witness = receipt.get('architecture_comparison_witness')
+    if witness is None:
+        return None
+    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _digest as comparison_digest, _git
+    names = set(ArchitectureBaseSelection.__dataclass_fields__)
+    if (type(witness) is not dict or set(witness) != names
+            or architecture.get('architecture_comparison_witness') != witness
+            or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
+            or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
+            or witness.get('range_mode') not in ('pr', 'release')
+            or witness.get('invocation_mode') != report['mode']
+            or witness.get('invocation_ranges_digest') != receipt.get('architecture_invocation_ranges_digest')
+            or witness.get('invocation_ranges_digest') != architecture.get('architecture_invocation_ranges_digest')
+            or witness.get('comparison_base_sha') != witness.get('target_sha')
+            or witness.get('comparison_base_sha') == head
+            or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
+            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', witness[key])
+                       for key in ('route_base_sha', 'comparison_base_sha', 'candidate_sha', 'target_sha'))
+            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{64}', witness[key])
+                       for key in ('ranges_digest', 'model_digest', 'invocation_ranges_digest'))
+            or not isinstance(witness.get('target_ref'), str)
+            or not witness['target_ref'].startswith(('refs/remotes/origin/', 'refs/heads/'))):
+        raise ArchitectureError('qualified architecture comparison witness is malformed', code='git')
+    old_range = {'mode': witness['range_mode'], 'head': head, 'bases': [
+        {'kind': 'route', 'source': 'route.base_commit', 'target_sha': witness['route_base_sha'],
+         'comparison_base_sha': witness['route_base_sha']},
+        {'kind': 'pr-target', 'source': witness['target_ref'], 'target_sha': witness['target_sha'],
+         'comparison_base_sha': witness['comparison_base_sha']}], 'findings': []}
+    anchor = _git(root, ['merge-base', '--all', witness['route_base_sha'], witness['target_sha']])
+    contained = _git(root, ['merge-base', '--all', witness['target_sha'], head])
+    if (anchor is None or anchor.decode().splitlines() != [witness['route_base_sha']]
+            or contained is None or contained.decode().splitlines() != [witness['target_sha']]
+            or comparison_digest(old_range) != witness['ranges_digest']
+            or _comparison_model_digest(root, (witness['route_base_sha'], witness['target_sha'], head)) != witness['model_digest']):
+        raise ArchitectureError('qualified architecture comparison identity is stale', code='git')
+    for name in ('architecture_base_sha', 'architecture_base_kind', 'architecture_bootstrap_baseline',
+                 'architecture_route_base_sha', 'architecture_head_commit'):
+        if architecture.get(name) != receipt.get(name):
+            raise ArchitectureError('qualification architecture bindings disagree', code='git')
+    # Prove live acceptance separately from the frozen plan's binding ranges.
+    # This lower-level compiler never calls the range/witness reader again.
+    from .verification import GitRangeBase, GitRangeSelection, _select_local_pr_target, _resolve_commit
+    target = _select_local_pr_target(root)
+    if not isinstance(target, tuple) or target[0] != witness['target_ref']:
+        return None
+    accepted = _git(root, ['merge-base', '--all', head, target[1]])
+    if accepted is None or accepted.decode().splitlines() != [head]:
+        return None
+    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['invocation_mode'], head_sha=head)
+    try:
+        from .verification_plan import _compile_required_plan, _report_plan_gaps
+        current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+                                         docs_scope=None, route=route, ranges=frozen)
+        if _report_plan_gaps(root, report, current):
+            return None
+        if _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+                                  docs_scope=None, route=route, ranges=frozen) != current:
+            return None
+        spec = _active_spec_binding(root, route, 'verification')
+        if spec is not None and any(receipt.get(key) != value for key, value in spec.items()):
+            return None
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        return None
+    if (_exact_head(root) != head or _select_local_pr_target(root) != target
+            or _resolve_commit(root, witness['target_ref']) != target[1]
+            or tree_fingerprint(root) != receipt['tree_fingerprint']
+            or not receipt_context_current(root, route, receipt)):
+        raise ArchitectureError('qualified comparison changed during validation', code='git')
+    try:
+        if (get_receipt(root, route_id, 'verification') != receipt
+                or _receipt_storage_identity(root, route_id) != stored_identity):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return ArchitectureBaseSelection(**witness)
+
+
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],
     root_fd: int | None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     authority = _authority_presence(root, root_fd=root_fd)
     adoption = _architecture_adoption(root, present=authority.entries[0])
@@ -504,9 +638,9 @@ def _active_architecture_binding(
         if head is None:
             _confirm_legacy_absence(root, root_fd, authority)
             return None
-        base_selection = select_architecture_comparison_base(root, route)
+        route_base = _exact_commit(root, route.get('base_commit', head), label='architecture_route_base_sha')
         exact_evidence = _exact_tree_has_architecture(root, head) or _exact_tree_has_architecture(
-            root, base_selection.route_base_sha
+            root, route_base
         )
         if not exact_evidence:
             exact_evidence = _exact_history_has_architecture(root, head)
@@ -530,7 +664,7 @@ def _active_architecture_binding(
     head = _exact_head(root)
     if head is None:
         raise RuntimeError("architecture binding requires an exact Git HEAD")
-    base_selection = select_architecture_comparison_base(root, route)
+    base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
     fingerprint = architecture_fingerprint(
         root,
         snapshot,
@@ -538,6 +672,8 @@ def _active_architecture_binding(
         head_sha=f"worktree:{head}",
         contract_digests={record.path: record.digest for record in records},
     )
+    if select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges) != base_selection:
+        raise RuntimeError('architecture comparison changed during binding')
     return {
         "architecture_adoption_digest": adoption["digest"],
         "architecture_base_sha": base_selection.comparison_base_sha,
@@ -549,16 +685,20 @@ def _active_architecture_binding(
         "architecture_fingerprint": fingerprint,
         "architecture_head_commit": head,
         "architecture_head_kind": "worktree",
+        "architecture_range_mode": base_selection.invocation_mode,
+        "architecture_invocation_ranges_digest": base_selection.invocation_ranges_digest,
         "architecture_route_base_sha": base_selection.route_base_sha,
         "architecture_rules_digest": digests["rules_digest"],
         "architecture_schema_digest": digests["schema_digest"],
         "architecture_system_digest": digests["system_digest"],
+        **({'architecture_comparison_witness': asdict(base_selection)}
+           if base_selection.base_kind == 'accepted_target' else {}),
     }
 
 
-def active_architecture_binding(root: Path, route: dict[str, Any]) -> dict[str, Any] | None:
+def active_architecture_binding(root: Path, route: dict[str, Any], *, _trusted_ranges: Any = None) -> dict[str, Any] | None:
     try:
-        return _active_architecture_binding(root, route, None)
+        return _active_architecture_binding(root, route, None, _trusted_ranges=_trusted_ranges)
     except NotImplementedError as exc:
         raise ArchitectureError(
             f"architecture authority metadata is unavailable: {exc}", code="io"
@@ -687,19 +827,27 @@ def active_governance_binding(
     root: Path,
     route: dict[str, Any],
     architecture: dict[str, Any] | None = None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> dict[str, Any] | None:
     if not _governance_is_configured(root):
         return None
     try:
-        current_architecture = active_architecture_binding(root, route)
+        current_architecture = (active_architecture_binding(root, route) if _trusted_ranges is None else
+                                active_architecture_binding(root, route, _trusted_ranges=_trusted_ranges))
         if current_architecture is None:
             raise RuntimeError("governance requires adopted executable architecture")
         if architecture is not None and any(
-            architecture.get(field) != current_architecture[field]
+            architecture.get(field) != current_architecture.get(field)
             for field in (
                 "architecture_digest",
                 "architecture_base_sha",
                 "architecture_head_commit",
+                "architecture_route_base_sha",
+                "architecture_base_kind",
+                "architecture_comparison_witness",
+                "architecture_range_mode",
+                "architecture_invocation_ranges_digest",
             )
         ):
             raise RuntimeError(
@@ -825,6 +973,15 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
                 pass
 
 
+def _verification_architecture_options(root: Path, route: dict[str, Any], kind: str, details: Any) -> dict[str, Any]:
+    if kind != 'verification' or not isinstance(details, dict) or 'mode' not in details:
+        return {}
+    from .verification import _git_range_selection, _RANGE_MODES
+    if type(details['mode']) is not str or details['mode'] not in {'fast', *_RANGE_MODES}:
+        raise RuntimeError('verification invocation mode is unavailable')
+    return {'_trusted_ranges': _git_range_selection(root, route, details['mode'])}
+
+
 @serialized_task
 def write_receipt(
     root: Path,
@@ -886,9 +1043,10 @@ def write_receipt(
     ):
         raise RuntimeError("repository changed after verification checks")
     current = _active_spec_binding(root, route, kind)
-    current_architecture = active_architecture_binding(root, route)
+    architecture_options = _verification_architecture_options(root, route, kind, details)
+    current_architecture = active_architecture_binding(root, route, **architecture_options)
     current_governance = active_governance_binding(
-        root, route, current_architecture
+        root, route, current_architecture, **architecture_options
     )
     explicit = {
         'criterion_ids': sorted({str(item) for item in (criterion_ids or [])}),
@@ -922,8 +1080,8 @@ def write_receipt(
     }
     after_tree = tree_fingerprint(root)
     after_binding = _active_spec_binding(root, route, kind)
-    after_architecture = active_architecture_binding(root, route)
-    after_governance = active_governance_binding(root, route, after_architecture)
+    after_architecture = active_architecture_binding(root, route, **architecture_options)
+    after_governance = active_governance_binding(root, route, after_architecture, **architecture_options)
     if (
         (review_source is not None and review_source_binding(root, reviewed_commit, report, reviewed_context=reviewed_context) != review_source)
         or after_tree != before_tree
@@ -944,11 +1102,11 @@ def write_receipt(
         if spill:
             publication = _publish_verification_report(root, route['route_id'], data, interrupt_check)
             assert_context()
-            report_architecture = active_architecture_binding(root, route)
+            report_architecture = active_architecture_binding(root, route, **architecture_options)
             if (tree_fingerprint(root) != before_tree or _exact_head(root) != before_head
                     or _active_spec_binding(root, route, kind) != current
                     or report_architecture != current_architecture
-                    or active_governance_binding(root, route, report_architecture) != current_governance):
+                    or active_governance_binding(root, route, report_architecture, **architecture_options) != current_governance):
                 raise RuntimeError('repository or authority changed while verification report was written')
             data['details'] = {'_verification_report': publication.reference}
         assert_context()
@@ -980,14 +1138,26 @@ def write_receipt(
 
 
 def get_receipt(root: Path, route_id: str, kind: str) -> dict[str, Any] | None:
+    return _read_receipt(root, route_id, kind)
+
+
+def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
+    """Observe the bounded envelope and immutable artifact through pinned readers."""
+    observation: list = []
+    data = _read_receipt(root, route_id, 'verification', _observation=observation)
+    return tuple(observation) if data is not None else None
+
+
+def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None) -> dict[str, Any] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
         directory_fd = _open_receipt_directory(root, route_id)
-        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt')
+        data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES,
+                                    'receipt', _observation=_observation)
         if kind == 'verification':
-            _hydrate_verification_report(directory_fd, route_id, data)
+            _hydrate_verification_report(directory_fd, route_id, data, _observation=_observation)
         return data
     except FileNotFoundError:
         return None
@@ -1043,6 +1213,7 @@ def validate_evidence(
     waived = _waived_evidence(root, route_id, required, current)
     for kind in [*[item for item in required if item not in waived], *escalated]:
         try:
+            receipt_identity = _receipt_storage_identity(root, route_id) if kind == 'verification' else None
             receipt = get_receipt(root, route_id, kind)
         except RuntimeError as exc:
             missing.append(f'{kind}: unsafe receipt: {exc}')
@@ -1067,6 +1238,10 @@ def validate_evidence(
             missing.append(f'{kind}: status={receipt.get("status")}')
         if receipt.get('stale') is True:
             missing.append(f'{kind}: explicitly invalidated')
+        if kind == 'verification' and receipt.get('status') == 'pass':
+            from .verification_plan import report_gaps
+            if report_gaps(root, receipt.get('details')):
+                missing.append('verification: current required plan or individual evidence is unavailable or stale')
         plan_digest = (route.get('review_plan') or {}).get('digest')
         if plan_digest and receipt.get('review_plan_digest') != plan_digest:
             missing.append(f'{kind}: review plan binding stale')
@@ -1092,7 +1267,22 @@ def validate_evidence(
             if receipt.get('criterion_ids') != binding['criterion_ids']:
                 missing.append(f'{kind}: criterion binding stale')
         try:
-            architecture = active_architecture_binding(root, route)
+            architecture_options = _verification_architecture_options(root, route, kind, receipt.get('details'))
+            architecture = active_architecture_binding(root, route, **architecture_options)
+            live_architecture = architecture
+            if kind == 'verification' and architecture is not None and receipt_identity is not None:
+                qualified = _qualified_architecture_comparison(root, route, _exact_head(root),
+                    _expected_receipt=receipt, _expected_storage_identity=receipt_identity)
+                if qualified is not None:
+                    # Validate live operands above; compare the publication's
+                    # original observation only after its full proof is current.
+                    publication = asdict(qualified)
+                    observed = dict(architecture.get('architecture_comparison_witness') or {})
+                    observed['invocation_ranges_digest'] = qualified.invocation_ranges_digest
+                    if observed != publication:
+                        raise RuntimeError('qualified receipt comparison differs from the live binding')
+                    architecture = {**architecture, 'architecture_comparison_witness': publication,
+                                    'architecture_invocation_ranges_digest': qualified.invocation_ranges_digest}
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: architecture binding stale: {exc}')
             continue
@@ -1102,7 +1292,7 @@ def validate_evidence(
         elif "architecture_digest" in receipt or "architecture_fingerprint" in receipt:
             missing.append(f'{kind}: architecture binding stale')
         try:
-            governance = active_governance_binding(root, route, architecture)
+            governance = active_governance_binding(root, route, live_architecture, **architecture_options)
         except (RuntimeError, ValueError) as exc:
             missing.append(f'{kind}: governance binding stale: {exc}')
             continue

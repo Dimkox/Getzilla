@@ -47,10 +47,10 @@ from getzilla.verification import (
 from tests._support import project_copy as full_project_copy
 
 
-def project_copy(*, git: bool = False):
+def project_copy(*, git: bool = False, verification_fixture: bool = False):
     # Verifier fixtures exercise synthetic projects, not another copy of the
     # complete runtime's scanner results. Full-source coverage stays explicit.
-    return full_project_copy(git=git, minimal_runtime=True)
+    return full_project_copy(git=git, minimal_runtime=True, verification_fixture=verification_fixture)
 
 
 @contextlib.contextmanager
@@ -880,7 +880,8 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context'},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract',
+                 'source-stability', 'task-context', 'quality-gate'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:
@@ -1365,7 +1366,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(result.status, 'fail')
 
     def test_verify_records_receipt_for_active_route(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
@@ -1595,7 +1596,7 @@ class VerificationTests(unittest.TestCase):
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
     def test_abandoned_unmarked_model_draft_does_not_establish_adoption(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)

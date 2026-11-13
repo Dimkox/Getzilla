@@ -25,6 +25,7 @@ import signal
 import sys
 import tempfile
 import time as time
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,7 @@ from .architecture_diagrams import artifact_digests, compare_generated, render_d
 from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
 from .architecture_fitness import diff_architecture, evaluate_fitness
 from .quality_gates import evaluate_quality_gate, required_check_refused
+from .expanded_security import known_vulnerability_check, run_checks as expanded_security_checks
 from .receipts import (
     active_architecture_binding,
     active_governance_binding,
@@ -48,7 +50,6 @@ from .receipts import (
 )
 from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
 from .package_status import read_package_file
-from .known_vulns import VulnerabilityError, scan as scan_known_vulnerabilities
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
 from .stacks import load_registry, stack_checks
@@ -120,6 +121,7 @@ class _RunState:
     context: dict[str, Any] | None = None
     context_route_id: str | None = None
     context_error: str | None = None
+    required_plan: dict | None = None
 
 
 @diagnostics.observed('task-context-check')
@@ -153,14 +155,15 @@ def _task_context_check(root: Path, state: _RunState) -> CheckResult:
 class _CheckDispatch:
     """Retain completed results and disclose remaining scheduled work after refusal."""
 
-    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None):
+    def __init__(self, results, mode, scope=None, *, keep_going=False, blocked_by=None, required_plan=None):
         self.results, self.mode, self.scope = results, mode, scope
         self.fail_fast = mode in {'pr', 'release'} and not keep_going
         self.blocked_by = blocked_by
+        self.required_plan = required_plan
 
     def add(self, check):
         self.results.append(check)
-        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope):
+        if self.fail_fast and self.blocked_by is None and required_check_refused(check, mode=self.mode, docs_scope=self.scope, required_plan=self.required_plan):
             self.blocked_by = check.name
         return check
 
@@ -239,6 +242,9 @@ class GitRangeBase:
 class GitRangeSelection:
     bases: list[GitRangeBase] = field(default_factory=list)
     findings: list[dict[str, str]] = field(default_factory=list)
+    qualification_bases: tuple[GitRangeBase, ...] | None = None
+    mode: str = 'pr'
+    head_sha: str | None = None
 
 
 FOCUSED_STATIC_SEO_LANDING_MODE = 'focused-static-seo-landing'
@@ -287,16 +293,19 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
-        binding = active_architecture_binding(root, route or {})
+        binding = (active_architecture_binding(root, route or {}) if _trusted_ranges is None else
+                   active_architecture_binding(root, route or {}, _trusted_ranges=_trusted_ranges))
         if binding is None:
             return (
                 CheckResult("architecture", "skip", "architecture is not configured"),
                 {"configured": False, "status": "not_configured"},
             )
         snapshot = load_architecture(root)
-        base_selection = select_architecture_comparison_base(root, route)
+        base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
         base = base_selection.comparison_base_sha
         if (
             binding["architecture_base_sha"] != base
@@ -326,6 +335,8 @@ def _architecture_check(
         diagram_status = "fail" if mismatches else "pass"
         failed = fitness.status != "pass" or bool(drift) or bool(mismatches)
         core: dict[str, object] = {
+            **({'architecture_comparison_witness': binding['architecture_comparison_witness']}
+               if 'architecture_comparison_witness' in binding else {}),
             "architecture_contract_version": 1,
             "adoption_digest": binding["architecture_adoption_digest"],
             "architecture_digest": binding["architecture_digest"],
@@ -337,6 +348,8 @@ def _architecture_check(
                 "architecture_bootstrap_baseline"
             ],
             "architecture_route_base_sha": binding["architecture_route_base_sha"],
+            "architecture_range_mode": binding["architecture_range_mode"],
+            "architecture_invocation_ranges_digest": binding["architecture_invocation_ranges_digest"],
             "baseline_introduced": diff.baseline_introduced,
             "base_adoption_state": diff.base_adoption_state,
             "head_adoption_state": diff.head_adoption_state,
@@ -415,22 +428,30 @@ def _governance_check(
     root: Path,
     route: dict[str, object] | None,
     architecture: dict[str, object],
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
         checked_architecture: dict[str, object] | None = None
         if architecture.get("status") == "pass" and architecture.get("configured") is True:
             checked_architecture = {
-                field: architecture[field]
+                field: architecture.get(field)
                 for field in (
                     "architecture_digest",
                     "architecture_base_sha",
                     "architecture_head_commit",
+                    "architecture_route_base_sha",
+                    "architecture_base_kind",
+                    "architecture_comparison_witness",
+                    "architecture_range_mode",
+                    "architecture_invocation_ranges_digest",
                 )
             }
         binding = active_governance_binding(
             root,
             route or {},
             checked_architecture,
+            **({'_trusted_ranges': _trusted_ranges} if _trusted_ranges is not None else {}),
         )
         if binding is None:
             return (
@@ -696,9 +717,14 @@ def _git_range_selection(
     route: dict[str, object] | None,
     mode: str,
 ) -> GitRangeSelection:
-    selection = GitRangeSelection()
+    mode = 'pr' if mode == 'fast' and ((route or {}).get('delivery_lane') == 'light'
+                                      or (route or {}).get('light_lane_candidate') is True) else mode
+    selection = GitRangeSelection(mode=mode)
     if mode not in _RANGE_MODES or not command_exists('git'):
+        if mode == 'fast' and command_exists('git'):
+            selection.head_sha = _resolve_commit(root, 'HEAD')
         return selection
+    selection.head_sha = _resolve_commit(root, 'HEAD')
 
     if route:
         raw_route_base = route.get('base_commit')
@@ -769,6 +795,18 @@ def _git_range_selection(
                 target_sha=target_sha,
                 comparison_base_sha=bases[0],
             ))
+            if bases[0] == _resolve_commit(root, 'HEAD') and route:
+                from .receipts import _qualified_architecture_comparison
+                qualified = _qualified_architecture_comparison(root, route, bases[0])
+                if qualified is not None and qualified.comparison_base_sha not in {item.comparison_base_sha for item in selection.bases}:
+                    selection.bases.append(GitRangeBase('qualified-pr-target', qualified.target_ref,
+                                                       qualified.target_sha, qualified.comparison_base_sha))
+                    # The live target remains in the full review union. A prior
+                    # qualifying plan retains its exact range metadata separately.
+                    selection.qualification_bases = (
+                        GitRangeBase('route', 'route.base_commit', qualified.route_base_sha, qualified.route_base_sha),
+                        GitRangeBase('pr-target', qualified.target_ref, qualified.target_sha, qualified.comparison_base_sha),
+                    )
     elif route and route.get('delivery_expected') is True:
         selection.findings.append({
             'severity': 'error',
@@ -1270,7 +1308,7 @@ def _unittest_contract_failure(path: Path) -> str | None:
     return 'contract must define a unittest.TestCase subclass with a test_ method'
 
 
-def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResult:
+def _focused_landing_contract(root: Path, scope: dict[str, object], *, required_plan=None) -> CheckResult:
     focused_tests = scope.get('focused_tests')
     if not isinstance(focused_tests, list) or len(focused_tests) != 1:
         return CheckResult(
@@ -1316,6 +1354,10 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
                 'message': contract_failure,
             }],
         )
+    if required_plan is not None:
+        from .criterion_tests import run_required_tests
+        value = run_required_tests(root, [relative], timeout=300)
+        return CheckResult('static-seo-landing-contract', value['status'], value['summary'], details=value['details'])
     command = [
         sys.executable,
         '-m',
@@ -1708,10 +1750,21 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
 
 
 @diagnostics.observed('composer')
-def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None) -> list[CheckResult]:
+def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _composer_checks(root, results, _CheckDispatch(results, mode, keep_going=keep_going, blocked_by=blocked_by))
+        return _composer_checks(root, results, _CheckDispatch(results, mode, keep_going=keep_going,
+                                 blocked_by=blocked_by, required_plan=required_plan))
+
+
+def composer_check_selection(root: Path) -> list[tuple[str, list[str]]]:
+    """The exact existing installed Composer tools; no tool is installed or executed."""
+    return [(name, args) for name, path, args in (
+        ('phpunit', 'vendor/bin/phpunit', ['vendor/bin/phpunit']),
+        ('phpstan', 'vendor/bin/phpstan', ['vendor/bin/phpstan', 'analyse', '--no-progress']),
+        ('phpcs', 'vendor/bin/phpcs', ['vendor/bin/phpcs']),
+        ('deptrac', 'vendor/bin/deptrac', ['vendor/bin/deptrac', 'analyse']),
+    ) if (root / path).is_file()]
 
 
 def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDispatch) -> list[CheckResult]:
@@ -1721,14 +1774,8 @@ def _composer_checks(root: Path, results: list[CheckResult], dispatch: _CheckDis
         dispatch.run('composer-validate', lambda: _command_check(root, 'composer-validate', ['composer', 'validate', '--no-check-publish'], 120))
     else:
         dispatch.run('composer-validate', lambda: CheckResult('composer-validate', 'skip', 'composer not available'))
-    for name, path, args in [
-        ('phpunit', 'vendor/bin/phpunit', ['vendor/bin/phpunit']),
-        ('phpstan', 'vendor/bin/phpstan', ['vendor/bin/phpstan', 'analyse', '--no-progress']),
-        ('phpcs', 'vendor/bin/phpcs', ['vendor/bin/phpcs']),
-        ('deptrac', 'vendor/bin/deptrac', ['vendor/bin/deptrac', 'analyse']),
-    ]:
-        if (root / path).is_file():
-            dispatch.run(name, lambda: _command_check(root, name, args, 600))
+    for name, args in composer_check_selection(root):
+        dispatch.run(name, lambda: _command_check(root, name, args, 600))
     return results
 
 
@@ -1854,11 +1901,11 @@ def _trivy_config(root: Path) -> CheckResult | None:
 
 @diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
-    try:
-        report = scan_known_vulnerabilities(root)
-    except VulnerabilityError as exc:
-        return CheckResult('known-vulnerabilities', 'fail', str(exc))
-    details = [_vulnerability_detail(item) for item in report['findings'][:200]]
+    report = known_vulnerability_check(root)
+    details = list(report['details'])
+    for item in report['details']:
+        if item.get('kind') == 'security-result':
+            details.extend(_vulnerability_detail(finding) for finding in item.get('findings', [])[:200])
     return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
 
 
@@ -1958,21 +2005,45 @@ def _trivy_config_present(root: Path) -> bool:
 
 
 @diagnostics.observed('node')
-def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None) -> list[CheckResult]:
+def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going, blocked_by=blocked_by))
+        return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going,
+                             blocked_by=blocked_by, required_plan=required_plan))
+
+
+def node_check_selection(root: Path, mode: str) -> tuple[dict, str, str | None, list[str]]:
+    """Declare the same manifest, lock and script IDs used below, without running tools."""
+    scripts = json.loads((root / 'package.json').read_text(encoding='utf-8')).get('scripts', {})
+    if not isinstance(scripts, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in scripts.items()):
+        raise ValueError('invalid package scripts')
+    manager, lockfile = node_lockfile(root)
+    names = ['package-json', 'node-tooling']
+    if mode in {'pr', 'release'}:
+        names.append('node-lockfile')
+        if lockfile is not None:
+            names.append(manager + '-install')
+    names.extend(manager + '-' + name for name in ('lint', 'typecheck', 'test', 'prettier', 'format',
+                 *(['build'] if mode in {'pr', 'release'} else [])) if name in scripts)
+    if 'typecheck' not in scripts and (root / 'tsconfig.json').is_file() and mode in {'pr', 'release'}:
+        names.append('tsc')
+    return scripts, manager, lockfile, names
 
 
 def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _CheckDispatch) -> list[CheckResult]:
     package = root / 'package.json'
     if not package.is_file():
+        if dispatch.required_plan is not None:
+            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'explicit frontend profile has no package.json'))
+            return results
         return []
     try:
-        scripts = json.loads(package.read_text(encoding='utf-8')).get('scripts', {})
-    except (json.JSONDecodeError, OSError, AttributeError):
+        scripts, manager, lockfile, _names = node_check_selection(root, mode)
+    except (ValueError, OSError, AttributeError):
         dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'invalid package.json'))
         return results
+    if dispatch.required_plan is not None:
+        dispatch.run('package-json', lambda: CheckResult('package-json', 'pass', 'closed package scripts selected'))
     env = None
     if not command_exists('npm'):
         # No Node on this machine: deliver the pinned toolchain instead of skipping (stacks.json).
@@ -1982,8 +2053,9 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                                                              details=[toolchain.detail('package.json')]))
             return results
         env = toolchain.process_env()
+    if dispatch.required_plan is not None:
+        dispatch.run('node-tooling', lambda: CheckResult('node-tooling', 'pass', 'existing selected Node tooling is available'))
     node_env = {'env': env} if env else {}
-    manager, lockfile = node_lockfile(root)
     if mode in {'pr', 'release'}:
         if lockfile is None:
             dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'fail', 'NODE_LOCK_MISSING', details=[{
@@ -1991,6 +2063,8 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
                 'message': 'no package-lock.json, pnpm-lock.yaml or yarn.lock: dependencies are not reproducible',
             }]))
         else:
+            if dispatch.required_plan is not None:
+                dispatch.run('node-lockfile', lambda: CheckResult('node-lockfile', 'pass', 'source lock selected'))
             install = _node_install_command(root, manager, lockfile)
             dispatch.run(f'{manager}-install', lambda: _command_check(root, f'{manager}-install', install, 1800, **node_env))
     names = ['lint', 'typecheck', 'test', 'prettier', 'format']
@@ -2154,10 +2228,11 @@ def _focused_python(
 
 @diagnostics.observed('python')
 def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = None, *,
-            keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
+            keep_going: bool = False, blocked_by: str | None = None, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     try:
-        return _python_checks(root, mode, scope, results, keep_going=keep_going, blocked_by=blocked_by)
+        return _python_checks(root, mode, scope, results, keep_going=keep_going, blocked_by=blocked_by,
+                              **({'required_plan': required_plan} if required_plan is not None else {}))
     except RunCancelled as exc:
         exc.checks = [*results, *exc.checks]
         completed = getattr(exc, 'core_run', None)
@@ -2192,9 +2267,17 @@ def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
+def python_check_selection(root: Path) -> tuple[bool, bool]:
+    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
+    tests_dir = root / 'tests'
+    return (has_project and command_exists('pytest') and tests_dir.is_dir(),
+            tests_dir.is_dir() and any(tests_dir.glob('test*.py')))
+
+
 def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, results: list[CheckResult], *,
-                   keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
-    dispatch = _CheckDispatch(results, mode, scope, keep_going=keep_going, blocked_by=blocked_by)
+                   keep_going: bool = False, blocked_by: str | None = None, required_plan=None) -> list[CheckResult]:
+    dispatch = _CheckDispatch(results, mode, scope, keep_going=keep_going, blocked_by=blocked_by,
+                              required_plan=required_plan)
     dispatch.run('ruff', lambda: _ruff(root))
     dispatch.run('bandit', lambda: _bandit(root))
     focused = bool(scope and scope.get('eligible') is True)
@@ -2206,9 +2289,7 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
                 [sys.executable, '-m', 'unittest', 'discover', '-s', 'pilot/tests', '-t', '.', '-v'],
                 300,
             ))
-    has_project = any((root / item).exists() for item in ('pyproject.toml', 'requirements.txt', 'setup.py'))
-    tests_dir = root / 'tests'
-    uses_pytest_runner = has_project and command_exists('pytest') and tests_dir.is_dir()
+    uses_pytest_runner, has_unittest_files = python_check_selection(root)
     if focused:
         # Named here rather than assumed: the focused profile replaces whichever full-discovery
         # runner this tree would have used, and the skip it reports must say so.
@@ -2219,12 +2300,15 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
             'pytest' if uses_pytest_runner else 'python-unittest',
             dispatch=dispatch,
         )
-    has_unittest_files = tests_dir.is_dir() and any(tests_dir.glob('test*.py'))
     names = ['pytest' if uses_pytest_runner else 'python-unittest']
     if mode in {'pr', 'release'}:
         names.append('coverage')
     if uses_pytest_runner or has_unittest_files:
-        dispatch.batch(names, lambda: _core_python_checks(root, mode, uses_pytest_runner, keep_going=keep_going))
+        dispatch.batch(names, lambda: _core_python_checks(root, mode, uses_pytest_runner, keep_going=keep_going,
+                       **({'required_plan': required_plan} if required_plan is not None else {})))
+    elif required_plan is not None:
+        for name in names:
+            dispatch.run(name, lambda: CheckResult(name, 'skip', 'no native Python discovery inputs'))
     factory_exit = root / 'factory/tests/run_disposable_exit.py'
     installed = (root / '.getzilla' / 'AGBP_SYNC.json').is_file()
     if installed and mode in {'pr', 'release'} and factory_exit.is_file():
@@ -2232,8 +2316,6 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
     _dispatch_factory_unit(root, dispatch)
-    if uses_pytest_runner:
-        return results
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
@@ -2262,14 +2344,15 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
 
 
 
-def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool) -> list[CheckResult]:
+def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool, required_plan=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
-        return _core_python_run(root, mode, uses_pytest_runner, results, keep_going=keep_going)
+        return _core_python_run(root, mode, uses_pytest_runner, results, keep_going=keep_going,
+                                **({'required_plan': required_plan} if required_plan is not None else {}))
 
 
-def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: list[CheckResult], *, keep_going: bool) -> list[CheckResult]:
-    dispatch = _CheckDispatch(results, mode, keep_going=keep_going)
+def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: list[CheckResult], *, keep_going: bool, required_plan=None) -> list[CheckResult]:
+    dispatch = _CheckDispatch(results, mode, keep_going=keep_going, required_plan=required_plan)
     if uses_pytest_runner:
         dispatch.run('pytest', lambda: _command_check(root, 'pytest', ['pytest', '-q'], 900))
         if mode in {'pr', 'release'}:
@@ -2457,6 +2540,8 @@ def _verify_focused_static_seo_landing(
         ),
     )
     scope['mode'] = FOCUSED_STATIC_SEO_LANDING_MODE
+    state = state or _RunState({})
+    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, state, scope)
     results: list[CheckResult] = state.results if state else []
     if state:
         state.report['verification_scope'] = scope
@@ -2464,7 +2549,7 @@ def _verify_focused_static_seo_landing(
     results.append(_git_diff_check(root, FOCUSED_STATIC_SEO_LANDING_MODE, git_ranges))
     results.append(_focused_scope_check(scope))
     if scope.get('eligible') is True:
-        results.append(_focused_landing_contract(root, scope))
+        results.append(_focused_landing_contract(root, scope, required_plan=required_plan))
 
     final_fingerprint = tree_fingerprint(root)
     source_stable = final_fingerprint == checked_fingerprint
@@ -2478,6 +2563,12 @@ def _verify_focused_static_seo_landing(
     )
     if state:
         results.append(_task_context_check(root, state))
+    if required_plan is not None:
+        from .verification_plan import bind_result
+        for item in results:
+            bind_result(required_plan, item)
+    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, results, required_plan, scope)
+    results.append(CheckResult('quality-gate', gate.status, gate.summary, details=gate.details))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
         'status': 'not_run',
@@ -2779,6 +2870,36 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
             raise VerificationCancelled(number, report) from None
 
 
+def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
+    """Both local admission and stored receipt consumers require fresh, explicit bindings."""
+    from .verification_plan import current_required_plan
+    from .expanded_security import validate_data_source
+    current = None
+    try:
+        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+        if observed == required_plan:
+            current = observed['binding']
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        pass
+    return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+        required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
+        data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
+
+
+def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
+    from .verification_plan import current_required_plan
+    try:
+        plan = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        state.receipt_eligible = False
+        state.results.append(CheckResult('required-plan', 'fail', 'current required plan cannot be established'))
+        return None
+    state.required_plan = plan
+    state.report['required_plan'] = plan
+    state.results.append(CheckResult('required-plan', 'pass', 'current source-bound obligations captured before dispatch'))
+    return plan
+
+
 def _verification_run(root: Path, mode: str, profiles: list[str] | None, record: bool,
                       state: _RunState, cancellation, *, keep_going: bool = False) -> dict[str, object]:
     report = state.report
@@ -2865,12 +2986,13 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             target for target in FOCUSED_TEST_TARGETS if (root / target).is_file()
         ],
     )
+    required_plan = _capture_required_plan(root, mode, active_profiles, state, docs_scope)
     state.stage = 'architecture-inputs'
     architecture_inputs = _architecture_preflight_check(root)
     preflight_failed = architecture_inputs.status == 'fail'
     # Retain the primary refusal before any subsequent consumer can cancel.
     state.results.append(architecture_inputs)
-    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going)
+    dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going, required_plan=required_plan)
     if required_check_refused(architecture_inputs, mode=mode, docs_scope=docs_scope) and not keep_going:
         dispatch.blocked_by = architecture_inputs.name
     dispatch.add(_docs_state_scope_check(docs_scope))
@@ -2902,13 +3024,14 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             architecture_check = dispatch.run('architecture', None)
             architecture_metadata = {'status': 'not_run'}
         else:
-            architecture_check, architecture_metadata = _architecture_check(root, route)
+            architecture_check, architecture_metadata = _architecture_check(root, route, _trusted_ranges=git_ranges)
             dispatch.add(architecture_check)
         if dispatch.blocked_by:
             governance_check = dispatch.run('governance', None)
             governance_metadata = {'status': 'not_run'}
         else:
-            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata)
+            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata,
+                                                                     _trusted_ranges=git_ranges)
             dispatch.add(governance_check)
     if architecture_check.status == 'fail' or governance_check.status == 'fail':
         state.receipt_eligible = False
@@ -2962,7 +3085,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         state.stage = 'php'
         cancellation.check()
         dispatch.run('php-lint', lambda: _php_lint(root, files))
-        for check in _composer(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
+        for check in _composer(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan):
             dispatch.add(check)
     if 'bitrix' in active_profiles:
         state.stage = 'bitrix'
@@ -2971,7 +3094,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     if 'frontend' in active_profiles or (root / 'package.json').is_file():
         state.stage = 'node'
         cancellation.check()
-        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by):
+        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan):
             dispatch.add(check)
     state.stage = 'stacks'
     cancellation.check()
@@ -2980,7 +3103,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         dispatch.run('stacks', None)
         stack_metadata: dict[str, object] = {'status': 'not_run'}
     else:
-        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check)
+        stack_results, stack_metadata = stack_checks(root, mode, files, make=CheckResult, command=_command_check, required_plan=required_plan)
         for check in stack_results:
             dispatch.add(check)
     report['stacks'] = stack_metadata
@@ -2995,6 +3118,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     state.stage = 'known-vulnerabilities'
     cancellation.check()
     dispatch.run('known-vulnerabilities', lambda: _known_vulnerabilities(root))
+    state.stage = 'expanded-security'
+    from .verification_plan import SECURITY_FAMILIES
+    dispatch.batch([name for name in SECURITY_FAMILIES if name != 'known-vulnerabilities'],
+                   lambda: [CheckResult(**item) for item in expanded_security_checks(root)])
     state.stage = 'opengrep'
     cancellation.check()
     dispatch.run('opengrep', lambda: _opengrep(root))
@@ -3009,7 +3136,13 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         if (root / 'factory/tests').is_dir():
             results.append(CheckResult('factory-unit', 'skip', 'architecture input preflight failed; not started'))
     else:
-        results.extend(_python(root, mode, docs_scope, keep_going=keep_going, blocked_by=dispatch.blocked_by))
+        results.extend(_python(root, mode, docs_scope, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan))
+    if required_plan is not None:
+        references = sorted({reference for item in required_plan['obligations'] if item['check_id'] == 'criterion-tests'
+                             for reference in item['expected_tests']})
+        if references:
+            from .criterion_tests import run_required_tests
+            dispatch.run('criterion-tests', lambda: CheckResult(**run_required_tests(root, references)))
     state.stage = 'source-stability'
     try:
         final_fingerprint = tree_fingerprint(root)
@@ -3029,7 +3162,11 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
     )
     results.append(_task_context_check(root, state))
-    quality_gate = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope)
+    if required_plan is not None:
+        from .verification_plan import bind_result
+        for item in results:
+            bind_result(required_plan, item)
+    quality_gate = _required_quality_gate(root, mode, active_profiles, results, required_plan, docs_scope)
     results.append(
         CheckResult(
             "quality-gate",

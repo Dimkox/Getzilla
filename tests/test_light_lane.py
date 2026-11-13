@@ -137,7 +137,7 @@ class LightLaneVerificationTests(unittest.TestCase):
         from tests._support import activate_owned_route
         from getzilla.verification import verify
         from tests._support import project_copy
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = git(root, 'rev-parse', 'HEAD')
             git(root, 'update-ref', 'refs/remotes/origin/main', base)
             route = build_route(root, 'Fix the greeting text', 'light-e2e').to_dict()
@@ -146,7 +146,7 @@ class LightLaneVerificationTests(unittest.TestCase):
             self.assertEqual(route['delivery_lane'], 'light')
             activate_owned_route(root, route)
             (root / 'app.py').write_text('def greeting():\n    return "hello"\n')
-            (root / 'tests').mkdir()
+            (root / 'tests').mkdir(exist_ok=True)
             (root / 'tests/test_app.py').write_text('import unittest\nfrom app import greeting\nclass Tests(unittest.TestCase):\n    def test_greeting(self):\n        self.assertEqual(greeting(), "hello")\n')
             git(root, 'add', '.')
             git(root, 'commit', '-qm', 'small code and regression')
