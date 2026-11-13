@@ -678,6 +678,10 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if (relative.startswith(".getzilla/runtime/")
+                    and not relative.endswith(".gitkeep")
+                    and relative != ".getzilla/runtime/.gitignore"):
+                continue  # Ignored state can disappear after directory enumeration.
             if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
                 continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
