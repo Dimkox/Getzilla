@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import verification_dispositions as dispositions
 from .python_test_runner import execute
+from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import MAX_DOWNLOAD, TRIVY_ARCHIVE_SHA256, TRIVY_VERSION, trivy_binary
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
 from .updater import OPENGREP_ASSETS
@@ -185,14 +186,20 @@ def _process_detail(result, failure: str) -> str:
     state = result.terminal_state if result.terminal_state in {'completed', 'timeout', 'cancelled'} else 'unknown'
     code = result.returncode if type(result.returncode) is int and -255 <= result.returncode <= 255 else 'unknown'
     cleanup = 'failed' if result.cleanup_error else 'complete'
-    return f'security {failure}: exit={code}, state={state}, cleanup={cleanup}, diagnostic={category}'
+    return f'security {failure}: exit={code}, state={state}, cleanup={cleanup}, diagnostic={category}; stop=' + json.dumps(stop_details(result), sort_keys=True)
+
+
+def _process_error(result, failure):
+    error = SecurityDataError(_process_detail(result, failure))
+    retain_stop(error, updated_stop(result))
+    return error
 
 
 def _process(command: list[str], cwd: Path, scratch: Path, *, timeout=900, finding_exit=False):
     result = execute(command, cwd, _environment(scratch), timeout=timeout)
     allowed = {0, 1} if finding_exit else {0}
     if result.returncode not in allowed or result.terminal_state != 'completed' or result.cleanup_error:
-        raise SecurityDataError(_process_detail(result, 'process-failed'))
+        raise _process_error(result, 'process-failed')
     return result
 
 
@@ -200,9 +207,9 @@ def _process_report(output: Path, result) -> dict:
     try:
         return _json(output)
     except FileNotFoundError as exc:
-        raise SecurityDataError(_process_detail(result, 'report-missing')) from exc
+        raise _process_error(result, 'report-missing') from exc
     except (OSError, ValueError, RuntimeError) as exc:
-        raise SecurityDataError(_process_detail(result, 'report-invalid')) from exc
+        raise _process_error(result, 'report-invalid') from exc
 
 
 def image_report(report: dict, reference: str, *, expected_image_id: str | None = None) -> dict:

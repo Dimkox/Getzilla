@@ -28,3 +28,18 @@ For a new failure, record the date, concrete cause, consequence and countermeasu
 ## Restart completed workers
 
 Use `followup_task` for new work when a worker is completed. `send_message` queues a message without starting a turn; use it for coordination with an active worker. Confirm the running status before waiting for a result. See the [handoff delay](incidents/2026-11-04-completed-worker-followup.md).
+
+## Separate private evidence modes from test-child defaults
+
+Keep private output at umask `077`; give ordinary verification children their explicit `022` mask at launch. Check exact file-mode contracts with a new owned fixture before attributing a failure to the product. See the [local verification incident](incidents/2026-11-13-local-verification-umask.md); unrelated historical Core failures remain unexplained.
+# Source modes before qualification
+
+Check all finite owned Git inputs required by installation, including baseline
+blobs. Preparing only changed files missed inherited `0664` format refusals;
+admitted mode preparation preserves bytes and does not qualify a failed head.
+
+## Execution fixtures must preserve Git and pathname boundaries
+
+Do not place no-Git execution fixtures under an existing checkout. Use the
+admitted private OS-temp exception and check AF_UNIX path bytes; keep source
+and evidence canonical, preserve exact-root guards, and retain failed runs.

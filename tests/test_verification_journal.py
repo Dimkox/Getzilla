@@ -22,6 +22,37 @@ from getzilla import ci_evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class RetainedHealthControls(unittest.TestCase):
+    """New owned-file controls; select this class without existing process cases."""
+    def setUp(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(subprocess, 'Popen', side_effect=AssertionError('no child')))
+        self.run = journal.Run(root, 'a' * 64, 'owned-health')
+        self.addCleanup(self.run.writer.close)
+
+    def test_ownership_snapshot_replacement_refuses_foreign_file(self):
+        node = 'tests/test_python_test_runner.py::PythonTestRunnerTests::test_term_resistant_grandchild_is_killed_on_every_stop_path'
+        with journal.bind_sink(self.run.writer, node), journal.ownership_case('exit'):
+            journal.ownership_mark('ready')
+        path = self.run.path / 'controller.json'
+        foreign = self.run.path / 'foreign.json'
+        foreign.write_bytes(b'FOREIGN-CANARY')
+        path.unlink()
+        os.link(foreign, path)
+        with journal.bind_sink(self.run.writer, node), journal.ownership_case('flood'):
+            journal.ownership_mark('result')
+        self.assertEqual(foreign.read_bytes(), b'FOREIGN-CANARY')
+        self.assertEqual(path.read_bytes(), b'FOREIGN-CANARY')
+
+    def test_optional_snapshot_limit_preserves_ordinary_logging(self):
+        self.run.writer._ownership = {'private': 'x' * 4096}
+        self.assertTrue(self.run.writer.emit('action', 'unknown', step='ordinary-event'))
+        health = json.loads((self.run.path / 'controller.json').read_bytes())
+        self.assertNotIn('ownership', health)
+        self.assertFalse(self.run.writer.disabled)
+        self.assertEqual(health['sequence'], 1)
+
+
 class WorkerActionSinkTests(unittest.TestCase):
     def test_real_loader_orders(self):
         code = '''import importlib.util,io,sys,unittest
@@ -106,7 +137,7 @@ finally:writer.close()
 
 class JournalColocatedSDKTests(unittest.TestCase):
     def colocated_worlds(self, archive, external=False):
-        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'python_test_runner.py',
+        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'python_test_runner.py', 'process_limits.py',
                    'pytest_progress.py', '_cpu_capacity.py', 'verification_scope.py')
         with tempfile.TemporaryDirectory(prefix='owned-colocated-sdk-', dir=ROOT / '.getzilla/runtime') as temporary:
             fixture = Path(temporary)

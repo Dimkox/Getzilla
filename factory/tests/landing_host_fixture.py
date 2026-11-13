@@ -29,7 +29,7 @@ PATH_FIELDS = (*ROOT_FIELDS, "actors_file", "socket_path")
 
 class HostFixture(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="landing-host-")
+        temporary = tempfile.TemporaryDirectory(prefix="lh-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.config_path = self.root / "host.json"
@@ -38,6 +38,7 @@ class HostFixture(unittest.TestCase):
             "live_enabled": False,
             "selected_profile": "qwen-omni",
             **{name: str(self.root / name) for name in PATH_FIELDS},
+            "socket_path": str(self.root / "s"),
         }
         # The offline profile needs no source checkout. No real actor/key files
         # are used: the host's authentication boundary gets synthetic actors.

@@ -16,6 +16,66 @@ from getzilla import review_snapshot  # noqa: E402
 from getzilla.worktree_safety import WorktreeError  # noqa: E402
 
 
+@unittest.skipUnless(os.name == 'posix', 'POSIX checkout mode contract')
+class SnapshotCheckoutModeTests(unittest.TestCase):
+    def test_snapshot_uses_git_modes_without_changing_caller_or_source(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, env(), clear=True):
+            parent = Path(os.path.realpath(temporary))
+            root = parent / 'project'
+            root.mkdir(mode=0o700)
+            nested = root / 'nested'
+            nested.mkdir(mode=0o700)
+            plain, executable = nested / 'plain.txt', nested / 'worker.sh'
+            plain.write_bytes(b'committed data\n')
+            executable.write_bytes(b'#!/bin/sh\nexit 0\n')
+            plain.chmod(0o644)
+            executable.chmod(0o755)
+            git(root, 'init', '-q', '-b', 'main')
+            git(root, 'add', 'nested/plain.txt', 'nested/worker.sh')
+            git(root, 'commit', '-qm', 'two committed files')
+            head = git(root, 'rev-parse', 'HEAD')
+            self.assertTrue(git(root, 'ls-files', '-s', 'nested/plain.txt').startswith('100644 '))
+            self.assertTrue(git(root, 'ls-files', '-s', 'nested/worker.sh').startswith('100755 '))
+            plain.chmod(0o640)
+            executable.chmod(0o750)
+            custom = root / 'customer.dat'
+            custom.write_bytes(b'untracked customer bytes\n')
+            custom.chmod(0o600)
+
+            def source_files():
+                return tuple((path.name, path.read_bytes(), stat.S_IMODE(path.stat().st_mode),
+                              path.stat().st_ino, path.stat().st_mtime_ns)
+                             for path in (plain, executable, custom))
+
+            before = source_files()
+            source_status = git(root, 'status', '--porcelain')
+            base = parent / 'snapshots'
+            for mask in (0o002, 0o022, 0o077):
+                with self.subTest(mask=oct(mask)):
+                    previous = os.umask(mask)
+                    snapshot = None
+                    try:
+                        snapshot = review_snapshot.create(root, head, base)
+                        self.assertEqual(os.umask(mask), mask)
+                        self.assertEqual(stat.S_IMODE(snapshot.stat().st_mode), 0o700)
+                        self.assertEqual(stat.S_IMODE((snapshot / 'nested').stat().st_mode), 0o755)
+                        self.assertEqual(stat.S_IMODE((snapshot / 'nested/plain.txt').stat().st_mode), 0o644)
+                        self.assertEqual(stat.S_IMODE((snapshot / 'nested/worker.sh').stat().st_mode), 0o755)
+                        self.assertEqual((snapshot / 'nested/plain.txt').read_bytes(), b'committed data\n')
+                        self.assertEqual((snapshot / 'nested/worker.sh').read_bytes(), b'#!/bin/sh\nexit 0\n')
+                        self.assertEqual(git(snapshot, 'rev-parse', 'HEAD'), head)
+                        self.assertEqual(git(snapshot, 'status', '--porcelain'), '')
+                    finally:
+                        try:
+                            if snapshot is not None:
+                                self.assertEqual(review_snapshot.remove(root, str(snapshot), base)['result'], 'removed')
+                        finally:
+                            self.assertEqual(os.umask(previous), mask)
+                    self.assertEqual(source_files(), before)
+                    self.assertEqual(git(root, 'rev-parse', 'HEAD'), head)
+                    self.assertEqual(git(root, 'status', '--porcelain'), source_status)
+
+
 class ReviewSnapshotTests(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -158,8 +218,8 @@ class ReviewSnapshotTests(unittest.TestCase):
     def test_failed_add_after_registration_keeps_ownership_and_can_be_removed(self) -> None:
         real_git = review_snapshot._git
 
-        def interrupted(root, *args):
-            result = real_git(root, *args)
+        def interrupted(root, *args, **kwargs):
+            result = real_git(root, *args, **kwargs)
             if args[:2] == ('worktree', 'add'):
                 raise WorktreeError('git worktree: TimeoutExpired')
             return result
@@ -181,13 +241,13 @@ class ReviewSnapshotTests(unittest.TestCase):
     def test_failed_add_preserves_an_unregistered_partial_directory(self) -> None:
         real_git = review_snapshot._git
 
-        def partial(root, *args):
+        def partial(root, *args, **kwargs):
             if args[:2] == ('worktree', 'add'):
                 path = Path(args[-2])
                 path.mkdir(exist_ok=True)
                 (path / 'partial.txt').write_text('retained partial checkout')
                 raise WorktreeError('git worktree: TimeoutExpired')
-            return real_git(root, *args)
+            return real_git(root, *args, **kwargs)
 
         with patch.object(review_snapshot, '_git', side_effect=partial), self.assertRaises(WorktreeError):
             review_snapshot.create(self.task, self.first)
@@ -210,10 +270,10 @@ class ReviewSnapshotTests(unittest.TestCase):
 
         real_git = review_snapshot._git
 
-        def before_add(root, *args):
+        def before_add(root, *args, **kwargs):
             if args[:2] == ('worktree', 'add'):
                 raise WorktreeError('git worktree: TimeoutExpired')
-            return real_git(root, *args)
+            return real_git(root, *args, **kwargs)
 
         with patch.object(review_snapshot, 'list_worktrees', side_effect=uncertain):
             with patch.object(review_snapshot, '_git', side_effect=before_add), self.assertRaises(WorktreeError):
@@ -282,10 +342,10 @@ class ReviewSnapshotTests(unittest.TestCase):
     def test_a_failed_worktree_add_leaves_no_marker(self) -> None:
         real_git = review_snapshot._git
 
-        def failing(root, *args):
+        def failing(root, *args, **kwargs):
             if args[:2] == ('worktree', 'add'):
                 raise WorktreeError('worktree add failed')
-            return real_git(root, *args)
+            return real_git(root, *args, **kwargs)
 
         with patch('getzilla.review_snapshot._git', side_effect=failing), self.assertRaises(WorktreeError):
             review_snapshot.create(self.task, self.first)
