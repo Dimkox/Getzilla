@@ -29,6 +29,115 @@ def port_for(objects, reference, calls):
 
 
 class OciTransportContracts(OwnedOciCase):
+    def test_cleanup_failures_release_all_fds_and_never_delete_foreign_lock(self):
+        import os
+        transport = self.module('security_oci_transport')
+        _, reference = owned_image()
+        subject = {'reference': reference, 'manifest': 'owned/source', 'line': 1,
+                   'source_sha256': 'a' * 64, 'platform': 'linux/amd64'}
+        for variant in ['rmtree', 'lock-stat', 'lock-unlink', 'foreign-lock']:
+            destination = self.root / variant
+            destination.mkdir(mode=0o700)
+            opened, leaked = {}, []
+            refusing = False
+            actual_open, actual_stat, actual_unlink = os.open, os.stat, os.unlink
+            def opening(*args, **kwargs):
+                fd = actual_open(*args, **kwargs)
+                observed = os.fstat(fd)
+                opened[fd] = (observed.st_dev, observed.st_ino)
+                return fd
+            def statting(path, *args, **kwargs):
+                if refusing and variant == 'lock-stat' and path == '.writer.lock':
+                    raise PermissionError('NEW owned lock stat cut')
+                return actual_stat(path, *args, **kwargs)
+            def unlinking(path, *args, **kwargs):
+                if refusing and variant == 'lock-unlink' and path == '.writer.lock':
+                    raise PermissionError('NEW owned lock unlink cut')
+                return actual_unlink(path, *args, **kwargs)
+            def refuse(*args, **kwargs):
+                nonlocal refusing
+                refusing = True
+                if variant == 'foreign-lock':
+                    (destination / '.writer.lock').unlink()
+                    (destination / '.writer.lock').write_bytes(b'foreign-owned lock')
+                raise transport.OCIError('NEW original prepublication refusal')
+            caught = None
+            with (self.subTest(variant=variant), mock.patch.object(transport.os, 'open', side_effect=opening),
+                  mock.patch.object(transport.os, 'stat', side_effect=statting),
+                  mock.patch.object(transport.os, 'unlink', side_effect=unlinking),
+                  mock.patch.object(transport.shutil, 'rmtree', side_effect=PermissionError('NEW owned run cleanup cut')) if variant == 'rmtree' else mock.patch.object(transport, 'REGISTRIES', transport.REGISTRIES)):
+                try:
+                    transport.acquire_images([subject], selected_profile(reference), destination,
+                                             network_selection=owned_network(), open_url=refuse)
+                except Exception as exc:
+                    caught = exc
+            for fd, inode in opened.items():
+                try:
+                    value = os.fstat(fd)
+                    if (value.st_dev, value.st_ino) == inode:
+                        leaked.append(fd)
+                except OSError:
+                    pass
+            for fd in leaked:  # Always reap baseline leaked descriptors before asserting.
+                os.close(fd)
+            self.assertIsInstance(caught, transport.OCIError, variant)
+            self.assertIn('NEW original prepublication refusal', str(caught), variant)
+            self.assertEqual(leaked, [], variant)
+            if variant == 'rmtree':
+                self.assertFalse((destination / '.writer.lock').exists())
+            if variant == 'foreign-lock':
+                self.assertEqual((destination / '.writer.lock').read_bytes(), b'foreign-owned lock')
+
+    def test_selected_root_swap_after_publication_is_uncertain(self):
+        transport = self.module('security_oci_transport')
+        objects, reference = owned_image()
+        subject = {'reference': reference, 'manifest': 'owned/source', 'line': 1,
+                   'source_sha256': 'a' * 64, 'platform': 'linux/amd64'}
+        destination = self.root / 'selected'
+        destination.mkdir(mode=0o700)
+        actual_replace = transport.os.replace
+        def publish(source, target, **kwargs):
+            actual_replace(source, target, **kwargs)
+            moved = self.root / 'original'
+            destination.rename(moved)
+            destination.mkdir(mode=0o700)
+            for child in moved.iterdir():
+                if child.name != '.writer.lock':
+                    child.rename(destination / child.name)
+        with mock.patch.object(transport.os, 'replace', side_effect=publish), self.assertRaisesRegex(transport.OCIError, 'uncertain'):
+            transport.acquire_images([subject], selected_profile(reference), destination,
+                                     network_selection=owned_network(), open_url=port_for(objects, reference, []))
+
+    def test_last_retained_archive_read_refuses_ancestor_symlink_swap(self):
+        transport = self.module('security_oci_transport')
+        objects, reference = owned_image()
+        subject = {'reference': reference, 'manifest': 'owned/source', 'line': 1,
+                   'source_sha256': 'a' * 64, 'platform': 'linux/amd64'}
+        parent = self.root / 'selected-parent'
+        parent.mkdir(mode=0o700)
+        destination = parent / 'oci'
+        destination.mkdir(mode=0o700)
+        binding = owned_binding()
+        transport.acquire_images([subject], selected_profile(reference), destination, binding=binding,
+                                 network_selection=owned_network(), open_url=port_for(objects, reference, []))
+        transport.retained_acquisition(destination, [subject], binding=binding,
+                                       profile=selected_profile(reference), network_selection=owned_network())
+        actual_read = transport.os.read
+        swapped = False
+        def read(fd, count):
+            nonlocal swapped
+            body = actual_read(fd, count)
+            if not swapped and body.startswith(b'blobs/sha256/'):
+                swapped = True
+                moved = self.root / 'moved-parent'
+                parent.rename(moved)
+                parent.symlink_to(moved, target_is_directory=True)
+            return body
+        with mock.patch.object(transport.os, 'read', side_effect=read), self.assertRaises(transport.OCIError):
+            transport.retained_acquisition(destination, [subject], binding=binding,
+                                           profile=selected_profile(reference), network_selection=owned_network())
+        self.assertTrue(swapped, 'fixture must reach the final retained TAR read')
+
     def test_original_inode_and_pointer_are_pinned_through_publication(self):
         transport = self.module('security_oci_transport')
         layout = self.module('security_oci_layout')

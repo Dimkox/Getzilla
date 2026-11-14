@@ -14,6 +14,7 @@ import shutil
 import socket
 import ssl
 import stat
+import sys
 import threading
 import time
 from urllib.parse import urlencode, urlsplit
@@ -21,7 +22,8 @@ from urllib.parse import urlencode, urlsplit
 from .security_oci_layout import (ARTIFACT_BYTES, INDEX_BYTES, Budget, OCIError,
                                   CONFIG_MEDIA, LAYER_MEDIA, MANIFEST_MEDIA, digest,
                                   identity, json_object, open_directory, pack_layout, safe_name,
-                                  validate_layout, read_directory, read_owned_file)
+                                  validate_layout, read_directory, read_owned_file,
+                                  open_directory_chain, verify_directory_chain)
 
 REGISTRIES = {'docker.io': ('registry-1.docker.io', 'auth.docker.io', 'registry.docker.io'),
               'ghcr.io': ('ghcr.io', 'ghcr.io', 'ghcr.io')}
@@ -348,11 +350,13 @@ def acquire_images(subjects, profile, destination, *, open_url=None, clock=time.
     selected_network = validate_network_selection(network_selection, required=required_hosts)
     root = Path(destination).absolute()
     descriptor = lock = None
+    root_handles = []
     written, directory_handles = {}, {}
     run = 'run-' + secrets.token_hex(12)
     published = False
     try:
-        descriptor = open_directory(root)
+        root_handles = open_directory_chain(root)
+        descriptor = root_handles[-1]
         root_stat = os.fstat(descriptor)
         if root_stat.st_uid != os.getuid() or stat.S_IMODE(root_stat.st_mode) != 0o700:
             raise OCIError('OCI output root must be exclusively owned0700')
@@ -411,6 +415,7 @@ def acquire_images(subjects, profile, destination, *, open_url=None, clock=time.
                 os.close(parent)
         def verify_written(*, published_pointer=None):
             """Pin the original FDs and rebind every name, including the rename target."""
+            verify_directory_chain(root, root_handles)
             expected_children = {name: set() for name in directory_handles}
             for name in [*directory_handles, *written]:
                 if name == published_pointer:
@@ -453,6 +458,7 @@ def acquire_images(subjects, profile, destination, *, open_url=None, clock=time.
                         or total != saved['bytes'] or checksum.hexdigest() != saved['sha256']
                         or hashlib.sha256(body).hexdigest() != saved['sha256']):
                     raise OCIError('OCI original FD/content/name binding differs')
+            verify_directory_chain(root, root_handles)
         records, retained = [], {}
         current = now or datetime.now(timezone.utc)
         if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
@@ -561,25 +567,40 @@ def acquire_images(subjects, profile, destination, *, open_url=None, clock=time.
             raise
         raise OCIError('OCI acquisition refused before publication') from exc
     finally:
+        original_error = sys.exc_info()[1]
+        cleanup_errors = []
+        def cleanup(operation):
+            try:
+                operation()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                cleanup_errors.append(type(error).__name__)
         if descriptor is not None:
             if not published:
-                try:
+                def remove_run():
                     owned_run = directory_handles.get(run)
                     if owned_run is not None and identity(os.stat(run, dir_fd=descriptor, follow_symlinks=False))[:2] == identity(os.fstat(owned_run))[:2]:
                         shutil.rmtree(run, dir_fd=descriptor)
-                except FileNotFoundError:
-                    pass
+                cleanup(remove_run)
             if lock is not None:
-                try:
+                def remove_lock():
                     if identity(os.stat('.writer.lock', dir_fd=descriptor, follow_symlinks=False))[:2] == identity(os.fstat(lock))[:2]:
                         os.unlink('.writer.lock', dir_fd=descriptor)
-                finally:
-                    os.close(lock)
+                cleanup(remove_lock)
+                cleanup(lambda: os.close(lock))
             for saved in written.values():
-                os.close(saved['fd'])
+                cleanup(lambda: os.close(saved['fd']))
             for fd in directory_handles.values():
-                os.close(fd)
-            os.close(descriptor)
+                cleanup(lambda: os.close(fd))
+        for fd in reversed(root_handles):
+            cleanup(lambda: os.close(fd))
+        if cleanup_errors:
+            message = 'OCI cleanup incomplete; owned resources may remain; do not retry blindly'
+            if original_error is not None:
+                original_error.add_note(message)
+            else:
+                raise OCIError('OCI post-publication durability uncertain; ' + message)
 
 
 def retained_acquisition(root, subjects, *, binding, now=None, profile=None, network_selection=None):

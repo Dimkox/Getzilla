@@ -297,39 +297,56 @@ def identity(value):
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
-def open_directory(path):
+def open_directory_chain(path):
     """Pin every ancestor without following a link, including the selected root."""
     if os.name != 'posix':
         raise OCIError('physical OCI directory reader requires qualified POSIX support')
     path = Path(path).absolute()
     if '..' in path.parts:
         raise OCIError('OCI root escapes selection')
-    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    handles = [os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)]
     try:
         for part in path.parts[1:]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        return descriptor
+            handles.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=handles[-1]))
+        return handles
     except OSError as exc:
-        os.close(descriptor)
+        for descriptor in reversed(handles):
+            os.close(descriptor)
         raise OCIError('OCI directory is not physically bound') from exc
+
+
+def verify_directory_chain(path, handles):
+    current = open_directory_chain(path)
+    try:
+        if [identity(os.fstat(fd))[:2] for fd in current] != [identity(os.fstat(fd))[:2] for fd in handles]:
+            raise OCIError('OCI original directory ancestor chain changed')
+    finally:
+        for fd in reversed(current):
+            os.close(fd)
+
+
+def open_directory(path):
+    handles = open_directory_chain(path)
+    for descriptor in handles[:-1]:
+        os.close(descriptor)
+    return handles[-1]
 
 
 def read_owned_file(root, relative, maximum=ARTIFACT_BYTES, *, budget=None):
     """Return bytes plus physical identities, with no followed parent/leaf link."""
     safe_name(relative)
     budget = budget or Budget()
-    parent = descriptor = root_descriptor = None
+    descriptor = None
+    root_handles, parent_handles = [], []
     try:
-        root_descriptor = open_directory(root)
+        root_handles = open_directory_chain(root)
+        root_descriptor = root_handles[-1]
         root_identity = identity(os.fstat(root_descriptor))
-        parent = os.dup(root_descriptor)
         parts = relative.split('/')
-        for part in parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-            os.close(parent)
-            parent = child
+        parent_path = Path(root).joinpath(*parts[:-1])
+        parent_handles = open_directory_chain(parent_path)
+        parent = parent_handles[-1]
+        verify_directory_chain(root, root_handles)
         descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 <= before.st_size <= maximum:
@@ -346,26 +363,26 @@ def read_owned_file(root, relative, maximum=ARTIFACT_BYTES, *, budget=None):
             chunks.append(raw)
         if (count != before.st_size or identity(before) != identity(os.fstat(descriptor))
                 or identity(before) != identity(os.stat(parts[-1], dir_fd=parent, follow_symlinks=False))
-                or identity(os.fstat(root_descriptor)) != root_identity
-                or identity(os.stat(root, follow_symlinks=False)) != root_identity):
+                or identity(os.fstat(root_descriptor)) != root_identity):
             raise OCIError('OCI retained file changed during read')
+        verify_directory_chain(root, root_handles)
+        verify_directory_chain(parent_path, parent_handles)
         return b''.join(chunks), identity(before)
     except OSError as exc:
         raise OCIError('OCI retained file identity unavailable') from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if parent is not None:
-            os.close(parent)
-        if root_descriptor is not None:
-            os.close(root_descriptor)
+        for fd in reversed(parent_handles + root_handles):
+            os.close(fd)
 
 
 def read_directory(path, reference, platform, *, budget=None, validate=True):
     budget = budget or Budget()
-    descriptor = None
+    handles, directories = [], {}
     try:
-        descriptor = open_directory(path)
+        handles = open_directory_chain(path)
+        descriptor = handles[-1]
         root_identity = identity(os.fstat(descriptor))
         objects, identities = {}, {'.': root_identity}
         def walk(parent, prefix='', depth=0):
@@ -385,6 +402,7 @@ def read_directory(path, reference, platform, *, budget=None, validate=True):
                     if stat.S_ISDIR(before.st_mode):
                         if relative not in {'blobs', 'blobs/sha256'}:
                             raise OCIError('unreferenced OCI directory')
+                        directories[relative] = os.dup(child)
                         walk(child, relative + '/', depth + 1)
                     else:
                         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > ARTIFACT_BYTES:
@@ -408,15 +426,23 @@ def read_directory(path, reference, platform, *, budget=None, validate=True):
                 finally:
                     os.close(child)
         walk(descriptor)
-        if identity(os.fstat(descriptor)) != root_identity or identity(os.stat(path, follow_symlinks=False)) != root_identity:
+        if identity(os.fstat(descriptor)) != root_identity:
             raise OCIError('OCI directory changed during read')
         # Exact-byte reacquisition need not decompress an already validated graph.
         # Raw snapshots deliberately contain no semantic/config validation result.
         result = validate_layout(objects, reference, platform, budget=budget) if validate else {'objects': objects}
+        verify_directory_chain(path, handles)
+        for name, held in directories.items():
+            current = open_directory(Path(path) / name)
+            try:
+                if identity(os.fstat(current)) != identities[name] or identity(os.fstat(held)) != identities[name]:
+                    raise OCIError('OCI original object ancestor changed')
+            finally:
+                os.close(current)
         result['identities'] = identities
         return result
     except OSError as exc:
         raise OCIError('OCI physical object read refused') from exc
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        for fd in reversed([*handles, *directories.values()]):
+            os.close(fd)
