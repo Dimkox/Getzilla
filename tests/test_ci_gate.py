@@ -589,7 +589,7 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                     "if sys.argv[1:] == ['-']:\n"
                     "    sys.stdin.read()\n"
                     "    raise SystemExit(int(os.environ['PREFLIGHT_RC']))\n"
-                    "expected = ['scripts/getzilla_cli.py', 'test', '--require-parallel', 'tests', '--max-worker-restart=0', '--durations=20']\n"
+                    "expected = ['scripts/getzilla_cli.py', 'test', '--require-parallel', 'tests', '--max-worker-restart=0', '--durations=20', '-ra']\n"
                     "if sys.argv[1:] != expected:\n"
                     "    raise SystemExit(91)\n"
                     "raise SystemExit(int(os.environ['RUNNER_RC']))\n", encoding='utf-8')
