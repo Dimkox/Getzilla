@@ -49,7 +49,10 @@ class FactoryLicenseScopeTests(unittest.TestCase):
         (self.root / PATHS[3]).write_text(json.dumps(policy))
         self.policy = licenses.load_policy(self.root)
 
-    def test_real_main_profile_is_explicitly_changed_not_silently_reanchored(self):
+    def test_changed_synthetic_profile_is_not_silently_reanchored(self):
+        self.synthetic_profile()
+        lock = self.root / PATHS[0]
+        lock.write_bytes(lock.read_bytes() + b' ')
         info = licenses.factory_offline_intent(self.root, self.policy)
         self.assertEqual(info['code'], 'license-factory-profile-changed')
         self.assertEqual(info['components'], [])
@@ -100,6 +103,9 @@ class FactoryLicenseScopeTests(unittest.TestCase):
                 self.assertEqual(check['details'][0]['factory_offline_use']['final_archive_evidence'],'not_evaluated')
 
     def test_actual_incomplete_gate_reports_profile_gap_and_remains_blocked(self):
+        self.synthetic_profile()
+        lock = self.root / PATHS[0]
+        lock.write_bytes(lock.read_bytes() + b' ')
         inv = {'complete': False, 'digest':'a'*64,'gaps':[{'code':'unresolved-image'}],
                'dependencies':[], 'images':[], 'tools':[], 'files':[], 'manifests':[], 'excluded_fixture_paths':[]}
         result = expanded_security.run_checks(self.root, inventory=inv)
