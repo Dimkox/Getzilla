@@ -5,6 +5,8 @@ Publisher identity and execution provenance remain external-runner obligations.
 """
 from __future__ import annotations
 
+from .security_oci_layout import OCIError, read_archive as read_oci_archive
+
 import base64
 import bz2
 import gzip
@@ -405,83 +407,20 @@ def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dic
 
 
 def _image_source(record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
-    """Read one OCI image and every layer; a vulnerability report is not a SBOM."""
+    """One shared OCI object/format reader; format support grants no license."""
     subject, origin = record['subject'], record['origin']
     reference = subject['reference']
     if (subject.get('kind') != 'oci-image' or not re.fullmatch(r'[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}', reference)
-            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'} or not record['filename'].endswith('.zip')
+            or subject.get('platform') not in {'linux/amd64', 'linux/arm64'}
+            or not record['filename'].endswith(('.zip', '.tar'))
             or set(origin) != {'kind', 'manifest_digest'} or origin['kind'] != 'oci-layout'
             or origin['manifest_digest'] != reference.rsplit('@', 1)[1]):
-        raise ArtifactError('artifact-origin', 'image needs an exact OCI identity and supported platform')
-    outer = archive_inventory(payload, record['filename'])
-    if 'oci-layout' not in outer or 'index.json' not in outer:
-        raise ArtifactError('artifact-origin', 'OCI layout/index is missing')
-    bound, licenses = {}, {}
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        if any(member.orig_filename != member.filename for member in archive.infolist()):
-            raise ArtifactError('artifact-archive', 'OCI archive names are ambiguous')
-        def read(name):
-            if name not in outer or outer[name]['size'] > MAX_ARTIFACT_BYTES:
-                raise ArtifactError('artifact-size', 'OCI object is missing or exceeds its bound')
-            return archive.read(name)
-        if _json(read('oci-layout')) != {'imageLayoutVersion': '1.0.0'}:
-            raise ArtifactError('artifact-origin', 'unsupported OCI layout')
-        index = _json(read('index.json'))
-        platform = dict(zip(('os', 'architecture'), subject['platform'].split('/')))
-        if (index.get('schemaVersion') != 2 or not isinstance(index.get('manifests'), list)
-                or len(index['manifests']) != 1 or not isinstance(index['manifests'][0], dict)
-                or index['manifests'][0].get('platform') != platform):
-            raise ArtifactError('artifact-origin', 'OCI index must select exactly one matching platform')
-        names = {'oci-layout', 'index.json'}
-        def blob(descriptor, media):
-            if (not isinstance(descriptor, dict) or descriptor.get('mediaType') not in media
-                    or not isinstance(descriptor.get('digest'), str) or not re.fullmatch('sha256:[0-9a-f]{64}', descriptor['digest'])
-                    or type(descriptor.get('size')) is not int or not 0 < descriptor['size'] <= MAX_ARTIFACT_BYTES):
-                raise ArtifactError('artifact-origin', 'OCI descriptor is unsupported or unbounded')
-            name = 'blobs/sha256/' + descriptor['digest'][7:]
-            raw = read(name)
-            if len(raw) != descriptor['size'] or hashlib.sha256(raw).hexdigest() != descriptor['digest'][7:]:
-                raise ArtifactError('artifact-hash', 'OCI descriptor bytes differ')
-            names.add(name)
-            return raw
-        selected = index['manifests'][0]
-        if selected.get('digest') != origin['manifest_digest']:
-            raise ArtifactError('artifact-origin', 'OCI selected manifest differs from image reference')
-        manifest = _json(blob(selected, {'application/vnd.oci.image.manifest.v1+json'}))
-        if (manifest.get('schemaVersion') != 2 or not isinstance(manifest.get('layers'), list)
-                or not 0 < len(manifest['layers']) <= MAX_MEMBERS):
-            raise ArtifactError('artifact-origin', 'OCI image has no complete bounded layers')
-        config = _json(blob(manifest.get('config'), {'application/vnd.oci.image.config.v1+json'}))
-        if any(config.get(key) != value for key, value in platform.items()):
-            raise ArtifactError('artifact-origin', 'OCI config platform differs')
-        rootfs = config.get('rootfs')
-        if (not isinstance(rootfs, dict) or rootfs.get('type') != 'layers' or not isinstance(rootfs.get('diff_ids'), list)
-                or len(rootfs['diff_ids']) != len(manifest['layers'])):
-            raise ArtifactError('artifact-origin', 'OCI config lacks exact uncompressed layer identities')
-        total = sum(row['size'] for row in outer.values())
-        for layer, diff_id in zip(manifest['layers'], rootfs['diff_ids']):
-            raw = blob(layer, {'application/vnd.oci.image.layer.v1.tar', 'application/vnd.oci.image.layer.v1.tar+gzip'})
-            if layer['mediaType'].endswith('+gzip'):
-                with gzip.open(io.BytesIO(raw), 'rb') as stream:
-                    expanded = stream.read(MAX_ARCHIVE_BYTES + 1)
-            else:
-                expanded = raw
-            if len(expanded) > MAX_ARCHIVE_BYTES or diff_id != 'sha256:' + hashlib.sha256(expanded).hexdigest():
-                raise ArtifactError('artifact-hash', 'OCI uncompressed layer identity differs or exceeds its budget')
-            prefix = 'layers/' + layer['digest'][7:] + '/'
-            members = archive_inventory(expanded, 'layer.tar')
-            total += sum(row['size'] for row in members.values())
-            if total > MAX_ARCHIVE_BYTES or len(bound) + len(members) + len(outer) > MAX_MEMBERS:
-                raise ArtifactError('artifact-size', 'OCI complete layer inventory exceeds aggregate limits')
-            for name, row in members.items():
-                if prefix + name in bound:
-                    raise ArtifactError('artifact-origin', 'OCI repeats layer identity')
-                bound[prefix + name] = row
-            licenses.update({prefix + name: body for name, body in archive_files(expanded, 'layer.tar').items()})
-        if names != set(outer):
-            raise ArtifactError('artifact-origin', 'OCI layout contains unreferenced or missing objects')
-    bound.update({'oci/' + name: row for name, row in outer.items()})
-    return bound, licenses, []
+        raise ArtifactError('artifact-origin', 'image needs an exact OCI identity and supported platform/format')
+    try:
+        result = read_oci_archive(payload, record['filename'], reference, subject['platform'])
+    except OCIError as exc:
+        raise ArtifactError('artifact-origin', 'OCI object/format validation refused') from exc
+    return result['members'], result['files'], []
 
 
 def family_evidence(root: Path, record: dict) -> dict:

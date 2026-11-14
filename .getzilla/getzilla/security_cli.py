@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -151,6 +152,7 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
             'profile': profile, 'profile_sha256': profile.get('profile_sha256'),
             'before': before, 'after': after, 'required_sources': obligations,
             'acquisitions': acquisitions, 'license_inputs': license_result, 'gaps': sorted(set(gaps)),
+            'retained_image_layouts': [item for item in acquisitions if item.get('kind') == 'oci-image-acquisition'],
             'checked_at': _clock(now).isoformat(), 'scan_outcomes': [],
             'assurance': 'local-input-integrity-only-not-external-attestation'}
 
@@ -164,6 +166,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         raise SecurityDataError('profile declaration cannot execute acquisition')
     if os.name != 'posix':
         raise SecurityDataError('public snapshot preparation requires a qualified POSIX reader; platform unavailable')
+    action_deadline = time.monotonic() + 600
     root = root.resolve()
     roots = {key: str(path.absolute()) for key, path in
                                   (('database', database), ('artifacts', artifacts), ('tools', tools))}
@@ -194,7 +197,10 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                 acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
-                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile']))
+                binding = {'source': before, 'inventory_sha256': inventory['digest'],
+                           'policy_sha256': policy, 'run': run}
+                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'],
+                                                   binding=binding, deadline=action_deadline))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
@@ -513,6 +519,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
              provision=False, now=None, profile=None, run=None) -> dict:
     if (refresh or provision) and not isinstance(profile, dict):
         raise SecurityDataError('acquisition requires an explicit current public input profile')
+    action_deadline = time.monotonic() + 600
     root, artifacts, tools = (path.resolve() for path in (root, artifacts, tools))
     database = database.absolute()  # Keep named links visible to descriptor snapshot I/O.
     env = {'GETZILLA_SECURITY_DB': str(database), 'GETZILLA_SECURITY_ARTIFACTS': str(artifacts),
@@ -530,6 +537,8 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
                                        'tools': str(tools)}, run, policy, now=now)
+                env['GETZILLA_SECURITY_OCI_BINDING'] = json.dumps({'source': before,
+                    'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run}, sort_keys=True)
             def acquire(label, operation):
                 try:
                     acquisitions.extend(operation())
@@ -548,7 +557,9 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)
                 if inventory['images']:
-                    acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now))
+                    acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now,
+                        profile=profile['image_profile'], binding=json.loads(env['GETZILLA_SECURITY_OCI_BINDING']),
+                        deadline=action_deadline))
             initial_plan = security_obligations(root, inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             checks.extend(run_checks(root, environ=env, now=now, inventory=inventory, policy_root=TRUSTED_ROOT))
             checks.append(known_vulnerability_check(root, environ=env, now=now, inventory=inventory,

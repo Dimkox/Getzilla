@@ -101,6 +101,17 @@ def release_fixture(directory):
     return inventory, record, bundle
 
 
+class NewOciPreparationConsumerTests(unittest.TestCase):
+    def test_retained_layout_projection_never_claims_scan_or_qualification(self):
+        from getzilla import security_cli
+        selected = {'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
+                    'manifest_sha256': 'a' * 64, 'records': [{'subject': {'reference': 'owned'}}]}
+        result = security_cli.preparation_result({'observed_counts': {}}, {}, {}, [], [selected], {'status': 'skip'})
+        self.assertEqual(result.get('retained_image_layouts'), [selected])
+        self.assertEqual(result['qualification'], 'UNVERIFIED')
+        self.assertEqual(result['scan_outcomes'], [])
+
+
 class PublicReleaseLicenseTests(unittest.TestCase):
     def test_exact_source_pinned_release_archive_retains_component_licenses(self):
         with tempfile.TemporaryDirectory() as temporary:
