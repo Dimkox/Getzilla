@@ -9,8 +9,8 @@
   "factory_offline_profile": {
     "profile": "ubuntu-24.04-x86_64-cpython312",
     "distribution": "redistributed",
-    "lock_sha256": "e6d5f3f021055951d5273d323051953fb2314a2b2a011d01cf59fa33f08ac929",
-    "wheel_inventory_sha256": "a7070165bad608d32a640f40f9285d2ffe3dc030162ce28110421cdda501dcf5",
-    "builder_sha256": "39254ca4d904a615983019737b5f8075dc9d72e30ea5c2f48b2a2d48fa570e95"
+    "lock_sha256": "95e088718f76ad545b03c3e11bf62f765beb1f75a6955a61c13d7bfe77115bab",
+    "wheel_inventory_sha256": "8acc42767b397a7e1728fc3809c9ff6a49d47a3e741a43e717035071ff7adeba",
+    "builder_sha256": "b8ae53c162b800b57cdf233df101f0ea6e4fcabf9715dde0431535d8b4f4cdfd"
   }
 }
