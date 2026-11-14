@@ -361,7 +361,7 @@ def read_owned_file(root, relative, maximum=ARTIFACT_BYTES, *, budget=None):
             os.close(root_descriptor)
 
 
-def read_directory(path, reference, platform, *, budget=None):
+def read_directory(path, reference, platform, *, budget=None, validate=True):
     budget = budget or Budget()
     descriptor = None
     try:
@@ -410,7 +410,9 @@ def read_directory(path, reference, platform, *, budget=None):
         walk(descriptor)
         if identity(os.fstat(descriptor)) != root_identity or identity(os.stat(path, follow_symlinks=False)) != root_identity:
             raise OCIError('OCI directory changed during read')
-        result = validate_layout(objects, reference, platform, budget=budget)
+        # Exact-byte reacquisition need not decompress an already validated graph.
+        # Raw snapshots deliberately contain no semantic/config validation result.
+        result = validate_layout(objects, reference, platform, budget=budget) if validate else {'objects': objects}
         result['identities'] = identities
         return result
     except OSError as exc:

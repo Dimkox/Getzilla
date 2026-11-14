@@ -27,7 +27,7 @@ from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
-from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, scan_source
+from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, scan_source, image_network_selection
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
                    'security-malicious-packages', 'security-licenses', 'security-container-images',
@@ -36,7 +36,7 @@ _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
                     'from getzilla.security_cli import main;raise SystemExit(main())')
 
 
-def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None) -> dict:
+def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, network_selection=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     keys = {'head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha', 'candidate_clean', 'checker_clean', 'same_project'}
     if (not isinstance(source, dict) or set(source) != keys or source['candidate_clean'] is not True
@@ -80,6 +80,8 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         'security-licenses': ['artifact-license-catalog'] if any(counts.values()) else [],
         'security-container-images': images}
     body['image_profile'] = None
+    if network_selection is not None:
+        body['image_network_selection'] = image_network_selection(inventory, network_selection)
     if counts['images']:
         platforms = {item.get('platform') for item in inventory['images']}
         if len(platforms) != 1 or not platforms <= {'linux/amd64', 'linux/arm64'}:
@@ -98,7 +100,8 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     from .security_data import _timestamp
     created = _timestamp(profile['created_at'])
     age = (_clock(now) - created).total_seconds()
-    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created):
+    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created,
+                                                                 network_selection=profile.get('image_network_selection')):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -158,7 +161,8 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
 
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
-                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None) -> dict:
+                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None,
+                   network_selection=None) -> dict:
     """Reuse existing producers for explicit inputs; never run vulnerability/scanner callbacks."""
     if not write_profile and not isinstance(profile, dict):
         raise SecurityDataError('explicit current public input profile required before preparation')
@@ -178,7 +182,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
-            return input_profile(before, inventory, roots, run, policy, now=now)
+            return input_profile(before, inventory, roots, run, policy, now=now, network_selection=network_selection)
         validate_input_profile(profile, before, inventory, roots, run, policy, now=now)
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
@@ -200,7 +204,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                 binding = {'source': before, 'inventory_sha256': inventory['digest'],
                            'policy_sha256': policy, 'run': run}
                 acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'],
-                                                   binding=binding, deadline=action_deadline))
+                    binding=binding, deadline=action_deadline, network_selection=profile.get('image_network_selection')))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
@@ -539,6 +543,8 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                        'tools': str(tools)}, run, policy, now=now)
                 env['GETZILLA_SECURITY_OCI_BINDING'] = json.dumps({'source': before,
                     'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run}, sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_NETWORK_SELECTION'] = json.dumps(profile.get('image_network_selection'), sort_keys=True)
             def acquire(label, operation):
                 try:
                     acquisitions.extend(operation())
@@ -559,7 +565,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 if inventory['images']:
                     acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now,
                         profile=profile['image_profile'], binding=json.loads(env['GETZILLA_SECURITY_OCI_BINDING']),
-                        deadline=action_deadline))
+                        deadline=action_deadline, network_selection=profile.get('image_network_selection')))
             initial_plan = security_obligations(root, inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             checks.extend(run_checks(root, environ=env, now=now, inventory=inventory, policy_root=TRUSTED_ROOT))
             checks.append(known_vulnerability_check(root, environ=env, now=now, inventory=inventory,
@@ -614,6 +620,8 @@ def main(argv=None) -> int:
     preparation.add_argument('--write-input-profile', type=Path, help='write a current source/run declaration without acquisition or scans')
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
+    parser.add_argument('--oci-network-selection', type=Path,
+                        help='explicit fixed-host global numeric peer map for profile declaration; automatic DNS unavailable')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
@@ -627,6 +635,10 @@ def main(argv=None) -> int:
         parser.error('invalid internal preparation dispatch')
     try:
         profile = _json(read_file(args.input_profile.parent, args.input_profile.name, MAX_INDEX_BYTES)) if args.input_profile else None
+        network_selection = _json(read_file(args.oci_network_selection.parent, args.oci_network_selection.name, 16384)) if args.oci_network_selection else None
+        if args.oci_network_selection is not None and args.write_input_profile is None and (
+                not isinstance(profile, dict) or network_selection != profile.get('image_network_selection')):
+            raise SecurityDataError('OCI numeric selection differs from explicit input profile')
         families = _json(read_file(args.family_records.parent, args.family_records.name, MAX_INDEX_BYTES)) if args.family_records else None
         run = ci_run_context(os.environ)
         if args.prepare_inputs and args.input_worker is None:
@@ -636,7 +648,8 @@ def main(argv=None) -> int:
         elif args.prepare_inputs or args.write_input_profile is not None:
             report = prepare_inputs(args.root, args.database, args.artifacts, args.tools,
                 profile=profile, run=run, write_profile=args.write_input_profile is not None,
-                refresh=args.refresh, provision=args.provision_tools, families=families)
+                refresh=args.refresh, provision=args.provision_tools, families=families,
+                network_selection=network_selection)
             if args.write_input_profile is not None:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:

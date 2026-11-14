@@ -68,6 +68,11 @@ def owned_binding():
             'run': {'provider': 'github-actions', 'repository': 'owned/fixture', 'run_id': '1', 'run_attempt': '1', 'head_sha': '1' * 40}}
 
 
+def owned_network():
+    # Explicit fixture metadata; no connection to these literals is made.
+    return {host: ['93.184.216.34'] for host in ['registry-1.docker.io', 'auth.docker.io']}
+
+
 class OwnedOciCase(unittest.TestCase):
     def setUp(self):
         base = Path(os.environ.get('GETZILLA_OCI_TEST_ROOT', str(Path(__file__).resolve().parents[1] / '.getzilla/runtime')))
@@ -76,7 +81,7 @@ class OwnedOciCase(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.root.chmod(0o700)
-        for target in ['socket.socket', 'subprocess.Popen', 'subprocess.run']:
+        for target in ['socket.socket', 'socket.getaddrinfo', 'subprocess.Popen', 'subprocess.run']:
             patch = mock.patch(target, side_effect=AssertionError('uncontrolled network/process forbidden'))
             patch.start()
             self.addCleanup(patch.stop)

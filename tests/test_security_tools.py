@@ -29,8 +29,42 @@ from tests.test_security_oci_layout import OwnedOciCase
 
 
 class NewOciExecutionPortTests(OwnedOciCase):
+    def test_two_record_contract_uses_one_selected_storage_ledger(self):
+        from getzilla import security_oci_transport as transport
+        from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile, owned_network
+        from tests.test_security_oci_transport import port_for
+        from types import SimpleNamespace
+        objects, reference = owned_image()
+        subjects = [{'reference': reference, 'manifest': 'owned/compose.yaml', 'line': line,
+                     'source_sha256': 'd' * 64, 'platform': 'linux/amd64'} for line in [1, 3]]
+        profile = selected_profile(reference, max_storage_bytes=54000, max_layers=20)
+        root = self.root / 'oci'
+        root.mkdir(mode=0o700)
+        binding = owned_binding()
+        transport.acquire_images(subjects, profile, root, network_selection=owned_network(), binding=binding,
+                                 open_url=port_for(objects, reference, []), now=NOW)
+        calls = []
+        def process(command, *args, **kwargs):
+            calls.append(command)
+            from getzilla import security_oci_layout as layout
+            validated = layout.validate_layout(objects, reference, 'linux/amd64')
+            report = {'SchemaVersion': 2, 'ArtifactType': 'container_image',
+                'ArtifactName': command[command.index('--input') + 1], 'Trivy': {'Version': '0.74.0'},
+                'Metadata': {'ImageID': validated['config_digest'], 'DiffIDs': validated['diff_ids'], 'ImageConfig': validated['config']},
+                'Results': [{'Class': 'os-pkgs', 'Packages': [{'Name': 'owned', 'Version': '1'}]}]}
+            Path(command[command.index('--output') + 1]).write_text(json.dumps(report))
+            return SimpleNamespace(returncode=0, terminal_state='completed', cleanup_error=None, stdout='', stderr='')
+        tool = self.root / 'not-executed'
+        tool.write_bytes(b'NEW controlled port; not a scanner')
+        with (mock.patch.object(security_tools, 'MAX_REPORT', 2048),
+              mock.patch.object(security_tools, 'pinned_tool', return_value=tool),
+              mock.patch.object(security_tools, 'trivy_database_source', return_value={'owned': 'fixture-only'})):
+            result = security_tools.scan_layouts({'images': subjects}, self.root, binding=binding, now=NOW, process=process, profile=profile, network_selection=owned_network())
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertEqual(len(calls), 1, 'first must run; second must exceed the one action logical storage ledger')
+
     def test_refresh_facade_carries_validated_selection_and_retained_layout(self):
-        from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile
+        from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile, owned_network
         from tests.test_security_oci_transport import port_for
         from types import SimpleNamespace
         objects, reference = owned_image()
@@ -42,7 +76,7 @@ class NewOciExecutionPortTests(OwnedOciCase):
               mock.patch.object(security_tools, '_process', return_value=SimpleNamespace(returncode=0)) as process,
               mock.patch.object(security_tools, 'trivy_database_source', return_value={'fixture': 'not a DB qualification'})):
             result = security_tools.refresh_images({'images': [subject]}, self.root, now=NOW, profile=profile,
-                        binding=binding, image_opener=port_for(objects, reference, []))
+                        binding=binding, network_selection=owned_network(), image_opener=port_for(objects, reference, []))
         self.assertEqual(result[0]['kind'], 'oci-image-acquisition')
         self.assertEqual(result[0]['qualification'], 'UNVERIFIED')
         self.assertEqual(result[0]['profile'], profile)
@@ -53,7 +87,7 @@ class NewOciExecutionPortTests(OwnedOciCase):
 
     def test_controlled_layout_execution_stays_unverified_and_reacquires_input_db(self):
         from getzilla import security_oci_layout as layout, security_oci_transport as transport
-        from tests.test_security_oci_layout import owned_image, selected_profile, owned_binding
+        from tests.test_security_oci_layout import owned_image, selected_profile, owned_binding, owned_network
         from tests.test_security_oci_transport import port_for
         from types import SimpleNamespace
         objects, reference = owned_image()
@@ -64,13 +98,13 @@ class NewOciExecutionPortTests(OwnedOciCase):
         root = self.root / 'oci'
         root.mkdir(mode=0o700)
         profile = selected_profile(reference, max_storage_bytes=128 * 1024 * 1024, max_layers=20)
-        acquired = transport.acquire_images(inv['images'], profile, root,
+        acquired = transport.acquire_images(inv['images'], profile, root, network_selection=owned_network(),
             binding=binding, open_url=port_for(objects, reference, []), now=NOW)
         validated = layout.validate_layout(objects, reference, 'linux/amd64')
         tool = self.root / 'pinned-tool-placeholder'
         tool.write_bytes(b'NEW test port only; never executed')
         source = {'source_id': 'trivy-db', 'content_sha256': 'e' * 64}
-        for variant in ['valid', 'input-inode', 'database', 'wrong-image']:
+        for variant in ['valid', 'database', 'wrong-image', 'input-inode']:
             calls = []
             db = dict(source)
             def process(command, cwd, scratch, **kwargs):
@@ -96,7 +130,7 @@ class NewOciExecutionPortTests(OwnedOciCase):
                                        stdout='', stderr='')
             with (self.subTest(variant=variant), mock.patch.object(security_tools, 'pinned_tool', return_value=tool),
                   mock.patch.object(security_tools, 'trivy_database_source', side_effect=lambda *args, **kwargs: dict(db))):
-                result = security_tools.scan_layouts(inv, self.root, binding=binding, now=NOW, process=process)
+                result = security_tools.scan_layouts(inv, self.root, binding=binding, now=NOW, process=process, profile=profile, network_selection=owned_network())
             self.assertEqual(result['outcome'], 'blocked')
             self.assertEqual(result['qualification'], 'UNVERIFIED')
             self.assertEqual(result['execution'], 'UNEXECUTED')
