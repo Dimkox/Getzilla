@@ -2869,19 +2869,25 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
 
 
 def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
-    """Both local admission and stored receipt consumers require fresh, explicit bindings."""
+    """Failed admission cannot supply fresh bindings; other paths still rederive them."""
     from .verification_plan import current_required_plan
     from .expanded_security import validate_data_source
+    hard_failure = any(isinstance(item, CheckResult) and item.status in {'fail', 'cancelled'} for item in results)
     current = None
-    try:
-        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
-        if observed == required_plan:
-            current = observed['binding']
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-        pass
-    return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+    if not hard_failure:
+        try:
+            observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+            if observed == required_plan:
+                current = observed['binding']
+        except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+            pass
+    decision = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
         required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
         data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
+    if hard_failure:
+        decision.details.append({'severity': 'info', 'code': 'required-plan-revalidation-unexecuted',
+            'path': 'required_plan', 'message': 'Final plan revalidation not executed after a prior failed or cancelled check; current binding unavailable.'})
+    return decision
 
 
 def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
