@@ -210,6 +210,102 @@ class GitArchitectureRepo:
         return self.git("rev-parse", "HEAD")
 
 
+class CommittedMetadataWorktreeTests(unittest.TestCase):
+    def setUp(self):
+        ArchitectureAdmissionPrerequisiteTests.setUp(self)
+
+    def pair(self, mutation=None):
+        return ArchitectureAdmissionPrerequisiteTests._pair(self, mutation, with_repo=True)
+
+    def observe(self, repo, committed):
+        diff = DIFF.diff_architecture(repo.root, base_sha=committed.base_sha, worktree=True)
+        result = FIT._change_separation(ARCHITECTURE.load_architecture(repo.root), diff, root=repo.root)
+        return result, diff
+
+    def test_clean_worktree_proves_the_exact_commit_without_relabelling(self):
+        repo, committed = self.pair()
+        result, diff = self.observe(repo, committed)
+        self.assertEqual(result.status, 'pass', result.findings)
+        self.assertEqual(diff.head_kind, 'worktree')
+        self.assertIsNone(diff.head_sha)
+        self.assertEqual(diff.changed_paths, committed.changed_paths)
+        self.assertIn('architecture/system.yaml', FIT._trust_ci_metadata_paths(diff, repo.root))
+
+    def test_dirty_staged_untracked_and_cancelled_index_changes_refuse(self):
+        for kind in ('dirty', 'staged', 'untracked', 'cancelled_index'):
+            with self.subTest(kind=kind):
+                repo, committed = self.pair()
+                path = 'trust-ci/src/adaptive_trust_ci/component.py'
+                if kind == 'untracked':
+                    repo.write_text('untracked.py', 'VALUE = 9\n')
+                else:
+                    repo.write_text(path, 'VALUE = 9\n')
+                    if kind != 'dirty':
+                        repo.git('add', path)
+                    if kind == 'cancelled_index':
+                        repo.write_text(path, 'VALUE = 1\n')
+                result, _ = self.observe(repo, committed)
+                self.assertEqual(result.status, 'fail', result.findings)
+
+    def test_stale_captured_source_or_model_cannot_use_a_new_clean_head(self):
+        for kind in ('source', 'model'):
+            with self.subTest(kind=kind):
+                repo, committed = self.pair()
+                diff = DIFF.diff_architecture(repo.root, base_sha=committed.base_sha, worktree=True)
+                if kind == 'source':
+                    repo.write_text('trust-ci/src/adaptive_trust_ci/component.py', 'VALUE = 7\n')
+                else:
+                    system = json.loads((repo.root / 'architecture/system.yaml').read_text())
+                    system['nodes'][-1]['owner'] = 'changed observation'
+                    repo.write_json('architecture/system.yaml', system)
+                repo.commit('new clean head after captured observation')
+                self.assertEqual(FIT._trust_ci_metadata_paths(diff, repo.root), ())
+
+    def test_head_change_during_proof_refuses(self):
+        repo, committed = self.pair()
+        diff = DIFF.diff_architecture(repo.root, base_sha=committed.base_sha, worktree=True)
+        original = DIFF._head_commit
+        calls = []
+        def swapped(root, **kwargs):
+            calls.append(None)
+            if len(calls) == 2:
+                repo.git('reset', '--hard', committed.base_sha)
+            return original(root, **kwargs)
+        with patch.object(DIFF, '_head_commit', side_effect=swapped):
+            self.assertEqual(FIT._trust_ci_metadata_paths(diff, repo.root), ())
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_missing_sources_and_both_committed_view_sides_stay_required(self):
+        for mutation in ('missing_source', 'forged_view', 'forged_base_view', 'missing_view'):
+            with self.subTest(mutation=mutation):
+                repo, committed = self.pair(mutation)
+                if mutation == 'missing_view':
+                    (repo.root / 'architecture/generated/container.mmd').unlink()
+                    repo.commit('missing committed view')
+                result, _ = self.observe(repo, committed)
+                self.assertEqual(result.status, 'fail', result.findings)
+
+    def test_missing_or_forged_state_and_complete_artifacts_refuse(self):
+        repo, committed = self.pair()
+        diff = DIFF.diff_architecture(repo.root, base_sha=committed.base_sha, worktree=True)
+        artifact = replace(diff.artifacts[0], head_digest='f' * 64)
+        for changed in (replace(diff, _base_state=None), replace(diff, _head_state=None),
+                        replace(diff, artifacts=(artifact, *diff.artifacts[1:])),
+                        replace(diff, changes=()), replace(diff, head_adoption_digest='f' * 64),
+                        replace(diff, head_architecture_digest='f' * 64),
+                        replace(diff, repository_inventory_digest='f' * 64),
+                        replace(diff, _head_state=replace(diff._head_state, adoption_digest='f' * 64))):
+            with self.subTest(digest=changed.digest):
+                self.assertEqual(FIT._trust_ci_metadata_paths(changed, repo.root), ())
+        self.assertEqual(FIT._trust_ci_metadata_paths(diff), ())
+
+    def test_real_core_and_trustci_implementation_is_still_mixed(self):
+        repo, committed = self.pair('core_code')
+        result, _ = self.observe(repo, committed)
+        self.assertEqual(result.status, 'fail', result.findings)
+        self.assertTrue(any('mixed' in item for item in result.findings))
+
+
 class ArchitectureAdmissionPrerequisiteTests(unittest.TestCase):
     PARSER = '''import http.client
 import io
@@ -237,7 +333,7 @@ def parse():
         temporary_root.start()
         self.addCleanup(temporary_root.stop)
 
-    def _pair(self, mutation=None):
+    def _pair(self, mutation=None, *, with_repo=False):
         diagrams = importlib.import_module('getzilla.architecture_diagrams')
         system, rules = _system(), _rules()
         system['trust_domains'].extend([
@@ -307,6 +403,8 @@ def parse():
             repo.write_text('.getzilla/getzilla/changed.py', 'VALUE = 3\n')
         head = repo.commit('source-bound component addition')
         diff = FIT.diff_architecture(repo.root, base_sha=base, head_sha=head)
+        if with_repo:
+            return repo, diff
         return FIT._change_separation(ARCHITECTURE.load_architecture(repo.root), diff, root=repo.root), diff
 
     def test_exact_new_component_and_both_generated_snapshots_qualify(self):

@@ -3,9 +3,33 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from .util import dump_json, git_head, git_output, now_utc
+from .util import dump_json, git_head, git_output, now_utc, tree_fingerprint
+from . import verification_journal as diagnostics
 
 _LOGS = ('core-tests.log', 'trust-ci-tests.log', 'smoke.log', 'install.log')
+
+
+def _journal_binding(root, report, head):
+    """Match a selected report/run to current source; this is not authority."""
+    if report is None:
+        return None  # Bare CLI history remains explicitly unbound.
+    invalid = {'run_id': None, 'source': None, 'session_id': None}
+    try:
+        reference = report['diagnostics']
+        identity = reference['run_id']
+        if (type(identity) is not str or not diagnostics._RUN.fullmatch(identity)
+                or reference.get('index') != f'.getzilla/runtime/verification-history/{identity}/index.json'
+                or report.get('git_head') != head or type(report.get('tree_fingerprint')) is not str
+                or not diagnostics._DIGEST.fullmatch(report['tree_fingerprint'])
+                or report['tree_fingerprint'] != tree_fingerprint(root)):
+            return invalid
+        from .state import get_active_route
+        session = (get_active_route(root) or {}).get('session_id')
+        if type(session) is not str or not diagnostics._SESSION.fullmatch(session):
+            session = None
+        return {'run_id': identity, 'source': report['tree_fingerprint'], 'session_id': session}
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return invalid
 
 
 def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: str, run_id: str) -> None:
@@ -16,6 +40,7 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
     if not head:
         raise ValueError('CI evidence requires an exact Git HEAD')
     inventory = []
+    journal_report = None
     for name in _LOGS:
         path = logs / name
         if path.is_file() and not path.is_symlink():
@@ -30,6 +55,8 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
             continue
         content = source.read_bytes()
         record = json.loads(content)
+        if name == 'verification.json':
+            journal_report = record if record.get('ci_run_id') == run_id else {}
         if record.get('ci_run_id') != run_id or record.get('git_head') != head:
             continue
         (output / name).write_bytes(content)
@@ -37,9 +64,24 @@ def export_evidence(root: Path, output: Path, *, logs: Path, job: str, status: s
     dump_json(output / 'state.json', {'schema_version': 1, 'job': job, 'job_status': status,
         'local_reviews': 'not_available_in_ci', 'local_analysis': 'not_available_in_ci',
         'authority': 'CI run observations only; local approval grants are never exported'})
+    journal_state = {'status': 'unavailable'}
+    if (root / '.getzilla/runtime/verification-history').exists():
+        candidates = diagnostics.export_entries(root, binding=_journal_binding(root, journal_report, head))
+        journal_state = json.loads(candidates[0][1])
+        remaining = 10_485_760 - sum(p.stat().st_size for p in output.iterdir() if p.is_file())
+        for name, content in candidates:
+            if len(inventory) >= 126 or len(content) > 1_048_576 or len(content) > remaining:
+                journal_state['subset'] = True
+                continue
+            target = output / name
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            target.write_bytes(content)
+            remaining -= len(content)
+            inventory.append({'path': name, 'sha256': hashlib.sha256(content).hexdigest(),
+                              'journal_association': journal_state['association']})
     dump_json(output / 'provenance.json', {'schema_version': 1, 'source': 'github-actions',
         'head': head, 'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'job': job,
-        'run_id': run_id, 'observed_at': now_utc(), 'files': inventory})
+        'run_id': run_id, 'observed_at': now_utc(), 'files': inventory, 'diagnostics': journal_state})
 
 
 def export_local_evidence(root: Path, output: Path) -> None:
@@ -83,10 +125,16 @@ def export_local_evidence(root: Path, output: Path) -> None:
     candidates.extend([(Path('.getzilla/runtime/startup-capacity.json'), 'startup-capacity.json'),
                        (Path('.getzilla/runtime/evidence/verification.json'), 'verification.json')])
     entries, total = [], 0
+    journal_report = None
     for relative, destination in candidates:
         if not (root / relative).exists() and not (root / relative).is_symlink():
             continue
         content = _read_regular_bytes(root, relative.as_posix(), label='portable evidence')
+        if destination == 'verification.json':
+            try:
+                journal_report = json.loads(content)
+            except ValueError:
+                journal_report = {}
         total += len(content)
         if len(content) > 1_048_576 or total > 10_485_760 or len(entries) >= 128:
             raise ValueError('portable evidence exceeds size limits')
@@ -94,11 +142,21 @@ def export_local_evidence(root: Path, output: Path) -> None:
     head = git_head(root)
     if not head:
         raise ValueError('portable evidence requires an exact Git HEAD')
+    journal_state = {'status': 'unavailable'}
+    if (root / '.getzilla/runtime/verification-history').exists():
+        selected = diagnostics.export_entries(root, binding=_journal_binding(root, journal_report, head))
+        journal_state = json.loads(selected[0][1])
+        for name, content in selected:
+            if len(content) > 1_048_576 or total + len(content) > 10_485_760 or len(entries) >= 128:
+                journal_state['subset'] = True
+                continue
+            entries.append((name, content))
+            total += len(content)
     manifest = {'schema_version': 1, 'source': 'local-workflow-observations', 'head': head,
         'tree': git_output(root, 'rev-parse', 'HEAD^{tree}'), 'route_id': route_id,
         'change_id': active.get('change_id'), 'observed_at': now_utc(),
         'authority': 'Archive only; historical observations retain their original bindings, never merge authority',
-        'files': [{'path': name, 'sha256': hashlib.sha256(content).hexdigest()} for name, content in entries]}
+        'files': [{'path': name, 'sha256': hashlib.sha256(content).hexdigest()} for name, content in entries], 'diagnostics': journal_state}
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, indent=2))

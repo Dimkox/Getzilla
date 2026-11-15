@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+from . import verification_journal as diagnostics
+
+from .verification_failure_excerpt import (
+    _pytest_summary_identity as _pytest_summary_identity,
+    _pytest_terminal_counts as _pytest_terminal_counts,
+    _core_output_excerpt as _core_output_excerpt,
+)
+from .verification_progress_evidence import (
+    _pytest_source_metadata as _pytest_source_metadata,
+    _trusted_pytest_metadata as _trusted_pytest_metadata,
+    _trusted_progress_metadata as _trusted_progress_metadata,
+    _progress_failure_rows as _progress_failure_rows,
+    _failure_progress_details as _failure_progress_details,
+    _core_progress_details as _core_progress_details,
+)
+
 import ast
 import hashlib
 import json
@@ -8,7 +24,7 @@ import re
 import signal
 import sys
 import tempfile
-import time
+import time as time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -39,7 +55,7 @@ from .stacks import load_registry, stack_checks
 from .state import get_active_change, get_active_route, update_route
 from .python_test_runner import (
     DEFAULT_CORE_CPU_RESERVE, DEFAULT_CORE_WORKER_CAP, TIMEOUT as CORE_TEST_TIMEOUT,
-    OUTPUT_LIMIT, ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
+    OUTPUT_LIMIT as OUTPUT_LIMIT, ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
     cleanup_details, execute, run_core_tests, run_named_tests,
 )
 from .util import (
@@ -82,6 +98,7 @@ class CheckResult:
         return asdict(self)
 
 
+@diagnostics.observed('agent-eval-checks')
 def _agent_eval_checks(root: Path, mode: str) -> list[CheckResult]:
     """Use the optional replay suites inside the existing verification gate."""
     return [CheckResult(**item) for item in required_suites(root, mode)]
@@ -105,6 +122,7 @@ class _RunState:
     context_error: str | None = None
 
 
+@diagnostics.observed('task-context-check')
 def _task_context_check(root: Path, state: _RunState) -> CheckResult:
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     from .state import task_transition, route_authority_present
@@ -153,7 +171,10 @@ class _CheckDispatch:
                 'execution': 'not_executed', 'blocked_by': self.blocked_by,
                 'message': f'not executed after {self.blocked_by} refused verification',
             }]))
-        check = callback()
+        with diagnostics.span(name) as detail:
+            check = callback()
+            if detail is not None and check is not None:
+                detail['outcome'] = check.status if check.status in {'pass', 'fail', 'skip', 'cancelled', 'error'} else 'unknown'
         return self.add(check) if check is not None else None
 
     def batch(self, names, callback):
@@ -161,8 +182,9 @@ class _CheckDispatch:
             for name in names:
                 self.run(name, None)
         else:
-            for check in callback():
-                self.add(check)
+            with diagnostics.span('check-batch'):
+                for check in callback():
+                    self.add(check)
 
 
 @contextmanager
@@ -248,6 +270,7 @@ def _risk_level(route: dict[str, object] | None) -> str:
     return {"low": "green", "medium": "yellow", "high": "red"}.get(risk, fallback)
 
 
+@diagnostics.observed('architecture-preflight-check')
 def _architecture_preflight_check(root: Path) -> CheckResult:
     if not architecture_inputs_present(root):
         return CheckResult("architecture-inputs", "skip", "architecture authority inputs are absent; not executed")
@@ -260,6 +283,7 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
     return CheckResult("architecture-inputs", "pass", "bounded model and referenced-input preflight executed")
 
 
+@diagnostics.observed('architecture-check')
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
@@ -386,6 +410,7 @@ def _architecture_check(
         )
 
 
+@diagnostics.observed('governance-check')
 def _governance_check(
     root: Path,
     route: dict[str, object] | None,
@@ -456,6 +481,7 @@ def _governance_check(
         )
 
 
+@diagnostics.observed('workflow-artifacts-check')
 def _workflow_artifacts_check(
     root: Path,
     route: dict[str, object] | None,
@@ -554,6 +580,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         exc.checks = [CheckResult(
             name, 'cancelled', f'cancelled exit={exc.code}', command=command,
             stdout=proc.stdout[-12000:] if proc else '', stderr=proc.stderr[-12000:] if proc else '',
+            details=[{'stop': diagnostics.stop_details(proc if proc is not None else exc)}],
         )]
         raise
     return CheckResult(
@@ -563,6 +590,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         command=command,
         stdout=proc.stdout[-12000:],
         stderr=(proc.stderr + ('\ncleanup failed: ' + proc.cleanup_error if proc.cleanup_error else ''))[-12000:],
+        details=[{'stop': diagnostics.stop_details(proc)}],
     )
 
 
@@ -1303,6 +1331,7 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
     return result
 
 
+@diagnostics.observed('git-diff-check')
 def _git_diff_check(
     root: Path,
     mode: str,
@@ -1407,6 +1436,7 @@ def _git_diff_check(
     )
 
 
+@diagnostics.observed('secret-scan')
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, object]] = []
     try:
@@ -1445,6 +1475,7 @@ def _secret_scan(root: Path, files: list[str]) -> CheckResult:
                        details=findings)
 
 
+@diagnostics.observed('php-lint')
 def _php_lint(root: Path, files: list[str]) -> CheckResult:
     php_files = [rel for rel in files if rel.lower().endswith('.php') and (root / rel).is_file()]
     if not php_files:
@@ -1461,6 +1492,7 @@ def _php_lint(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('php-lint', 'fail' if failures else 'pass', f'{len(php_files)} files linted', stdout='\n'.join(outputs[-100:]), details=failures)
 
 
+@diagnostics.observed('bitrix')
 def _bitrix(root: Path, files: list[str]) -> CheckResult:
     findings = check_bitrix(root, files)
     errors = [item for item in findings if item.severity == 'error']
@@ -1472,6 +1504,7 @@ def _bitrix(root: Path, files: list[str]) -> CheckResult:
     )
 
 
+@diagnostics.observed('contracts')
 def _contracts(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     checked = 0
@@ -1498,6 +1531,7 @@ def _contracts(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('contract-structure', 'fail' if findings else 'pass', f'{checked} contracts checked', details=findings)
 
 
+@diagnostics.observed('sql-safety')
 def _sql_safety(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     for rel in files:
@@ -1525,7 +1559,9 @@ def _docs_micro_exempt(route: dict[str, object] | None, files: list[str]) -> boo
     )
 
 
-def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None, route: dict[str, object] | None, mode: str) -> list[dict[str, object]]:
+def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None,
+                                route: dict[str, object] | None, mode: str, *,
+                                ranges: GitRangeSelection | None = None) -> list[dict[str, object]]:
     """Bind archival retirement/strict relocation to actual comparison-base blobs."""
     manifest_rel = 'engineering/archived-change-specs.json'
     if not (root / manifest_rel).exists():
@@ -1533,7 +1569,8 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     manifest = _parse_canonical_json(read_package_file(root, manifest_rel), Path(manifest_rel))
     if set(manifest) != {'schema_version', 'source_base', 'entries'} or manifest['schema_version'] != 1 or not isinstance(manifest['entries'], list):
         raise ValueError('invalid historical spec migration manifest')
-    ranges = _git_range_selection(root, route, mode)
+    if ranges is None:
+        ranges = _git_range_selection(root, route, mode)
     if ranges.findings or not ranges.bases:
         raise ValueError('historical spec migration requires trusted comparison ranges')
     bases = {item.comparison_base_sha for item in ranges.bases}
@@ -1607,7 +1644,9 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     return records
 
 
-def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str) -> tuple[CheckResult, dict[str, object]]:
+@diagnostics.observed('change-specs')
+def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str, *,
+                  ranges: GitRangeSelection | None = None) -> tuple[CheckResult, dict[str, object]]:
     gate = mode in {'pr', 'release'}
     exempt = bool(route and (route.get('light_diff') or {}).get('admitted')) or _docs_micro_exempt(route, files)
     selected = {
@@ -1623,7 +1662,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     records: list[dict[str, object]] = []
     migrations: list[dict[str, object]] = []
     try:
-        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode)
+        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode, ranges=ranges)
     except (OSError, ValueError) as exc:
         findings.append({'severity': 'error', 'code': 'historical-spec-migration-invalid', 'path': 'engineering/archived-change-specs.json', 'message': str(exc)})
     if gate and route and route.get('delivery_expected') and not active_rel and not exempt:
@@ -1668,6 +1707,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     return CheckResult('change-spec', 'fail' if findings else ('skip' if exempt and not selected else 'pass'), f'{len(records)} specs checked; exempt={exempt}', details=findings), metadata
 
 
+@diagnostics.observed('composer')
 def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -1730,6 +1770,7 @@ def _existing_quality_paths(root: Path) -> list[str]:
     return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
 
 
+@diagnostics.observed('ruff')
 def _ruff(root: Path) -> CheckResult:
     paths = _existing_quality_paths(root)
     if not paths:
@@ -1743,6 +1784,7 @@ def _ruff(root: Path) -> CheckResult:
     return result
 
 
+@diagnostics.observed('bandit')
 def _bandit(root: Path) -> CheckResult:
     paths = [rel for rel in _existing_quality_paths(root) if rel != 'tests' and not rel.startswith('tests/')]
     if not paths:
@@ -1774,6 +1816,7 @@ def _bandit(root: Path) -> CheckResult:
     return replace(result, summary=f'{result.summary}; {len(issues)} issues in {lines} lines', details=details)
 
 
+@diagnostics.observed('semgrep')
 def _semgrep(root: Path) -> CheckResult | None:
     config = _semgrep_config(root)
     if config is None:
@@ -1809,6 +1852,7 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
+@diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
     try:
         report = scan_known_vulnerabilities(root)
@@ -1852,6 +1896,7 @@ def _unpinned_opengrep(executable: Path) -> str | None:
     return None
 
 
+@diagnostics.observed('opengrep')
 def _opengrep(root: Path) -> CheckResult:
     """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
     rules = root / OPENGREP_RULES
@@ -1912,6 +1957,7 @@ def _trivy_config_present(root: Path) -> bool:
     )
 
 
+@diagnostics.observed('node')
 def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -2011,6 +2057,7 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
     return ensure_toolchain('node', stack.toolchain, version)
 
 
+@diagnostics.observed('factory-unit')
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
     if not (root / 'factory/pyproject.toml').is_file():
@@ -2048,13 +2095,14 @@ def _factory_unit(root: Path) -> list[CheckResult]:
             validate_report(evidence, binding)
             if evidence['status'] != result.status or not source_matches(root, binding):
                 raise ValueError('Factory result does not match subprocess outcome or current source')
-            result.details.append(evidence)
+            result.details.insert(0, evidence)
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
             result.status = 'fail'
             result.summary += '; Factory result missing or invalid: ' + str(exc)
         return [result]
 
 
+@diagnostics.observed('focused-python')
 def _focused_python(
     root: Path,
     results: list[CheckResult],
@@ -2104,6 +2152,7 @@ def _focused_python(
     return results
 
 
+@diagnostics.observed('python')
 def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = None, *,
             keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
     results: list[CheckResult] = []
@@ -2117,13 +2166,13 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
             exc.checks.append(CheckResult('python-unittest', 'pass' if process.returncode == 0 else 'fail',
                                           f'exit={process.returncode}', command=process.command,
                                           stdout=process.stdout[-12000:], stderr=process.stderr[-12000:],
-                                          details=[{'cleanup': cleanup_details(process, origin='tests')}]))
+                                          details=[{'stop': diagnostics.stop_details(process), 'cleanup': cleanup_details(process, origin='tests')}]))
             process = exc.result
             exc.checks.append(CheckResult('coverage', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
                                           stderr=process.stderr[-12000:] if process else '',
-                                          details=[{'cleanup': cleanup_details(process if process is not None else exc,
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(process if process is not None else exc,
                                               origin=('coverage_export' if process is not None and
                                                       process is getattr(completed, 'coverage_export', None)
                                                       else 'coverage_report' if process is not None else 'process'))}]))
@@ -2133,7 +2182,7 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
                                           stderr=process.stderr[-12000:] if process else '',
-                                          details=[{'cleanup': cleanup_details(
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(
                                               process if process is not None else exc, origin='tests')}]))
         raise
 
@@ -2195,404 +2244,22 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
     return results
 
 
-def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
-    module = ast.parse(source)
-    nodes: set[str] = set()
-    for item in module.body:
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
-            nodes.add(item.name)
-        elif isinstance(item, ast.ClassDef):
-            nodes.update(item.name + '::' + child.name for child in item.body
-                         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                         and child.name.startswith('test'))
-    return source.count('\n') + 1, nodes
 
 
-def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
-    """Bind at most 50 reported paths and test identifiers to committed source."""
-    candidates = []
-    for match in re.finditer(r'tests/[A-Za-z0-9_./-]+\.py', output.replace('\\', '/')):
-        path = match.group(0)
-        if '..' not in PurePosixPath(path).parts and path not in candidates:
-            candidates.append(path)
-            if len(candidates) >= 50:
-                break
-    if not candidates:
-        return {}
-    tracked = run(['git', 'ls-files', '-z', '--', *candidates], cwd=root, timeout=10)
-    if tracked.returncode:
-        return {}
-    names = set(tracked.stdout.split('\0'))
-    result: dict[str, tuple[int, set[str]]] = {}
-    for path in candidates:
-        if path not in names:
-            continue
-        size = run(['git', 'cat-file', '-s', 'HEAD:' + path], cwd=root, timeout=10)
-        if size.returncode or not size.stdout.strip().isdigit() or int(size.stdout.strip()) > 1_000_000:
-            continue
-        source = run(['git', 'show', 'HEAD:' + path], cwd=root, timeout=10)
-        if source.returncode:
-            continue
-        try:
-            result[path] = _pytest_source_metadata(source.stdout)
-        except (SyntaxError, ValueError, RecursionError):
-            continue
-    return result
 
 
-def _trusted_progress_metadata(root: Path, paths: list[str], *, deadline: float | None = None) -> dict[str, tuple[int, set[str]]]:
-    """Progress-only limits; leave terminal-output validation's contract intact."""
-    if deadline is None:
-        deadline = time.monotonic() + 2.0
-
-    def bounded_git(arguments):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError
-        result = run(['git', *arguments], cwd=root, timeout=remaining)
-        if result.returncode or time.monotonic() >= deadline:
-            raise TimeoutError
-        return result.stdout
-
-    result: dict[str, tuple[int, set[str]]] = {}
-    try:
-        head = bounded_git(['rev-parse', 'HEAD']).strip()
-        if not re.fullmatch('[0-9a-f]{40,64}', head):
-            return {}
-        names = set(bounded_git(['ls-files', '-z', '--', *paths[:50]]).split('\0'))
-        total = 0
-        for path in paths[:50]:
-            if path not in names:
-                continue
-            size = bounded_git(['cat-file', '-s', head + ':' + path]).strip()
-            if not size.isdecimal() or int(size) > 1_000_000:
-                continue
-            total += int(size)
-            if total > 8 * 1024 * 1024:
-                break
-            source = bounded_git(['show', head + ':' + path])
-            if len(source.encode('utf-8')) > 1_000_000:
-                continue
-            try:
-                result[path] = _pytest_source_metadata(source)
-            except (SyntaxError, ValueError, RecursionError):
-                continue
-        if bounded_git(['rev-parse', 'HEAD']).strip() != head:
-            return {}
-    except (OSError, TimeoutError, UnicodeError, ValueError):
-        return {}  # Deadline/currentness uncertainty cannot identify a source.
-    return result
 
 
-def _progress_failure_rows(progress, workers):
-    raw = progress.get('failure_events')
-    if (type(raw) is not dict or set(raw) != {'version', 'status', 'workers'}
-            or type(raw['version']) is not int or raw['version'] != 1
-            or raw['status'] not in ('not_supported', 'unavailable', 'partial', 'observed')
-            or type(raw['workers']) is not list or len(raw['workers']) > 64):
-        return []
-    rows, seen = [], set()
-    for row in raw['workers']:
-        if (type(row) is not dict
-                or set(row) != {'worker', 'sequence', 'overflow', 'dropped', 'partial_tail', 'events'}
-                or type(row['worker']) is not int or not 0 <= row['worker'] < workers
-                or type(row['sequence']) is not int or not 1 <= row['sequence'] <= 2**63 - 1
-                or any(type(row[name]) is not bool for name in ('overflow', 'dropped', 'partial_tail'))
-                or type(row['events']) is not list or len(row['events']) > 4
-                or (row['overflow'] and len(row['events']) != 4)
-                or (not row['events'] and not row['dropped'])):
-            continue
-        if row['worker'] in seen:
-            return []
-        seen.add(row['worker'])
-        previous, valid = 0, True
-        for event in row['events']:
-            if (type(event) is not dict or set(event) != {'ordinal', 'phase', 'path', 'key'}
-                    or type(event['ordinal']) is not int or not previous < event['ordinal'] <= row['sequence']
-                    or event['phase'] not in ('setup', 'call', 'teardown')
-                    or type(event['path']) is not str or len(event['path']) > 256
-                    or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', event['path'])
-                    or any(part in {'', '.', '..'} for part in event['path'].split('/'))
-                    or type(event['key']) is not str or not re.fullmatch('[0-9a-f]{64}', event['key'])):
-                valid = False
-                break
-            previous = event['ordinal']
-        if valid:
-            rows.append(row)
-    return sorted(rows, key=lambda row: row['worker'])
 
 
-def _failure_progress_details(rows, identities, workers):
-    output = {'version': 1, 'observation': 'FAILED_REPORTS_BEFORE_STOP', 'prefix_only': True,
-              'status': 'unavailable', 'overflow': None, 'dropped': None, 'partial_tail': None,
-              'render_truncated': False, 'events': []}
-    if not rows:
-        return output
-    known = len(rows) == workers
-    proven = {name: any(row[name] for row in rows) for name in ('overflow', 'dropped', 'partial_tail')}
-    # Positive facts survive uncertainty; absence is not yet a negative proof.
-    for name, value in proven.items():
-        output[name] = True if value else None
-    unknown = False
-    for row in rows:
-        for event in row['events']:
-            identity = identities.get((event['path'], event['key']))
-            unknown |= identity is None
-            candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
-                         'phase': event['phase'], 'identity': identity}
-            proposed = {**output, 'events': output['events'] + [candidate]}
-            # Reserve the longest final flag spelling without publishing a
-            # provisional FALSE. Finalizing certainty must not exceed the cap.
-            budgeted = {**proposed, **{name: True if value else False for name, value in proven.items()}}
-            if len(json.dumps(budgeted).encode('utf-8')) > 8192:
-                output['render_truncated'] = True
-                break
-            output['events'].append(candidate)
-        if output['render_truncated']:
-            break
-    uncertain = not known or unknown or output['render_truncated'] or any(proven.values())
-    for name, value in proven.items():
-        output[name] = True if value else None if uncertain else False
-    output['status'] = 'partial' if uncertain else 'observed'
-    return output
 
 
-def _core_progress_details(root: Path, progress: dict[str, object] | None) -> dict[str, object]:
-    """Source-bound last slots and failed-report prefixes, never test totals."""
-    output: dict[str, object] = {'observation': 'LAST_REPORTED_BEFORE_STOP', 'best_effort': True,
-                                 'status': 'not_supported', 'selected_workers': 0,
-                                 'observed_workers': 0, 'omitted_workers': 0, 'slots': [],
-                                 'failure_events': _failure_progress_details([], {}, 0)}
-    output['failure_events']['status'] = 'not_supported'
-    if not isinstance(progress, dict):
-        return output
-    workers = progress.get('selected_workers')
-    if type(workers) is not int or workers < 0:
-        return output
-    output.update(selected_workers=workers, omitted_workers=workers)
-    if workers > 64 or progress.get('status') == 'not_supported':
-        return output
-    output['status'] = 'unavailable'
-    output['failure_events']['status'] = 'unavailable'
-    failures = _progress_failure_rows(progress, workers)
-    raw = progress.get('slots')
-    if not isinstance(raw, list) or len(raw) > 64:
-        if not failures:
-            return output
-        raw = []
-    slots, seen = [], set()
-    # One shared bounded source lookup; failures precede last-reported slots.
-    paths = list(dict.fromkeys(event['path'] for row in failures for event in row['events']))
-    for slot in raw:
-        if not isinstance(slot, dict):
-            continue
-        worker, state, path, key = (slot.get(name) for name in ('worker', 'state', 'path', 'key'))
-        if (type(worker) is not int or not 0 <= worker < workers or worker in seen
-                or not isinstance(state, str) or state not in {'active', 'idle'}):
-            continue
-        seen.add(worker)
-        if (not isinstance(path, str) or len(path) > 256
-                or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', path)
-                or any(part in {'', '.', '..'} for part in path.split('/'))
-                or not isinstance(key, str) or not re.fullmatch('[0-9a-f]{64}', key)):
-            path, key = None, None
-        if path is not None and path not in paths:
-            paths.append(path)
-        slots.append((worker, state, path, key))
-    deadline = time.monotonic() + 2.0
-    trusted = _trusted_progress_metadata(root, paths, deadline=deadline) if paths else {}
-    requested = {(path, key) for _, _, path, key in slots if path is not None}
-    requested.update((event['path'], event['key']) for row in failures for event in row['events'])
-    identities = {}
-    expired = False
-    for path, (_, nodes) in trusted.items():
-        for node in nodes:
-            if time.monotonic() >= deadline:
-                expired = True
-                break
-            canonical = path + '::' + node
-            if (len(canonical) <= 512 and re.fullmatch(
-                    r'[A-Za-z_][A-Za-z0-9_]{0,127}(?:::[A-Za-z_][A-Za-z0-9_]{0,127})?', node)):
-                pair = (path, hashlib.sha256(canonical.encode('utf-8')).hexdigest())
-                if pair in requested:
-                    identities[pair] = canonical
-        if expired:
-            break
-    if expired:
-        identities = {}
-    output['failure_events'] = _failure_progress_details(failures, identities, workers)
-    rendered = []
-    unknown = False
-    for worker, state, path, key in sorted(slots):
-        identity = identities.get((path, key))
-        unknown |= identity is None
-        candidate = {'worker': worker, 'state': state, 'identity': identity}
-        if len(json.dumps({**output, 'slots': rendered + [candidate]}).encode('utf-8')) > 16000:
-            break
-        rendered.append(candidate)
-    output.update(status=('observed' if len(rendered) == workers and not unknown else
-                           'partial' if rendered else 'unavailable'),
-                  observed_workers=len(slots), omitted_workers=workers - len(rendered), slots=rendered)
-    if 'phase_witness' in progress:
-        from .pytest_progress import phase_witness_details
-        candidate = {**output, 'phase_witness': phase_witness_details(progress['phase_witness'], workers)}
-        if len(json.dumps(candidate).encode('utf-8')) <= 16000:
-            output = candidate
-    return output
 
 
-def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
-    """Descriptions are arbitrary data; return only an unambiguous source-bound node."""
-    if len(line) > 1024:
-        return None
-    node_pattern = r'(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)(?=\[|\s|$)'
-    if line.startswith('SUBFAILED'):
-        if not re.match(r'^SUBFAILED[\[(]', line):
-            return None
-        candidates = list(re.finditer(r'(?:^|\s)' + node_pattern, line))
-        if len(candidates) != 1:
-            return None
-        # Consume only balanced description groups. A sole node-looking value
-        # inside a malformed description must not become a reported identity.
-        rest = line[len('SUBFAILED'):]
-        while rest.startswith(('[', '(')):
-            stack: list[str] = []
-            for index, character in enumerate(rest):
-                if character in '[(':
-                    stack.append(character)
-                    if len(stack) > 8:
-                        return None
-                elif character in '])':
-                    if not stack or stack.pop() != {']': '[', ')': '('}[character]:
-                        return None
-                    if not stack:
-                        rest = rest[index + 1:].lstrip(' ')
-                        break
-            else:
-                return None
-        match = re.fullmatch(node_pattern + r'(?:\[[^\n]*\])?(?: - .*)?', rest)
-        if not match:
-            return None
-        kind, node = 'SUBFAILED', match.group(1)
-    else:
-        match = re.match(r'^(FAILED|ERROR)\s+' + node_pattern, line)
-        if not match:
-            return None
-        kind, node = match.groups()
-    path, *names = node.split('::')
-    if (len(path) > 512 or any(part in {'', '.', '..'} for part in path.split('/'))
-            or path not in trusted or any(len(name) > 128 for name in names)):
-        return None
-    name = '::'.join(names)
-    return kind, path, name if name in trusted[path][1] else ''
 
 
-def _pytest_terminal_counts(line: str) -> dict[str, int | None] | None:
-    """Backend-reported counts only, never unique methods/subcases or qualification."""
-    if len(line) > 1024:
-        return None
-    line = line.strip()
-    if line.startswith('=') or line.endswith('='):
-        if not re.fullmatch(r'={3,} .+ ={3,}', line):
-            return None
-        line = line.strip('=').strip()
-    label = r'(?:failed|passed|errors?|skipped|warnings?|xfailed|xpassed|deselected|subtests (?:passed|failed|skipped))'
-    item = r'[0-9]{1,9} ' + label
-    match = re.fullmatch(r'(' + item + r'(?:, ' + item + r')*) in [0-9]{1,8}(?:\.[0-9]{1,6})?s'
-                         r'(?: \([0-9]{1,3}:[0-9]{2}(?::[0-9]{2})?\))?', line)
-    if not match:
-        return None
-    result: dict[str, int | None] = dict.fromkeys(('failed', 'passed', 'errors', 'skipped'))
-    seen = set()
-    for statistic in match.group(1).split(', '):
-        number, name = statistic.split(' ', 1)
-        name = 'errors' if name == 'error' else name
-        if name in seen:
-            return None
-        seen.add(name)
-        if name in result:
-            result[name] = int(number)
-    return result
 
 
-def _core_output_excerpt(output: str, *, failed: bool,
-                         trusted: dict[str, tuple[int, set[str]]] | None = None,
-                         pytest_output: bool = False) -> str:
-    """Keep bounded reported pytest metadata, not values or execution authority."""
-    oversized = len(output) > OUTPUT_LIMIT
-    normalized = re.sub(r'\x1b\[[0-9;]*m', '', output[:OUTPUT_LIMIT]) if failed else output
-    if not failed or (not pytest_output and not re.search(
-            r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized)):
-        return output[-12000:]
-    trusted = trusted or {}
-    locations: list[str] = []
-    summaries: list[str] = []
-    identities: list[str] = []
-    count_candidates: list[tuple[int, dict[str, int | None]]] = []
-    omitted = oversized
-    captured = False
-    summary_section = False
-    safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
-                   'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
-    lines = normalized.split('\n')
-    last_line = max((index for index, line in enumerate(lines) if line.strip()), default=-1)
-    for index, raw_line in enumerate(lines):
-        line = raw_line.rstrip('\r').replace('\\', '/')
-        if len(line) > 1024 or any(ord(character) < 32 for character in line):
-            omitted = True
-            continue
-        if re.match(r'^-{3,}\s*Captured\b', line):
-            captured = True
-            continue
-        if re.match(r'^={3,}\s*short test summary info\s*={3,}', line):
-            captured = False
-            summary_section = True
-            continue
-        if captured:
-            omitted = True
-            continue
-        counts = _pytest_terminal_counts(line)
-        if counts is not None:
-            count_candidates.append((index, counts))
-            if len(count_candidates) > 2:
-                count_candidates = count_candidates[:2]
-        location = re.match(r'^(tests/[A-Za-z0-9_./-]+\.py):([0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
-        node = _pytest_summary_identity(line, trusted)
-        if location and not summary_section:
-            path, number, error = location.groups()
-            if (path not in trusted or any(part in {'', '.', '..'} for part in path.split('/'))
-                    or len(number) > 9 or not 1 <= int(number) <= trusted[path][0]):
-                continue
-            if len(locations) < 100:
-                locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
-            else:
-                omitted = True
-        elif node:
-            kind, path, name = node
-            if len(summaries) < 20:
-                summaries.append(kind + ' ' + path + ('::' + name if name else ''))
-            else:
-                omitted = True
-            identity = path + '::' + name if name else ''
-            if identity and identity not in identities:
-                if len(identities) < 20 and len(json.dumps(identities + [identity])) <= 2400:
-                    identities.append(identity)
-                else:
-                    omitted = True
-    trace = '\n'.join(locations)
-    summary = '\n'.join(summaries)
-    if len(trace) > 5500 or len(summary) > 2500:
-        omitted = True
-    reported_counts = (count_candidates[0][1] if not oversized and len(count_candidates) == 1
-                       and count_candidates[0][0] == last_line else
-                       dict.fromkeys(('failed', 'passed', 'errors', 'skipped')))
-    parts = ['[sanitized pytest failure locations; values and captured output omitted]',
-             trace[:5500], summary[:2500],
-             'pytest_failure_ids=' + json.dumps(identities or None),
-             'pytest_reported_terminal_counts=' + json.dumps(reported_counts, sort_keys=True)]
-    if omitted:
-        parts.append('[additional failure locations omitted]')
-    return '\n'.join(part for part in parts if part)
 
 
 def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool) -> list[CheckResult]:
@@ -2621,7 +2288,7 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                 cleanup_attached = True
             message = 'Core runner unavailable; private cleanup details omitted' if cleanup_attached else str(exc)
             results.append(CheckResult('python-unittest', 'fail', message,
-                                       details=[{'cleanup': cleanup_details(exc, origin='tests')}]))
+                                       details=[{'stop': diagnostics.stop_details(exc), 'cleanup': cleanup_details(exc, origin='tests')}]))
             if mode in {'pr', 'release'}:
                 results.append(CheckResult('coverage', 'fail', 'required Core run unavailable'))
             core, workers = None, -1
@@ -2675,6 +2342,8 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  'stop': diagnostics.stop_details(process),
+                                  **({'coverage_export_stop': diagnostics.stop_details(exported)} if exported is not None else {}),
                                   'cleanup': cleanup_details(process,
                                       origin='tests' if name == 'python-unittest' else 'coverage_report',
                                       extra=exported),
@@ -2913,7 +2582,8 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'python-named-smoke', 'cancelled' if cancelled else ('pass' if process.returncode == 0 and not process.cleanup_error else 'fail'),
         f'exit={process.returncode} seconds={process.seconds:.3f} budget={budget}', command=process.command,
         stdout=process.stdout[-12000:], stderr=(process.stderr + process.cleanup_error)[-12000:],
-        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt'}],
+        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt',
+                  'stop': diagnostics.stop_details(process)}],
     ), CheckResult(
         'source-stability', 'pass' if head_before == head_after and fingerprint == final_fingerprint else 'fail',
         'repository fingerprint remained stable' if head_before == head_after and fingerprint == final_fingerprint
@@ -2923,6 +2593,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'schema_version': 1, 'created_at': now_utc(), 'mode': 'fast', 'profiles': [], 'route_id': None,
         'tree_fingerprint': final_fingerprint, 'fingerprint_before': fingerprint,
         'head_before': head_before, 'head_after': head_after, 'changed_files': [],
+        'diagnostics': getattr(process, 'diagnostics', {'status': 'unavailable'}),
         'checks': [check.to_dict() for check in checks],
         'status': 'fail' if any(check.status in {'fail', 'cancelled'} for check in checks) else 'pass',
         'terminal_state': 'cancelled' if cancelled else 'completed', 'evidence_status': 'not_recorded',
@@ -2933,6 +2604,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
     return report
 
 
+@diagnostics.observed('diff-risk-check')
 def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
                      fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
     """Rederive and persist the same source-bound plan exposed before dispatch."""
@@ -2961,6 +2633,7 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     return CheckResult('diff-risk', 'pass', summary), metadata
 
 
+@diagnostics.observed('cost-guard-check')
 def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
                       git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Paid or unbounded operations need a budget contract and a tested bound before pr/release."""
@@ -2986,6 +2659,7 @@ def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
     return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('eu-ai-act-check')
 def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Optional EU AI Act evidence gate; silent unless the compliance:eu-ai-act component is installed."""
     from . import eu_ai_act
@@ -3004,6 +2678,7 @@ def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tu
     return CheckResult('eu-ai-act', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('hook-health-check')
 def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
                        diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
     """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
@@ -3028,6 +2703,7 @@ CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machin
 NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
 
 
+@diagnostics.observed('workflow-baseline-check')
 def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[str, object]]:
     """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
     import os
@@ -3065,7 +2741,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
     }
     state = _RunState(report)
-    with _cancellation() as cancellation:
+    with diagnostics.session(root, 'verify', report), _cancellation() as cancellation:
         try:
             result = _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
             if record:
@@ -3109,6 +2785,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     checked_fingerprint = tree_fingerprint(root)
     route = get_active_route(root)
+    if diagnostics.current():
+        diagnostics.current().bind_source(checked_fingerprint, session_id=(route or {}).get('session_id'))
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     state.context_route_id = (route or {}).get('route_id')
     if route and not legacy_evidence_allowed(route):
@@ -3168,7 +2846,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
                      'allowed_agents': unique_ordered([*(route.get('allowed_agents') or []), *full['review_agents']])}
         update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence', 'allowed_agents')})
         report['light_diff'] = light
-    spec_check, spec_metadata = _change_specs(root, files, route, mode)
+    spec_check, spec_metadata = _change_specs(root, files, route, mode, ranges=git_ranges)
     report['spec'] = spec_metadata
     cancellation.check()
     if mode in _RANGE_MODES - {FOCUSED_STATIC_SEO_LANDING_MODE}:

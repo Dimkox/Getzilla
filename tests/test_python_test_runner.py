@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
 from getzilla import fsx, python_test_runner, verification
+from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
@@ -1040,9 +1041,11 @@ class CoverageLayout(unittest.TestCase):
                 })
 
     def assert_descendant_stopped(self, pid_file: Path) -> None:
+        diagnostics.ownership_mark('descendant-check')
         if os.name == 'nt':
             if windows_process_running(int(pid_file.read_text()), pid_file.stat().st_mtime_ns):
                 self.fail('owned descendant continued after process cleanup')
+            diagnostics.ownership_mark('descendant-check', status='returned')
             return
         if sys.platform != 'linux':
             self.skipTest('descendant verification reads /proc on Linux or process handles on Windows')
@@ -1050,10 +1053,13 @@ class CoverageLayout(unittest.TestCase):
         for _ in range(100):
             try:
                 if 'Z (zombie)' in status.read_text():
+                    diagnostics.ownership_mark('descendant-check', status='returned', descendant='zombie')
                     return
             except FileNotFoundError:
+                diagnostics.ownership_mark('descendant-check', status='returned', descendant='absent')
                 return
             time.sleep(0.01)
+        diagnostics.ownership_mark('descendant-check', status='failed', descendant='nonzombie')
         self.fail('owned descendant continued after process cleanup')
 
     def test_trust_cli_uses_own_imports_and_keeps_each_file_on_one_worker(self) -> None:
@@ -1447,7 +1453,8 @@ class CoverageLayout(unittest.TestCase):
                     self.assertEqual(before.get_option(option), after.get_option(option))
             harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
             self.assertEqual(['a.py', 'b.py', harness, str(Path(fsx.__file__).resolve()),
-                              str(Path(pytest_progress.__file__).resolve())], after.get_option('run:omit'))
+                              str(Path(pytest_progress.__file__).resolve()),
+                              str(Path(python_test_runner.diagnostics.__file__).resolve())], after.get_option('run:omit'))
             self.assertEqual(original, config.read_bytes())
             fresh = root / 'ambiguous-overlay'
             fresh.mkdir()
@@ -1464,14 +1471,15 @@ class CoverageLayout(unittest.TestCase):
             config = root / '.coveragerc'
             config.write_text('[report]\nfail_under = 100\n')
             before = config.read_bytes()
-            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py')]
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
             owned = root / 'owned.py'
             for path in [*external, owned]:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
             output = root / 'overlay'
             output.mkdir()
             with patch.object(fsx, '__file__', str(external[0])), \
-                 patch.object(pytest_progress, '__file__', str(external[1])):
+                 patch.object(pytest_progress, '__file__', str(external[1])), \
+                 patch.object(python_test_runner.diagnostics, '__file__', str(external[2])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
@@ -1499,13 +1507,14 @@ class CoverageLayout(unittest.TestCase):
             before = config.read_bytes()
             package = root / '.getzilla/getzilla'
             package.mkdir(parents=True)
-            owned = [package / name for name in ('fsx.py', 'pytest_progress.py')]
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
             for path in owned:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
             output = root / 'overlay'
             output.mkdir()
             with patch.object(fsx, '__file__', str(owned[0])), \
-                 patch.object(pytest_progress, '__file__', str(owned[1])):
+                 patch.object(pytest_progress, '__file__', str(owned[1])), \
+                 patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
@@ -1547,6 +1556,12 @@ class CoverageLayout(unittest.TestCase):
                 output = root / f'progress-overlay-{index}'
                 output.mkdir()
                 with patch.object(pytest_progress, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+                output = root / f'journal-overlay-{index}'
+                output.mkdir()
+                with patch.object(python_test_runner.diagnostics, '__file__', str(Path(outside) / spelling / 'module.py')):
                     with self.assertRaises(RunnerError):
                         python_test_runner._application_coverage_config(config, output, root=root)
                 self.assertFalse((output / 'application.coveragerc').exists())
@@ -1849,7 +1864,7 @@ class CoverageLayout(unittest.TestCase):
             '    time.sleep(60)\n'
         )
         for then in ('exit', 'flood', 'timeout', 'controller'):
-            with self.subTest(then=then), fixture() as root:
+            with self.subTest(then=then), diagnostics.ownership_case(then), fixture() as root:
                 pid_file = root / 'grandchild.pid'
                 command = [sys.executable, '-c', child, str(pid_file), 'sleep' if then == 'controller' else then]
                 if then == 'controller':
@@ -1859,14 +1874,20 @@ class CoverageLayout(unittest.TestCase):
                         f'execute({command!r}, Path.cwd(), os.environ.copy())\n'
                     )
                     environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
+                    diagnostics.ownership_mark('execute')
                     controller = subprocess.Popen([sys.executable, '-c', code], cwd=root, env=environment)
                     try:
                         deadline = time.monotonic() + 30
                         while not pid_file.exists() and time.monotonic() < deadline:
                             time.sleep(0.01)
                         self.assertTrue(pid_file.exists(), 'grandchild did not start')
+                        diagnostics.ownership_mark('ready', status='returned')
+                        diagnostics.ownership_mark('controller-stop')
                         controller.terminate()
+                        diagnostics.ownership_mark('controller-stop', status='returned')
+                        diagnostics.ownership_mark('controller-reaped')
                         self.assertNotEqual(controller.wait(timeout=10), 0)
+                        diagnostics.ownership_mark('controller-reaped', status='returned')
                     finally:
                         if controller.poll() is None:
                             controller.kill()
@@ -1874,6 +1895,7 @@ class CoverageLayout(unittest.TestCase):
                 else:
                     with patch.object(python_test_runner, 'OUTPUT_LIMIT', 1024):
                         result = execute(command, root, os.environ.copy(), timeout=5 if then == 'timeout' else 30)
+                    diagnostics.ownership_mark('result', status='returned', cleanup='recorded' if result.cleanup_error else 'none-reported')
                     self.assertTrue(pid_file.exists(), f'grandchild did not start: {result.stderr}')
                     self.assertEqual(result.returncode, 0 if then == 'exit' else 124, result.stderr)
                     self.assertEqual(result.cleanup_error, '')

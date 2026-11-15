@@ -103,7 +103,8 @@ def create(root: Path, revision: str, base: Path | None = None) -> Path:
         raise WorktreeError(f'snapshot owner marker creation failed: {type(exc).__name__}') from exc
     phase = 'worktree-add'
     try:
-        _git(root, 'worktree', 'add', '--quiet', '--detach', str(path), commit)
+        _git(root, 'worktree', 'add', '--quiet', '--detach', str(path), commit,
+             umask=0o022 if os.name == 'posix' else -1)
         phase = 'finalize-marker'
         data.update(creation_state='ready', phase='complete')
         dump_json(marker, data)
