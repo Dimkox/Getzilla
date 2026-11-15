@@ -9,16 +9,94 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import _policy_legacy as legacy
 from getzilla.policy import evaluate_pre_tool
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
+
+
+@contextlib.contextmanager
+def _functional_policy_clock():
+    """Literal permission tests isolate host time; real entry limits still apply."""
+    with mock.patch.object(legacy, 'time', SimpleNamespace(monotonic=lambda: 0.0)):
+        yield
+
+
+class FunctionalPolicyClockTests(unittest.TestCase):
+    def test_local_clock_isolates_semantics_but_preserves_entry_and_expiry_bounds(self):
+        import time
+        real_monotonic = time.monotonic
+        host = SimpleNamespace(monotonic=mock.Mock(side_effect=[100.0, 103.001]))
+        with mock.patch.object(legacy, 'time', host):
+            with _functional_policy_clock():
+                budget = legacy._Budget()
+                try:
+                    budget.tick()
+                    outcome = 'within-budget'
+                except legacy._BudgetExceeded:
+                    outcome = 'expired'
+                self.assertEqual(outcome, 'within-budget', 'functional semantics must not depend on host elapsed time')
+                self.assertIs(time.monotonic, real_monotonic)
+                for _ in range(legacy._SCAN_ENTRY_LIMIT - 1):
+                    budget.tick()
+                self.assertEqual(budget._entries, 20000)
+                with self.assertRaises(legacy._BudgetExceeded):
+                    budget.tick()
+            self.assertIs(legacy.time, host)
+            expired = legacy._Budget()
+            with self.assertRaises(legacy._BudgetExceeded):
+                expired.check()
+        self.assertIs(legacy.time, time)
+        self.assertEqual((legacy._SCAN_SECONDS, legacy._SCAN_ENTRY_LIMIT), (3.0, 20000))
+
+
+    def test_common_clock_fixture_preserves_discovery_and_restores_after_failures(self):
+        import time
+        from tests.test_policy_gh_arguments import GhArgumentPolicyTests
+        from tests.test_policy_compound_writes import CompoundWritePolicyTests
+        from tests.test_policy_bypasses import PullRequestReviewTests
+        loader = unittest.TestLoader()
+        for case in (ShellStatePolicyTests, GhArgumentPolicyTests,
+                     CompoundWritePolicyTests, PullRequestReviewTests):
+            self.assertTrue(isinstance(case, type) and issubclass(case, unittest.TestCase))
+            names = loader.getTestCaseNames(case)
+            self.assertTrue(names)
+            self.assertEqual(len(names), len(set(names)))
+        events = []
+        real_monotonic = time.monotonic
+        class OwnedLifecycle(unittest.TestCase):
+            def setUp(inner):
+                inner.enterContext(_functional_policy_clock())
+                events.append(('setup', legacy.time.monotonic()))
+            def test_a_failure(inner):
+                inner.assertIs(time.monotonic, real_monotonic)
+                inner.fail('owned expected lifecycle failure')
+            def test_b_reentrant_setup(inner):
+                inner.setUp()
+                budget = legacy._Budget()
+                budget.tick()
+                inner.assertEqual(budget._entries, 1)
+                inner.assertEqual(legacy.time.monotonic(), 0.0)
+        host = SimpleNamespace(monotonic=lambda: 123456.0)
+        with mock.patch.object(legacy, 'time', host):
+            suite = loader.loadTestsFromTestCase(OwnedLifecycle)
+            self.assertEqual(suite.countTestCases(), 2)
+            result = unittest.TestResult()
+            suite.run(result)
+            self.assertEqual((result.testsRun, len(result.failures), len(result.errors)), (2, 1, 0))
+            self.assertIs(legacy.time, host, 'enterContext cleanup must restore after failure and repeated setup')
+            self.assertIs(time.monotonic, real_monotonic)
+        self.assertEqual(events, [('setup', 0.0)] * 3)
+        self.assertIs(legacy.time, time)
 
 
 def _format_flags(code, result):
@@ -258,6 +336,7 @@ class ShellStatePolicyTests(unittest.TestCase):
         cls.stack.close()
 
     def setUp(self) -> None:
+        self.enterContext(_functional_policy_clock())
         approvals_path(self.root).write_text('[]', encoding='utf-8')
         environment = mock.patch.dict(os.environ)
         environment.start()
@@ -294,7 +373,7 @@ class ShellStatePolicyTests(unittest.TestCase):
             return
         if diagnostic is None:
             with self.subTest(layer='policy', command=command):
-                self.assertEqual(allowed, expected, (command, reason))
+                self.assertEqual(allowed, expected, policy_diagnostic(allowed, reason))
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
             **event, 'cwd': str(self.root), 'session_id': 'shell-state',
         })
