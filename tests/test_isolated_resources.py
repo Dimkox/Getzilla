@@ -302,6 +302,48 @@ class ResourceTransitionTests(unittest.TestCase):
                 self.fail("omitted volume-only Name must not strand a bind container")
         self.assertEqual(docker.items["container"], {})
 
+    def test_partial_mount_refuses_removal(self):
+        owner = self.module.OwnedDocker(self.root / "bad", "gz-transition")
+        docker = DockerDouble()
+        def inspect(command, *args, **kwargs):
+            result = docker(command, *args, **kwargs)
+            if command[1:3] == ["container", "inspect"]:
+                values = json.loads(result.stdout)
+                values[0]["Mounts"][0]["Source"] = None
+                return ProcessResult(command, 0, json.dumps(values))
+            return result
+        with patch.object(self.module, "_execute", side_effect=inspect):
+            try:
+                owner.container("app", PIN, bind={self.root: "/src"})
+                owner.cleanup()
+            except (ValueError, self.module.CleanupUnconfirmed):
+                pass
+        self.assertEqual(docker.removed, [])
+
+    def test_partial_mount_live_and_recovered(self):
+        owner = self.module.OwnedDocker(self.root / "ok", "gz-transition")
+        docker = DockerDouble()
+        with patch.object(self.module, "_execute", side_effect=docker):
+            owner.container("app", PIN, bind={self.root: "/src"})
+            complete = json.loads(owner.manifest.read_text())
+            observation = next(iter(docker.items["container"].values()))
+            for field in ("Source", "Destination"):
+                for bad in (None, "", 7):
+                    with self.subTest(field=field, value=bad):
+                        broken = copy.deepcopy(observation)
+                        broken["Mounts"][0][field] = bad
+                        with self.assertRaises(ValueError):
+                            self.module._identity("container", broken)
+                        malformed = copy.deepcopy(complete)
+                        malformed["resources"][0]["identity"]["mounts"][0][field] = bad
+                        owner.manifest.write_text(json.dumps(malformed))
+                        with patch.object(self.module, "_process_identity", return_value={**owner.owner_process, "start": "x"}):
+                            with self.assertRaises(ValueError):
+                                self.module.OwnedDocker.recover(owner.manifest)
+            owner.manifest.write_text(json.dumps(complete))
+            owner._journal_identity = self.module._read(owner.manifest).identity
+            owner.cleanup()
+
     def test_marker_unlink_transition_is_recoverable_and_bound(self):
         for ordinal, after in enumerate(("payload", ".owner")):
             with self.subTest(after=after):

@@ -192,17 +192,21 @@ import hashlib, json, pathlib, sys
 root = pathlib.Path.cwd()
 sys.path.insert(0, str(root / '.getzilla'))
 from getzilla import verification
+from getzilla.verification_failure_excerpt import factory_diagnostic
 assert 'getzilla.zip' in verification.__file__, verification.__file__
 result = verification._factory_unit(root)[0]
 evidence = result.details[0] if result.details else {}
+digests = {'collected_ids': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
+           'source_inventory': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest()}
 print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'factory_diagnostic': factory_diagnostic(evidence, outcome=result.status, digests=digests),
                   'problems': evidence.get('problems'),
                   'collected': evidence.get('collected'),
                   'executed': len(evidence.get('executed', [])),
                   'qualified_skips': len(evidence.get('skipped', [])),
                   'required': len(evidence.get('required_ids', [])),
-                  'collected_ids_digest': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
-                  'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
+                  'collected_ids_digest': digests['collected_ids'],
+                  'source_inventory_digest': digests['source_inventory'],
                   'unqualified_skips': evidence.get('unqualified_skips')}))
 """
         with public_source_copy(ROOT) as source, \
@@ -217,7 +221,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                                     env=environment, text=True, capture_output=True, timeout=180)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             evidence = json.loads(result.stdout)
-            self.assertEqual(evidence['status'], 'pass', evidence)
+            from getzilla.verification_failure_excerpt import factory_assertion_message
+            with patch.object(self, 'longMessage', False):
+                self.assertEqual(evidence['status'], 'pass', factory_assertion_message(evidence))
             self.assertGreater(evidence['collected'], 0)
             self.assertGreater(evidence['executed'], 0)
             self.assertEqual(evidence['unqualified_skips'], [])
@@ -230,10 +236,12 @@ import json, pathlib, sys
 root = pathlib.Path.cwd()
 sys.path.insert(0, str(root / '.getzilla'))
 from getzilla import verification
+from getzilla.verification_failure_excerpt import factory_diagnostic
 assert 'getzilla.zip' in verification.__file__, verification.__file__
 result = verification._factory_unit(root)[0]
 evidence = result.details[0] if result.details else {}
 print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'factory_diagnostic': factory_diagnostic(evidence, outcome=result.status),
                   'stderr': result.stderr[-1000:], 'collected': evidence.get('collected'),
                   'executed': len(evidence.get('executed', []))}))
 """
@@ -255,7 +263,9 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                                     text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             evidence = json.loads(result.stdout)
-            self.assertEqual(evidence['status'], 'pass', evidence)
+            from getzilla.verification_failure_excerpt import factory_assertion_message
+            with patch.object(self, 'longMessage', False):
+                self.assertEqual(evidence['status'], 'pass', factory_assertion_message(evidence))
             self.assertEqual(evidence['collected'], 1)
             self.assertEqual(evidence['executed'], 1)
 

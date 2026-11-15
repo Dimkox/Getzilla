@@ -21,6 +21,7 @@ from getzilla.router import build_route
 from getzilla.state import add_approval
 from tests._support import activate_owned_route
 from tests._support import project_copy
+from tests.test_policy_shell_state import _functional_policy_clock
 
 
 @contextlib.contextmanager
@@ -253,6 +254,10 @@ class ProductionActionSpellingTests(_ProjectCase):
 
 class PullRequestReviewTests(_ProjectCase):
     """S9: submitting a GitHub review is an external write."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(_functional_policy_clock())
 
     def test_gh_pr_review_requires_external_write_grant(self) -> None:
         for command in ('gh pr review --approve 1', 'gh -R a/b pr review 1 -a', 'gh pr review 1 --request-changes -b x'):
