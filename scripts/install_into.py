@@ -51,6 +51,9 @@ MANAGED_DIRS = (
 MANAGED_FILES = (
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
+    "scripts/getzilla_live.py",
+    "scripts/getzilla_live_lifecycle.py",
+    "docs/isolated-ci-acceptance.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),

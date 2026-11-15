@@ -17,11 +17,11 @@ from .stack_toolchains import (
     INSTALLERS, Blocker, Fetch, Run, Toolchain, ToolchainError, Which, _publish, cache_root, download_verified,
     unpack,
 )
-from .stacks import PLANNERS, RUNNERS, StackContext, StackPlanContext
+from .stacks import RUNNERS, PLANNERS, StackContext, StackPlanContext
 
 # -- shared ---------------------------------------------------------------------------------------
 
-def _project_dirs(context: StackContext | StackPlanContext, patterns: tuple[str, ...]) -> list[Path]:
+def _project_dirs(context: StackContext, patterns: tuple[str, ...]) -> list[Path]:
     """Shallowest directories holding a build file for the touched files (one per independent project)."""
     from .stacks import tree_files
 
@@ -37,7 +37,7 @@ def _project_dirs(context: StackContext | StackPlanContext, patterns: tuple[str,
     return [context.root / str(root) for root in (chosen or roots)]
 
 
-def _label(context: StackContext | StackPlanContext, directory: Path) -> str:
+def _label(context: StackContext, directory: Path) -> str:
     relative = directory.relative_to(context.root).as_posix()
     return '' if relative == '.' else f':{relative}'
 
@@ -375,6 +375,66 @@ def java_checks(context: StackContext) -> list[Any]:
 RUNNERS['java'] = java_checks
 
 
+def rust_plan(context: StackPlanContext) -> list[str]:
+    names = ['toolchain:rust']
+    for directory in _project_dirs(context, ('Cargo.toml',)):
+        label = _label(context, directory)
+        if not (directory / 'Cargo.lock').is_file():
+            names.append('cargo-lockfile' + label)
+        names.extend(name + label for name in ('cargo-fmt', 'cargo-clippy'))
+        if context.mode in {'pr', 'release'}:
+            names.extend(name + label for name in ('cargo-build', 'cargo-test'))
+    return names
+
+
+def dotnet_plan(context: StackPlanContext) -> list[str]:
+    names = ['toolchain:dotnet']
+    for directory in _project_dirs(context, DOTNET_PROJECTS):
+        for project in sorted(directory.rglob('*.*proj')):
+            if DOTNET_WORKLOAD.search(project.read_text(encoding='utf-8', errors='replace')):
+                names.append('dotnet-workload:' + project.relative_to(context.root).as_posix())
+        if _dotnet_target(directory) is None:
+            continue
+        label = _label(context, directory)
+        chosen = ('dotnet-restore', 'dotnet-build', 'dotnet-test', 'dotnet-format', 'nuget-vulnerabilities') if context.mode in {'pr', 'release'} else ('dotnet-format',)
+        names.extend(name + label for name in chosen)
+        if context.mode not in {'pr', 'release'} and not any(directory.rglob('packages.lock.json')):
+            names.append('nuget-dependencies' + label)
+    return names
+
+
+def powershell_plan(context: StackPlanContext) -> list[str]:
+    from .stacks import tree_files
+    names = ['toolchain:powershell', 'psscriptanalyzer']
+    if context.mode in {'pr', 'release'} and any(path.endswith('.Tests.ps1') for path in tree_files(context.root) if context.stack.owns(path)):
+        names.append('pester')
+    return names
+
+
+def go_plan(context: StackPlanContext) -> list[str]:
+    names = ['toolchain:go']
+    for directory in _project_dirs(context, ('go.mod',)):
+        chosen = ('gofmt', 'go-vet', 'go-build', 'go-test') if context.mode in {'pr', 'release'} else ('gofmt', 'go-vet')
+        names.extend(name + _label(context, directory) for name in chosen)
+    return names
+
+
+def java_plan(context: StackPlanContext) -> list[str]:
+    if context.mode not in {'pr', 'release'}:
+        return ['java']
+    names = ['toolchain:java']
+    for directory in _project_dirs(context, JAVA_BUILDS):
+        label, wrapper = _label(context, directory), _wrapper(directory)
+        names.append(wrapper[0] + '-build' + label if wrapper else 'java-wrapper' + label)
+        if (directory / 'pom.xml').is_file() and not (directory / 'gradle.lockfile').is_file():
+            names.append('maven-dependencies' + label)
+    return names
+
+
+PLANNERS.update(rust=(rust_checks, rust_plan), dotnet=(dotnet_checks, dotnet_plan),
+                powershell=(powershell_checks, powershell_plan), go=(go_checks, go_plan), java=(java_checks, java_plan))
+
+
 def planned_checks(context: StackPlanContext) -> list[dict[str, Any]]:
     """Declare the existing runners' checks from the same directory, mode and source selectors."""
     names: list[str] = []
@@ -427,7 +487,3 @@ def planned_checks(context: StackPlanContext) -> list[dict[str, Any]]:
     evidence = {'stack': stack, 'mode': context.mode, 'touched': context.files}
     return [{'check_id': name, 'applicability': 'required', 'reason': 'existing stack runner selection',
              'evidence': evidence} for name in names]
-
-
-for _stack in ('rust', 'dotnet', 'powershell', 'go', 'java'):
-    PLANNERS[_stack] = (RUNNERS[_stack], planned_checks)

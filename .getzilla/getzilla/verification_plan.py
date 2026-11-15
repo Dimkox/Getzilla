@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
 import sys
+import zipimport
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +39,7 @@ _POLICY_PATHS = (
     '.getzilla/getzilla/stacks.py', '.getzilla/getzilla/stack_runners.py',
     '.getzilla/config/diff-risk-rules.json', '.getzilla/config/routing.json',
     '.getzilla/config/stacks.json',
-    '.getzilla-verification.json', '.getzilla-test-runner.json',
+    '.getzilla-verification.json', '.getzilla-test-runner.json', '.getzilla-evals.json',
     'architecture/system.yaml', 'architecture/rules.yaml',
 )
 
@@ -66,6 +70,32 @@ def _obligation(value: Any) -> dict:
     return copy.deepcopy(value)
 
 
+def _module_source(module) -> bytes:
+    """Read corresponding engine source through its actual closed loader; never execute it."""
+    loader = getattr(module, '__loader__', None)
+    if type(loader) not in {importlib.machinery.SourceFileLoader,
+                            importlib.machinery.SourcelessFileLoader, zipimport.zipimporter}:
+        raise ValueError('verification policy source loader is unavailable')
+    try:
+        filename = loader.get_filename(module.__name__)
+        if filename != module.__file__:
+            raise ValueError('verification policy source identity differs')
+        source = filename
+        if source.endswith('.pyc'):
+            try:
+                source = importlib.util.source_from_cache(source)
+            except ValueError:
+                source = source[:-1]
+        if not source.endswith('.py'):
+            raise ValueError('verification policy has no corresponding Python source')
+        content = loader.get_data(source)
+        if not isinstance(content, bytes) or not 0 < len(content) <= 4 * 1024 * 1024:
+            raise ValueError('verification policy source is unavailable or excessive')
+        return content
+    except (AttributeError, ImportError, OSError, TypeError) as exc:
+        raise ValueError('verification policy source cannot be bound') from exc
+
+
 def policy_binding(root: Path) -> dict:
     from .verification_tool_workspace import checked_path
     values = {}
@@ -80,13 +110,17 @@ def policy_binding(root: Path) -> dict:
     implementation = {}
     for name in ('verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
+                 'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
+                 'verification_scope.py', 'verification_tool_workspace.py',
                  'expanded_security.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
-                 'security_intelligence.py', 'security_data.py'):
-        path = Path(__file__).resolve().parent / name
-        implementation[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py'):
+        module = importlib.import_module('.' + name[:-3], __package__)
+        implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR
     registry = STACK_DIR / 'config' / 'stacks.json'
-    implementation['stacks.json'] = hashlib.sha256(registry.read_bytes()).hexdigest() if registry.is_file() else None
+    if not registry.is_file() or registry.is_symlink() or registry.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError('engine stack registry source is unavailable')
+    implementation['stacks.json'] = hashlib.sha256(registry.read_bytes()).hexdigest()
     content = {'inputs': values, 'implementation': implementation}
     return {'schema_version': 1, **content, 'digest': digest(content)}
 
@@ -97,7 +131,7 @@ def build_required_plan(root: Path, *, mode: str, context: dict | None, source: 
     """Normalize policy-derived descriptors; current_required_plan supplies native policy."""
     if mode not in {'fast', 'pr', 'release', FOCUSED_MODE}:
         raise ValueError('required plan only supports qualifying verification modes')
-    if not all(isinstance(item, dict) for item in (source, inventory, risk, selection)):
+    if not all(isinstance(item, dict) for item in (context, source, inventory, risk, selection)):
         raise ValueError('required plan inputs must be explicit bindings')
     obligations = [_obligation(item) for item in extra_obligations]
     if not 0 < len(obligations) <= MAX_OBLIGATIONS or len({item['id'] for item in obligations}) != len(obligations):
@@ -122,6 +156,49 @@ def _value(result: Any, name: str, default=None):
     return result.get(name, default) if isinstance(result, dict) else getattr(result, name, default)
 
 
+def _executed_references(plan, result):
+    try:
+        return _observed_references(plan, result)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return []
+
+
+def _observed_references(plan, result):
+    """Derive credit from exact individual observations, never a claimed list or Core total."""
+    name = _value(result, 'name')
+    items = [item for item in plan['obligations'] if item['check_id'] == name]
+    details = _value(result, 'details', [])
+    if name in {'criterion-tests', 'static-seo-landing-contract'}:
+        from .criterion_tests import _verified_references
+        references = sorted({ref for item in items for ref in item['expected_tests']})
+        ownership = {}
+        for item in items:
+            for path, value in item['evidence'].get('test_sources', {}).items():
+                if path in ownership and ownership[path] != value:
+                    return []
+                ownership[path] = value
+        reports = [row for row in details if isinstance(row, dict) and row.get('kind') == 'criterion-test-execution']
+        return _verified_references(reports[0], references, ownership) if len(reports) == 1 else []
+    if isinstance(name, str) and name.startswith('tool:'):
+        from .verification_tool_reports import evaluate_criteria
+        mapping = {key: refs for item in items for key, refs in item['evidence'].get('criteria', {}).items()}
+        if len(details) != 1 or not isinstance(details[0], dict):
+            return []
+        detail = details[0]
+        executions = detail.get('executions', [])
+        if not executions or any(row.get('returncode') != 0 or row.get('terminal_state') != 'completed'
+                                 or row.get('cleanup_error') for row in executions):
+            return []
+        try:
+            evaluated = evaluate_criteria(detail['report'], mapping)
+        except (KeyError, TypeError, ValueError):
+            return []
+        if evaluated != detail.get('criteria'):
+            return []
+        return sorted({ref for row in evaluated if row.get('status') == 'pass' for ref in row['tests']})
+    return []
+
+
 def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
               data_source_validator: Callable | None = None) -> list[dict[str, str]]:
     """Missing, repeated, unexecuted or stale observations never become PASS."""
@@ -134,10 +211,12 @@ def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
         obligations = [_obligation(item) for item in plan['obligations']]
         if len({item['id'] for item in obligations}) != len(obligations):
             raise ValueError('duplicate required obligation')
-        if plan['binding'] != current_binding:
+        if not isinstance(current_binding, dict) or plan['binding'] != current_binding:
             raise ValueError('current source, intent, criteria, inventory or policy differs from required plan')
         if now_utc.tzinfo is None or now_utc.utcoffset() is None:
             raise ValueError('freshness requires an aware current timestamp')
+        if not callable(data_source_validator):
+            raise ValueError('trusted current source validator is required')
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as exc:
         return [_finding('required-plan-invalid', 'required_plan', str(exc))]
     try:
@@ -148,9 +227,12 @@ def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
     except (TypeError, ValueError) as exc:
         return [_finding('required-results-invalid', 'checks', str(exc))]
     gaps = []
+    planned = {item['check_id'] for item in obligations}
     for name, count in counts.items():
         if count > 1:
             gaps.append(_finding('required-result-duplicate', str(name), 'duplicate check results cannot be overwritten'))
+        if name not in planned and name != 'quality-gate':
+            gaps.append(_finding('required-result-unplanned', name, 'result has no source-bound declaration'))
     for result in results:
         if _value(result, 'status') not in {'pass', 'skip'}:
             gaps.append(_finding('required-result-unverified', _value(result, 'name'),
@@ -159,6 +241,8 @@ def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
     checked_sources = set()
     for obligation in obligations:
         name = obligation['check_id']
+        if obligation['evidence'].get('producer_declared') is False:
+            gaps.append(_finding('required-producer-unavailable', obligation['id'], 'explicit required producer is not declared by the current source'))
         result = named.get(name)
         if result is None:
             gaps.append(_finding('required-check-missing', name, 'required obligation was not dispatched: ' + obligation['id']))
@@ -178,6 +262,9 @@ def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
             if status not in {'skip', 'pass'} or bindings[0].get('applicability') != obligation['evidence']:
                 gaps.append(_finding('required-applicability-unproven', name, 'not_applicable lacks the exact source-derived exclusion'))
         executed = bindings[0].get('executed_tests', [])
+        if executed != _executed_references(plan, result):
+            gaps.append(_finding('required-test-proof-mismatch', name, 'individual observations differ from credited references'))
+            executed = []
         if not _strings(executed):
             gaps.append(_finding('required-test-results-invalid', name, 'invalid or duplicate executed test identifiers'))
             executed = []
@@ -213,11 +300,20 @@ def plan_gaps(plan: Any, results, *, current_binding: dict, now_utc: datetime,
             try:
                 if data_source_validator is None:
                     raise ValueError('current source validator is unavailable')
+                acquired = source['acquisition']['last_verified_sync_utc']
+                if not isinstance(acquired, str):
+                    raise ValueError('source acquisition time is unavailable')
+                stamp = datetime.fromisoformat(acquired.replace('Z', '+00:00'))
+                if stamp.tzinfo is None or stamp.utcoffset() is None:
+                    raise ValueError('source acquisition time is not aware')
+                age = (now_utc - stamp).total_seconds()
+                if not 0 <= age <= 259200:
+                    raise ValueError('source acquisition is future or stale')
                 validated = data_source_validator(source, now=now_utc)
                 if validated is not True:
                     raise ValueError('current data source validator refused the source')
-            except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
-                gaps.append(_finding('required-data-source-stale', name, str(exc)))
+            except (ValueError, OSError, RuntimeError, KeyError, TypeError):
+                gaps.append(_finding('required-data-source-stale', name, 'current source identity or acquisition freshness could not be verified'))
     return gaps
 
 
@@ -226,6 +322,24 @@ def obligation(name: str, *, required=True, reason='native verification policy',
     return {'id': identifier or name, 'check_id': name, 'requirement_ids': list(requirement_ids),
             'applicability': 'required' if required else 'not_applicable', 'reason': reason,
             'evidence': evidence or {}, 'expected_tests': list(expected_tests), 'data_sources': []}
+
+
+def declared_check_obligations(spec, *, available=()) -> list[dict]:
+    """Typed check references declare work; they confer no attestation or execution authority."""
+    result = []
+    for collection in ('acceptance_criteria', 'invariants', 'forbidden_outcomes'):
+        for item in spec.get(collection, []):
+            names = [row['attestation'][6:] for row in item.get('evidence', [])
+                     if isinstance(row.get('attestation'), str) and row['attestation'].startswith('check:')]
+            if len(names) != len(set(names)):
+                raise ValueError('duplicate typed producer reference')
+            for name in sorted(names):
+                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,121}', name):
+                    raise ValueError('invalid typed producer reference')
+                result.append(obligation(name, identifier=item['id'] + ':check:' + name,
+                    requirement_ids=[item['id']], reason='explicit typed producer requirement',
+                    evidence={'producer_declared': name in available, 'requirement': item['id']}))
+    return result
 
 
 def _plan_documents(root: Path, route: dict) -> dict | None:
@@ -273,12 +387,13 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
     from .verification import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
                                composer_check_selection, node_check_selection, python_check_selection)
     from .verification_tools import load_checks
-    names = {'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
+    names = {'required-plan', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
     files = files or []
     profiles = profiles or route.get('quality_profiles', ['base'])
     if mode == FOCUSED_MODE:
         names.update({'git-diff-check', 'scope-selection', 'static-seo-landing-contract'})
     if mode != FOCUSED_MODE:
+        names.update({'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit'})
         names |= MANDATORY_PR_CHECKS | MANDATORY_PYTHON_PR_CHECKS
         names.update({'diff-risk', 'cost-guard', 'hook-health', 'eu-ai-act', 'workflow-baseline'})
     if documents is _UNREAD_DOCUMENTS:
@@ -339,7 +454,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
         if mode in {'pr', 'release'}:
             names.add('coverage')
             exclusions['coverage'] = 'no native Python discovery inputs'
-    if mode != FOCUSED_MODE and (root / 'factory/pyproject.toml').is_file() and any((root / 'factory/tests').glob('test*.py')):
+    if mode != FOCUSED_MODE and (root / 'factory/pyproject.toml').is_file():
         names.add('factory-unit')
     if mode != FOCUSED_MODE:
         if any((root / 'pilot/tests').glob('test*.py')):
@@ -353,6 +468,8 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
                 names.update(name for name, _args in composer_check_selection(root))
         if 'bitrix' in profiles:
             names.add('bitrix')
+        if 'frontend' in profiles and not (root / 'package.json').is_file():
+            names.add('package-json')
         if (root / 'package.json').is_file():
             try:
                 names.update(node_check_selection(root, mode)[3])
@@ -362,12 +479,17 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
         names.add('factory-postgres-exit')
         if (root / '.getzilla/AGBP_SYNC.json').is_file():
             exclusions['factory-postgres-exit'] = 'consumer source-only/unit-only policy prohibits infrastructure execution'
+        elif os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
+            exclusions['factory-postgres-exit'] = 'repository-sandbox has no nested-container/database capability'
     if (root / 'scripts/getzilla_live.py').is_file() and mode in {'pr', 'release'}:
         live = {'factory-lifecycle', 'trust-ci-postgres', 'trust-ci-postgres-restart'}
         names.update(live)
         if (root / '.getzilla/AGBP_SYNC.json').is_file():
             exclusions.update({name: 'consumer source-only/unit-only policy prohibits infrastructure execution' for name in live})
+        elif os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
+            exclusions.update({name: 'repository-sandbox has no nested-container/database capability' for name in live})
     if docs_scope.get('eligible') is True:
+        names.update(docs_scope.get('skipped_checks', []))
         exclusions.update({name: 'admitted documentation/state scope' for name in docs_scope.get('skipped_checks', [])})
     fingerprint = tree_fingerprint(root)
     result = [obligation(name, required=name not in exclusions, evidence=(
@@ -378,18 +500,33 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
         result.extend(obligation(item['check_id'], required=item['applicability'] == 'required',
                                  reason=item['reason'], evidence=item['evidence'])
                       for item in planned_stack_checks(root, mode, files))
+        from . import agent_evals
+        if (root / agent_evals.CONFIG).exists() or (root / agent_evals.CONFIG).is_symlink():
+            try:
+                config, _ = agent_evals._read(root, agent_evals.CONFIG)
+                suites = config['suites']
+                if not isinstance(suites, list) or not 1 <= len(suites) <= 16:
+                    raise ValueError('invalid suite declarations')
+                selected = ['agent-eval:' + row['id'] for row in suites if mode in row['modes']]
+                if len(selected) != len(set(selected)):
+                    raise ValueError('duplicate suite declarations')
+                result.extend(obligation(name) for name in selected)
+            except (ValueError, KeyError, TypeError, agent_evals.EvalError):
+                result.append(obligation('agent-eval:configuration'))
     if _semgrep_config(root) is not None:
         result.append(obligation('semgrep'))
     if _trivy_config_present(root):
         result.append(obligation('trivy-config'))
     external_criteria: dict[str, set[str]] = {}
-    for check in load_checks(root, mode):
+    for check in load_checks(root, mode) if mode != FOCUSED_MODE else []:
         expected = sorted({test for tests in check['criteria'].values() for test in tests})
-        result.append(obligation('tool:' + check['id'], requirement_ids=sorted(check['criteria']), expected_tests=expected))
+        result.append(obligation('tool:' + check['id'], requirement_ids=sorted(check['criteria']), expected_tests=expected,
+                                 evidence={'criteria': check['criteria']}))
         for identifier, tests in check['criteria'].items():
             external_criteria.setdefault(identifier, set()).update(tests)
     focused_refs = set(docs_scope.get('focused_tests', [])) if mode == FOCUSED_MODE else set()
     if documents:
+        result.extend(declared_check_obligations(documents['spec'], available={row['check_id'] for row in result}))
         for collection in ('acceptance_criteria', 'invariants', 'forbidden_outcomes'):
             for item in documents['spec'].get(collection, []):
                 refs = sorted({entry['test'] for entry in item['evidence'] if 'test' in entry} - external_criteria.get(item['id'], set()))
@@ -397,12 +534,18 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
                     if mode == FOCUSED_MODE and any(ref.split('::', 1)[0] not in focused_refs for ref in refs):
                         raise ValueError('focused mode does not cover all typed test evidence; select pr/release for the full scope')
                     producer = 'static-seo-landing-contract' if mode == FOCUSED_MODE else 'criterion-tests'
+                    from .criterion_tests import _source_ownership
+                    sources = _source_ownership(root, refs)[0]
                     result.append(obligation(producer, requirement_ids=[item['id']], expected_tests=refs,
+                                             evidence={'test_sources': sources},
                                              identifier=item['id'] + ':tests', reason='typed criterion test references'))
     if mode == FOCUSED_MODE:
+        from .criterion_tests import _source_ownership
+        sources = _source_ownership(root, sorted(focused_refs))[0]
         for item in result:
-            if item['id'] == 'static-seo-landing-contract':
+            if item['check_id'] == 'static-seo-landing-contract':
                 item['expected_tests'] = sorted(focused_refs)
+                item['evidence']['test_sources'] = sources
     return result
 
 
@@ -484,15 +627,7 @@ def bind_result(plan: dict, result) -> None:
     if not items:
         return
     details = _value(result, 'details', [])
-    executed = set()
-    for detail in details:
-        if not isinstance(detail, dict):
-            continue
-        if detail.get('kind') == 'criterion-test-execution':
-            executed.update(detail.get('verified_references', []))
-        for criterion in detail.get('criteria', []):
-            if isinstance(criterion, dict) and criterion.get('status') == 'pass':
-                executed.update(criterion.get('tests', []))
+    executed = _executed_references(plan, result)
     binding = {'schema_version': 1, 'kind': 'required-plan-result', 'check_id': name,
                'plan_digest': plan['digest'], 'executed_tests': sorted(executed),
                'command': _value(result, 'command'),
@@ -523,5 +658,5 @@ def report_gaps(root: Path, report: Any, *, now: datetime | None = None) -> list
             docs_scope=current['binding']['selection'].get('docs_scope'), required_plan=plan,
             current_binding=current['binding'], now_utc=now or datetime.now(timezone.utc),
             data_source_validator=validate_source).details
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError) as exc:
-        return [_finding('required-plan-unavailable', 'required_plan', str(exc))]
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        return [_finding('required-plan-unavailable', 'required_plan', 'current required plan and evidence could not be established')]

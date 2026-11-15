@@ -45,11 +45,6 @@ _PASSING_UNITTEST = (
     '        self.assertTrue(True)\n'
 )
 
-# These tests exercise historical receipt bindings, not fabricated new executions.
-# Such receipts remain readable but cannot satisfy the current verification policy.
-_MISSING_REQUIRED_PLAN = ['verification: required-plan-unavailable: required_plan: '
-                          'qualifying verification requires an embedded required_plan']
-
 class ChangeTests(unittest.TestCase):
     def test_start_requires_route(self) -> None:
         with project_copy() as root:
@@ -289,7 +284,7 @@ class ReceiptTests(unittest.TestCase):
             receipt = __import__('json').loads(receipt_path.read_text(encoding='utf-8'))
             self.assertEqual(receipt['criterion_ids'], ['AC-001', 'AC-002'])
             self.assertEqual(len(receipt['spec_digest']), 64)
-            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), ['verification: current required plan or individual evidence is unavailable or stale'])
             spec['objective']['target'] = 'changed'
             path.write_text(dump_canonical_spec(spec), encoding='utf-8')
             self.assertTrue(any('spec' in item and 'stale' in item for item in validate_evidence(root, get_active_route(root) or route)))
@@ -310,7 +305,7 @@ class ReceiptTests(unittest.TestCase):
             self.assertRegex(receipt['architecture_digest'], r'^[0-9a-f]{64}$')
             self.assertRegex(receipt['architecture_fingerprint'], r'^[0-9a-f]{64}$')
             self.assertEqual(receipt['criterion_ids'], ['AC-001'])
-            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), ['verification: current required plan or individual evidence is unavailable or stale'])
             receipt.pop('architecture_digest')
             receipt.pop('architecture_fingerprint')
             receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
@@ -602,7 +597,7 @@ class ReceiptTests(unittest.TestCase):
                 )
             )
 
-    def test_unconfigured_consumer_reads_legacy_receipt_but_requires_current_plan(self) -> None:
+    def test_unconfigured_consumer_keeps_legacy_receipt_compatibility(self) -> None:
         with project_copy(git=True) as root:
             route = _legacy_receipt_route(root, 'Review current code', 's1')
             route['required_evidence'] = ['verification']
@@ -610,7 +605,7 @@ class ReceiptTests(unittest.TestCase):
             path = write_receipt(root, 'verification', 'pass')
             receipt = json.loads(path.read_text(encoding='utf-8'))
             self.assertNotIn('architecture_digest', receipt)
-            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, route), ['verification: current required plan or individual evidence is unavailable or stale'])
 
     def test_receipt_survives_scratch_churn_but_stales_on_product_edit(self) -> None:
         with project_copy(git=True) as root:
@@ -623,9 +618,9 @@ class ReceiptTests(unittest.TestCase):
             scratch.parent.mkdir(parents=True)
             for content in ('one', 'two'):
                 scratch.write_text(content, encoding='utf-8')
-                self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+                self.assertEqual(validate_evidence(root, route), ['verification: current required plan or individual evidence is unavailable or stale'])
             scratch.unlink()
-            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, route), ['verification: current required plan or individual evidence is unavailable or stale'])
             scratch.write_text('mixed scratch and product edit', encoding='utf-8')
             with (root / 'VERSION').open('a', encoding='utf-8') as handle:
                 handle.write('\nproduct changed\n')
@@ -645,7 +640,7 @@ class ReceiptTests(unittest.TestCase):
             path = write_receipt(root, 'verification', 'pass', details={'changed_files': [rel]})
             receipt = json.loads(path.read_bytes().decode('utf-8'))
             self.assertEqual([rel], receipt['details']['changed_files'])
-            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, route), ['verification: current required plan or individual evidence is unavailable or stale'])
             (root / rel).write_text('two', encoding='utf-8')
             self.assertIn('verification: stale after repository changes', validate_evidence(root, route))
 
@@ -665,7 +660,7 @@ class ReceiptTests(unittest.TestCase):
             for index, kind in enumerate(kinds, 1):
                 receipt = json.loads(write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {})).read_text(encoding='utf-8'))
                 self.assertEqual(receipt['criterion_ids'], [f'AC-{index:03d}'])
-            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), ['verification: current required plan or individual evidence is unavailable or stale'])
 
     def test_explicit_binding_mismatch_is_rejected(self) -> None:
         with project_copy(git=True) as root:
@@ -735,7 +730,7 @@ class ReceiptTests(unittest.TestCase):
             review = prepare_review_source(root)
             write_receipt(root, 'verification', 'pass')
             write_receipt(root, 'code_review', 'pass', **review)
-            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            self.assertEqual(validate_evidence(root, route), ['verification: current required plan or individual evidence is unavailable or stale'])
 
     def test_receipt_becomes_stale_after_change(self) -> None:
         with project_copy(git=True) as root:
@@ -770,8 +765,180 @@ class ReceiptTests(unittest.TestCase):
                 )
             )
 
+    def test_unconfigured_consumer_reads_legacy_receipt_but_requires_current_plan(self) -> None:
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Review current code', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            path = write_receipt(root, 'verification', 'pass')
+            receipt = json.loads(path.read_text(encoding='utf-8'))
+            self.assertNotIn('architecture_digest', receipt)
+            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+
+
+    def test_parent_contract_receipt_binds_active_spec_and_declared_criteria(self) -> None:
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            start_change(root)
+            active = get_active_change(root) or {}
+            path = root / str(active['path']) / 'change-spec.yaml'
+            spec = {
+                'schema_version': 2,
+                'change_id': active['change_id'],
+                'objective': {'id': 'OBJ-001', 'statement': 'bind evidence', 'success_metric': 'bound_receipts', 'target': 'all'},
+                'risk': {'tier': 'green', 'domains': []},
+                'acceptance_criteria': [{'id': 'AC-002', 'statement': 'bound', 'evidence': [{'receipt': 'verification'}]}, {'id': 'AC-001', 'statement': 'also bound', 'evidence': [{'receipt': 'verification'}]}],
+                'invariants': [], 'forbidden_outcomes': [],
+                'contracts': {'openapi': [], 'json_schema': [], 'events': []},
+                'observability': [],
+                'rollback': {'strategy': 'forward_fix', 'maximum_steps': 1},
+                'approvals': {'required_scopes': []},
+            }
+            path.write_text(dump_canonical_spec(spec), encoding='utf-8')
+            receipt_path = write_receipt(root, 'verification', 'pass')
+            receipt = __import__('json').loads(receipt_path.read_text(encoding='utf-8'))
+            self.assertEqual(receipt['criterion_ids'], ['AC-001', 'AC-002'])
+            self.assertEqual(len(receipt['spec_digest']), 64)
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+            spec['objective']['target'] = 'changed'
+            path.write_text(dump_canonical_spec(spec), encoding='utf-8')
+            self.assertTrue(any('spec' in item and 'stale' in item for item in validate_evidence(root, get_active_route(root) or route)))
+
+
+    def test_parent_contract_adopted_receipt_binds_architecture_and_preserves_spec_criteria(self) -> None:
+        with project_copy(git=True) as root:
+            self._adopt_architecture(root)
+            route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            start_change(root)
+            active = get_active_change(root) or {}
+            self._install_spec(root, active, {'AC-001': {'receipt': 'verification'}})
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
+            receipt_path = write_receipt(root, 'verification', 'pass')
+            receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+            self.assertRegex(receipt['architecture_digest'], r'^[0-9a-f]{64}$')
+            self.assertRegex(receipt['architecture_fingerprint'], r'^[0-9a-f]{64}$')
+            self.assertEqual(receipt['criterion_ids'], ['AC-001'])
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+            receipt.pop('architecture_digest')
+            receipt.pop('architecture_fingerprint')
+            receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+            self.assertTrue(any('architecture binding stale' in gap for gap in validate_evidence(root, route)))
+
+
+    def test_parent_contract_receipt_survives_scratch_churn_but_stales_on_product_edit(self) -> None:
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Review current code', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            receipt_path = write_receipt(root, 'verification', 'pass')
+            original_receipt = receipt_path.read_bytes()
+            scratch = root / '.qwen/tmp/probe'
+            scratch.parent.mkdir(parents=True)
+            for content in ('one', 'two'):
+                scratch.write_text(content, encoding='utf-8')
+                self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            scratch.unlink()
+            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            scratch.write_text('mixed scratch and product edit', encoding='utf-8')
+            with (root / 'VERSION').open('a', encoding='utf-8') as handle:
+                handle.write('\nproduct changed\n')
+            gaps = validate_evidence(root, route)
+            self.assertIn('verification: stale after repository changes', gaps)
+            self.assertEqual(original_receipt, receipt_path.read_bytes())
+
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX filenames can contain non-UTF-8 bytes')
+    @unittest.skipIf(sys.platform == 'darwin', 'APFS refuses file names that are not valid UTF-8')
+    def test_parent_contract_receipt_roundtrips_non_utf8_changed_file_names(self) -> None:
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Review current code', 's1')
+            route['required_evidence'] = ['verification']
+            activate_owned_route(root, route)
+            rel = os.fsdecode(b'source-\xff.py')
+            (root / rel).write_text('one', encoding='utf-8')
+            path = write_receipt(root, 'verification', 'pass', details={'changed_files': [rel]})
+            receipt = json.loads(path.read_bytes().decode('utf-8'))
+            self.assertEqual([rel], receipt['details']['changed_files'])
+            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+            (root / rel).write_text('two', encoding='utf-8')
+            self.assertIn('verification: stale after repository changes', validate_evidence(root, route))
+
+
+    def test_parent_contract_every_receipt_kind_selects_only_its_declared_criteria(self) -> None:
+        kinds = ['verification', 'code_review', 'test_review', 'security_review', 'release_review']
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Добавить функцию', 's1')
+            route['required_evidence'] = kinds
+            activate_owned_route(root, route)
+            start_change(root)
+            active = get_active_change(root) or {}
+            self._install_spec(root, active, {
+                f'AC-{index:03d}': {'receipt': kind}
+                for index, kind in enumerate(kinds, 1)
+            })
+            review = prepare_review_source(root)
+            for index, kind in enumerate(kinds, 1):
+                receipt = json.loads(write_receipt(root, kind, 'pass', **(review if kind != 'verification' else {})).read_text(encoding='utf-8'))
+                self.assertEqual(receipt['criterion_ids'], [f'AC-{index:03d}'])
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route), _MISSING_REQUIRED_PLAN)
+
+
+    def test_parent_contract_receipts_validate_against_current_tree(self) -> None:
+        with project_copy(git=True) as root:
+            route = _legacy_receipt_route(root, 'Исправить PHP баг', 's1')
+            route['required_evidence'] = ['verification', 'code_review']
+            activate_owned_route(root, route)
+            review = prepare_review_source(root)
+            write_receipt(root, 'verification', 'pass')
+            write_receipt(root, 'code_review', 'pass', **review)
+            self.assertEqual(validate_evidence(root, route), _MISSING_REQUIRED_PLAN)
+
+
+
 
 class ContourTests(unittest.TestCase):
+    def test_contour_route_change_verify_review_has_no_evidence_gaps(self) -> None:
+        with project_copy(git=True, verification_fixture=True) as root:
+            route = build_route(root, 'Добавить функцию', 's1').to_dict()
+            base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            route['base_commit'] = base
+            subprocess.run(['git', 'update-ref', 'refs/remotes/origin/main', base], cwd=root, check=True)
+            route['required_evidence'] = ['verification', 'code_review', 'test_review']
+            route['quality_profiles'] = ['base']
+            route['delivery_lane'] = 'full'
+            activate_owned_route(root, route)
+            start_change(root)
+            active = get_active_change(root)
+            self.assertIsNotNone(active)
+            change = root / str(active['path'])
+            tests_dir = root / 'tests'
+            tests_dir.mkdir(exist_ok=True)
+            (tests_dir / 'test_ok.py').write_text(_PASSING_UNITTEST, encoding='utf-8')
+            evidence = change / 'evidence'
+            evidence.mkdir(parents=True, exist_ok=True)
+            (evidence / 'code-review.md').write_text('# dummy code review\n', encoding='utf-8')
+            (evidence / 'test-review.md').write_text('# dummy test review\n', encoding='utf-8')
+            review = prepare_review_source(root)
+            from getzilla.review_plan import reconcile_route
+            reconciled = reconcile_route(root, additional_reviewers=('test_reviewer',))
+            self.assertEqual(reconciled['risk_assessment']['status'], 'complete')
+            report = verify(root, mode='fast', record=True)
+            checks = {item['name']: item for item in report['checks']}
+            self.assertIn('python-unittest', checks)
+            self.assertEqual(checks['python-unittest']['status'], 'pass')
+            write_receipt(root, 'code_review', 'pass', **review)
+            write_receipt(root, 'test_review', 'pass', **review)
+            # A full task's fast observation remains readable but is not PR qualification.
+            self.assertEqual(validate_evidence(root, get_active_route(root) or route),
+                             ['verification: current required plan or individual evidence is unavailable or stale'])
+            self.assertEqual(json.loads((root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json').read_text())['review_plan_digest'],
+                             reconciled['review_plan']['digest'])
+
     def test_contour_incomplete_fast_verification_remains_unqualified_despite_reviews(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Добавить функцию', 's1').to_dict()
@@ -807,6 +974,13 @@ class ContourTests(unittest.TestCase):
             self.assertTrue(any(item.startswith('verification:') for item in validate_evidence(root, get_active_route(root) or route)))
             self.assertEqual(json.loads((root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json').read_text())['review_plan_digest'],
                              reconciled['review_plan']['digest'])
+
+
+
+
+
+_MISSING_REQUIRED_PLAN = ['verification: required-plan-unavailable: required_plan: '
+                          'qualifying verification requires an embedded required_plan']
 
 
 if __name__ == '__main__':

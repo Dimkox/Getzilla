@@ -19,6 +19,32 @@ PASS_LINE = (
 DIAGNOSTIC_SENTINEL = "test-only-diagnostic-payload"
 
 
+class LiveProducerSourceTests(unittest.TestCase):
+    def test_bound_live_failure_keeps_primary_when_owned_cleanup_fails(self):
+        import tempfile
+        primary = RuntimeError('owned primary')
+        cleanup = PermissionError('owned cleanup')
+        binding = {'head':'a'*40,'tree':'b'*40,'run_id':'owned','attempt':'1','cell':'factory',
+                   'namespace':'gz-owned','nonce':'c'*32,'producer_sha256':'d'*64}
+        owner = unittest.mock.Mock()
+        owner.cleanup.side_effect = cleanup
+        with tempfile.TemporaryDirectory() as raw, \
+                patch('subprocess.Popen', side_effect=AssertionError('unmocked child forbidden')), \
+                patch('socket.socket.connect', side_effect=AssertionError('unmocked network forbidden')), \
+                patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING':'owned', 'GETZILLA_LIVE_ARTIFACTS':raw}), \
+                patch.object(runner,'read_document',return_value=binding), \
+                patch.object(runner,'OwnedDocker',return_value=owner), \
+                patch.object(runner,'_postgres',side_effect=primary):
+            environment=runner.Path(raw)/'factory-live-venv-owned'
+            environment.mkdir(mode=0o700)
+            runner.os.environ['UV_PROJECT_ENVIRONMENT']=str(environment)
+            with self.assertRaises(RuntimeError) as caught:
+                runner.main()
+        self.assertIs(caught.exception, primary)
+        owner.cleanup.assert_called_once()
+        self.assertTrue(any('cleanup=resources' in note for note in caught.exception.__notes__))
+
+
 class DisposableExitTests(unittest.TestCase):
     def test_error_diagnostics_name_only_a_fixed_docker_operation(self):
         for command, operation in ((["docker", "port", CONTAINER_ID, "5432/tcp"], "docker.port"),
@@ -84,6 +110,7 @@ class DisposableExitTests(unittest.TestCase):
             return ("172.28.0.2" if item["id"] == CONTAINER_ID else "172.28.0.3"), 5432
 
         with (
+            patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': ''}),
             patch.object(runner.subprocess, "run", side_effect=docker),
             patch.object(runner, "_binding_matches", return_value=True),
             patch.object(runner, "_final_postgres_ready", return_value=True),

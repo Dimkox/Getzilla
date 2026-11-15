@@ -37,6 +37,8 @@ flowchart LR
     node_23677f8757246623["NODE-GOVERNANCE-VALIDATOR | local_component | repository engineering"]
     node_a02e5f5306abe637["NODE-ISOLATED-ACCEPTANCE | local_component | repository engineering"]
     node_29363a281e26c870["NODE-ISOLATED-DOCKER | local_component | ephemeral local or GitHub Actions runner; never production"]
+    node_81fcab772d947882["NODE-LIVE-COMPONENT-OBSERVER | local_component | local component test operators"]
+    node_15647433e781e546["NODE-LIVE-DISPOSABLE-POSTGRES | datastore | local component test operators"]
     node_052b9b5f7c4415eb["NODE-LOCAL-CI-ADMISSION | local_component | repository engineering"]
     node_47745d4c55496199["NODE-LOCAL-CI-GATE | local_component | repository engineering"]
     node_3703dbb382efdb0f["NODE-LOCAL-DEMO-TEST-CLIENT | local_component | repository engineering"]
@@ -145,6 +147,8 @@ flowchart LR
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-INPUT-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-RESOURCE-CONTROL | dependency | docker_api"| node_29363a281e26c870
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api"| node_4e78270f61d78ed8
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql"| node_15647433e781e546
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8

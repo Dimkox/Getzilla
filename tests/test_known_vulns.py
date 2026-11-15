@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import io
 import os
 import runpy
+from unittest import mock
+
+import io
 import copy
 import json
 import subprocess
@@ -13,7 +15,6 @@ import zipfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -332,24 +333,28 @@ class PolicyTests(unittest.TestCase):
                 KV.load_config(root)
 
 
-class AcceptedVerifierDetailTests(unittest.TestCase):
+class VerifierDetailTests(unittest.TestCase):
     def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
         # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
         from unittest.mock import patch
         from getzilla import verification
+        from getzilla.expanded_security import _result
         finding = KV.Finding(
             dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
             vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
             summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
         )
-        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
-                  'findings': [finding.to_dict()], 'accepted': []}
-        structured = {'name': 'known-vulnerabilities', 'status': report['status'], 'summary': report['summary'],
-                      'details': [{'kind': 'security-result', 'findings': report['findings'], 'accepted': report['accepted']}]}
-        with patch.object(verification, 'known_vulnerability_check', return_value=structured):
-            result = verification._known_vulnerabilities(ROOT)
+        report = _result('known-vulnerabilities', 'finding',
+                         '1 known vulnerabilities in 1 pinned packages (owned fixture)',
+                         {'digest': 'a' * 64}, 'b' * 64, findings=[finding.to_dict()])
+        report['details'][0]['accepted'] = []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(Path(directory))
         self.assertEqual(result.status, 'fail')
-        detail = result.details[-1]
+        self.assertEqual(result.details[0], report['details'][0])
+        self.assertEqual(result.details[0]['kind'], 'security-result')
+        [detail] = [row for row in result.details if 'message' in row]
         self.assertEqual(detail['severity'], 'MODERATE')
         self.assertEqual(detail['path'], 'requirements.txt')
         self.assertEqual(
@@ -359,6 +364,36 @@ class AcceptedVerifierDetailTests(unittest.TestCase):
         )
         self.assertEqual(detail['package'], 'jinja2')
         self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+    def test_parent_contract_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
+                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
+                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        [structured, detail] = result.details
+        self.assertEqual(structured['findings'], [finding.to_dict()])
+        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
 
 
 class QualityGateTests(unittest.TestCase):
@@ -532,7 +567,9 @@ class NativeAliasTests(unittest.TestCase):
             self.assertEqual(finding.aliases, [])
 
 
-class VerifierDetailTests(unittest.TestCase):
+
+
+class AcceptedVerifierDetailTests(unittest.TestCase):
     def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
         # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
         from unittest.mock import patch
@@ -542,15 +579,14 @@ class VerifierDetailTests(unittest.TestCase):
             vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
             summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
         )
-        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
-                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
-                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
-        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
+                  'findings': [finding.to_dict()], 'accepted': []}
+        structured = {'name': 'known-vulnerabilities', 'status': report['status'], 'summary': report['summary'],
+                      'details': [{'kind': 'security-result', 'findings': report['findings'], 'accepted': report['accepted']}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=structured):
             result = verification._known_vulnerabilities(ROOT)
         self.assertEqual(result.status, 'fail')
-        [structured, detail] = result.details
-        self.assertEqual(structured['findings'], [finding.to_dict()])
-        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        detail = result.details[-1]
         self.assertEqual(detail['severity'], 'MODERATE')
         self.assertEqual(detail['path'], 'requirements.txt')
         self.assertEqual(
@@ -560,12 +596,6 @@ class VerifierDetailTests(unittest.TestCase):
         )
         self.assertEqual(detail['package'], 'jinja2')
         self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
-
-
-
-
-
-
 
 
 

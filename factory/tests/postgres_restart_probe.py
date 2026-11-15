@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import ipaddress
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -16,13 +14,13 @@ import time
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import uuid
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla.disposable_resources import image_pins, internal_postgres_endpoint
-POSTGRES = image_pins(ROOT)["postgres"]
-
 SOURCE = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SOURCE))
+sys.path.insert(0, str(SOURCE.parents[1] / '.getzilla'))
+from getzilla.disposable_resources import image_pins
+from getzilla.live_acceptance import owned_postgres_endpoint, restart_observation, _write, read_document
+POSTGRES = image_pins(SOURCE.parents[1])['postgres']
+_RESTART_OBSERVATIONS = []
 
 if __package__:
     from .postgres_fixture_reset import reset_fixture_tables
@@ -70,8 +68,6 @@ from getzilla_factory.workspace import (
 )
 
 
-_RESTART_OBSERVATIONS = []
-
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 _DATABASE_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
@@ -90,14 +86,8 @@ def _database_url_for_login(database_url: str, login: str, password: str) -> str
 
 
 def _database_url_at_port(database_url: str, port: int) -> str:
-    return _database_url_at_endpoint(database_url, "127.0.0.1", port)
-
-
-def _database_url_at_endpoint(database_url: str, host: str, port: int) -> str:
     if (type(port) is int, 1 <= port <= 65_535) != (True, True):
         raise ValueError("invalid PostgreSQL port")
-    if str(ipaddress.IPv4Address(host)) != host:
-        raise ValueError("noncanonical PostgreSQL endpoint")
     parsed = urlsplit(database_url)
     if (parsed.scheme in {"postgres", "postgresql"}, parsed.username is not None,
         parsed.password is not None) != (True, True, True):
@@ -109,7 +99,7 @@ def _database_url_at_endpoint(database_url: str, host: str, port: int) -> str:
     return urlunsplit(
         (
             parsed.scheme,
-            f"{userinfo}{host}:{port}",
+            f"{userinfo}127.0.0.1:{port}",
             parsed.path,
             parsed.query,
             "",
@@ -145,18 +135,26 @@ def _published_port(container_name: str) -> int:
     return port
 
 
-def _bound_endpoint(container_name: str, container_id: str, nonce: str) -> tuple[str, int]:
-    network_id = os.environ.get("FACTORY_TEST_POSTGRES_NETWORK_ID")
-    namespace = os.environ.get("FACTORY_TEST_POSTGRES_NAMESPACE")
-    if network_id is not None or namespace is not None:
-        if not network_id or not namespace:
-            raise RuntimeError("Incomplete internal PostgreSQL network authority")
-        return internal_postgres_endpoint(container_id=container_id, container_name=container_name,
-            image=POSTGRES["reference"], image_id=POSTGRES["image_id"], nonce=nonce,
-            namespace=namespace, network_id=network_id)
-    # Compatibility path: absent explicit owned-network authority never grants
-    # permission for an arbitrary private address or container hostname.
-    return "127.0.0.1", _published_port(container_id)
+def _owned_endpoint(container_name, container_id, nonce):
+    return owned_postgres_endpoint(Path(os.environ['FACTORY_TEST_POSTGRES_JOURNAL']),
+        container_name=container_name, container_id=container_id, nonce=nonce,
+        namespace=os.environ['FACTORY_TEST_POSTGRES_NAMESPACE'],
+        network_id=os.environ['FACTORY_TEST_POSTGRES_NETWORK_ID'], pin=POSTGRES)
+
+
+def _owned_mode(container_name):
+    return bool(os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL') and container_name.startswith('gz-'))
+
+
+def _assert_owned_endpoint(database_url, container_name, container_id, nonce):
+    """Validate original births and exact DSN before any database identity SQL."""
+    host, port = _owned_endpoint(container_name, container_id, nonce)
+    from psycopg.conninfo import conninfo_to_dict
+    values = conninfo_to_dict(database_url)
+    if (set(values) != {'user', 'password', 'dbname', 'host', 'port'}
+            or values['user'] != 'factory_exit' or values['dbname'] != 'factory_exit'
+            or values['host'] != host or values['port'] != str(port) or not values['password']):
+        raise ValueError('Database URL differs from original owned internal endpoint')
 
 
 def _assert_disposable_target(
@@ -165,7 +163,10 @@ def _assert_disposable_target(
     container_id: str,
     nonce: str,
 ) -> None:
-    if (re.fullmatch(r"(?:adaptive-factory-exit-[0-9a-f]{12}|gz-[a-z0-9-]{1,90})", container_name) is not None,
+    if _owned_mode(container_name):
+        _assert_owned_endpoint(database_url, container_name, container_id, nonce)
+        return _assert_cluster_session(database_url, container_id)
+    if (re.fullmatch(r"adaptive-factory-exit-[0-9a-f]{12}", container_name) is not None,
         _CONTAINER_ID.fullmatch(container_id) is not None, _NONCE.fullmatch(nonce) is not None) != (True, True, True):
         raise RuntimeError("invalid disposable PostgreSQL identity")
     metadata = subprocess.run(
@@ -174,7 +175,7 @@ def _assert_disposable_target(
             "inspect",
             "--format",
             '{{.Id}}\t{{.Name}}\t{{.Config.Image}}\t{{.State.Running}}\t'
-            '{{index .Config.Labels "getzilla.ci.nonce"}}\t{{.Image}}',
+            '{{index .Config.Labels "adaptive-factory.disposable-exit"}}',
             container_id,
         ],
         check=True,
@@ -185,28 +186,30 @@ def _assert_disposable_target(
     if metadata != [
         container_id,
         f"/{container_name}",
-        POSTGRES["reference"],
+        "postgres:17-alpine",
         "true",
         nonce,
-        POSTGRES["image_id"],
     ]:
         raise RuntimeError("disposable PostgreSQL container binding mismatch")
 
     from psycopg.conninfo import conninfo_to_dict
 
     values = conninfo_to_dict(database_url)
-    host, port = _bound_endpoint(container_name, container_id, nonce)
     if (
         set(values) != {"user", "password", "dbname", "host", "port"}
         or values.get("user") != "factory_exit"
         or values.get("dbname") != "factory_exit"
-        or values.get("host") != host
-        or values.get("port") != str(port)
+        or values.get("host") != "127.0.0.1"
+        or values.get("port") != str(_published_port(container_id))
         or not values.get("password")
         or not _DATABASE_ID.fullmatch(values["user"])
         or not _DATABASE_ID.fullmatch(values["dbname"])
     ):
         raise RuntimeError("database URL is not the named disposable PostgreSQL")
+    return _assert_cluster_session(database_url, container_id)
+
+
+def _assert_cluster_session(database_url, container_id):
     pid1 = subprocess.run(
         [
             "docker",
@@ -251,6 +254,7 @@ def _assert_disposable_target(
     ).stdout.strip()
     if not _database_session_is_bound(direct, inside):
         raise RuntimeError("disposable database session identity is invalid")
+    return direct[3]
 
 
 def _database_session_is_bound(direct, inside: str) -> bool:
@@ -315,7 +319,7 @@ def _restart_database(
     runtime_url: str,
     attestor_url: str,
 ):
-    _assert_disposable_target(
+    previous_cluster = _assert_disposable_target(
         owner_url, container_name, container_id, nonce
     )
     previous_start = _postmaster_started_at(owner_url)
@@ -325,13 +329,17 @@ def _restart_database(
         timeout=30,
         stdout=subprocess.DEVNULL,
     )
-    host, port = _bound_endpoint(container_name, container_id, nonce)
-    urls = tuple(
-        _database_url_at_endpoint(value, host, port)
-        for value in (owner_url, runtime_url, attestor_url)
-    )
+    if _owned_mode(container_name):
+        host, port = _owned_endpoint(container_name, container_id, nonce)
+        parts = urlsplit(owner_url)
+        if parts.hostname != host or parts.port != port:
+            raise ValueError('Owned restart endpoint changed before database wait')
+        urls = (owner_url, runtime_url, attestor_url)
+    else:
+        port = _published_port(container_id)
+        urls = tuple(_database_url_at_port(value, port) for value in (owner_url, runtime_url, attestor_url))
     _wait_for_database(urls[0])
-    _assert_disposable_target(
+    current_cluster = _assert_disposable_target(
         urls[0], container_name, container_id, nonce
     )
     current_start = _postmaster_started_at(urls[0])
@@ -339,8 +347,11 @@ def _restart_database(
         current_start > previous_start,
         "docker restart did not replace the PostgreSQL postmaster",
     )
-    _RESTART_OBSERVATIONS.append({"container_id": container_id,
-                                  "before": str(previous_start), "after": str(current_start)})
+    _require(current_cluster == previous_cluster, 'PostgreSQL restart changed the original cluster')
+    if _owned_mode(container_name) and os.environ.get('GETZILLA_LIVE_BINDING'):
+        _RESTART_OBSERVATIONS.append(restart_observation(
+            {'postmaster': previous_start.isoformat(), 'cluster': previous_cluster},
+            {'postmaster': current_start.isoformat(), 'cluster': current_cluster}))
     return urls
 
 
@@ -1209,6 +1220,7 @@ def _assert_durable_recovery(
 
 
 def main() -> int:
+    _RESTART_OBSERVATIONS.clear()
     parser = argparse.ArgumentParser()
     parser.add_argument("--database-url-env", default="FACTORY_TEST_DATABASE_URL")
     parser.add_argument(
@@ -1745,18 +1757,18 @@ def main() -> int:
          runtime_store.verify_audit_chain(task_b.task_id)) == (True, True),
         "replacement/late-fence proof broke the task audit hash chain",
     )
-    if os.environ.get("GETZILLA_LIVE_ARTIFACTS"):
-        if len(_RESTART_OBSERVATIONS) != 2:
-            raise RuntimeError("Two actual PostgreSQL restart observations are required")
-        report = Path(os.environ["GETZILLA_LIVE_ARTIFACTS"]) / "factory-restart.json"
-        with report.open("x") as stream:
-            json.dump({"status": "pass", "restarts": _RESTART_OBSERVATIONS,
-                       "workspace_scope": "FakeWorkspaceBroker and modeled ambiguous workspace release; database restart is real"}, stream)
     print(
         "PASS: two PostgreSQL restarts; exact runtime/attestor roles; "
         "cancelled+orphaned recovery; ambiguous cleanup fence2 replay; "
         "zero fabricated proposal/result/attestation; higher M4 fence"
     )
+    if os.environ.get('GETZILLA_LIVE_BINDING'):
+        if len(_RESTART_OBSERVATIONS) != 2:
+            raise RuntimeError('Complete actual two-restart observations are required')
+        _write(Path(os.environ['GETZILLA_LIVE_ARTIFACTS'])/'factory-restart.json', {
+            'schema': 'getzilla-live-restart-v1', 'status': 'pass',
+            'binding': read_document(Path(os.environ['GETZILLA_LIVE_BINDING'])),
+            'restarts': _RESTART_OBSERVATIONS})
     return 0
 
 

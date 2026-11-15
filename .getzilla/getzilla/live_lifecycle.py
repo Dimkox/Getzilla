@@ -11,23 +11,21 @@ import os
 import re
 from pathlib import Path
 import signal
-import subprocess
 import sys
 import threading
 import time
 
 from .disposable_resources import OwnedDocker, image_pins
-from .python_test_runner import RunCancelled, execute
+from .python_test_runner import RunCancelled, execute, cleanup_details
+from .live_acceptance import _write, _held_bytes, read_document, acknowledge_cleanup, seal_component
 
 
 def _run(*args, timeout=30):
-    return subprocess.run(["docker", *args], check=True, capture_output=True,
-                          text=True, encoding="utf-8", timeout=timeout).stdout.strip()
-
-
-def _write(path, value):
-    with path.open("x", encoding="utf-8", newline="\n") as stream:
-        json.dump(value, stream, indent=2, sort_keys=True)
+    result = execute(["docker", *args], Path.cwd(), dict(os.environ), timeout=timeout)
+    facts = cleanup_details(result)
+    if result.returncode or result.terminal_state != 'completed' or facts['facts'] or facts['overflow'] or facts['unavailable']:
+        raise RuntimeError('Bounded lifecycle Docker command failed or cleanup is unknown')
+    return result.stdout.strip()
 
 
 def inventory():
@@ -37,13 +35,17 @@ def inventory():
 
 
 def cycles_accepted(rows):
-    if not (len(rows) == 100 and [row.get("cycle") for row in rows] == list(range(1, 101))
+    if not (isinstance(rows, list) and len(rows) == 100 and all(isinstance(row, dict) for row in rows)
+            and [row.get("cycle") for row in rows] == list(range(1, 101))
             and all(row.get("status") == "pass" and row.get("disposable_remaining") == 0
                     and row.get("protected_unchanged") is True and row.get("payload_bytes") == 1024
                     and row.get("directory_payload_bytes") == 1024 for row in rows)):
         return False
     seen = set()
     for row in rows:
+        mode = {96:'sigint',97:'sigterm',98:'failure',99:'timeout',100:'kill'}.get(row['cycle'],'normal')
+        if row.get('mode') != mode:
+            return False
         resources = row.get("resources", [])
         if (len(resources) != 4 or {item.get("kind") for item in resources} != {"container", "volume", "network", "directory"}
                 or any(not re.fullmatch(r"gz-[a-z0-9-]+", item.get("name", "")) for item in resources)):
@@ -113,10 +115,11 @@ def worker(root, output, namespace, mode):
             elif primary is not None:
                 primary.add_note("Worker cleanup unconfirmed: " + type(cleanup).__name__)
         try:
-            _write(output / (namespace + "-ack.json"), {"cleanup": cleanup_status,
+            _write(output / (namespace + "-ack.json"), {"cleanup": cleanup_status, 'namespace': namespace,
+                'nonce': getattr(owner, 'nonce', None),
                 "allocator_pid": os.getpid(), "primary_exit": code,
                 "primary_error": type(primary).__name__ if primary else None})
-        except OSError as acknowledgement:
+        except BaseException as acknowledgement:
             if code == 0:
                 code = 1
             if primary is not None:
@@ -147,8 +150,7 @@ def _child_cycle(root, output, namespace, mode):
     cancellation = None
     try:
         try:
-            result = execute(command, root, dict(os.environ), timeout=35 if mode == "timeout" else 45,
-                             termination_grace=120)
+            result = execute(command, root, dict(os.environ), timeout=35 if mode == "timeout" else 45)
         except RunCancelled as exc:
             cancellation = exc.signal_number
             result = exc.result
@@ -156,15 +158,19 @@ def _child_cycle(root, output, namespace, mode):
         timer_done.set()
         if timer:
             timer.join(timeout=1)
-    if result is None or result.cleanup_error:
+    facts = cleanup_details(result) if result is not None else None
+    if facts is None or facts['facts'] or facts['overflow'] or facts['unavailable']:
         raise RuntimeError("Lifecycle child exit was not confirmed")
     journal = output / (namespace + "-resources.json")
     if mode == "kill":
         if result.returncode != -signal.SIGKILL:
             raise RuntimeError("Abrupt death fixture did not die after binding")
         # A new process, not an in-memory instance of the old allocator, reconciles it.
-        subprocess.run([sys.executable, str(root / "scripts/getzilla_live_lifecycle.py"),
-                        "--recover", str(journal)], check=True, timeout=150)
+        recovery = execute([sys.executable, str(root / "scripts/getzilla_live_lifecycle.py"),
+                            "--recover", str(journal)], root, dict(os.environ), timeout=150)
+        details = cleanup_details(recovery)
+        if recovery.returncode or recovery.terminal_state != 'completed' or details['facts'] or details['overflow'] or details['unavailable']:
+            raise RuntimeError('Lifecycle recovery exit is unconfirmed')
         cleanup_kind = "observer_recovery"
     else:
         expected = 23 if mode == "failure" else 124 if mode == "timeout" else 130
@@ -173,20 +179,20 @@ def _child_cycle(root, output, namespace, mode):
                 raise RuntimeError("Verifier did not observe the requested cancellation")
         elif result.returncode != expected:
             raise RuntimeError("Primary failure or timeout was lost")
-        if json.loads((output / (namespace + "-ack.json")).read_text(encoding="utf-8")).get("cleanup") != "removed":
+        if read_document(output / (namespace + "-ack.json")).get("cleanup") != "removed":
             raise RuntimeError("Native cleanup acknowledgement is absent")
         cleanup_kind = "native_acknowledged"
     owner = OwnedDocker.recover(journal)
     owner.cleanup()
     if owner.cleanup_status != "removed":
         raise RuntimeError("Lifecycle cleanup readback failed")
-    sample = json.loads((output / (namespace + "-sample.json")).read_text(encoding="utf-8"))
+    sample = read_document(output / (namespace + "-sample.json"))
     return {**sample, "mode": mode, "cleanup_kind": cleanup_kind,
             "child_returncode": result.returncode, "cancellation": cancellation,
             "disposable_remaining": sum(item["status"] != "removed" for item in owner.resources)}
 
 
-def run(root, output, namespace):
+def run(root, output, namespace, binding=None):
     baseline = inventory()
     protected_file = output / "protected-evidence.txt"
     protected_file.write_bytes(b"lifecycle retained evidence\n")
@@ -227,6 +233,7 @@ def run(root, output, namespace):
                             raise
                         cycle_error.add_note("Cycle cleanup unconfirmed: " + type(cleanup).__name__)
                 owner.cleanup()  # at-least-once finalization must preserve other runs
+                acknowledge_cleanup(owner)
                 row = {**sample, "mode": mode, "cleanup_kind": "native",
                        "disposable_remaining": sum(item["status"] != "removed" for item in owner.resources)}
             else:
@@ -245,6 +252,7 @@ def run(root, output, namespace):
     cleanup_error = None
     try:
         foreign.cleanup()
+        acknowledge_cleanup(foreign)
     except BaseException as exc:
         cleanup_error = exc
         if primary is None:
@@ -260,7 +268,7 @@ def run(root, output, namespace):
         else:
             primary.add_note("Final resource inventory unavailable: " + type(exc).__name__)
     passed = primary is None and cycles_accepted(rows) and baseline == after
-    _write(output / "lifecycle.json", {"check_id": "factory-lifecycle", "cycles": rows,
+    _write(output / "lifecycle.json", {"check_id": "factory-lifecycle", "cycles": rows, 'binding': binding,
         "status": "pass" if passed else "fail", "resources_before": baseline, "resources_after": after,
         "primary_error": type(primary).__name__ if primary else None,
         "cleanup_error": type(cleanup_error).__name__ if cleanup_error else None,
@@ -270,6 +278,11 @@ def run(root, output, namespace):
         raise primary
     if not passed:
         raise RuntimeError("Disposable resource inventory did not return to baseline")
+    if binding is not None:
+        index = {path.name: hashlib.sha256(_held_bytes(path)).hexdigest()
+                 for path in sorted(output.glob('*-resources.json'))}
+        _write(output/'lifecycle-resource-index.json', {'binding': binding, 'journals': index})
+        seal_component(output, 'lifecycle.json', 'lifecycle-resource-index.json', binding)
 
 
 def main(argv=None):
