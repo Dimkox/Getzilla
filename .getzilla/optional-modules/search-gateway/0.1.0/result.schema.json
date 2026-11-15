@@ -73,7 +73,7 @@
           },
           "url": {
             "type": "string",
-            "pattern": "^https?://",
+            "pattern": "^[hH][tT][tT][pP][sS]?://",
             "maxLength": 8192
           },
           "snippet": {
@@ -135,7 +135,7 @@
                 },
                 "source_url": {
                   "type": "string",
-                  "pattern": "^https?://",
+                  "pattern": "^[hH][tT][tT][pP][sS]?://",
                   "maxLength": 8192
                 },
                 "untrusted": {

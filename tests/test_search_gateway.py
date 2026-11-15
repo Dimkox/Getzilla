@@ -105,6 +105,25 @@ class SearchBehavior(unittest.TestCase):
                 self.assertEqual(source['engine'], 'google')
                 self.assertIsNone(result['usage']['actual_cost_microusd'])
 
+    def test_mixed_case_http_schemes_preserve_urls_and_validate_full_result(self):
+        import jsonschema
+        schema = json.loads((ARTIFACT / 'result.schema.json').read_text())
+        validator = jsonschema.Draft202012Validator(schema)
+        for url in ('HTTPS://example.invalid/Case?Q=One#section',
+                    'hTtP://example.invalid/Case?Q=One#section'):
+            with self.subTest(url=url):
+                def send(request, timeout):
+                    rows = [{'title': 'Evidence', 'link': url, 'snippet': 'untrusted text'}]
+                    return 200, {}, json.dumps(payload('serper', rows)).encode()
+                result = self.service(send=send).web_search({'query': 'preserve source URL'})
+                self.assertEqual(result['status'], 'ok')
+                self.assertEqual(result['results'][0]['url'], url)
+                self.assertEqual(result['results'][0]['provenance'][0]['source_url'], url)
+                self.assertTrue(result['results'][0]['provenance'][0]['untrusted'])
+                errors = [(list(error.absolute_path), error.message)
+                          for error in validator.iter_errors(result)]
+                self.assertEqual(errors, [])
+
     def test_authority_and_invalid_input_are_rejected_before_transport(self):
         for request in ({'query': 'a', 'endpoint': 'https://evil.invalid'}, {'query': 'a', 'project': 'other'},
                         {'query': 'a', 'budget': {}}, {'query': 'a', 'credential': 'x'},
