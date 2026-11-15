@@ -11,7 +11,6 @@ import time
 
 from . import fsx
 from . import verification_journal as diagnostics
-from .verification_failure_excerpt import policy_exception_diagnostic, valid_policy_diagnostic
 
 MAX_WORKERS = 64
 MAX_SLOT_BYTES = 2048
@@ -200,7 +199,10 @@ class _WorkerProgress:
         self._pending_diagnostic = None
         yield
         try:
-            value = policy_exception_diagnostic(call.excinfo.value) if call.excinfo is not None else None
+            if call.excinfo is None:
+                return
+            from .verification_failure_excerpt import policy_exception_diagnostic
+            value = policy_exception_diagnostic(call.excinfo.value)
             if value is not None:
                 self._pending_diagnostic = (item.nodeid, call.when, value)
         except Exception:
@@ -537,8 +539,12 @@ def _read_failure_prefix(handle, ordinal, nonce):
                     or any(part in {'', '.', '..'} for part in row['path'].split('/'))
                     or type(row['key']) is not str or not re.fullmatch('[0-9a-f]{64}', row['key'])):
                 raise ValueError('invalid failure source')
-            if 'diagnostic' in row and not valid_policy_diagnostic(row['diagnostic']):
-                raise ValueError('invalid failure diagnostic')
+            if 'diagnostic' in row:
+                value = row['diagnostic']
+                if (type(value) is not dict or set(value) != {'decision', 'reason'}
+                        or type(value['decision']) is not str or value['decision'] not in {'allow', 'deny', 'unavailable'}
+                        or type(value['reason']) is not str or value['reason'] not in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
+                    raise ValueError('invalid failure diagnostic')
             event = {key: row[key] for key in ('ordinal', 'phase', 'path', 'key')}
             if 'diagnostic' in row:
                 event['diagnostic'] = row['diagnostic']

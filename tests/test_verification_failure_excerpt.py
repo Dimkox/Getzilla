@@ -12,6 +12,39 @@ from getzilla import verification_failure_excerpt as verification_module  # noqa
 
 
 class PytestFailureExcerptTests(unittest.TestCase):
+    def test_progress_import_survives_unavailable_optional_diagnostic_helper(self):
+        import builtins
+        import importlib.util
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        original_import = builtins.__import__
+        blocked = []
+        def without_helper(name, *args, **kwargs):
+            if name.rsplit('.', 1)[-1] == 'verification_failure_excerpt':
+                blocked.append(name)
+                raise ImportError('owned optional helper unavailable')
+            return original_import(name, *args, **kwargs)
+        spec = importlib.util.spec_from_file_location(
+            'getzilla.owned_optional_progress', ROOT / '.getzilla/getzilla/pytest_progress.py')
+        module = importlib.util.module_from_spec(spec)
+        with patch.object(builtins, '__import__', without_helper):
+            try:
+                spec.loader.exec_module(module)
+                outcome = 'imported'
+            except ImportError:
+                outcome = 'blocked'
+            self.assertEqual(outcome, 'imported', 'optional diagnostics must not prevent pure progress import')
+            holder = SimpleNamespace(_pending_diagnostic=None)
+            item = SimpleNamespace(nodeid='tests/test_owned.py::test_value')
+            call = SimpleNamespace(when='call', excinfo=SimpleNamespace(value=AssertionError(
+                'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')))
+            hook = module._WorkerProgress.pytest_runtest_makereport(holder, item, call)
+            next(hook)
+            with self.assertRaises(StopIteration):
+                next(hook)
+            self.assertIsNone(holder._pending_diagnostic)
+        self.assertEqual(len(blocked), 1, 'helper is attempted only inside the guarded diagnostic hook')
+
     def _owned_structured_observation(self):
         import os
         import tempfile
