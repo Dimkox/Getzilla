@@ -19,7 +19,7 @@ from getzilla.util import find_root  # noqa: E402
 NAME = 'search-gateway'
 VERSION = '0.1.0'
 PERMISSION = 'search.web'
-EXPECTED_MANIFEST_SHA256 = '559a4637d34fcee89ef6498e22c0e38e645d86808155805d3f91403be0f49fad'
+EXPECTED_MANIFEST_SHA256 = '0230f21451c0c26196dac38ac88c7661b0aa9de4c470e2be91ff0adcdac7351b'
 SOURCES = ('providers.py', 'gateway.py', 'interfaces.py')
 
 
