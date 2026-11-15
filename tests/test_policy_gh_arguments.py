@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla._policy_legacy import _http_write_resource, analyze_command_authority, production_targets  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, sensitive_action  # noqa: E402
+from getzilla.verification_failure_excerpt import policy_diagnostic  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
@@ -111,7 +112,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_quoted_selector_data_cannot_use_the_wrong_grant(self) -> None:
         self.grant('gh:other/project pr create')

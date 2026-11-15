@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
@@ -294,7 +295,7 @@ class ShellStatePolicyTests(unittest.TestCase):
             return
         if diagnostic is None:
             with self.subTest(layer='policy', command=command):
-                self.assertEqual(allowed, expected, (command, reason))
+                self.assertEqual(allowed, expected, policy_diagnostic(allowed, reason))
         code, result, error = run_hook(self.root, 'pre_tool_use.py', {
             **event, 'cwd': str(self.root), 'session_id': 'shell-state',
         })

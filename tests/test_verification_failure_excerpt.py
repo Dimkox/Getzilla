@@ -12,6 +12,45 @@ from getzilla import verification_failure_excerpt as verification_module  # noqa
 
 
 class PytestFailureExcerptTests(unittest.TestCase):
+    def test_owned_pytest_retains_safe_refusal_context_without_private_values(self):
+        import os
+        import tempfile
+        from getzilla.python_test_runner import execute
+        self.assertEqual(verification_module.policy_diagnostic(False,
+            'Policy resource budget exhausted: PRIVATE_DIAGNOSTIC_CANARY'),
+            'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            root = Path(raw)
+            (root / 'tests').mkdir()
+            (root / 'pytest.ini').write_text('[pytest]\n')
+            path = root / 'tests/test_owned_refusal.py'
+            path.write_text("import unittest\n"
+                            "def test_owned_refusal():\n"
+                            "    unittest.TestCase().assertEqual(False, True, 'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget PRIVATE_DIAGNOSTIC_CANARY')\n")
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith(('GETZILLA_JOURNAL_', 'PYTEST_'))}
+            environment['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
+            proc = execute([sys.executable, '-m', 'pytest', '-q', '--tb=short', '-c', 'pytest.ini',
+                            'tests/test_owned_refusal.py'], root, environment, timeout=20)
+            self.assertEqual(proc.terminal_state, 'completed')
+            self.assertEqual(proc.returncode, 1)
+            excerpt = verification_module._core_output_excerpt(proc.stdout, failed=True, pytest_output=True,
+                trusted={'tests/test_owned_refusal.py': (3, {'test_owned_refusal'})})
+            self.assertIn('policy_diagnostics=', excerpt)
+            diagnostic = json.loads(next(line.split('=', 1)[1] for line in excerpt.splitlines()
+                                         if line.startswith('policy_diagnostics=')))
+            self.assertEqual(diagnostic, [{'location': 'tests/test_owned_refusal.py:3',
+                                          'decision': 'deny', 'reason': 'budget'}])
+            self.assertNotIn('policy_diagnostics=', verification_module._core_output_excerpt(
+                proc.stdout, failed=True, pytest_output=True, trusted={}))
+            alternate = verification_module._core_output_excerpt(
+                proc.stdout.replace('False != True', 'False is not true'), failed=True, pytest_output=True,
+                trusted={'tests/test_owned_refusal.py': (3, {'test_owned_refusal'})})
+            self.assertIn('policy_diagnostics=', alternate)
+            self.assertNotIn('PRIVATE_DIAGNOSTIC_CANARY', excerpt)
+            self.assertNotIn('assert False', excerpt)
+            self.assertLessEqual(len(excerpt), 12000)
+
     def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
         output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'
                   '---- Captured stdout call ----\nSYNTHETIC_CAPTURE\n'

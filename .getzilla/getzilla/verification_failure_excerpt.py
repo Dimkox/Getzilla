@@ -7,6 +7,25 @@ import re
 from .process_limits import OUTPUT_LIMIT
 
 
+def policy_diagnostic(allowed, reason):
+    """Closed assertion context only; never retain the command or refusal value."""
+    decision = 'allow' if allowed is True else 'deny' if allowed is False else 'unavailable'
+    category = 'other'
+    if type(reason) is str and len(reason) <= 4096:
+        for code, prefixes in (
+            ('budget', ('Policy resource budget exhausted:',)),
+            ('grant', ('No active approval', 'Missing approval', 'Approval', 'Direct external write requires')),
+            ('secret', ('Blocked secret', 'Secret read', 'Blocked a secret')),
+            ('degraded', ('Getzilla policy did not load,',)),
+        ):
+            if reason.startswith(prefixes):
+                category = code
+                break
+        if reason.startswith('Sensitive action ') and ': root resolution status is ' in reason:
+            category = 'root'
+    return 'GETZILLA_POLICY_DIAGNOSTIC decision=' + decision + ' reason=' + category
+
+
 def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
     """Descriptions are arbitrary data; return only an unambiguous source-bound node."""
     if len(line) > 1024:
@@ -97,6 +116,8 @@ def _core_output_excerpt(output: str, *, failed: bool,
     count_candidates: list[tuple[int, dict[str, int | None]]] = []
     omitted = oversized
     captured = False
+    diagnostic_blocks = []
+    block_locations, block_codes = set(), set()
     summary_section = False
     safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
                    'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
@@ -107,6 +128,12 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if len(line) > 1024 or any(ord(character) < 32 for character in line):
             omitted = True
             continue
+        if re.match(r'^_{3,}.*_{3,}$', line) or re.match(r'^={3,}\s*short test summary info', line):
+            if len(diagnostic_blocks) < 20:
+                diagnostic_blocks.append((block_locations, block_codes))
+            else:
+                omitted = True
+            block_locations, block_codes = set(), set()
         if re.match(r'^-{3,}\s*Captured\b', line):
             captured = True
             continue
@@ -117,6 +144,12 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if captured:
             omitted = True
             continue
+        diagnostic = re.match(
+            r'^E\s+AssertionError:\s+(?:(?:False != True|True != False|False is not true|True is not false) : )?'
+            r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
+            r'reason=(budget|grant|secret|root|degraded|other)(?:\s|$)', line)
+        if diagnostic and not summary_section and len(block_codes) < 16:
+            block_codes.add(diagnostic.groups())
         counts = _pytest_terminal_counts(line)
         if counts is not None:
             count_candidates.append((index, counts))
@@ -129,6 +162,8 @@ def _core_output_excerpt(output: str, *, failed: bool,
             if (path not in trusted or any(part in {'', '.', '..'} for part in path.split('/'))
                     or len(number) > 9 or not 1 <= int(number) <= trusted[path][0]):
                 continue
+            if len(block_locations) < 2:
+                block_locations.add(path + ':' + number)
             if len(locations) < 100:
                 locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
             else:
@@ -157,5 +192,24 @@ def _core_output_excerpt(output: str, *, failed: bool,
              'pytest_failure_ids=' + json.dumps(identities or None),
              'pytest_reported_terminal_counts=' + json.dumps(reported_counts, sort_keys=True)]
     if omitted:
+        parts.append('[additional failure locations omitted]')
+    diagnostic_blocks.append((block_locations, block_codes))
+    diagnostics = []
+    for reported_locations, codes in diagnostic_blocks:
+        if len(reported_locations) != 1:
+            continue  # An ambiguous traceback cannot bind a reported diagnostic.
+        for decision, reason in sorted(codes):
+            row = {'location': next(iter(reported_locations)), 'decision': decision, 'reason': reason}
+            if len(diagnostics) >= 16:
+                omitted = True
+                break
+            candidate = 'policy_diagnostics=' + json.dumps(diagnostics + [row], sort_keys=True)
+            if len('\n'.join(parts)) + len(candidate) + 64 > 12000:
+                omitted = True
+                break
+            diagnostics.append(row)
+    if diagnostics:
+        parts.append('policy_diagnostics=' + json.dumps(diagnostics, sort_keys=True))
+    if omitted and '[additional failure locations omitted]' not in parts:
         parts.append('[additional failure locations omitted]')
     return '\n'.join(part for part in parts if part)
