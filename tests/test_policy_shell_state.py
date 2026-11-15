@@ -9,17 +9,54 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
+from getzilla import _policy_legacy as legacy
 from getzilla.policy import evaluate_pre_tool
 from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
+
+
+@contextlib.contextmanager
+def _functional_policy_clock():
+    """Literal permission tests isolate host time; real entry limits still apply."""
+    with mock.patch.object(legacy, 'time', SimpleNamespace(monotonic=lambda: 0.0)):
+        yield
+
+
+class FunctionalPolicyClockTests(unittest.TestCase):
+    def test_local_clock_isolates_semantics_but_preserves_entry_and_expiry_bounds(self):
+        import time
+        real_monotonic = time.monotonic
+        host = SimpleNamespace(monotonic=mock.Mock(side_effect=[100.0, 103.001]))
+        with mock.patch.object(legacy, 'time', host):
+            with _functional_policy_clock():
+                budget = legacy._Budget()
+                try:
+                    budget.tick()
+                    outcome = 'within-budget'
+                except legacy._BudgetExceeded:
+                    outcome = 'expired'
+                self.assertEqual(outcome, 'within-budget', 'functional semantics must not depend on host elapsed time')
+                self.assertIs(time.monotonic, real_monotonic)
+                for _ in range(legacy._SCAN_ENTRY_LIMIT - 1):
+                    budget.tick()
+                self.assertEqual(budget._entries, 20000)
+                with self.assertRaises(legacy._BudgetExceeded):
+                    budget.tick()
+            self.assertIs(legacy.time, host)
+            expired = legacy._Budget()
+            with self.assertRaises(legacy._BudgetExceeded):
+                expired.check()
+        self.assertIs(legacy.time, time)
+        self.assertEqual((legacy._SCAN_SECONDS, legacy._SCAN_ENTRY_LIMIT), (3.0, 20000))
 
 
 def _format_flags(code, result):
@@ -398,6 +435,7 @@ class ShellStatePolicyTests(unittest.TestCase):
         ):
             self.check(prefix + '; ' + self.ISSUE, False)
 
+    @_functional_policy_clock()
     def test_only_bounded_literal_same_root_directory_forms_are_supported(self) -> None:
         for prefix in (f'cd {shlex.quote(str(self.root))}', 'cd .', 'cd dist', 'cd -- dist', 'pushd .', 'pushd dist'):
             self.check(prefix + ' && ' + self.ISSUE, True)
@@ -405,6 +443,7 @@ class ShellStatePolicyTests(unittest.TestCase):
                        'pushd -n .', 'pushd ..', 'popd', 'cd . extra'):
             self.check(prefix + '; ' + self.ISSUE, False)
 
+    @_functional_policy_clock()
     def test_command_local_target_environment_remains_local(self) -> None:
         for read in ("GH_REPO=Other/Project printf '%s' public", 'GH_REPO=Other/Project gh pr view 5'):
             self.check(read + '; ' + self.ISSUE, True)
