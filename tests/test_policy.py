@@ -35,6 +35,9 @@ def github_project() -> Iterator[Path]:
 
 
 class PolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(_functional_policy_clock())
+
     def test_new_grant_uses_neutral_binding_digest_key(self) -> None:
         with github_project() as root:
             approval = add_approval(
@@ -315,7 +318,6 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(allowed)
 
     def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
-        self.enterContext(_functional_policy_clock())
         self.enterContext(mock.patch.object(self, 'longMessage', False))
         # These names carry the write verb inside the name and used to pass with no grant (#193).
         from getzilla.policy import mcp_side_effect, sensitive_action
