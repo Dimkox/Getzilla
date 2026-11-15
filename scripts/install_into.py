@@ -678,6 +678,10 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if (relative.startswith(".getzilla/runtime/")
+                    and not relative.endswith(".gitkeep")
+                    and relative != ".getzilla/runtime/.gitignore"):
+                continue  # Ignored state can disappear after directory enumeration.
             if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
                 continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
@@ -688,6 +692,9 @@ class _SourceTree:
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name == "__pycache__":
+                    continue
+                if relative == "factory/src/getzilla_factory.egg-info":
+                    # Editable-install metadata is generated, never managed source.
                     continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.

@@ -238,7 +238,7 @@ class CorePhaseWitnessTests(unittest.TestCase):
         actors = [{'worker': worker, 'elapsed_ns': {
             'configured': 0, 'collection_finished': 1, 'first_test_start': 2}} for worker in range(64)]
         # Inject bounded existing rendered facts, not source/test execution.
-        with mock.patch('getzilla.verification._failure_progress_details', return_value=legacy):
+        with mock.patch('getzilla.verification_progress_evidence._failure_progress_details', return_value=legacy):
             output = _core_progress_details(self.directory, {'selected_workers': 64, 'slots': [],
                 'phase_witness': {'version': 1, 'actors': actors}})
         self.assertNotIn('phase_witness', output)

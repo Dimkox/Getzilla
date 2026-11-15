@@ -56,6 +56,40 @@ class Runtime:
         return self.text
 
 
+class StagedReleaseModeTests(unittest.TestCase):
+    def test_staged_modes_are_exact_and_caller_umask_is_preserved(self):
+        # This fixture already owns verified bytes; no archive, service adapter,
+        # native installer or historical workload is involved.
+        files = (('app/data.json', b'{"owned": true}\n', 0o644),
+                 ('bin/worker', b'#!/bin/sh\nexit 0\n', 0o755))
+        manifest = json.dumps({'schema_version': 'factory-release/v1',
+            'product_version': '1.0.0', 'profile': 'factory-python', 'data_schema': 1,
+            'files': [{'path': name, 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
+                       'mode': mode} for name, content, mode in files]}).encode()
+        release = setup.VerifiedRelease('a' * 64, hashlib.sha256(manifest).hexdigest(), manifest, files)
+        for mask in (0o002, 0o022, 0o077, 0o027):
+            with self.subTest(mask=oct(mask)), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve() / 'installation'
+                root.mkdir(mode=0o700)
+                (root / 'releases').mkdir(mode=0o700)
+                manager = setup.SetupManager(root)
+                previous = os.umask(mask)
+                try:
+                    staged = manager._stage(release)
+                    self.assertEqual(os.umask(mask), mask)
+                finally:
+                    os.umask(previous)
+                self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o555)
+                self.assertEqual(stat.S_IMODE((staged / setup.MARKER).stat().st_mode), 0o444)
+                for name, content, mode in files:
+                    self.assertEqual((staged / name).read_bytes(), content)
+                    self.assertEqual(stat.S_IMODE((staged / name).stat().st_mode), mode & ~0o222)
+                    self.assertEqual(stat.S_IMODE((staged / name).parent.stat().st_mode), 0o555)
+                self.assertEqual(manager._release(release.identity), (staged, release.manifest))
+                self.assertEqual(release.files, files)
+                self.assertEqual(release.manifest_bytes, manifest)
+
+
 class InstallerTests(unittest.TestCase):
     def test_inert_filesystem_contract_does_not_depend_on_ambient_host_label(self):
         # The adapter is already inert. This does not qualify native services.
