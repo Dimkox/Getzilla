@@ -269,6 +269,8 @@ def _union_assessment(root: Path, route: dict[str, Any], text: str) -> None:
     for field in ('domains', 'task_domains', 'workflow_skills', 'analysis_agents', 'review_agents',
                   'allowed_agents', 'quality_profiles', 'required_evidence', 'human_gates'):
         route[field] = list(dict.fromkeys([*route.get(field, []), *assessed.get(field, [])]))
+    if not route.get('write_agent') and assessed.get('write_agent'):
+        route['write_agent'] = assessed['write_agent']
     if route.get('write_agent'):
         route['allowed_agents'] = list(dict.fromkeys([*route['allowed_agents'], route['write_agent']]))
     # Intake keeps existing obligations, but the old exact-diff assessment no
@@ -781,6 +783,44 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
         rejected = context['rejected']
         lines.append(f"scope_sync_required: NOT admitted {rejected['id']} ({rejected['bytes']} bytes, "
                      f"sha256={rejected['digest']}); exact original bytes must be supplied again.")
+    details: list[str] = []
+    evidence_recovery = ''
+    if root:
+        try:
+            documents = package_documents(root, route)
+            details.append('Task context digest: ' + context_binding(root, route, discovery=True)['digest'])
+            if documents:
+                evidence_recovery = (f"Full evidence: {documents['path']}/state.json "
+                                     '(evidence_accounting.obligations).\n')
+                unresolved = [row for row in documents['state'].get('evidence_accounting', {}).get('obligations', [])
+                              if not (row.get('status') == 'pass' or
+                                      row.get('status') == 'recorded' and row.get('outcome') == 'pass')]
+                lines.append(f'Unresolved evidence count: {len(unresolved)}')
+                # Reserve the rest of the display for intake and the exact recovery
+                # paths. Whole rows keep identifiers and states readable in UTF-8.
+                remaining = max_bytes // 2
+                visible = 0
+                for row in unresolved:
+                    outcome = f" ({row.get('outcome')})" if row.get('status') == 'recorded' else ''
+                    line = f"Unresolved evidence: {row.get('id')}: {row.get('status')}{outcome}"
+                    size = len((line + '\n').encode('utf-8'))
+                    if size > remaining:
+                        break
+                    lines.append(line)
+                    remaining -= size
+                    visible += 1
+                if visible < len(unresolved):
+                    lines.append(f'Unresolved evidence hidden: {len(unresolved) - visible}; see Full evidence below.')
+                details.extend([f"Typed package: {documents['path']}",
+                                f"Spec digest: {documents['spec_digest']}",
+                                f"Requirements digest: {documents['requirements_digest']}"])
+                spec = documents['spec']
+                for item in [spec['objective'], *spec.get('acceptance_criteria', []),
+                             *spec.get('invariants', []), *spec.get('forbidden_outcomes', [])]:
+                    details.append(f"Typed {item['id']}: {item['statement']} (mapping is not completion)")
+            lines.extend(scope_gaps(root, route))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            lines.append('Typed authority unavailable: ' + str(error))
     lines.extend(['Original task:', route.get('task', 'Original task unavailable in this legacy record; inspect the original package.')])
     for item in context.get('pending', []):
         lines.extend([f"Pending {item['id']} ({item['bytes']} UTF-8 bytes):", item['text']])
@@ -791,26 +831,9 @@ def render_context(root: Path | None, route: dict[str, Any], *, max_bytes: int =
             lines.append(f"Human response ({answer.get('resolution', 'answered')}; {answer['source_ref']}): {answer['text']}")
         else:
             lines.append('Unresolved: ask the human before the affected implementation; independent work may continue.')
-    if root:
-        try:
-            documents = package_documents(root, route)
-            lines.append('Task context digest: ' + context_binding(root, route, discovery=True)['digest'])
-            if documents:
-                lines.extend([f"Typed package: {documents['path']}",
-                              f"Spec digest: {documents['spec_digest']}",
-                              f"Requirements digest: {documents['requirements_digest']}"])
-                spec = documents['spec']
-                for item in [spec['objective'], *spec.get('acceptance_criteria', []),
-                             *spec.get('invariants', []), *spec.get('forbidden_outcomes', [])]:
-                    lines.append(f"Typed {item['id']}: {item['statement']} (mapping is not completion)")
-                for row in documents['state'].get('evidence_accounting', {}).get('obligations', []):
-                    if row.get('status') != 'pass':
-                        lines.append(f"Unresolved evidence: {row.get('id')}: {row.get('status')}")
-            lines.extend(scope_gaps(root, route))
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            lines.append('Typed authority unavailable: ' + str(error))
+    lines.extend(details)
     recovery = f"Full stored intake: .getzilla/runtime/routes/{route['route_id']}.json; "
-    recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n'
+    recovery += 'typed package: ' + str(route.get('change_id') or 'none') + '.\n' + evidence_recovery
     raw = ('\n'.join(lines) + '\n').encode('utf-8')
     reserve = len(recovery.encode('utf-8')) + 160
     if len(raw) + len(recovery.encode('utf-8')) > max_bytes:

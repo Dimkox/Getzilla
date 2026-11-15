@@ -82,6 +82,9 @@ DOCUMENT_PREFIXES = (
 # suite: scripts/install_into.py installs ``docs/bitrix-local-AGENTS.md`` as
 # ``local/AGENTS.md`` in every Bitrix install, and tests/test_installer.py proves it ships.
 SHIPPED_EXECUTED_FILES = frozenset({'docs/bitrix-local-AGENTS.md'})
+# Readable content-addressed blobs and manifests materialize code/instructions.
+# Their .txt/.json representation never makes them documentation-only changes.
+SHIPPED_EXECUTED_PREFIXES = ('.getzilla/templates/baseline/',)
 # Declared-immutable evidence. ``tests/test_history.py`` pins these bytes to a literal
 # sha256, so rewriting one is a contract change and a documentation lane must never carry it.
 # Matched structurally (``<any>/evidence/historical-<name>``) rather than by package name, so
@@ -215,7 +218,7 @@ def _classify_path(path: str) -> str | None:
     # instead of the generic unallowlisted-path.
     if path.startswith('tests/'):
         return 'test-suite-change'
-    if path in SHIPPED_EXECUTED_FILES:
+    if path in SHIPPED_EXECUTED_FILES or path.startswith(SHIPPED_EXECUTED_PREFIXES):
         return 'shipped-executed-content'
     if is_immutable_historical_evidence(path):
         return 'immutable-historical-evidence'

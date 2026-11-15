@@ -7,7 +7,7 @@
    `getzilla-update-<version>`, which is then checked out. The commit is built in a private Git
    index. A failure before branch publication leaves product files unchanged; a later failure
    reports the retained branch or incomplete checkout. The project must be a clean Git
-   work tree with committed v2 adapter selection. Nothing is pushed, nothing is deleted without --retire-legacy, and an up-to-date
+   work tree with committed v2 adapter selection. Nothing is pushed. Superseded common hooks retire only with matching ownership proofs; --retire-legacy controls earlier engine files. An up-to-date
    project gets no branch. Paths the
    project keeps (`.getzilla/AGBP_SYNC.json`) are left alone; in AGENTS.md only the managed block
    is replaced. The project's own ruff.toml, bandit.yaml and .coveragerc stay; --retire-legacy also removes
@@ -24,11 +24,10 @@ import copy
 import hashlib
 import importlib.util
 import json
-import os
+import math
 import re
 import subprocess
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -36,46 +35,31 @@ HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla import fsx
+from getzilla.adapter_removal import (
+    UpdateError, git, _git_out, head_tree, _require_clean_project, _committed_manifest, _publish_changes,
+    commit_changes as commit_changes, remove_adapters as remove_adapters,
+)
+from getzilla.baseline_assets import archive_entries, read_archive
 from getzilla.component_state import (
     MANIFEST, BoundRoot, ComponentStateError, ComponentTransaction,
     component_transaction, decode_manifest, encode_manifest, matches_owned, mode_matches,
     owned_proof, read_state, record_owned, read_keep_contract, match_kept_local, kept_file_state,
     validate_manifest_publication,
 )
-from getzilla.harnesses import render_codex_hooks
+from getzilla.harnesses import policy_reconciliation_required, render_codex_hooks
+from getzilla.spec import MAX_SPEC_BYTES, SpecError, _parse_canonical_json
+from getzilla.install_baseline import POLICY_PATHS, load_baseline
 
 TOOL_OPTIONS = ('--only', '--status', '--if-due', '--now', '--quiet')
-OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--help')
+OWN_OPTIONS = ('--ref', '--no-self', '--no-tools', '--accept-local', '--retire-legacy', '--baseline-release', '--help')
 BRANCH_PREFIX = 'getzilla-update-'
 # Lint and coverage settings name the project's own paths and rules; Getzilla's copy is only a first default.
-PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc'})
+PROJECT_CONFIGS = frozenset({'ruff.toml', 'bandit.yaml', '.coveragerc', '.getzilla/config/optional-modules.json'})
 STEPS = {
     'core': 'update only Getzilla itself',
     'project': 'update only the project, on a new branch',
     'tools': 'update only the third-party tools (getzilla_update.py options apply)',
 }
-
-
-class UpdateError(RuntimeError):
-    pass
-
-
-def git(cwd: Path, *args: str, data: bytes | None = None,
-        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Run git in cwd; output stays bytes when data is given, else text."""
-    return subprocess.run(['git', '-C', str(cwd), *args], input=data, capture_output=True,
-                          text=data is None, encoding='utf-8' if data is None else None,
-                          errors='replace' if data is None else None, env=env, check=False)
-
-
-def _git_out(cwd: Path, *args: str, data: bytes | None = None, env: dict[str, str] | None = None) -> str:
-    proc = git(cwd, *args, data=data, env=env)
-    out, err = proc.stdout, proc.stderr
-    if isinstance(out, bytes):
-        out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-    if proc.returncode != 0:
-        raise UpdateError(f"git {args[0]} failed in {cwd}: {(err or out).strip()}")
-    return out.strip()
 
 
 def update_self(home: Path, ref: str | None) -> str:
@@ -135,25 +119,15 @@ def merge_agents(installer, existing: bytes | None, block: bytes) -> bytes:
     return (text[:start] + managed + text[end:]).encode('utf-8')
 
 
-def head_tree(project: Path, ref: str = 'HEAD') -> dict[str, tuple[str, str]]:
-    """path -> (mode, object id) for every file and link committed at HEAD."""
-    raw = git(project, 'ls-tree', '-r', '-z', '--full-tree', ref, data=b'')
-    if raw.returncode != 0:
-        raise UpdateError(f'{project} has no commit yet: commit once first')
-    tree = {}
-    for record in raw.stdout.split(b'\0'):
-        if record:
-            meta, path = record.split(b'\t', 1)
-            mode, _kind, oid = meta.decode().split()
-            tree[path.decode('utf-8', 'surrogateescape')] = (mode, oid)
-    return tree
-
-
 def blob_id(content: bytes, object_format: str) -> str:
     # A Git object id, not a security digest.
     digest = hashlib.sha256() if object_format == 'sha256' else hashlib.sha1(usedforsecurity=False)
     digest.update(b'blob %d\0' % len(content) + content)
     return digest.hexdigest()
+
+
+def _published_mode(git_mode: str) -> int:
+    return 0o755 if git_mode == '100755' else 0o644
 
 
 def accept_local(installer, project: Path, ref: str = 'HEAD') -> tuple[dict[str, str], bytes | None, list[str]]:
@@ -188,18 +162,27 @@ HISTORICAL_EVIDENCE = re.compile(r'^(?:engineering|\.getzilla/runtime)/changes/[
 
 
 def legacy_report(installer, project: Path, tree: dict[str, tuple[str, str]],
-                  incoming: set[str], ref: str = 'HEAD') -> tuple[list[str], list[str], list[str]]:
+                  incoming: set[str], ref: str = 'HEAD', *,
+                  incoming_archive: bytes | None = None) -> tuple[list[str], list[str], list[str]]:
     """(committed pre-rename paths, project files that import the old engine, old engine paths the sync record keeps).
 
     Only a pre-rename file whose Getzilla replacement is committed or arrives with this update is
     retired; one without a replacement (a vendored factory the update does not install) stays.
     """
     present = set(tree) | incoming
+    try:
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in present:
+            with BoundRoot(project) as binding:
+                current_archive = read_archive(binding)
+                incoming_archive = current_archive[0].content if current_archive else None
+        members = archive_entries(incoming_archive) if incoming_archive is not None else {}
+    except ValueError as exc:
+        raise UpdateError('cannot prove legacy replacement archive members') from exc
 
     def replaced(path: str) -> bool:
         current = installer.legacy_to_current_path(path)
-        # The engine may ship as one archive instead of a folder of modules.
-        return current in present or (current.startswith(installer.ENGINE_DIR) and installer.ENGINE_ARCHIVE in present)
+        # The physical archive name alone proves no logical replacement.
+        return current in present or current in members
 
     retire = sorted(item['path'] for item in installer._legacy_migration(project)
                     if item['path'] in tree and replaced(item['path']))
@@ -239,7 +222,8 @@ def planned_changes(installer, home: Path, project: Path,
                     kept_configs: list[str] | None = None, *, expected_head: str | None = None,
                     binding: BoundRoot | ComponentTransaction | None = None,
                     tree: dict[str, tuple[str, str]] | None = None,
-                    observations: dict | None = None) -> list[tuple[str, bytes, str]]:
+                    observations: dict | None = None,
+                    baseline: dict | None = None) -> list[tuple[str, bytes, str]]:
     """(path, new bytes, Git mode) for every managed file that differs from the project's HEAD.
 
     A lint or coverage configuration the project already commits is its own and stays; its path
@@ -248,7 +232,8 @@ def planned_changes(installer, home: Path, project: Path,
     if binding is None:
         with BoundRoot(project) as bound:
             return planned_changes(installer, home, project, digests, kept_configs,
-                                   expected_head=expected_head, binding=bound, tree=tree, observations=observations)
+                                   expected_head=expected_head, binding=bound, tree=tree, observations=observations,
+                                   baseline=baseline)
     state = read_state(project, binding=binding)
     selected = state.require_selection()
     manifest = copy.deepcopy(state.manifest)
@@ -274,6 +259,8 @@ def planned_changes(installer, home: Path, project: Path,
     object_format = git(project, 'rev-parse', '--show-object-format').stdout.strip() or 'sha1'
     changes = []
     by_path = {entry.path: entry for entry in payload}
+    incoming_archive = by_path.get(installer.ENGINE_ARCHIVE)
+    archive_members = installer.archive_entries(incoming_archive.content) if incoming_archive else {}
     known = set(by_path) | {path for record in manifest['components'].values() for path in record['files']}
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, digests if digests is not None else kept_digests, known)
@@ -292,17 +279,92 @@ def planned_changes(installer, home: Path, project: Path,
             raise installer.UnsafeInstallTarget(str(exc)) from exc
         for record in manifest['components'].values():
             record.get('owned', {}).pop(path, None)
-    retained_overlay = binding.read('.grok/codex-hooks.json')
+    # Retire only actual incoming members whose old physical bytes are positively owned.
+    # A .py suffix or a resource prefix is not proof that the archive replaces a file.
+    for path, (body, mode) in sorted(archive_members.items()):
+        if path in by_path or path not in tree or path in kept:
+            continue
+        current = binding.read(path)
+        if observations is not None:
+            observations[path] = current
+        if not matches_owned(current, owned_proof(state.manifest, path)):
+            raise UpdateError(f'ownership conflict for archived member: {path}')
+        if current.content != body or not mode_matches(current.mode, mode):
+            raise UpdateError(f'archived member differs from its owned legacy file: {path}')
+        changes.append((path, None, ''))
+
+    # Local ownership is not vendor provenance for canonical policy inputs.
+    retained_legacy_sources = set()
+    if baseline is not None:
+        # Preserve positively matched vendor provenance across this migration.
+        # A later ordinary update must not mistake retained stock helpers for
+        # unknown code. Local ownership alone cannot create these proofs.
+        declared_kept, _ = read_keep_contract(binding)
+        for legacy_path, proof in baseline.items():
+            replacement = neutral_source_path(legacy_path)
+            if (replacement is None or legacy_path in by_path or legacy_path in declared_kept
+                    or replacement not in by_path and legacy_path != '.grok/config.toml'):
+                continue
+            current = binding.read(legacy_path)
+            if observations is not None:
+                observations[legacy_path] = current
+            if matches_owned(current, proof):
+                record_owned(manifest, legacy_path, current.content, proof['mode'])
+    # Require exact incoming identity so relocation cannot widen local role permissions.
+    for path, entry in sorted(by_path.items()):
+        legacy_path = next((old + path[len(new):] for new, old in (
+            ('.getzilla/agents/', '.grok/agents/'),
+            ('.getzilla/cursor-rules/', '.grok/cursor-rules/'))
+            if path.startswith(new) and path.endswith('.toml') and '/' not in path[len(new):]), None)
+        if legacy_path is None:
+            continue
+        if observations is not None and legacy_path in observations:
+            current = observations[legacy_path]
+        else:
+            current = binding.read(legacy_path)
+            if observations is not None:
+                observations[legacy_path] = current
+        if current is None:
+            continue
+        incoming_match = current.content == entry.content and mode_matches(current.mode, entry.mode)
+        historical_match = baseline is not None and matches_owned(current, baseline.get(legacy_path))
+        if not incoming_match and not historical_match:
+            destination = binding.read(path)
+            if observations is not None:
+                observations[path] = destination
+            if (destination is None or destination.content != entry.content
+                    or not mode_matches(destination.mode, entry.mode)):
+                raise UpdateError('custom legacy canonical source requires reconciliation before neutral migration: '
+                                  f'{legacy_path} -> {path}')
+            retained_legacy_sources.add(legacy_path)
+    # Never silently deactivate a customized canonical legacy guard. Unknown
+    # extra hooks stay; a customization of a replaced entrypoint needs review.
+    for path in sorted(by_path):
+        if not path.startswith('.getzilla/hooks/') or not path.endswith('.py'):
+            continue
+        legacy_path = '.grok/hooks/' + path.removeprefix('.getzilla/hooks/')
+        current = binding.read(legacy_path)
+        if observations is not None:
+            observations[legacy_path] = current
+        historical_match = baseline is not None and matches_owned(current, baseline.get(legacy_path))
+        if current is not None and (legacy_path in kept or not (
+                matches_owned(current, owned_proof(state.manifest, legacy_path)) or historical_match)):
+            raise UpdateError(f'custom legacy hook must be reconciled before neutral migration: {legacy_path}')
+    retained_overlay = binding.read('.getzilla/config/codex-hooks.json')
+    legacy_overlay = binding.read('.grok/codex-hooks.json') if retained_overlay is None else None
     if observations is not None:
-        observations['.grok/codex-hooks.json'] = retained_overlay
-    incoming_overlay = by_path.get('.grok/codex-hooks.json')
+        observations['.getzilla/config/codex-hooks.json'] = retained_overlay
+        if retained_overlay is None:
+            observations['.grok/codex-hooks.json'] = legacy_overlay
+    consumer_overlay = retained_overlay or legacy_overlay
+    incoming_overlay = by_path.get('.getzilla/config/codex-hooks.json')
     codex_hooks = None
     retained_config = None
     if 'codex' in selected:
-        canonical = by_path.get('.grok/hooks.json')
+        canonical = by_path.get('.getzilla/config/hooks.json')
         if canonical is None or '.codex/config.toml' not in by_path or '.codex/hooks.json' not in by_path:
             raise UpdateError('incoming Codex activation unit is incomplete')
-        overlay = retained_overlay.content if retained_overlay else incoming_overlay.content if incoming_overlay else None
+        overlay = consumer_overlay.content if consumer_overlay else incoming_overlay.content if incoming_overlay else None
         codex_hooks = render_codex_hooks(canonical.content, overlay)
         existing_config = binding.read('.codex/config.toml')
         if observations is not None:
@@ -334,8 +396,10 @@ def planned_changes(installer, home: Path, project: Path,
         if observations is not None:
             observations[entry.path] = current
         content = entry.content
-        if entry.path == '.grok/codex-hooks.json' and retained_overlay is not None:
+        if entry.path == '.getzilla/config/codex-hooks.json' and retained_overlay is not None:
             continue  # shared consumer input is never replaced by the source default
+        if entry.path == '.getzilla/config/codex-hooks.json' and legacy_overlay is not None:
+            content = legacy_overlay.content
         if entry.path == '.codex/config.toml' and retained_config is not None:
             continue
         if entry.path == '.codex/hooks.json' and codex_hooks is not None:
@@ -350,12 +414,69 @@ def planned_changes(installer, home: Path, project: Path,
             if kept_configs is not None and (current is None or current.content != content):
                 kept_configs.append(entry.path)
             continue
+        historical_match = matches_owned(current, baseline.get(entry.path)) if baseline is not None else False
+        if (baseline is not None and current is not None and entry.path in POLICY_PATHS
+                and not historical_match and current.content != content):
+            raise UpdateError(f'custom policy is not a trusted baseline: {entry.path}')
+        if policy_reconciliation_required(entry.path, current, content, entry.mode) and not historical_match:
+            raise UpdateError(f'custom generated policy requires reconciliation before updating: {entry.path}')
         if (current is not None and (current.content != content or not mode_matches(current.mode, entry.mode))
-                and not matches_owned(current, owned_proof(manifest, entry.path)) and not initial_agents_block):
+                and not matches_owned(current, owned_proof(manifest, entry.path))
+                and not historical_match and not initial_agents_block):
             raise UpdateError(f'ownership conflict: {entry.path}; preserve or explicitly reconcile the custom file before updating')
-        record_owned(manifest, entry.path, content, entry.mode)
-        if tree.get(entry.path) != (mode, blob_id(content, object_format)):
+        changed = tree.get(entry.path) != (mode, blob_id(content, object_format))
+        owned_mode = _published_mode(mode)
+        if not changed and current is not None and not mode_matches(current.mode, owned_mode):
+            # No Git publication will change an unchanged file's physical mode.
+            owned_mode = current.mode
+        if entry.path != '.getzilla/config/codex-hooks.json' or content == entry.content:
+            record_owned(manifest, entry.path, content, owned_mode)
+        else:
+            record = manifest['components'].setdefault('core', {'files': [], 'owned': {}})
+            record['files'] = sorted(set(record['files']) | {entry.path})
+        # A migrated custom overlay remains a consumer input, without an ownership claim.
+        if changed:
             changes.append((entry.path, content, mode))
+    planned_contents = {path: content for path, content, _mode in changes}
+    legacy_dependencies = consumer_overlay is not None and not _neutral_hook_configuration(
+        consumer_overlay.content, incoming_overlay.content if incoming_overlay else None)
+    for config_path in ('.grok/hooks.json', '.grok/hooks/adaptive.json', '.claude/settings.json',
+                        '.qwen/settings.json', '.codex/hooks.json', '.gemini/settings.json',
+                        '.github/hooks/getzilla.json'):
+        if observations is not None and config_path in observations:
+            current = observations[config_path]
+        else:
+            current = binding.read(config_path)
+            if observations is not None:
+                observations[config_path] = current
+        if (config_path not in planned_contents and config_path not in kept
+                and neutral_source_path(config_path) in by_path
+                and matches_owned(current, owned_proof(manifest, config_path))):
+            continue  # This declaration retires in the same commit.
+        content = planned_contents.get(config_path, current.content if current else None)
+        canonical = by_path.get(config_path)
+        if content is not None and not _neutral_hook_configuration(content, canonical.content if canonical else None):
+            legacy_dependencies = True
+    # Publish neutral replacements and retire old sources in the same Git commit.
+    # A path alone never proves ownership; changed, kept and unknown files stay.
+    for record in manifest['components'].values():
+        for path, proof in list(record.get('owned', {}).items()):
+            replacement = neutral_source_path(path)
+            if path in by_path or path in kept or path in retained_legacy_sources or replacement is None:
+                continue
+            if legacy_dependencies and path.startswith('.grok/hooks/'):
+                continue  # A custom or unsupported declaration may still need these helpers.
+            if replacement not in by_path and path != '.grok/config.toml':
+                continue
+            current = binding.read(path)
+            if observations is not None:
+                observations[path] = current
+            if current is not None and not matches_owned(current, proof):
+                continue
+            if current is not None:
+                changes.append((path, None, ''))
+            del record['owned'][path]
+            record['files'].remove(path)
     encoded = encode_manifest(manifest) if manifest != state.manifest else None
     try:
         validate_manifest_publication(binding.read(MANIFEST), encoded, kept, kept_digests)
@@ -366,6 +487,55 @@ def planned_changes(installer, home: Path, project: Path,
     return changes
 
 
+_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+
+
+def _neutral_hook_configuration(content: bytes, canonical: bytes | None) -> bool:
+    """Only an exact neutral canonical artifact can authorize compatibility retirement.
+
+    Decoded strings give dependency evidence, never shell-expression authority.
+    Custom, malformed and unsupported configurations conservatively keep helpers.
+    """
+    if type(content) is not bytes or len(content) > MAX_SPEC_BYTES:
+        return False
+    try:
+        document = _parse_canonical_json(content, Path('hook-configuration.json'))
+    except SpecError:
+        return False
+    if type(document.get('hooks')) is not dict:
+        return False
+    pending = [document]
+    while pending:
+        value = pending.pop()
+        if type(value) is dict:
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif type(value) is list:
+            pending.extend(value)
+        elif type(value) is str:
+            normalized = re.sub(r'/+', '/', value.translate(_ASCII_LOWER).replace(chr(92), '/'))
+            if '.grok/hooks' in normalized:
+                return False
+        elif type(value) is float and not math.isfinite(value):
+            return False
+    return canonical is not None and content == canonical
+
+
+def neutral_source_path(path: str) -> str | None:
+    if path in {'.grok/hooks.json', '.grok/hooks/adaptive.json'}:
+        return '.getzilla/config/hooks.json'
+    if path == '.grok/codex-hooks.json':
+        return '.getzilla/config/codex-hooks.json'
+    if path == '.grok/config.toml':
+        return path  # old Core owned this adapter file even without selecting Grok
+    for old, new, suffix in (('.grok/hooks/', '.getzilla/hooks/', ('.py', 'README.md')),
+                             ('.grok/agents/', '.getzilla/agents/', ('.toml',)),
+                             ('.grok/cursor-rules/', '.getzilla/cursor-rules/', ('.toml',))):
+        if path.startswith(old) and '/' not in path[len(old):] and path.endswith(suffix):
+            return new + path[len(old):]
+    return None
+
+
 def version_of(home: Path) -> str:
     try:
         return (home / 'VERSION').read_text(encoding='utf-8').strip() or 'latest'
@@ -373,66 +543,26 @@ def version_of(home: Path) -> str:
         return 'latest'
 
 
-def commit_changes(project: Path, changes: list[tuple[str, bytes | None, str]], message: str, *, expected_head: str) -> str:
-    """Build the commit in a private index; the work tree and the project's index stay untouched.
-
-    A change with content None removes that path.
-    """
-    zero = '0' * len(expected_head)
-    with tempfile.TemporaryDirectory(prefix='getzilla-update-') as scratch:
-        env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
-        _git_out(project, 'read-tree', expected_head, env=env)
-        lines = []
-        for path, content, mode in changes:
-            if content is None:
-                lines.append(f'0 {zero}\t{path}')
-                continue
-            oid = _git_out(project, 'hash-object', '-w', '--stdin', data=content)
-            lines.append(f'{mode} {oid}\t{path}')
-        _git_out(project, 'update-index', '--index-info', data=('\n'.join(lines) + '\n').encode('utf-8'), env=env)
-        tree = _git_out(project, 'write-tree', env=env)
-    return _git_out(project, 'commit-tree', tree, '-p', expected_head, '-m', message)
-
-
-def _require_clean_project(project: Path) -> None:
-    top = git(project, 'rev-parse', '--show-toplevel')
-    if top.returncode != 0 or os.path.normcase(fsx.system_canonical(top.stdout.strip())) != os.path.normcase(str(project)):
-        raise UpdateError(f'{project} is not the root of a Git repository')
-    status = _git_out(project, 'status', '--porcelain', '--untracked-files=all',
-                      env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
-    # The persistent administrative guard is not product content. Every other
-    # tracked or untracked change still blocks the update.
-    if any(line != '?? .getzilla/runtime/.components.guard.lock' for line in status.splitlines()):
-        raise UpdateError(f'{project} has uncommitted changes: commit or stash them first')
-
-
-def _committed_manifest(project: Path, binding: BoundRoot | ComponentTransaction, head: str,
-                        tree: dict[str, tuple[str, str]]):
-    state = read_state(project, binding=binding)
-    state.require_selection()
-    snapshot = binding.read(MANIFEST)
-    committed = git(project, 'cat-file', 'blob', f'{head}:{MANIFEST}', data=b'')
-    if (tree.get(MANIFEST, ('', ''))[0] != '100644' or committed.returncode != 0
-            or snapshot is None or snapshot.content != committed.stdout):
-        raise UpdateError('the selected component manifest must be a committed regular file; review and commit it before updating')
-    return state, snapshot
-
-
-def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False) -> str:
+def sync_project(home: Path, project: Path, *, accept: bool = False, retire: bool = False,
+                 baseline_release: str | None = None) -> str:
     """Publish target selection and managed bytes in the same private-index commit."""
     project = Path(fsx.system_canonical(project))
     try:
+        if baseline_release is not None and (accept or retire):
+            raise UpdateError('baseline migration cannot be combined with accept-local or retire-legacy')
+        baseline = load_baseline(home, baseline_release, include_runtime_anchors=True) if baseline_release is not None else None
         with BoundRoot(project) as binding:
             _require_clean_project(project)
             head = _git_out(project, 'rev-parse', 'HEAD')
             _committed_manifest(project, binding, head, head_tree(project, head))
         with component_transaction(project) as transaction:
-            return _sync_project_locked(home, project, transaction, accept=accept, retire=retire)
+            return _sync_project_locked(home, project, transaction, accept=accept, retire=retire, baseline=baseline)
     except (ComponentStateError, OSError, ValueError) as exc:
         raise UpdateError(str(exc)) from exc
 
 
-def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransaction, *, accept: bool, retire: bool) -> str:
+def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransaction, *, accept: bool, retire: bool,
+                         baseline: dict | None = None) -> str:
     _require_clean_project(project)
     expected_head = _git_out(project, 'rev-parse', 'HEAD')
     expected_branch = git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
@@ -451,12 +581,20 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 raise UpdateError(f'project file changed during the update: {path}')
 
     check_current()
+    if baseline is not None:
+        # Legacy sandbox policy remains provenance-sensitive even if a later
+        # payload migrates it to a different path. Ledger ownership is insufficient.
+        legacy_policy = transaction.read('.grok/config.toml')
+        observations['.grok/config.toml'] = legacy_policy
+        if legacy_policy is not None and not matches_owned(legacy_policy, baseline.get('.grok/config.toml')):
+            raise UpdateError('custom legacy policy is not a trusted baseline: .grok/config.toml')
     installer = load_installer(home)
     kept_configs: list[str] = []
     try:
         digests, record, accepted = accept_local(installer, project, expected_head) if accept else ({}, None, [])
         changes = planned_changes(installer, home, project, digests if accepted else None, kept_configs,
-                                  expected_head=expected_head, binding=transaction, tree=tree, observations=observations)
+                                  expected_head=expected_head, binding=transaction, tree=tree, observations=observations,
+                                  baseline=baseline)
         fresh_record = sync_record(installer, project, tree, expected_head) if record is None else None
         # A fresh empty record alone is not an update: it rides along with the next real change (#215).
         if fresh_record is not None and (changes or fresh_record != installer.FRESH_SYNC_RECORD):
@@ -471,7 +609,15 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
             if log.returncode != 0:
                 raise UpdateError(f'cannot read {old_log} from HEAD')
             changes.append((installer.legacy_to_current_path(old_log), log.stdout, tree[old_log][0]))
-        legacy, importers, legacy_kept = legacy_report(installer, project, tree, {path for path, _, _ in changes}, expected_head)
+        incoming_archive = next((content for path, content, _mode in changes
+                                 if path == installer.ENGINE_ARCHIVE), None)
+        if incoming_archive is None and installer.ENGINE_ARCHIVE in tree:
+            current_archive = read_archive(transaction)
+            observations[installer.ENGINE_ARCHIVE] = current_archive[0] if current_archive else None
+            incoming_archive = current_archive[0].content if current_archive else None
+        legacy, importers, legacy_kept = legacy_report(
+            installer, project, tree, {path for path, content, _mode in changes if content is not None},
+            expected_head, incoming_archive=incoming_archive)
     except installer.UnsafeInstallTarget as exc:
         hint = ('; if the current version is the one you want, run `getzilla update --accept-local`'
                 if 'no longer matches its declared divergence' in str(exc) else '')
@@ -531,13 +677,34 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
                 component.get('owned', {}).pop(path, None)
                 if path in component['files']:
                     component['files'].remove(path)
-        else:
-            record_owned(pending_manifest, path, content, 0o755 if mode == '100755' else 0o644)
+        elif path != '.getzilla/config/codex-hooks.json' or owned_proof(pending_manifest, path):
+            record_owned(pending_manifest, path, content, _published_mode(mode))
     changes = permitted
     encoded = encode_manifest(pending_manifest) if pending_manifest != state.manifest else None
     validate_manifest_publication(original_manifest, encoded, kept, kept_digests)
     if encoded is not None:
         changes.append((MANIFEST, encoded, '100644'))
+    # Keep ignored, positively owned files outside Git when the incoming bytes
+    # and mode already match. Tracking them would remove them on rollback.
+    # The original observations remain in check_current and the checkout CAS.
+    ignored = set(_git_out(project, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+                           *(path for path, _, _ in changes)).split('\0')) - {''} if changes else set()
+    retained_ignored = set()
+    for path, content, mode in changes:
+        if path not in ignored:
+            continue
+        current = observations[path]
+        proved = (matches_owned(current, owned_proof(state.manifest, path))
+                  or baseline is not None and matches_owned(current, baseline.get(path)))
+        if (proved and content is not None and current.content == content
+                and mode_matches(current.mode, 0o755 if mode == '100755' else 0o644)):
+            retained_ignored.add(path)
+    if ignored - retained_ignored:
+        raise UpdateError('ignored local files sit on managed paths; move them first: '
+                          + ', '.join(sorted(ignored - retained_ignored)))
+    changes = [(path, content, mode) for path, content, mode in changes if path not in retained_ignored]
+    if retained_ignored:
+        notes.append(f'kept {len(retained_ignored)} unchanged owned ignored file(s) outside Git')
     arriving = sorted(path for path, content, mode in changes
                       if content is not None and path not in tree and (mode == '100755' or path.endswith('.py')))
     if arriving:
@@ -548,51 +715,9 @@ def _sync_project_locked(home: Path, project: Path, transaction: ComponentTransa
         return '\n'.join([f'{project.name} is up to date', *notes])
     version = version_of(home)
     branch = BRANCH_PREFIX + version
-    _git_out(project, 'check-ref-format', '--branch', branch)
-    if git(project, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0:
-        raise UpdateError(f'branch {branch} already exists in {project}: merge or delete it first')
-    # `git switch` overwrites ignored files without asking; an ignored local file on a managed path is work.
-    ignored = _git_out(project, 'ls-files', '--others', '--ignored', '--exclude-standard', '--',
-                       *(path for path, _, _ in changes))
-    if ignored:
-        raise UpdateError(f'ignored local files sit on managed paths; move them first: {", ".join(ignored.splitlines())}')
-    check_current()
-    commit = commit_changes(project, changes, f'chore: update Getzilla to {version}', expected_head=expected_head)
-    check_current()
-    # Verify the pinned parent and create an absent branch in one Git ref
-    # transaction. A concurrent writer cannot replace an existing update branch.
-    commands = f'start\nverify HEAD {expected_head}\ncreate refs/heads/{branch} {commit}\nprepare\ncommit\n'
-    _git_out(project, 'update-ref', '--stdin', data=commands.encode('utf-8'))
-    try:
-        check_current()
-    except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; checkout not completed: {exc}') from exc
-    switched = git(project, 'switch', '--quiet', branch)
-    if switched.returncode != 0:
-        raise UpdateError(f'commit is on branch {branch}, but checking it out failed: '
-                          f'{switched.stderr.strip()}; run `git switch {branch}`')
-    try:
-        transaction.check()
-        if (_git_out(project, 'rev-parse', 'HEAD') != commit
-                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
-            raise UpdateError('HEAD or branch changed after checkout')
-        _require_clean_project(project)
-        expected_files = {path: (snapshot.content, snapshot.mode) if snapshot is not None else (None, 0)
-                          for path, snapshot in observations.items()}
-        expected_files.update({path: (content, 0o755 if mode == '100755' else 0o644)
-                               for path, content, mode in changes})
-        for path, (content, mode) in expected_files.items():
-            snapshot = transaction.read(path)
-            if ((content is None and snapshot is not None)
-                    or (content is not None and (snapshot is None or snapshot.content != content
-                                                or not mode_matches(snapshot.mode, mode)))):
-                raise UpdateError(f'project file differs after checkout: {path}')
-        transaction.check()
-        if (_git_out(project, 'rev-parse', 'HEAD') != commit
-                or git(project, 'symbolic-ref', '-q', 'HEAD').stdout.strip() != f'refs/heads/{branch}'):
-            raise UpdateError('HEAD or branch changed while checking the checkout')
-    except (UpdateError, ValueError, OSError) as exc:
-        raise UpdateError(f'update branch {branch} retained at {commit}; update incomplete after checkout: {exc}') from exc
+    _publish_changes(project, transaction, changes, observations, expected_head, branch,
+                     f'chore: update Getzilla to {version}', check_current,
+                     retained_ignored=frozenset(retained_ignored))
     kept = f'; kept your current {", ".join(accepted)}' if accepted else ''
     return '\n'.join([f'{project.name}: {len(changes)} file(s) updated on branch {branch}{kept}; '
                       'review it and open a pull request', *notes])
@@ -614,6 +739,9 @@ def is_tool_option(arg: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     step, rest = (argv[0], argv[1:]) if argv and argv[0] in STEPS else (None, argv)
+    if any(arg.split('=')[0] == '--baseline-release' for arg in rest) and (
+            step == 'tools' or any(is_tool_option(arg) for arg in rest)):
+        argparse.ArgumentParser(prog='getzilla update').error('--baseline-release cannot dispatch tool updates')
     if step == 'tools':
         return run_tools(HOME, rest)
     if step is None and any(is_tool_option(arg) for arg in rest):
@@ -622,6 +750,8 @@ def main(argv: list[str] | None = None) -> int:
         prog=f"getzilla update{' ' + step if step else ''}", description=__doc__.splitlines()[0],
         epilog='steps: ' + '; '.join(f'`getzilla update {name}` {summary}' for name, summary in STEPS.items()))
     if step != 'core':
+        parser.add_argument('--baseline-release', choices=('v2.3.0',),
+                            help='recognize exact selected vendor files from the pinned v2.3.0 installation')
         parser.add_argument('project', nargs='?', help='project to update (default: the one around this folder)')
     if step is None or step == 'core':
         parser.add_argument('--ref', help='branch or tag for a detached Getzilla checkout (default: main)')
@@ -634,6 +764,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument('--retire-legacy', action='store_true',
                             help='also remove the committed pre-rename files (.grok-stack, scripts/grok_*) in the same commit')
     args = parser.parse_args(rest)
+    if getattr(args, 'baseline_release', None) and (args.accept_local or args.retire_legacy):
+        parser.error('--baseline-release cannot be combined with --accept-local or --retire-legacy')
+    if getattr(args, 'baseline_release', None) and step is None and (not args.no_self or not args.no_tools):
+        parser.error('--baseline-release requires project mode or both --no-self and --no-tools')
     try:
         if step == 'core':
             print(update_self(HOME, args.ref))
@@ -644,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
             project = args.project or find_project(Path.cwd(), HOME)
             again = [*([str(project)] if project else []), '--no-self', *(['--no-tools'] if args.no_tools else []),
                      *(['--accept-local'] if args.accept_local else []),
+                     *(['--baseline-release', args.baseline_release] if args.baseline_release else []),
                      *(['--retire-legacy'] if args.retire_legacy else [])]
             return subprocess.run([sys.executable, str(HOME / 'scripts/getzilla_upgrade.py'), *again],
                                   check=False).returncode
@@ -651,7 +786,8 @@ def main(argv: list[str] | None = None) -> int:
         if project is None:
             print('no project here: run `getzilla update` inside a project to update it too')
         else:
-            print(sync_project(HOME, project, accept=args.accept_local, retire=args.retire_legacy), flush=True)
+            print(sync_project(HOME, project, accept=args.accept_local, retire=args.retire_legacy,
+                               baseline_release=args.baseline_release), flush=True)
     except UpdateError as exc:
         print(f'getzilla update: {exc}', file=sys.stderr)
         return 1

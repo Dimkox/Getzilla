@@ -53,8 +53,8 @@ else:
         for item in report['findings']:
             grouped.setdefault((item['manifest'], item['ecosystem'], item['package'], item['version']), []).append(item)
         for (manifest, ecosystem, package, version), items in sorted(grouped.items()):
-            # OSV may publish several maintenance-line fixes. A global maximum
-            # is not a safe recommendation, even with an ecosystem comparator.
+            # Different maintenance lines cannot supply one safe global-max
+            # upgrade recommendation. Preserve each advisory's published fixes.
             fixes = '; '.join(
                 f"{item['id']}: fixed in {', '.join(item['fixed'])}" if item['fixed']
                 else f"{item['id']}: no fixed version published" for item in items)

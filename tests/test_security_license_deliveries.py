@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 from getzilla import security_license_acquisition as acquisition
@@ -20,6 +21,11 @@ from tests.test_security_licenses import NOW, POLICY, ROOT, artifact, dependency
 PROFILE = 'ubuntu-24.04-x86_64-cpython312'
 CONTEXT = 'factory-offline-linux312'
 NOTICE = b'Example attribution retained verbatim.\n'
+# Pure resolution target for generated fixtures; this does not attest the test host.
+SYNTHETIC_LINUX312 = {'sys_platform': 'linux', 'os_name': 'posix', 'platform_system': 'Linux',
+                      'platform_machine': 'x86_64', 'implementation_name': 'cpython',
+                      'platform_python_implementation': 'CPython', 'python_version': '3.12',
+                      'python_full_version': '3.12.3'}
 
 
 def sha(body):
@@ -35,6 +41,17 @@ def component_id(record):
     value = {key: record[key] for key in ('ecosystem', 'name', 'version', 'filename', 'sha256', 'context')}
     value['origin'] = {key: record['origin'][key] for key in ('index_url', 'index_sha256', 'artifact_url')}
     return sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
+
+
+def factory_builder():
+    runtime = ROOT / 'factory/runtime'
+    for name in ('setup_manager', 'build_offline_release'):
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, runtime / f'{name}.py')
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+    return sys.modules['build_offline_release']
 
 
 class ArtifactFixture(unittest.TestCase):
@@ -126,28 +143,57 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
                      ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']):
             subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True)
         head = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
-        runtime = ROOT / 'factory/runtime'
-        for name in ('setup_manager', 'build_offline_release'):
-            if name not in sys.modules:
-                spec = importlib.util.spec_from_file_location(name, runtime / f'{name}.py')
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[name] = module
-                spec.loader.exec_module(module)
-        builder = sys.modules['build_offline_release']
+        builder = factory_builder()
         wheelhouse = self.root / 'wheelhouse'
         wheelhouse.mkdir()
         (wheelhouse / filename).write_bytes(payload)
         wheel_inventory = self.root / 'wheel-inventory.json'
-        wheel_inventory.write_text(json.dumps(builder.derive_inventory(lock)))
+        wheel_inventory.write_text(json.dumps(builder.derive_inventory(lock, target_environment=SYNTHETIC_LINUX312)))
         result = builder.build_release(repository=repo, expected_head=head, wheelhouse=wheelhouse,
                                        inventory=wheel_inventory, output=self.root / 'release',
-                                       product_version='1.0.0', enforce_host=False)
+                                       product_version='1.0.0', enforce_host=False,
+                                       target_environment=SYNTHETIC_LINUX312)
+        self.assertEqual(result['target_environment'], SYNTHETIC_LINUX312)
+        self.assertFalse(result['host_enforced'])
         self.delivery = {'context': CONTEXT, 'kind': 'factory-offline-archive', 'profile': PROFILE,
                          'path': 'release.zip', 'sha256': result['archive_sha256'],
                          'manifest_path': 'release.manifest.json', 'manifest_sha256': result['manifest_sha256'],
                          'sidecar_path': 'release.sha256',
                          'components': [{'artifact_id': component_id(self.record), 'prefix': 'site-packages/'}]}
         self.save()
+
+    def test_explicit_synthetic_target_is_independent_of_the_test_host(self):
+        builder = factory_builder()
+        parent = self.root
+        for label, observed in (('unavailable', None), ('controlled-supported', dict(SYNTHETIC_LINUX312))):
+            with self.subTest(host=label), tempfile.TemporaryDirectory(dir=parent) as temporary:
+                self.root = Path(temporary)
+                try:
+                    with mock.patch.object(builder, '_host_environment', return_value=observed) as host:
+                        try:
+                            self.prepare()
+                        except builder.InstallerError:
+                            self.fail('synthetic fixture must not require host eligibility')
+                    host.assert_not_called()
+                    self.assertEqual(self.evaluate()['status'], 'pass')
+                finally:
+                    self.root = parent
+
+    def test_enforced_host_refusals_remain_separate_from_synthetic_fixture_target(self):
+        builder = factory_builder()
+        output = self.root / 'not-created'
+        arguments = {'repository': self.root / 'unused-repo', 'expected_head': 'a' * 40,
+                     'wheelhouse': self.root / 'unused-wheels', 'inventory': self.root / 'unused-inventory.json',
+                     'output': output, 'product_version': '1.0.0', 'enforce_host': True,
+                     'target_environment': dict(SYNTHETIC_LINUX312)}
+        for label, observed, code in (('unavailable', None, 'UNSUPPORTED_HOST'),
+                                      ('mismatch', {**SYNTHETIC_LINUX312, 'python_full_version': '3.12.4'},
+                                       'TARGET_PROFILE_MISMATCH')):
+            with self.subTest(host=label), mock.patch.object(builder, '_host_environment', return_value=observed):
+                with self.assertRaises(builder.InstallerError) as caught:
+                    builder.build_release(**arguments)
+                self.assertEqual(caught.exception.code, code)
+                self.assertFalse(output.exists())
 
     def save(self, *, records=None, deliveries=None):
         manifest(self.root, self.inv, records or [self.record])

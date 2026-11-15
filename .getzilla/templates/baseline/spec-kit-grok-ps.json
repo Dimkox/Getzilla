@@ -1,0 +1,211 @@
+{
+  "agent": "grok",
+  "argv": [
+    "/usr/bin/prlimit",
+    "--core=0",
+    "--as=2147483648",
+    "--cpu=20",
+    "--nproc=1024",
+    "--nofile=256",
+    "--fsize=16777216",
+    "--",
+    "/usr/bin/python3",
+    "-c",
+    "from specify_cli import main; main()",
+    "init",
+    "--here",
+    "--integration",
+    "grok",
+    "--non-interactive",
+    "--ignore-agent-tools",
+    "--script",
+    "ps"
+  ],
+  "binding": {
+    "dependency_lock_sha256": "cc93d484da0a09a4134d212e7a4a33e8353a3f4223b13f6a4dd463414fed1fd0",
+    "source_archive_sha256": "15192dfc3770ac170e6b026f495ec157e42d31c96bd1cf9e19ebe5c68527bab4",
+    "source_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342"
+  },
+  "component": "spec-kit",
+  "files": [
+    {
+      "bytes": 12035,
+      "mode": 420,
+      "path": ".grok/skills/speckit-analyze/SKILL.md",
+      "sha256": "bc5c24e6bbadf90f58e52d351c9ea22d502257ffb584694a9a46cf592dd78033"
+    },
+    {
+      "bytes": 22657,
+      "mode": 420,
+      "path": ".grok/skills/speckit-checklist/SKILL.md",
+      "sha256": "f846c702c2a83777ab6806decbfaecb9d7f48b15f48bebb2db1d5f06bc6775dc"
+    },
+    {
+      "bytes": 19707,
+      "mode": 420,
+      "path": ".grok/skills/speckit-clarify/SKILL.md",
+      "sha256": "c0ab0a24043c37e03db3251a261d9250da95bb1ab5f69b51f6beedf009900c48"
+    },
+    {
+      "bytes": 10520,
+      "mode": 420,
+      "path": ".grok/skills/speckit-constitution/SKILL.md",
+      "sha256": "9ba37cfc2ad0d64dcaf4816f85405376f9e671ef485220dbcbb8ed002aa93036"
+    },
+    {
+      "bytes": 13455,
+      "mode": 420,
+      "path": ".grok/skills/speckit-converge/SKILL.md",
+      "sha256": "c73faaef7cd7cbf8b5f5b3a378f5b583b4b878fa6add039d0dc30f5617baa5ef"
+    },
+    {
+      "bytes": 13083,
+      "mode": 420,
+      "path": ".grok/skills/speckit-implement/SKILL.md",
+      "sha256": "47bfb14d191d970e63b1acd362a9570baadea947daa1b3b747c3305aa0bd85cc"
+    },
+    {
+      "bytes": 8239,
+      "mode": 420,
+      "path": ".grok/skills/speckit-plan/SKILL.md",
+      "sha256": "cef8c4f2cdecc92b2069ba9e0cc3f921d0f87915caa1d8bc023dbc665e02904f"
+    },
+    {
+      "bytes": 19017,
+      "mode": 420,
+      "path": ".grok/skills/speckit-specify/SKILL.md",
+      "sha256": "f27c66b20968981c98ec65e67f279c3c5b3ac833016d0c3879b1e9aadc1361c9"
+    },
+    {
+      "bytes": 11582,
+      "mode": 420,
+      "path": ".grok/skills/speckit-tasks/SKILL.md",
+      "sha256": "2236ce1193fc122ee791c4f646aac11a341096670f1ea9aa5424b78148d9b44a"
+    },
+    {
+      "bytes": 586,
+      "mode": 420,
+      "path": ".specify/.gitignore",
+      "sha256": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
+    },
+    {
+      "bytes": 193,
+      "mode": 420,
+      "path": ".specify/init-options.json",
+      "sha256": "9ab7b2d1595b0a2e6f426535d2ec61be2b16dc889c4aaf70ad41dca2fba73d0d"
+    },
+    {
+      "bytes": 267,
+      "mode": 420,
+      "path": ".specify/integration.json",
+      "sha256": "5930f41ddc4a26ac7c56196bb31da80fbee34b79ba4cb4d6a09c7c6d9c12b916"
+    },
+    {
+      "bytes": 1143,
+      "mode": 420,
+      "path": ".specify/integrations/grok.manifest.json",
+      "sha256": "ac4d8f0c00f9da39e341b76ff213b580f8f3e112aff4f4234a4648783f024284"
+    },
+    {
+      "bytes": 1516,
+      "mode": 420,
+      "path": ".specify/integrations/speckit.manifest.json",
+      "sha256": "d766a3fdb38c5f481eb98a67e39069c9bf490ee4369efc95d2a29dd1e1c82954"
+    },
+    {
+      "bytes": 103,
+      "mode": 420,
+      "path": ".specify/memory/.constitution-template.json",
+      "sha256": "8fc4b39294bae0c10d59547ad7d415b6f0e890d656cbf7171dd567f4e9054711"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/memory/constitution.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 7085,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/check-prerequisites.ps1",
+      "sha256": "b5b522bd3ee99a490903cc0acb2ded41c662c5f18b9b587f44755a883aeb90d2"
+    },
+    {
+      "bytes": 35316,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/common.ps1",
+      "sha256": "c4816519ffb0b930427559b3ec729ef04a56162f4ef334958c8c50a3f92def9d"
+    },
+    {
+      "bytes": 14876,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/create-new-feature.ps1",
+      "sha256": "481c7368541a816b1679e5ed65fa9e5aea84b09f8be3a02ff8a340e3b48dd58a"
+    },
+    {
+      "bytes": 889,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/resolve-template.ps1",
+      "sha256": "e49c565a09902e4ebd4b5a51c4e014d5067fdee5b1592f15cb44ef31f430d745"
+    },
+    {
+      "bytes": 3062,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-plan.ps1",
+      "sha256": "5939ef98418e8dc8cc722ef53ba359fc814f3d2a9fd7620f04e8d145a7041f1a"
+    },
+    {
+      "bytes": 3977,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-tasks.ps1",
+      "sha256": "d286da96d5b7e0075daa56e834fc1e1eb5beaddbc7e06d3ba898d0e9c071c50a"
+    },
+    {
+      "bytes": 2033,
+      "mode": 420,
+      "path": ".specify/templates/checklist-template.md",
+      "sha256": "856532b3cb66171c662cc16f16b31a5856e4655a8666aad1e545bbfc7f603ca1"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/templates/constitution-template.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 3682,
+      "mode": 420,
+      "path": ".specify/templates/plan-template.md",
+      "sha256": "7e637502d41eccf0ca672496636365691fdca62ef37b27ec07fcb412dbfa90d4"
+    },
+    {
+      "bytes": 4556,
+      "mode": 420,
+      "path": ".specify/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "bytes": 9171,
+      "mode": 420,
+      "path": ".specify/templates/tasks-template.md",
+      "sha256": "fc29a233f6f5a27ca31f1aa46b596af6500c627441c6e62b2bc4a1d721525842"
+    },
+    {
+      "bytes": 2118,
+      "mode": 420,
+      "path": ".specify/workflows/speckit/workflow.yml",
+      "sha256": "177761c5e7df28126beea043b5cb45aeaf7958090c022dc11ac71399422fcfbc"
+    },
+    {
+      "bytes": 369,
+      "mode": 420,
+      "path": ".specify/workflows/workflow-registry.json",
+      "sha256": "bc016e67175ee86df6307b291c91bb9774ec4028d8058c1baacc22d729c0ee36"
+    }
+  ],
+  "generator": "linux-bubblewrap-offline-v1",
+  "permissions_granted": false,
+  "schema_version": 1,
+  "script": "ps",
+  "semantic_safety": "unqualified"
+}

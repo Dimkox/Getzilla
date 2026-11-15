@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import sys
 import tempfile
 import unittest
@@ -177,8 +178,43 @@ class SnapshotTests(unittest.TestCase):
         archive = self.database / 'PyPI/all.zip'
         archive.parent.mkdir(parents=True)
         archive.write_bytes(osv_bytes())
-        with self.assertRaisesRegex(SD.SecurityDataError, r'getzilla_vulns.py --download-db DIR --ecosystem PyPI'):
+        with self.assertRaisesRegex(SD.SecurityDataError, r'python3 scripts/getzilla_security.py --root ROOT --database DIR'):
             SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+
+    def test_recovery_command_drives_the_explicit_strict_refresh_entrypoint(self):
+        from getzilla import security_cli
+        from getzilla.security_acquisition import FetchResult, refresh_feeds
+        from tests.test_security_intelligence import epss_payload, kev_payload
+        with self.assertRaises(SD.SecurityDataError) as caught:
+            SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)
+        command = str(caught.exception).split('refresh with ', 1)[1].split(' on a network-enabled host', 1)[0]
+        arguments = shlex.split(command)
+        self.assertEqual(arguments[:2], ['python3', 'scripts/getzilla_security.py'])
+        (self.root / 'requirements.txt').write_text('example==1.0.0\n')
+        locations = {'ROOT':str(self.root), 'DIR':str(self.database),
+                     'ARTIFACTS':str(self.root/'artifacts'), 'TOOLS':str(self.root/'tools'),
+                     'REPORT':str(self.root/'report.json'), 'PROFILE':str(self.root/'profile.json')}
+        declared_profile = {'fixture': 'explicit dispatch-only profile'}
+        security_cli._atomic(Path(locations['PROFILE']), json.dumps(declared_profile).encode())
+        def prepare(args, profile):
+            self.assertEqual(profile, declared_profile)
+            self.assertEqual(args.input_profile, Path(locations['PROFILE']))
+            self.assertTrue(args.refresh)
+            def fetch(url):
+                body = (osv_bytes() if url == SD.SOURCE_URLS['osv:PyPI'] else
+                        kev_payload() if url == SD.SOURCE_URLS['kev'] else epss_payload())
+                return FetchResult(body,url,url,200)
+            from getzilla.security_inventory import collect_inventory
+            ecosystems = sorted({d['ecosystem'] for d in collect_inventory(args.root)['dependencies']})
+            reports = refresh_feeds(args.database,ecosystems,fetch=fetch,now=NOW) if args.refresh else []
+            passed = len(reports)==3 and all(r['status']=='pass' for r in reports)
+            return {'kind':'public-security-input-preparation', 'status':'prepared' if passed else 'unavailable',
+                    'qualification':'UNVERIFIED', 'scan_outcomes':[]}
+        with mock.patch.object(security_cli,'_supervised_preparation',side_effect=prepare):
+            self.assertEqual(security_cli.main([locations.get(value,value) for value in arguments[2:]]),0)
+        payload, evidence = SD.read_snapshot(self.database,'osv:PyPI',now=NOW)
+        self.assertEqual(payload,osv_bytes())
+        self.assertEqual(evidence['acquisition']['last_verified_sync_utc'],NOW.isoformat())
 
     def test_arbitrary_source_ids_never_select_files(self) -> None:
         for source_id in ('../outside', 'osv:../../outside', 'osv:Hex', 'https://example.invalid'):
@@ -209,6 +245,93 @@ class OsvCompatibilityTests(unittest.TestCase):
             for i, record in enumerate(records):
                 archive.writestr(f'record-{i}.json', json.dumps(record))
         return output.getvalue()
+
+    @staticmethod
+    def active_record():
+        return {'id': 'GHSA-public-null-fixture', 'modified': '2026-11-03T00:00:00Z', 'affected': [{
+            'package': {'ecosystem': 'PyPI', 'name': 'sample'}, 'versions': ['1.0.0'],
+        }]}
+
+    def accepted(self, operation):
+        try:
+            return operation()
+        except SD.SecurityDataError as exc:
+            self.fail(f'valid nullable OSV field refused: {exc}')
+
+    def test_nullable_alias_helper_returns_fresh_lists_without_truthiness_coercion(self):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+            with self.subTest(fields=fields):
+                record = dict(self.active_record(), **fields)
+                first = self.accepted(lambda: SD.osv_aliases(record))
+                second = self.accepted(lambda: SD.osv_aliases(record))
+                self.assertEqual(first, fields.get('aliases') or [])
+                self.assertIsNot(first, second)
+                self.assertIsNot(first, record.get('aliases'))
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+            with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
+                SD.osv_aliases(dict(self.active_record(), aliases=value))
+
+    def test_nullable_aliases_pass_strict_zip_but_malformed_aliases_refuse(self):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+            with self.subTest(fields=fields):
+                payload = self.archive(dict(self.active_record(), **fields))
+                self.assertEqual(self.accepted(lambda: SD.osv_coverage(payload, 'PyPI'))['record_count'], 1)
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+            with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(dict(self.active_record(), aliases=value)), 'PyPI')
+
+    def test_nullable_aliases_reach_injected_query_consumer_without_network(self):
+        from getzilla import security_osv_snapshot as osv
+        dependency = osv.Dependency('PyPI', 'sample', '1.0.0', 'requirements.txt')
+        def query(record):
+            calls = []
+            def fetch(url, body):
+                calls.append(url)
+                return json.dumps({'results': [{'vulns': [{'id': record['id']}]}]}
+                                  if url.endswith('/querybatch') else record).encode()
+            answer = osv.query_online([dependency], fetch=fetch)
+            self.assertEqual(len(calls), 2)
+            return answer[0]
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+            with self.subTest(fields=fields):
+                try:
+                    answer = query(dict(self.active_record(), **fields))
+                except osv.VulnerabilityError as exc:
+                    self.fail(f'valid nullable OSV aliases refused by query: {exc}')
+                self.assertEqual(answer.aliases, fields.get('aliases') or [])
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+            with self.subTest(malformed=value), self.assertRaises(osv.VulnerabilityError):
+                query(dict(self.active_record(), aliases=value))
+
+    def test_withdrawn_nullable_affected_passes_coverage_and_production_body_validator(self):
+        active = self.active_record()
+        withdrawn = {'id': 'GHSA-public-withdrawn', 'withdrawn': '2026-11-03T01:00:00Z'}
+        for fields in ({}, {'affected': []}, {'affected': None}):
+            with self.subTest(fields=fields):
+                payload = self.archive(active, dict(withdrawn, **fields))
+                coverage = self.accepted(lambda: SD.osv_coverage(payload, 'PyPI'))
+                self.assertEqual(coverage['record_count'], 2)
+                document = {'schema_version': 1, 'source_id': 'osv:PyPI',
+                            'source_url': SD.SOURCE_URLS['osv:PyPI'],
+                            'content_sha256': hashlib.sha256(payload).hexdigest(), 'payload_size': len(payload),
+                            'acquisition': {'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'},
+                            'coverage': coverage}
+                self.accepted(lambda: SD._validate(document, payload, 'osv:PyPI', now=NOW,
+                                                   required_scope={'PyPI'}))
+        for value in (False, 0, '', 'malformed', {}, [None], [{}]):
+            with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(active, dict(withdrawn, affected=value)), 'PyPI')
+        for value in (None, False, 0, 'unknown', '2026-11-03T01:00:00'):
+            with self.subTest(withdrawn=value), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(active, dict(withdrawn, withdrawn=value, affected=None)), 'PyPI')
+        for fields in ({}, {'affected': []}, {'affected': None}):
+            record = dict(active)
+            record.pop('affected')
+            record.update(fields)
+            with self.subTest(active_without_coverage=fields), self.assertRaises(SD.SecurityDataError):
+                SD.osv_coverage(self.archive(record), 'PyPI')
+        with self.assertRaises(SD.SecurityDataError):
+            SD.osv_coverage(self.archive(dict(withdrawn, affected=None)), 'PyPI')
 
     def test_supplementary_git_row_needs_named_coverage_in_same_record(self):
         named = {'package': {'ecosystem': 'npm', 'name': 'phoenix'}, 'versions': ['1.0.0']}
@@ -471,7 +594,7 @@ class SnapshotCapabilityTests(unittest.TestCase):
             self.assertFalse(database.exists())
 
     def test_structural_no_dependency_result_needs_no_snapshot_filesystem(self):
-        from getzilla.known_vulns import scan
+        from getzilla.security_osv_snapshot import scan
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True):
             root = Path(temporary)
             result = scan(root, environ={'GETZILLA_OSV_DB': str(root / 'absent')}, now=NOW)

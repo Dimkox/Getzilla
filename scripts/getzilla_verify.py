@@ -60,6 +60,9 @@ except VerificationCancelled as exc:
 
 
 def _emit_report():
+    # The live index is already on stderr. Keep --json stdout a single JSON value.
+    if report.get('diagnostics') and not args.json:
+        print('HISTORY: ' + str(report['diagnostics'].get('index') or 'unavailable'))
     report["git_head"] = git_head(root)
     report["ci_run_id"] = os.environ.get("GITHUB_RUN_ID")
     dump_json(root / ".getzilla/runtime/evidence/verification.json", report)

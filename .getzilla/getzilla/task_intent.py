@@ -124,9 +124,9 @@ def target_digest(root: Path, route: dict[str, Any], question: dict[str, Any], *
                     'targets': {identifier: targets.get(identifier, {'absent': True}) for identifier in sorted(question['targets'])}})
 
 
-def intent_gaps(root: Path, route: dict[str, Any], *, requirement_ids: tuple[str, ...] | None = None) -> list[str]:
+def _intent_status(root: Path, route: dict[str, Any], *, requirement_ids: tuple[str, ...] | None = None) -> tuple[list[str], set[str]]:
     if 'intent_state' not in route:
-        return []
+        return [], set()
     try:
         validate_intent(route['intent_state'])
         if requirement_ids is not None:
@@ -134,12 +134,14 @@ def intent_gaps(root: Path, route: dict[str, Any], *, requirement_ids: tuple[str
             if not requirement_ids or any(item not in available for item in requirement_ids):
                 raise ValueError('intent implementation scope is unavailable')
         gaps = []
+        active_ids = set()
         for question in route['intent_state']['questions']:
             if requirement_ids is not None and 'original' not in question['targets'] and not set(requirement_ids) & set(question['targets']):
                 continue
             answer = question['answer']
             if answer is None:
                 gaps.append(f"intent_unresolved: {question['id']}: {question['question']}")
+                active_ids.add(question['id'])
                 continue
             try:
                 current = target_digest(root, route, question, allow_missing=answer.get('resolution') == 'withdrawn')
@@ -147,9 +149,14 @@ def intent_gaps(root: Path, route: dict[str, Any], *, requirement_ids: tuple[str
                 current = None
             if current != answer['target_digest']:
                 gaps.append(f"intent_stale: {question['id']}: affected requirements changed; ask the human about the current version")
-        return gaps
+                active_ids.add(question['id'])
+        return gaps, active_ids
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return ['intent_invalid: ' + str(exc)]
+        return ['intent_invalid: ' + str(exc)], set()
+
+
+def intent_gaps(root: Path, route: dict[str, Any], *, requirement_ids: tuple[str, ...] | None = None) -> list[str]:
+    return _intent_status(root, route, requirement_ids=requirement_ids)[0]
 
 
 def _pending_regions(route: dict) -> list[dict]:
@@ -167,20 +174,24 @@ def _pending_regions(route: dict) -> list[dict]:
     return regions
 
 
-def write_scope_gaps(root: Path, route: dict, *, requirement_ids: tuple[str, ...] | None = None) -> list[str]:
-    gaps = intent_gaps(root, route, requirement_ids=requirement_ids)
+def _write_scope_status(root: Path, route: dict, *, requirement_ids: tuple[str, ...] | None = None) -> tuple[list[str], set[str]]:
+    gaps, active_ids = _intent_status(root, route, requirement_ids=requirement_ids)
     if requirement_ids is not None:
         try:
             available = _targets(root, route)
             if not requirement_ids or any(item not in available for item in requirement_ids):
                 raise ValueError('implementation requirement scope is unavailable')
         except (ValueError, OSError, KeyError, TypeError) as exc:
-            return [*gaps, 'scope_sync_required: ' + str(exc)]
+            return [*gaps, 'scope_sync_required: ' + str(exc)], active_ids
     for region in _pending_regions(route):
         if requirement_ids is not None and region['targets'] and not set(requirement_ids) & set(region['targets']):
             continue
         gaps.append('scope_sync_required: ' + region['id'] + ': synchronize the amendment and ask the human about unresolved meaning before affected implementation')
-    return gaps
+    return gaps, active_ids
+
+
+def write_scope_gaps(root: Path, route: dict, *, requirement_ids: tuple[str, ...] | None = None) -> list[str]:
+    return _write_scope_status(root, route, requirement_ids=requirement_ids)[0]
 
 
 @state.serialized_task
@@ -291,7 +302,7 @@ def mutation_block_reason(root: Path, event: dict[str, Any], *, execution_cwd: P
         unknown = not targets
     if not write:
         return None
-    gaps = write_scope_gaps(root, route)
+    gaps, active_ids = _write_scope_status(root, route)
     if not gaps:
         return None
     # Clarification documents and report scratch remain editable through their ordinary guards.
@@ -307,7 +318,6 @@ def mutation_block_reason(root: Path, event: dict[str, Any], *, execution_cwd: P
         return None
     if unknown or None in normalized or not normalized or any(gap.startswith('intent_invalid:') for gap in gaps):
         return 'Implementation scope cannot establish independence from ' + '; '.join(gaps)
-    active_ids = {gap.split(':', 2)[1].strip() for gap in gaps}
     blocked = []
     for question in (route.get('intent_state') or {}).get('questions', []):
         if question['id'] not in active_ids:

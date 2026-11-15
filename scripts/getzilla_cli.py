@@ -13,14 +13,17 @@ if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
 
 import os
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 
 HOME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOME / '.getzilla'))
 
 from getzilla.interpreter import project_python  # noqa: E402
+from getzilla import verification_journal as diagnostics  # noqa: E402
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
     'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
     'doctor': ('getzilla_doctor.py', 'check this machine and the repository'),
     'cpu': ('getzilla_startup_cpu.py', 'startup CPU step zero: measure and record capacity'),
@@ -31,6 +34,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'cleanup': ('getzilla_cleanup.py', 'disk inventory and guarded removal of worktrees without unique work'),
     'change': ('getzilla_change.py', 'manage engineering change packages'),
     'spec': ('getzilla_spec.py', 'validate typed change specifications'),
+    'evals': ('getzilla_evals.py', 'offline agent replay and explicit baseline acceptance'),
     'verify': ('getzilla_verify.py', 'run route-selected verification and record a receipt'),
     'test-tools': ('getzilla_verification_tools.py', 'catalog, plan and run optional executable verification tools'),
     'review': ('getzilla_review.py', 'record an independent review receipt'),
@@ -52,7 +56,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
     'install-into': ('install_into.py', 'install Getzilla into a project (--plan, --materialize-new)'),
-    'components': ('getzilla_components.py', 'managed selection: status, add agent:<name>|factory, adopt --agents <complete-list>'),
+    'components': ('getzilla_components.py', 'managed selection: status, add, remove agent:<name>, uninstall, adopt'),
+    'uninstall': ('getzilla_components.py', 'remove selected adapters in a clean Git consumer; shared engine stays'),
     'compliance': ('getzilla_compliance.py', 'scaffold optional compliance adapters for a registered AI system'),
     'baseline': ('getzilla_baseline.py', 'mandatory pinned baseline: status, apply to a project'),
     'risk-terms': ('getzilla_risk_terms.py', 'risk vocabulary language packs: check, scaffold, languages'),
@@ -68,7 +73,8 @@ def usage() -> str:
     lines = ['usage: getzilla <command> [arguments]', '', 'commands:']
     lines += [f'  {name:<{width}}  {summary}' for name, (_, summary) in COMMANDS.items()]
     lines.append(f"  {'test':<{width}}  run the test suite on the measured CPU capacity")
-    lines += ['', "`getzilla <command> --help` shows a command's own options."]
+    lines += ['', '`getzilla test --require-parallel [targets/options]` refuses a missing parallel backend.',
+              "`getzilla <command> --help` shows a command's own options."]
     return '\n'.join(lines)
 
 
@@ -92,23 +98,56 @@ def test_workers() -> int:
         return max(1, (os.cpu_count() or 1) - 2)
 
 
-def run_tests(args: list[str]) -> int:
+def run_tests(args: list[str], *, require_parallel: bool = False) -> int:
+    from getzilla.util import find_root
+    cleanup = ExitStack()
+    try:
+        try:
+            history = cleanup.enter_context(diagnostics.session(find_root(), 'test-cli'))
+        except Exception:
+            history = None
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+        return _run_tests(args, require_parallel=require_parallel, history=history)
+    finally:
+        try:
+            cleanup.close()
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+
+
+def _run_tests(args: list[str], *, require_parallel: bool = False, history=None) -> int:
     targets = args or ['tests']
     python = project_python(HOME)
     # UTF-8 mode on Windows: tests decode CLI output and fixtures as UTF-8, as on POSIX; product
     # code names its encodings (tests/test_text_writes.py) so this cannot hide a product bug. The
     # environment variable reaches the xdist workers and every child, unlike -X utf8.
     environment = {**os.environ, 'PYTHONUTF8': '1'} if os.name == 'nt' else None
-    probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
+    with diagnostics.span('test-backend-probe', stage='command'):
+        probe = subprocess.run([python, '-c', 'import pytest, xdist'], capture_output=True, check=False)
     if probe.returncode == 0:
         workers = test_workers()
         print(f'getzilla test: {workers} parallel workers', flush=True)
         command = [python, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-n', str(workers), *targets]
     else:
+        if require_parallel:
+            print('getzilla test: required pytest-xdist backend is unavailable', file=sys.stderr)
+            return probe.returncode
         print('getzilla test: pytest-xdist is not installed, running unittest serially '
               '(re-run the installer to create Getzilla\'s .venv)', flush=True)
-        command = [python, '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
-    return subprocess.run(command, env=environment, check=False).returncode
+        command = [python, str(HOME / 'scripts/getzilla_unittest.py'), '--journal-only', 'discover', '-s', 'tests', '-t', '.']
+    if history is not None and history.writer is not None:
+        try:
+            history.expect_workers(workers if probe.returncode == 0 else 1)
+            configured = history.child_environment(environment)
+            configured['PYTHONPATH'] = os.pathsep.join((str(HOME / '.getzilla'), configured.get('PYTHONPATH', '')))
+        except Exception:
+            print('getzilla journal: unavailable; test dispatch continues', file=sys.stderr, flush=True)
+        else:
+            environment = configured
+            if probe.returncode == 0:
+                command[6:6] = ['-p', 'getzilla.pytest_progress']
+    with diagnostics.span('test-command', stage='command'):
+        return subprocess.run(command, env=environment, check=False).returncode
 
 
 def main(argv: list[str]) -> int:
@@ -117,10 +156,14 @@ def main(argv: list[str]) -> int:
         return 0
     command, rest = argv[0], argv[1:]
     if command == 'test':
-        return run_tests(rest)
+        require_parallel = bool(rest and rest[0] == '--require-parallel')
+        return run_tests(rest[1:] if require_parallel else rest, require_parallel=require_parallel)
     if command not in COMMANDS:
         print(f"getzilla: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
+    if command == 'uninstall':
+        return subprocess.run([project_python(HOME), str(HOME / 'scripts/getzilla_components.py'),
+                               'uninstall', *rest], check=False).returncode
     # `update` changes the project from the Getzilla installation, never from the project's own copy.
     script = HOME / 'scripts' / COMMANDS[command][0] if command == 'update' else script_path(COMMANDS[command][0])
     return subprocess.run([project_python(HOME), str(script), *rest], check=False).returncode

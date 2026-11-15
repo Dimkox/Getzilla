@@ -395,9 +395,9 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [QUICKSTART.md](../QUICKSTART.md)
 - [VERSION](../VERSION)
 - [`.grok/skills/`](../.grok/skills/)
-- [`.grok/agents/`](../.grok/agents/)
-- [`.grok/hooks/`](../.grok/hooks/)
-- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.grok/hooks/`, the canonical source.
+- [`.getzilla/agents/`](../.getzilla/agents/)
+- [`.getzilla/hooks/`](../.getzilla/hooks/)
+- [Hook compatibility template](../.getzilla/templates/hook_root_shim.py) — root aliases for older consumer installs only; a fresh install keeps every hook entry script in `.getzilla/hooks/`, the canonical source.
 - [`scripts/getzilla_route.py`](../scripts/getzilla_route.py)
 - [`scripts/getzilla_change.py`](../scripts/getzilla_change.py)
 - [`scripts/getzilla_agent.py`](../scripts/getzilla_agent.py) — local heartbeat, checkpoints, watchdog and recovery; [watchdog runbook](../engineering/runbooks/local-agent-watchdog.md), [repeated-failure guard](../engineering/runbooks/session-progress.md)
@@ -547,9 +547,9 @@ Machine-readable local pins: `.getzilla/config/toolchain.json` (its `workflow_so
 
 | Component | Pinned | Upstream | Observed latest | Observed |
 | --- | --- | --- | --- | --- |
-| Superpowers | 6.4.2 | obra/superpowers | 6.4.2 | 2026-10-06 |
-| BMAD Method | 6.12.1 | bmad-code-org/BMAD-METHOD | 6.12.1 | 2026-10-06 |
-| GitHub Spec Kit | 1.1.0 | github/spec-kit | 1.1.0 | 2026-10-06 |
+| Superpowers | 7.0.2 | obra/superpowers | 7.0.2 | 2026-11-09 |
+| BMAD Method | 6.12.4 | bmad-code-org/BMAD-METHOD | 6.12.4 | 2026-11-09 |
+| GitHub Spec Kit | 1.3.2 | github/spec-kit | 1.3.2 | 2026-11-09 |
 
 These rows are dated currency observations for the workflow artifact adapters. The required installed Superpowers, BMAD, Spec Kit and OSV/OpenGrep baseline has its own pinned manifest. `getzilla baseline status --project /path/to/repo` inspects installation and project wiring; `getzilla baseline apply --project /path/to/repo` connects an installed workflow baseline. See [baseline setup](baseline.md) for user-level installation and security tools. Optional tool updates are separate from that requirement. `tests/test_workflow_sources.py` keeps them bound to `.getzilla/config/toolchain.json` and to named parser tests. Accepted document shapes and the known-unparsed list are defined in the upstream format amendments of [2026-09-15](../docs/superpowers/specs/2026-09-15-workflow-artifact-adapters-upstream-amendment.md) and [2026-10-06](../docs/superpowers/specs/2026-10-06-workflow-artifact-adapters-upstream-amendment.md).
 
@@ -627,6 +627,8 @@ git diff --cached -- .getzilla/managed-components.json
 
 Use `--agents ''` instead of the second command when selecting no adapters. Adoption writes the selection without installing or deleting adapter files. It does not declare arbitrary old files owned. Repeating the exact established list is a no-op; a different list cannot replace a valid v2 selection through adoption. This command is separate from `getzilla adopt`, which handles folders without Git. Review and commit the manifest before running the project phase of `getzilla update`, for example `getzilla update --no-self --no-tools`.
 
+The [optional module lifecycle](optional-modules.md) uses `getzilla components module registry|status|install|update|enable|disable|uninstall|recover|rollback`. Modules use trusted local checksummed artifacts, stay disabled after install/update, and require explicit project grants. Generic lifecycle performs no provider registration, network or worker launch.
+
 `getzilla components add agent:codex` adds to the existing choice and preserves other selected adapters. Adapter-dependent extras also require a complete selection; non-adapter additions may preserve a legacy ledger without inventing membership. `getzilla setup-agent --agent codex`, run from the installed project or a subdirectory, completes project validation and addition before changing user-level configuration. A later global-configuration failure reports that the project phase already completed. `--forget-key` remains global-only.
 
 Use `getzilla harness` to check selected outputs and `getzilla harness --write` to generate them from the installed canonical inputs. The installed `scripts/getzilla_harness.py` works from a project subdirectory, including with the engine in a ZIP. To regenerate this full source checkout, run `python3 scripts/getzilla_harness.py --repository-all --write`. Repository mode requires the full source markers and cannot override an established subset selection.
@@ -637,7 +639,7 @@ A keep declaration can include the component manifest itself. Add, adoption, gen
 
 The project update requires a committed valid v2 manifest and a clean Git checkout. It builds the selected files and target ledger in one private-index commit, checks the original HEAD and observations before creating a new branch, then checks the branch and actual file contents after checkout. Existing kept-local settings retain their separate `.getzilla/AGBP_SYNC.json` contract, including when legacy migration adds a sync record or log. An ownership conflict still needs reviewed resolution; `--accept-local` only acknowledges changed declared kept-local digests and does not grant ownership or permission to replace the kept files.
 
-Component writers share a persistent advisory guard. It coordinates cooperating writers, not operating-system isolation from other processes. Preflight conflicts stop before product writes. A later I/O failure can leave partial files with the old manifest or uncertain final publication; inspect the reported residue and retry explicitly. Update failures after branch creation retain that branch and report an incomplete checkout; no automatic rollback discards concurrent work. Adapter removal, shared-namespace relocation and native-hook deactivation are outside this selection change. In particular, `agents: []` does not remove `.grok/hooks.json` or `.grok/hooks/adaptive.json` or prove that native hooks are disabled.
+Component writers share a persistent advisory guard. It coordinates cooperating writers, not operating-system isolation from other processes. Preflight conflicts stop before product writes. A later I/O failure can leave partial files with the old manifest or uncertain final publication; inspect the reported residue and retry explicitly. Update failures after branch creation retain that branch and report an incomplete checkout; no automatic rollback discards concurrent work. Adapter removal and native-hook deactivation require separate checks. An empty selection does not prove that native hooks are disabled in an existing repository. See [neutral source migration](../engineering/runbooks/getzilla-neutral-hooks.md) for proof-checked relocation.
 
 ## Scripts
 
@@ -667,6 +669,7 @@ Every command runs as `getzilla <command>` through `bin/getzilla` (`bin\getzilla
 | `change` | `scripts/getzilla_change.py` | Start, transition or show the change package |
 | `spec` | `scripts/getzilla_spec.py` | Validate and summarize typed change specifications |
 | `agent` | `scripts/getzilla_agent.py` | Agent heartbeat, checkpoints, watchdog, `progress-inspect` and one-shot `progress-recover` |
+| `evals` | `scripts/getzilla_evals.py` | [Offline agent replay](agent-evals.md), paired baseline comparison and explicit acceptance |
 | `test` | `scripts/getzilla_cli.py` | Run the test suite with pytest-xdist on the measured CPUs, otherwise serial unittest |
 | `verify` | `scripts/getzilla_verify.py` | Local verification preflight (unittest, Ruff, Bandit, known vulnerabilities, measured coverage in `pr`/`release`) |
 | `review` | `scripts/getzilla_review.py` | Record a local review receipt bound to `--reviewed-commit` and the report's matching `--reviewed-context` marker |
@@ -756,7 +759,7 @@ The verification report keeps schema version 1 with additive detail fields. Orig
 
 `getzilla_verify.py` runs a `known-vulnerabilities` check next to Ruff, Bandit, Semgrep and Trivy. It reads exact pins from `requirements*.txt`, `pyproject.toml`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `go.mod`, `Cargo.lock`, `composer.lock` and `Gemfile.lock` (tracked files; `tests/**`, `**/fixtures/**`, `node_modules` and `vendor` are excluded by default) and looks every version up in [OSV](https://osv.dev), which merges the GitHub Advisory Database, PyPA, RustSec, the Go vulnerability database, npm and NVD-derived records. A finding fails the check with its OSV/GHSA/CVE ids, severity and fixed versions.
 
-It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked; `--mode pr`/`release` refuse that skip (only a repository without pinned dependencies may skip), so set one of them for those modes. The GitHub Actions workflow from `getzilla_ci.py --write` sets `GETZILLA_OSV_ONLINE=1`; Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
+It never touches the network unless asked: `GETZILLA_OSV_ONLINE=1` (or `--online`) queries `api.osv.dev`; `GETZILLA_OSV_DB=<dir>` (or `--db`) reads an offline mirror made with `python3 scripts/getzilla_vulns.py --download-db <dir>`. With neither, the check is skipped and says how many dependencies went unchecked; `--mode pr`/`release` refuse that skip (only a repository without pinned dependencies may skip), so set one of them for those modes. The generated workflow keeps its existing `GETZILLA_OSV_ONLINE=1` legacy selector. The new public-input runtime capability is unactivated: later structured-security CI integration needs separately qualified offline inputs and any missing family adapters. The online flag supplies no structured feed or license evidence. See [public input preparation](security-checker-bootstrap.md#explicit-public-input-preparation). Missing, stale, unsupported or unqualified inputs refuse; a profile or `prepared` report is not a scan PASS, receipt or external attestation. Trust CI mounts its host mirror read-only at `/vulndb` when the sandbox policy sets `vulnerability_db_host_path`.
 
 A finding can be accepted for a limited time in `.getzilla/config/known-vulnerabilities.json`:
 
@@ -781,12 +784,9 @@ Browser assets are same-origin only under `default-src 'self'`, render text thro
 
 ## Hooks
 
-Lifecycle adapters live in `.grok/hooks/` and are registered in both:
+Shared lifecycle code lives in `.getzilla/hooks/`. `.getzilla/config/hooks.json` declares its events. The generator writes each selected adapter, including Grok project discovery at `.grok/hooks.json`. Codex overlays live in `.getzilla/config/codex-hooks.json`.
 
-- `.grok/hooks.json` — doctor/structure contract (`command` + `commandWindows`)
-- `.grok/hooks/adaptive.json` — Grok project-hook discovery
-
-An empty managed adapter selection does not remove these shared registrations or disable native Grok hooks. See [managed adapter selection](#managed-adapter-selection) for generation, ownership and explicit legacy adoption.
+An empty managed selection does not prove native hooks are disabled in an existing repository. See [managed adapter selection](#managed-adapter-selection) for generation, ownership and explicit legacy adoption.
 
 Trust the folder once (`/hooks-trust` or `grok --trust`). Hooks classify prompts and enforce local policy (secrets, Bitrix core, destructive commands, control-plane mutations, and exact delegated side-effect grants). Hook failure remains fail-open to avoid locking an interactive agent; this is why hooks are not merge authority. External gates retain their own enforcement: public GitHub Actions or the private App-owned Trust CI required Check Run.
 
@@ -801,6 +801,20 @@ Creates `dist/getzilla-v<VERSION>.zip` and its checksum sidecar. See the [releas
 ## Bitrix
 
 See skills under `.grok/skills/bitrix-development/` and example module in `examples/bitrix-module/`.
+
+## Live verification history
+
+`getzilla verify` and `getzilla test` publish a private history index on stderr before work starts. JSON stdout remains JSON. The final verifier report includes `diagnostics.index` and a health status. Journals live under `.getzilla/runtime/verification-history/<run-id>/`, outside temporary coverage and test-fixture cleanup. Follow a named actor stream with `tail -f` on the index's directory. Each actor has its own sequence, process attempt and invocation ordinals. Compare monotonic times only within that actor's process attempt; UTC is an observation, not proof of cross-process order.
+
+History records actual check/command boundaries and pytest or unittest collection, setup, call, teardown and outcomes. Skip entries include a safe source location when available and a closed dependency/platform/opt-in classification. Other skip reasons are `redacted-unknown`. Error classes and bounded relative source frames replace arbitrary exception messages. Parameters are removed before test identity hashing. Arguments, environment values, captured output, locals and source text are not journal data.
+
+Measured unittest attachment requires literal coverage omissions for both exact private SDK helper origins. If those omissions are absent or unproved, including a co-located consumer-owned SDK, test detail is explicitly unavailable before either helper executes. Parent command history and counted test results remain available; application files and public SDK imports remain measured. No coverage threshold or exclusion is changed to obtain journal detail.
+
+Storage follows the selected project/test working directory, not an installed SDK's interpreter home. The verifier binds its observed source fingerprint and a validated canonical-route session ID. A bare test CLI without that established binding labels source/session `unavailable`; it does not invent Git or account identities. These are integrity observations, never authenticated external authority.
+
+The fixed bounds are 2048 bytes/event, four 128KiB segments per actor including rotation, 65 actors, 33MiB per run including metadata/transients, and four retained runs/132MiB overall. Rotation discloses discarded-event counts. Only precisely owned closed runs with closed streams can be evicted. Active, incomplete and unknown runs remain protected; saturation makes new diagnostics unavailable. Explicit loss/unavailable status uses metadata or a fixed stderr fallback when the disk cannot store its own error marker.
+
+Writes are immediately visible and survive process termination; power-loss durability is not promised. Missing end events remain unknown. Journals never change test selection, results, coverage, cleanup or the 900-second budget. They confer no receipt or merge authority. Export `run_status` preserves actual active/closed/incomplete/unavailable health separately from `export_status` and subset limits. Source/session and expected/missing actors remain explicit. Exporters compare the selected report's exact latest run, source fingerprint, Git head and session against current observations. Unmatched data is refused; bare CLI history stays visibly unbound. A source/run match is integrity correlation, not current execution approval or a complete-history claim.
 
 ## License
 

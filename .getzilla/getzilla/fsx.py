@@ -12,6 +12,12 @@ path that was swapped between the ``lstat`` and the ``open``.
 
 from __future__ import annotations
 
+import hashlib
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
 import errno
 import functools
 import os
@@ -615,3 +621,224 @@ def unlock_file(descriptor: int) -> None:
         return
     import fcntl
     fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+# Shared root-read primitives; component_state retains the legacy public names.
+class ComponentStateError(ValueError):
+    """Unsafe, ambiguous or unsupported component state; no implicit reset."""
+
+
+class _FileSnapshotChanged(ComponentStateError):
+    """A bounded regular file was atomically replaced; its bytes were discarded."""
+
+
+def path_parts(relative: str) -> tuple[str, ...]:
+    if type(relative) is not str or not relative or len(relative) > 4096:
+        raise ComponentStateError('invalid component path')
+    parts = tuple(relative.split('/'))
+    if len(parts) > 64 or any(not part or part in {'.', '..'} or part.endswith((' ', '.'))
+                             or any(ord(char) < 32 or char in '\\:' for char in part) for part in parts):
+        raise ComponentStateError(f'invalid component path: {relative!r}')
+    devices = {'con', 'prn', 'aux', 'nul', *(f'com{number}' for number in range(1, 10)),
+               *(f'lpt{number}' for number in range(1, 10))}
+    if any(part.split('.')[0].casefold() in devices for part in parts):
+        raise ComponentStateError(f'reserved device path: {relative!r}')
+    return parts
+
+
+def _identity(info: os.stat_result) -> tuple[int, int, int]:
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, ...]:
+    mode = (info.st_mode & stat.S_IWRITE) if WINDOWS else stat.S_IMODE(info.st_mode)
+    return (*_identity(info), info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink, mode)
+
+
+@dataclass(frozen=True)
+class FileSnapshot:
+    content: bytes
+    mode: int
+    identity: tuple[int, ...]
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+
+# Preserve legacy pickle lookup AFTER dataclass/type construction.
+ComponentStateError.__module__ = __package__ + '.component_state'
+_FileSnapshotChanged.__module__ = __package__ + '.component_state'
+path_parts.__module__ = __package__ + '.component_state'
+_identity.__module__ = __package__ + '.component_state'
+_file_identity.__module__ = __package__ + '.component_state'
+FileSnapshot.__module__ = __package__ + '.component_state'
+
+_BOUND_ROOT_READ_LIMIT = 16 * 1024 * 1024
+
+
+class ReadOnlyBoundRoot:
+    """Retained root read API; not an OS or authorization boundary."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = Path(system_canonical(root))
+        self._handles: list[DirHandle] = []
+        self._chain: list[tuple[DirHandle, str, DirHandle, tuple[int, int, int]]] = []
+        try:
+            if WINDOWS:
+                info = os.lstat(self.path.anchor)
+                if not stat.S_ISDIR(info.st_mode):
+                    raise ComponentStateError('filesystem anchor is not a directory')
+                anchor: DirHandle = WindowsDirectory(self.path.anchor, info)
+            else:
+                anchor = open_dir(self.path.anchor, flags=O_CLOEXEC)
+            self._handles.append(anchor)
+            self._anchor_identity = _identity(os.lstat(self.path.anchor))
+            current = anchor
+            for part in self.path.parts[1:]:
+                child, identity = self._child(current, part)
+                self._handles.append(child)
+                self._chain.append((current, part, child, identity))
+                current = child
+            self.handle = current
+            self.check()
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def _child(parent: DirHandle, name: str) -> tuple[DirHandle, tuple[int, int, int]]:
+        before = lstat_at(parent, name)
+        if is_link(before) or not stat.S_ISDIR(before.st_mode):
+            raise ComponentStateError(f'unsafe directory: {name}')
+        child = open_dir_at(parent, name, flags=O_CLOEXEC)
+        try:
+            if _identity(before) != _identity(fstat_dir(child)):
+                raise ComponentStateError(f'directory changed: {name}')
+        except BaseException:
+            close_dir(child)
+            raise
+        return child, _identity(before)
+
+    @staticmethod
+    def _check_chain(chain: list[tuple[DirHandle, str, DirHandle, tuple[int, int, int]]]) -> None:
+        for parent, name, child, expected in chain:
+            try:
+                named = lstat_at(parent, name)
+                if is_link(named) or _identity(named) != expected or _identity(fstat_dir(child)) != expected:
+                    raise ComponentStateError(f'directory binding changed: {name}')
+            except OSError as exc:
+                raise ComponentStateError(f'directory binding changed: {name}: {exc}') from exc
+
+    def check(self) -> None:
+        if _identity(os.lstat(self.path.anchor)) != self._anchor_identity:
+            raise ComponentStateError('filesystem anchor changed')
+        self._check_chain(self._chain)
+
+    @contextmanager
+    def _parent(self, relative: str, *, create: bool = False,
+               before_write: Callable[[], None] | None = None) -> Iterator[tuple[DirHandle, str, Any]]:
+        parts = path_parts(relative)
+        handles: list[DirHandle] = []
+        chain: list[tuple[DirHandle, str, DirHandle, tuple[int, int, int]]] = []
+        current = self.handle
+        def check() -> None:
+            self.check()
+            self._check_chain(chain)
+        try:
+            for index, name in enumerate(parts[:-1]):
+                check()
+                try:
+                    child, identity = self._child(current, name)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    if before_write is not None:
+                        before_write()
+                    try:
+                        mode = 0o700 if parts[:index + 1] == ('.getzilla', 'runtime') else 0o755
+                        mkdir_at(current, name, mode)
+                    except FileExistsError:
+                        pass
+                    child, identity = self._child(current, name)
+                handles.append(child)
+                chain.append((current, name, child, identity))
+                current = child
+            check()
+            yield current, parts[-1], check
+        finally:
+            for handle in reversed(handles):
+                close_dir(handle)
+
+    @contextmanager
+    def parent(self, relative: str) -> Iterator[tuple[DirHandle, str, Any]]:
+        with self._parent(relative) as binding:
+            yield binding
+
+    def read(self, relative: str, *, limit: int = _BOUND_ROOT_READ_LIMIT) -> FileSnapshot | None:
+        found = False
+        try:
+            with self.parent(relative) as (parent, name, check):
+                def changed(message: str, original: os.stat_result, observed: os.stat_result,
+                            *, detached: bool = False) -> None:
+                    # Only a safe named replacement can warrant a fresh read.
+                    # In-place writes, unsafe files and ancestry changes refuse.
+                    check()
+                    named = lstat_at(parent, name)
+                    allowed_links = (0, 1) if detached else (1,)
+                    if (is_link(named) or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                            or named.st_size > limit or not stat.S_ISREG(observed.st_mode)
+                            or observed.st_nlink not in allowed_links or observed.st_size > limit
+                            or (named.st_dev, named.st_ino) == (original.st_dev, original.st_ino)):
+                        raise ComponentStateError(message)
+                    check()
+                    raise _FileSnapshotChanged(message)
+
+                before = lstat_at(parent, name)
+                found = True
+                if is_link(before) or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                    raise ComponentStateError(f'expected a regular single-link file: {relative}')
+                if before.st_size > limit:
+                    raise ComponentStateError(f'file exceeds size limit: {relative}')
+                descriptor = open_at(parent, name, os.O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+                try:
+                    opened = os.fstat(descriptor)
+                    if _file_identity(before) != _file_identity(opened):
+                        changed(f'file changed while opening: {relative}', before, opened)
+                    chunks: list[bytes] = []
+                    remaining = limit + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(remaining, 65536))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    content = b''.join(chunks)
+                    if len(content) > limit:
+                        raise ComponentStateError(f'file exceeded size limit: {relative}')
+                    after = os.fstat(descriptor)
+                    if _file_identity(after) != _file_identity(opened):
+                        changed(f'file changed while reading: {relative}', opened, after, detached=True)
+                    check()
+                    if _file_identity(lstat_at(parent, name)) != _file_identity(opened):
+                        changed(f'file changed while reading: {relative}', opened, after, detached=True)
+                    return FileSnapshot(content, stat.S_IMODE(opened.st_mode), _file_identity(opened))
+                finally:
+                    os.close(descriptor)
+        except FileNotFoundError as exc:
+            if found:
+                raise ComponentStateError(f'file disappeared while reading: {relative}') from exc
+            return None
+        except OSError as exc:
+            raise ComponentStateError(f'cannot safely read {relative}: {exc}') from exc
+
+    def close(self) -> None:
+        for handle in reversed(self._handles):
+            close_dir(handle)
+        self._handles.clear()
+
+    def __enter__(self) -> ReadOnlyBoundRoot:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()

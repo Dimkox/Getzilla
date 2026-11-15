@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "design-reference",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {},
+  "permissions": [
+    "design.reference.read"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "reference.py",
+      "sha256": "d8bed874f6de1f0aa3cb938399207cb013aea87bb9a5c6c4c9e3f13dcc8940d4",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "pack-v1.schema.json",
+      "sha256": "06514f7ce2ad1aa33ac85b562dc6f0f5a187f6af3a10a3913c80a2ece990b95c",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

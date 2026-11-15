@@ -13,10 +13,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from tests._support import public_source_copy
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+CLOSED_BASELINE_METADATA = b'{"tools":[],"workflow_sources":{"components":[]}}\n'
 SPEC = importlib.util.spec_from_file_location("install_into", ROOT / "scripts/install_into.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
@@ -97,13 +100,19 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(MODULE.component_of(path), 'factory', path)
         self.assertEqual({path for path in full if path.startswith('delivery/')},
                          {path for path in support if path.startswith('delivery/')})
+        core_proofs = {'engineering/verification-dispositions.json',
+                       'engineering/vendor-custody/bmad-whitespace.json',
+                       'engineering/vendor-custody/bmad-whitespace.md'}
+        self.assertTrue(core_proofs <= core)
+        self.assertTrue(core_proofs.isdisjoint(support))
         self.assertEqual({path for path in full if path.startswith('engineering/')},
-                         {path for path in support if path.startswith('engineering/')})
+                         {path for path in support if path.startswith('engineering/')} | core_proofs)
         self.assertIn('factory/tests/json_schema_subset.py', full)
         self.assertNotIn('PROJECT_STATE.json', full)
         self.assertFalse(any(path.startswith(('tests/', 'side-projects/')) for path in full))
 
-    @unittest.skipUnless(os.name == 'posix', 'Factory publication runtime requires POSIX')
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
     def test_installed_factory_controls_use_only_their_payload(self) -> None:
         # Isolated Python disables ambient PYTHONPATH and the source checkout.
         # Collect every module, then execute the affected offline contracts.
@@ -128,9 +137,9 @@ targets = sys.argv[2:] or ['factory.tests.test_owner_autonomy', 'factory.tests.t
 result = unittest.TextTestRunner(verbosity=1).run(loader.loadTestsFromNames(targets))
 raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
 '''
-        with tempfile.TemporaryDirectory() as directory:
+        with public_source_copy(ROOT) as source, tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'consumer'
-            MODULE.materialize_new(ROOT, target, selection=MODULE.PayloadSelection.full_layout())
+            MODULE.materialize_new(source, target, selection=MODULE.PayloadSelection.full_layout())
 
             def run(*targets):
                 # The publisher validates every ancestor. A checkout may have a
@@ -156,6 +165,81 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
             self.assertNotEqual(missing_contract.returncode, 0, 'missing OpenAPI input silently passed')
             self.assertIn('factory-result-admission.v2.json', missing_contract.stderr)
 
+    @unittest.skipUnless(os.name == 'posix' and sys.version_info >= (3, 11),
+                         'Factory publication controls require POSIX and Python >=3.11')
+    def test_archived_engine_verifier_runs_complete_installed_factory_inventory(self):
+        code = """
+import hashlib, json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'problems': evidence.get('problems'),
+                  'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', [])),
+                  'qualified_skips': len(evidence.get('skipped', [])),
+                  'required': len(evidence.get('required_ids', [])),
+                  'collected_ids_digest': hashlib.sha256(json.dumps(evidence.get('collected_ids'), sort_keys=True).encode()).hexdigest(),
+                  'source_inventory_digest': hashlib.sha256(json.dumps(evidence.get('binding', {}).get('source_inventory'), sort_keys=True).encode()).hexdigest(),
+                  'unqualified_skips': evidence.get('unqualified_skips')}))
+"""
+        with public_source_copy(ROOT) as source, \
+                tempfile.TemporaryDirectory(prefix='g315-', dir=os.path.realpath('/tmp')) as temporary, \
+                tempfile.TemporaryDirectory(prefix='g-', dir=os.path.realpath('/tmp')) as child_temp:
+            target = Path(temporary) / 'c'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(source, target, selection=selection)
+            self.assertTrue((target / MODULE.ENGINE_ARCHIVE).is_file())
+            environment = dict(os.environ, TMPDIR=child_temp, TEMP=child_temp, TMP=child_temp)
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    env=environment, text=True, capture_output=True, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertGreater(evidence['collected'], 0)
+            self.assertGreater(evidence['executed'], 0)
+            self.assertEqual(evidence['unqualified_skips'], [])
+            print('installed-factory-unit ' + json.dumps(evidence, sort_keys=True))
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "Factory controls require Python >=3.11")
+    def test_archived_engine_verifier_rejects_consumer_package_shadowing(self):
+        code = """
+import json, pathlib, sys
+root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / '.getzilla'))
+from getzilla import verification
+assert 'getzilla.zip' in verification.__file__, verification.__file__
+result = verification._factory_unit(root)[0]
+evidence = result.details[0] if result.details else {}
+print(json.dumps({'status': result.status, 'summary': result.summary,
+                  'stderr': result.stderr[-1000:], 'collected': evidence.get('collected'),
+                  'executed': len(evidence.get('executed', []))}))
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+            MODULE.materialize_new(ROOT, target, selection=selection)
+            # Bound the launch regression to one real case; complete installed
+            # source discovery has its own archive control above.
+            import shutil
+            shutil.rmtree(target / 'factory/tests')
+            (target / 'factory/tests').mkdir()
+            (target / 'factory/tests/__init__.py').touch()
+            (target / 'factory/tests/test_probe.py').write_text(
+                "import unittest\nclass Probe(unittest.TestCase):\n def test_probe(self): pass\n")
+            (target / 'getzilla').mkdir()
+            (target / 'getzilla/__init__.py').write_text("raise RuntimeError('consumer shadowed selected engine')\n")
+            result = subprocess.run([sys.executable, '-I', '-c', code], cwd=target,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            evidence = json.loads(result.stdout)
+            self.assertEqual(evidence['status'], 'pass', evidence)
+            self.assertEqual(evidence['collected'], 1)
+            self.assertEqual(evidence['executed'], 1)
+
     def test_factory_consumer_payload_keeps_complete_discovery_sources(self) -> None:
         entries = MODULE.build_payload(ROOT)
         names = [entry.path for entry in entries]
@@ -165,6 +249,85 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
         self.assertEqual(len(names), len(set(names)), 'a managed file must be published only once')
         self.assertTrue({'scripts/getzilla_security.py', 'scripts/getzilla_live.py',
                          'scripts/getzilla_live_lifecycle.py', 'scripts/getzilla_ci_admission.py'} <= set(names))
+
+    def test_factory_procfs_applicability_names_only_the_ten_existing_dependent_cases(self):
+        from getzilla.factory_tests import skip_allowance
+        dependent = (
+            'test_crc_and_encrypted_members_fail_closed',
+            'test_descriptor_lifecycle_close_constructor_rollback_and_hostile_replay_are_bounded',
+            'test_exact_archive_bounds_are_admitted',
+            'test_external_hardlinks_in_object_generation_manifest_and_active_fail_closed',
+            'test_hostile_zip_matrix_preserves_old_active',
+            'test_manifest_tamper_and_generation_symlink_are_rejected',
+            'test_registry_callback_cannot_redirect_object_writes_or_reads',
+            'test_replay_rechecks_digest_origin_and_lifecycle_authority',
+            'test_restart_and_tenant_repository_symlink_isolation',
+            'test_thread_and_process_competitors_converge_and_reconcile',
+        )
+        prefix = 'factory.tests.test_vibevm_store.VibeVMStoreTests.'
+        reason = ('unsupported-procfs-store', 'requires Linux procfs descriptor reopening')
+        for method in dependent:
+            with self.subTest(method=method):
+                self.assertEqual(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}), reason)
+                for fact in (True, None, 0, 'false'):
+                    self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': fact}))
+                self.assertIsNone(skip_allowance(prefix + method, {}))
+        portable = ('test_provenance_is_exact_and_data_only', 'test_resolve_rechecks_authoritative_graph',
+                    'test_boot_marker_injection_and_corruption_fail',
+                    'test_root_must_be_owner_pinned_and_not_writable_by_others',
+                    'test_missing_procfs_refuses_before_registry_callback_or_data_writes',
+                    'test_procfs_probe_closes_owned_descriptors_and_refuses_wrong_identity', 'test_future_unlisted')
+        for method in portable:
+            self.assertIsNone(skip_allowance(prefix + method, {'procfs_descriptor_reopen': False}))
+
+    def test_factory_procfs_fact_is_measured_and_closes_its_owned_descriptors(self):
+        from getzilla import factory_tests
+        probe = getattr(factory_tests, '_procfs_descriptor_reopen', None)
+        self.assertTrue(callable(probe), 'report applicability requires an independent native fact')
+        opened, actual_open = [], os.open
+        def track(*args, **kwargs):
+            descriptor = actual_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with patch.object(factory_tests.os, 'open', side_effect=track):
+            self.assertIs(type(probe()), bool)
+        for descriptor in set(opened):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        with patch.object(factory_tests.os, 'open', side_effect=FileNotFoundError):
+            self.assertFalse(probe())
+        # Controlled descriptor backends prove both outcomes even on a host
+        # without procfs. This is not a native Linux qualification claim.
+        with tempfile.TemporaryDirectory(prefix='public-procfs-identity-') as temporary:
+            for same in (True, False):
+                opened.clear()
+                def controlled_open(path, flags):
+                    if not opened:
+                        self.assertEqual(path, '/')
+                        descriptor = actual_open(temporary, flags)
+                    else:
+                        self.assertEqual(path, f'/proc/self/fd/{opened[0]}')
+                        descriptor = os.dup(opened[0]) if same else actual_open('/', flags)
+                    opened.append(descriptor)
+                    return descriptor
+                with patch.object(factory_tests.sys, 'platform', 'linux'), \
+                        patch.object(factory_tests.os, 'open', side_effect=controlled_open):
+                    self.assertIs(probe(), same)
+                self.assertEqual(len(opened), 2)
+                for descriptor in set(opened):
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_factory_payload_contains_every_bound_regular_input(self):
+        from getzilla.factory_tests import source_inventory
+        selection = MODULE.PayloadSelection((), factory=True, engine_archive=True)
+        payload = {entry.path: entry for entry in MODULE.build_payload(ROOT, selection=selection)}
+        inventory = source_inventory(ROOT)
+        self.assertIn('factory/tests/fixtures/codex-0.152.1/success.jsonl', inventory)
+        for name, digest in inventory.items():
+            with self.subTest(path=name):
+                self.assertIn(name, payload)
+                self.assertEqual(hashlib.sha256(payload[name].content).hexdigest(), digest)
 
     def test_runtime_state_is_never_walked_or_counted(self) -> None:
         # A Getzilla checkout used as a workspace fills .getzilla/runtime with worktrees and receipts.
@@ -229,7 +392,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                         self.assertFalse(alias.is_symlink())
                         self.assertEqual(alias.read_bytes(), expected_bytes)
                         self.assertEqual(stat.S_IMODE(alias.stat().st_mode), expected_mode)
-                        canonical = root / '.grok/hooks' / name
+                        canonical = root / '.getzilla/hooks' / name
                         canonical.write_text('import json, sys\nfrom pathlib import Path\nprint(json.dumps({"name": Path(sys.argv[0]).name, "payload": json.load(sys.stdin)}))\n')
                         result = subprocess.run([sys.executable, name], cwd=root, input='{"sentinel": 1}', text=True, capture_output=True, timeout=10)
                         self.assertEqual(result.returncode, 0, result.stderr)
@@ -237,7 +400,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                         canonical.unlink()
                         fallback = subprocess.run([sys.executable, name], cwd=root, input='{}', text=True, capture_output=True, timeout=10)
                         self.assertEqual(fallback.returncode, 0, fallback.stderr)
-                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'allow'} if name == 'pre_tool_use.py' else {})
+                        self.assertEqual(json.loads(fallback.stdout), {'decision': 'deny', 'reason': 'Getzilla canonical policy hook is missing'} if name == 'pre_tool_use.py' else {})
 
     def test_hook_aliases_use_the_inventoried_template_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +411,9 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
             template.write_bytes(old)
             template.chmod(0o640)
             (source / MODULE.CONSUMER_AGENTS_TEMPLATE).write_text('fixture consumer contract\n')
+            metadata = source / '.getzilla/config/toolchain.json'
+            metadata.parent.mkdir(parents=True)
+            metadata.write_bytes(CLOSED_BASELINE_METADATA)
             original_read = MODULE._SourceTree.read
             reads = []
             def mutate_after_bound_read(tree, relative, limit, expected_identity=None):
@@ -1099,6 +1265,9 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                 template.parent.mkdir(parents=True)
                 template.write_text("managed agents\n", encoding="utf-8")
                 (managed / "required.md").write_text("required\n", encoding="utf-8")
+                metadata = source / '.getzilla/config/toolchain.json'
+                metadata.parent.mkdir(parents=True)
+                metadata.write_bytes(CLOSED_BASELINE_METADATA)
                 target = root / "target"
                 relocated = root / "relocated"
                 outside = root / "outside.txt"
@@ -1122,7 +1291,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
 
                 with (
                     patch.object(MODULE, "MANAGED_DIRS", (".grok",)),
-                    patch.object(MODULE, "MANAGED_FILES", (MODULE.CONSUMER_AGENTS_TEMPLATE,)),
+                    patch.object(MODULE, "MANAGED_FILES", (MODULE.CONSUMER_AGENTS_TEMPLATE, ".getzilla/config/toolchain.json")),
                 ):
                     positive = root / "unrelocated"
                     MODULE._materialize_new(
@@ -1175,7 +1344,9 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                 payload.write_bytes(b"managed payload\n")
                 toolchain = source / ".getzilla/config/toolchain.json"
                 toolchain.parent.mkdir(parents=True)
-                toolchain.write_text('{"tools": []}\n', encoding="utf-8")
+                self.assertLessEqual(len(CLOSED_BASELINE_METADATA), 256)
+                source_cap = max(32, len(CLOSED_BASELINE_METADATA))
+                toolchain.write_bytes(CLOSED_BASELINE_METADATA)
                 victim = {
                     "managed": payload,
                     "agents": agents,
@@ -1185,11 +1356,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                     "toolchain": toolchain,
                 }[family]
                 outside = root / "outside.bin"
-                outside.write_bytes(
-                    b'{"tools": [], "padding": "xxxxxxxxxxxxxxxxxxxxxxxx"}\n'
-                    if family == "toolchain"
-                    else b"x" * 34
-                )
+                outside.write_bytes(b'x' * (source_cap + 2))
                 saved = root / "saved-source"
                 swapped = False
                 path_bytes_read = 0
@@ -1231,7 +1398,7 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                         return text
                     return real_read_text(path, *args, **kwargs)
 
-                managed_files = (MODULE.CONSUMER_AGENTS_TEMPLATE,)
+                managed_files = (MODULE.CONSUMER_AGENTS_TEMPLATE, ".getzilla/config/toolchain.json")
                 if family == "managed":
                     managed_files += ("payload.bin",)
                 if family == "factory readme":
@@ -1258,16 +1425,26 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                 with (
                     patch.object(MODULE, "MANAGED_DIRS", ()),
                     patch.object(MODULE, "MANAGED_FILES", managed_files),
-                    patch.object(MODULE, "MAX_SOURCE_FILE_BYTES", 32),
-                    patch.object(MODULE, "MAX_TOOLCHAIN_BYTES", 32),
-                    patch.object(MODULE.os, "open", side_effect=race_descriptor_open),
-                    patch.object(Path, "read_bytes", race_path_bytes),
-                    patch.object(Path, "read_text", race_path_text),
+                    patch.object(MODULE, "MAX_SOURCE_FILE_BYTES", source_cap),
                 ):
-                    with self.assertRaises(MODULE.UnsafeInstallTarget):
-                        invocation()
+                    # Admit the complete benign source before injecting the race.
+                    # The advisory32 negative bound below is distinct from source admission.
+                    self.assertIsNotNone(invocation())
+                    self.assertFalse(swapped)
+                    with (
+                        patch.object(MODULE, "MAX_TOOLCHAIN_BYTES", 32),
+                        patch.object(MODULE.os, "open", side_effect=race_descriptor_open),
+                        patch.object(Path, "read_bytes", race_path_bytes),
+                        patch.object(Path, "read_text", race_path_text),
+                    ):
+                        relative = victim.relative_to(source).as_posix()
+                        with self.assertRaisesRegex(
+                            MODULE.UnsafeInstallTarget,
+                            rf"^cannot read managed source {re.escape(relative)}:",
+                        ):
+                            invocation()
                 self.assertTrue(swapped)
-                self.assertLessEqual(path_bytes_read, 33)
+                self.assertLessEqual(path_bytes_read, source_cap + 1)
 
     @unittest.skipUnless(os.name == "posix", 'POSIX descriptor-relative race hardening; Windows has no dir_fd')
     @unittest.skipUnless(os.path.isdir('/proc/self/fd'), 'fault injection resolves descriptors through /proc/self/fd')
@@ -1521,6 +1698,240 @@ raise SystemExit(0 if result.wasSuccessful() and result.testsRun and not result.
                 )
             self.assertIn("scripts/getzilla_ci.py --write", str(raised.exception))
             self.assertEqual(_snapshot(target), before)
+
+
+class GeneratedFactoryMetadataTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _source(self):
+        # Exercise the real builder on a new, Git-free source with only its
+        # required templates/config and representative Factory assets.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            files = {
+                MODULE.CONSUMER_AGENTS_TEMPLATE: b'fixture consumer contract\n',
+                '.getzilla/config/toolchain.json': CLOSED_BASELINE_METADATA,
+                'factory/src/getzilla_factory/resources/fixture.json': b'{"asset": true}\n',
+                'factory/src/getzilla_factory/resources/fixture.sql': b'SELECT 1;\n',
+                'factory/src/getzilla_factory/landing_pdf_worker.py': b'# owned source\n',
+                'factory/src/getzilla_factory/tests/getzilla_factory.egg-info/fixture.txt': b'test asset\n',
+                'factory/src/getzilla_factory.egg-info-assets/fixture.txt': b'required asset\n',
+            }
+            for relative, content in files.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            with patch.object(MODULE, 'MANAGED_DIRS', ('factory/src',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', (
+                     MODULE.CONSUMER_AGENTS_TEMPLATE, '.getzilla/config/toolchain.json')):
+                yield source, files
+
+    def test_generated_egg_info_does_not_change_payload_or_source_files(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, files):
+            baseline = MODULE.build_payload(source)
+            baseline_inventory = source_inventory(source)
+            expected = {**files, 'AGENTS.md':
+                b'<!-- ADAPTIVE-GROK-PRO:START -->\nfixture consumer contract\n<!-- ADAPTIVE-GROK-PRO:END -->\n'}
+            self.assertEqual({entry.path: entry.content for entry in baseline}, expected)
+            self.assertEqual(baseline_inventory, {
+                name: hashlib.sha256(content).hexdigest()
+                for name, content in files.items() if name.startswith('factory/')
+            })
+            metadata = source / 'factory/src/getzilla_factory.egg-info'
+            metadata.mkdir()
+            for name in ('PKG-INFO', 'SOURCES.txt', 'dependency_links.txt',
+                         'entry_points.txt', 'requires.txt', 'top_level.txt'):
+                (metadata / name).write_bytes((name + '\n').encode())
+            before = _snapshot(source)
+            self.assertEqual(MODULE.build_payload(source), baseline)
+            self.assertEqual(source_inventory(source), baseline_inventory)
+            self.assertEqual(_snapshot(source), before)
+            self.assertFalse((source / '.git').exists())
+
+    def test_regular_file_at_egg_info_path_is_still_delivered(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            path.write_bytes(b'regular source asset\n')
+            payload = {entry.path: entry.content for entry in MODULE.build_payload(source)}
+            self.assertEqual(payload['factory/src/getzilla_factory.egg-info'], b'regular source asset\n')
+            self.assertEqual(source_inventory(source)['factory/src/getzilla_factory.egg-info'],
+                             hashlib.sha256(b'regular source asset\n').hexdigest())
+            self.assertEqual(path.read_bytes(), b'regular source asset\n')
+
+    def test_egg_info_symlink_is_rejected_without_touching_target(self):
+        from getzilla.factory_tests import source_inventory
+
+        for target_kind in ('directory', 'file', 'missing'):
+            with self.subTest(target_kind=target_kind), self._source() as (source, _files):
+                target = source / 'private-target'
+                if target_kind == 'directory':
+                    target.mkdir()
+                    (target / 'sentinel').write_bytes(b'private content\n')
+                elif target_kind == 'file':
+                    target.write_bytes(b'private content\n')
+                link = source / 'factory/src/getzilla_factory.egg-info'
+                try:
+                    link.symlink_to(target, target_is_directory=target_kind == 'directory')
+                except (NotImplementedError, OSError) as exc:
+                    if os.name != 'nt':
+                        raise
+                    self.skipTest(f'symlink creation is unavailable: {exc}')
+                before = _snapshot(source)
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.build_payload(source)
+                with self.assertRaises(ValueError):
+                    source_inventory(source)
+                self.assertEqual(_snapshot(source), before)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO creation requires POSIX')
+    def test_egg_info_special_file_is_rejected_without_opening(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            os.mkfifo(path)
+            before = _snapshot(source)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(source)
+            with self.assertRaises(ValueError):
+                source_inventory(source)
+            self.assertEqual(_snapshot(source), before)
+
+
+class TransientRuntimeInventoryTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            files = {
+                MODULE.CONSUMER_AGENTS_TEMPLATE: b'fixture consumer contract\n',
+                '.getzilla/config/toolchain.json': CLOSED_BASELINE_METADATA,
+                '.getzilla/config/required.json': b'{"required": true}\n',
+                '.getzilla/runtime/.gitignore': b'*\n!.gitignore\n!.gitkeep\n',
+                '.getzilla/runtime/.gitkeep': b'',
+                '.getzilla/runtime/record.gitkeep': b'required suffix sentinel\n',
+            }
+            for relative, content in files.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            with patch.object(MODULE, 'MANAGED_DIRS', ('.getzilla',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', ()):
+                yield source
+
+    @contextlib.contextmanager
+    def _remove_after_listing(self, victim, *, directory=False):
+        parent = victim.parent.stat()
+        parent_identity = (parent.st_dev, parent.st_ino)
+        actual_listdir = MODULE.fsx.listdir
+        removed = []
+
+        def list_then_remove(descriptor):
+            names = actual_listdir(descriptor)
+            info = MODULE._fstat_directory(descriptor)
+            if (info.st_dev, info.st_ino) == parent_identity and not removed:
+                self.assertIn(victim.name, names)
+                victim.rmdir() if directory else victim.unlink()
+                removed.append(victim.name)
+            return names
+
+        with patch.object(MODULE.fsx, 'listdir', side_effect=list_then_remove):
+            yield
+        self.assertEqual(removed, [victim.name])
+
+    def _link(self, link, target, *, directory=False):
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except (NotImplementedError, OSError) as exc:
+            if os.name != 'nt':
+                raise
+            self.skipTest(f'symlink creation is unavailable: {exc}')
+
+    def test_ignored_runtime_entries_can_disappear_after_enumeration(self):
+        for directory in (False, True):
+            with self.subTest(directory=directory), self._source() as source:
+                baseline = MODULE.build_payload(source)
+                victim = source / '.getzilla/runtime/ephemeral'
+                if directory:
+                    victim.mkdir()
+                else:
+                    victim.write_bytes(b'transient state\n')
+                with self._remove_after_listing(victim, directory=directory):
+                    self.assertEqual(MODULE.build_payload(source), baseline)
+                self.assertFalse(os.path.lexists(victim))
+
+    def test_ignored_runtime_links_and_special_entries_do_not_enter_payload(self):
+        cases = ('file-link', 'directory-link', 'missing-link',
+                 *(('fifo',) if hasattr(os, 'mkfifo') else ()))
+        for kind in cases:
+            with self.subTest(kind=kind), self._source() as source:
+                baseline = MODULE.build_payload(source)
+                outside = source.parent / 'private-target'
+                victim = source / '.getzilla/runtime/ignored'
+                if kind == 'fifo':
+                    os.mkfifo(victim)
+                else:
+                    if kind == 'file-link':
+                        outside.write_bytes(b'private content\n')
+                    elif kind == 'directory-link':
+                        outside.mkdir()
+                        (outside / 'sentinel').write_bytes(b'private content\n')
+                    self._link(victim, outside, directory=kind == 'directory-link')
+                before, outside_before = _snapshot(source), _snapshot(outside)
+                self.assertEqual(MODULE.build_payload(source), baseline)
+                self.assertEqual(_snapshot(source), before)
+                self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_runtime_root_link_is_rejected_without_touching_target(self):
+        with self._source() as source:
+            runtime = source / '.getzilla/runtime'
+            outside = source.parent / 'private-runtime'
+            runtime.rename(outside)
+            self._link(runtime, outside, directory=True)
+            before, outside_before = _snapshot(source), _snapshot(outside)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(source)
+            self.assertEqual(_snapshot(source), before)
+            self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_required_runtime_files_cannot_disappear_after_enumeration(self):
+        for name in ('.gitkeep', '.gitignore', 'record.gitkeep'):
+            with self.subTest(name=name), self._source() as source:
+                victim = source / '.getzilla/runtime' / name
+                with self._remove_after_listing(victim):
+                    with self.assertRaisesRegex(MODULE.UnsafeInstallTarget,
+                                                '^managed source changed during enumeration:'):
+                        MODULE.build_payload(source)
+
+    def test_required_runtime_files_reject_links_and_special_files(self):
+        cases = ('link', *(('fifo',) if hasattr(os, 'mkfifo') else ()))
+        for name in ('.gitkeep', '.gitignore', 'record.gitkeep'):
+            for kind in cases:
+                with self.subTest(name=name, kind=kind), self._source() as source:
+                    victim = source / '.getzilla/runtime' / name
+                    victim.unlink()
+                    outside = source.parent / 'private-sentinel'
+                    outside.write_bytes(b'private content\n')
+                    if kind == 'fifo':
+                        os.mkfifo(victim)
+                    else:
+                        self._link(victim, outside)
+                    before, outside_before = _snapshot(source), _snapshot(outside)
+                    with self.assertRaises(MODULE.UnsafeInstallTarget):
+                        MODULE.build_payload(source)
+                    self.assertEqual(_snapshot(source), before)
+                    self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_real_managed_source_cannot_disappear_after_enumeration(self):
+        with self._source() as source:
+            victim = source / '.getzilla/config/required.json'
+            with self._remove_after_listing(victim):
+                with self.assertRaisesRegex(MODULE.UnsafeInstallTarget,
+                                            '^managed source changed during enumeration:'):
+                    MODULE.build_payload(source)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 """Isolated Core and Trust CI test sharding; local verification evidence only."""
 from __future__ import annotations
 
+from . import verification_journal as diagnostics
+from .process_limits import OUTPUT_LIMIT as OUTPUT_LIMIT
+
 import argparse
 import configparser
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import metadata
 import importlib.util
 import json
@@ -18,8 +21,9 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
-from . import fsx
+from . import STACK_DIR, fsx
 from ._cpu_capacity import linux_quota_capacity
 from .verification_scope import FORCE_FULL_VARIABLE
 
@@ -27,7 +31,6 @@ from .verification_scope import FORCE_FULL_VARIABLE
 PINS = {'pytest': '9.1.1', 'pytest-xdist': '3.8.0', 'pytest-cov': '7.1.0', 'coverage': '7.15.4'}
 CONFIG = '.getzilla-test-runner.json'
 TIMEOUT = 900
-OUTPUT_LIMIT = 2 * 1024 * 1024
 DEFAULT_CORE_WORKER_CAP = 6
 DEFAULT_CORE_CPU_RESERVE = 2
 
@@ -118,6 +121,29 @@ def core_worker_selection(root: Path, mode: str) -> WorkerSelection:
     return WorkerSelection(int(value), source)
 
 
+_CLEANUP_STAGES = frozenset({'owned_stop_reap', 'stdout_capture_file', 'stdout_capture_directory',
+                             'stderr_capture_file', 'stderr_capture_directory', 'run_scratch_directory'})
+_CLEANUP_CATEGORIES = frozenset({'permission', 'not_found', 'timeout', 'recursion', 'os_error', 'other'})
+_CLEANUP_ORIGINS = frozenset({'process', 'tests', 'parallel_shard', 'coverage_combine',
+                              'coverage_report', 'coverage_export'})
+_CLEANUP_LIMIT = 16
+
+
+@dataclass(frozen=True)
+class CleanupFact:
+    stage: str
+    category: str
+    errno: int | None = None
+    origin: str = 'process'
+
+
+@dataclass(frozen=True)
+class CleanupMetadata:
+    facts: tuple[CleanupFact, ...] = ()
+    overflow: bool = False
+    unavailable: bool = False
+
+
 @dataclass
 class ProcessResult:
     command: list[str]
@@ -127,6 +153,122 @@ class ProcessResult:
     seconds: float = 0.0
     terminal_state: str = 'completed'
     cleanup_error: str = ''
+    cleanup_metadata: CleanupMetadata = CleanupMetadata()
+    stop_metadata: diagnostics.StopMetadata = diagnostics.StopMetadata()
+
+
+def _validated_cleanup(value) -> CleanupMetadata:
+    if (type(value) is not CleanupMetadata or type(value.facts) is not tuple
+            or type(value.overflow) is not bool or type(value.unavailable) is not bool):
+        return CleanupMetadata(unavailable=True)
+    facts = []
+    unavailable = value.unavailable
+    for fact in value.facts[:_CLEANUP_LIMIT]:
+        if (type(fact) is not CleanupFact or type(fact.stage) is not str or fact.stage not in _CLEANUP_STAGES
+                or type(fact.category) is not str or fact.category not in _CLEANUP_CATEGORIES
+                or type(fact.origin) is not str or fact.origin not in _CLEANUP_ORIGINS
+                or not (fact.errno is None or type(fact.errno) is int and 0 <= fact.errno <= 65535)):
+            unavailable = True
+        else:
+            facts.append(fact)
+    return CleanupMetadata(tuple(facts), value.overflow or len(value.facts) > _CLEANUP_LIMIT, unavailable)
+
+
+def _merge_cleanup(*values: CleanupMetadata) -> CleanupMetadata:
+    facts = []
+    overflow = unavailable = False
+    for value in values:
+        valid = _validated_cleanup(value)
+        available = _CLEANUP_LIMIT - len(facts)
+        facts.extend(valid.facts[:available])
+        overflow = overflow or valid.overflow or len(valid.facts) > available
+        unavailable = unavailable or valid.unavailable
+    return CleanupMetadata(tuple(facts), overflow, unavailable)
+
+
+def _with_cleanup_origin(value: CleanupMetadata, origin: str) -> CleanupMetadata:
+    valid = _validated_cleanup(value)
+    if type(origin) is not str or origin not in _CLEANUP_ORIGINS:
+        return CleanupMetadata(unavailable=True)
+    return CleanupMetadata(tuple(replace(fact, origin=origin) if fact.origin == 'process' else fact
+                                 for fact in valid.facts), valid.overflow, valid.unavailable)
+
+
+def _stored_cleanup(target) -> CleanupMetadata:
+    try:
+        value = target.cleanup_metadata if isinstance(target, ProcessResult) else getattr(
+            target, '_getzilla_cleanup_metadata', CleanupMetadata())
+    except BaseException:
+        return CleanupMetadata(unavailable=True)
+    return _validated_cleanup(value)
+
+
+def _retain_cleanup(target, metadata: CleanupMetadata) -> None:
+    if target is None:
+        return
+    valid = _validated_cleanup(metadata)
+    if not (valid.facts or valid.overflow or valid.unavailable):
+        return
+    combined = _merge_cleanup(_stored_cleanup(target), valid)
+    try:
+        if isinstance(target, ProcessResult):
+            target.cleanup_metadata = combined
+        else:
+            target._getzilla_cleanup_metadata = combined
+    except BaseException:
+        return  # A diagnostic sidecar must never replace the primary exception.
+
+
+def _cleanup_failure(stage: str | None, error: BaseException) -> CleanupMetadata:
+    if type(stage) is not str or stage not in _CLEANUP_STAGES:
+        return CleanupMetadata(unavailable=True)
+    if isinstance(error, PermissionError):
+        category = 'permission'
+    elif isinstance(error, FileNotFoundError):
+        category = 'not_found'
+    elif isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        category = 'timeout'
+    elif isinstance(error, RecursionError):
+        category = 'recursion'
+    elif isinstance(error, OSError):
+        category = 'os_error'
+    else:
+        category = 'other'
+    try:
+        number = getattr(error, 'errno', None)
+    except BaseException:
+        number = None
+    if not (type(number) is int and 0 <= number <= 65535):
+        number = None
+    return CleanupMetadata((CleanupFact(stage, category, number),))
+
+
+def _result_cleanup(value, origin: str) -> CleanupMetadata:
+    metadata = _stored_cleanup(value)
+    if isinstance(value, ProcessResult):
+        if value.cleanup_error and not metadata.facts:
+            metadata = replace(metadata, unavailable=True)
+    else:
+        try:
+            present = isinstance(value, BaseException) and type(
+                getattr(value, '_getzilla_cleanup_metadata', None)) is CleanupMetadata
+        except BaseException:
+            present = False
+        if not present:
+            metadata = replace(metadata, unavailable=True)
+    return _with_cleanup_origin(metadata, origin)
+
+
+def cleanup_details(value, *, origin: str = 'process', extra=None,
+                    extra_origin: str = 'coverage_export') -> dict[str, object]:
+    """Project closed facts only; private cleanup strings never become public data."""
+    metadata = _result_cleanup(value, origin)
+    if extra is not None and extra is not value:
+        metadata = _merge_cleanup(metadata, _result_cleanup(extra, extra_origin))
+    return {'status': 'recorded' if metadata.facts else ('unavailable' if metadata.unavailable else 'none_reported'),
+            'facts': [{'stage': fact.stage, 'category': fact.category, 'origin': fact.origin,
+                       **({'errno': fact.errno} if fact.errno is not None else {})} for fact in metadata.facts],
+            'overflow': metadata.overflow, 'unavailable': metadata.unavailable}
 
 
 class RunCancelled(SystemExit):
@@ -137,6 +279,7 @@ class RunCancelled(SystemExit):
         self.signal_number = number
         self.result = result
         self.checks: list[object] = []
+        diagnostics.retain_stop(self, diagnostics.cancelled_stop(result, number))
 
 
 @dataclass
@@ -150,6 +293,7 @@ class Cancellation:
         if self.signal_number is not None:
             if result is not None:
                 result.terminal_state = 'cancelled'
+                result.stop_metadata = diagnostics.cancelled_stop(result, self.signal_number)
             raise RunCancelled(self.signal_number, result)
 
 
@@ -165,18 +309,23 @@ class CoreTestRun:
     workers: int
     versions: dict[str, str]
     coverage_metadata: dict[str, object]
+    progress: dict[str, object] | None = None
+    coverage_export: ProcessResult | None = None
 
 
 def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> None:
     """Stop only the session or Job Object created by execute; repeated calls are safe."""
     job = fsx.owned_job(process)
     if os.name == 'posix':
+        diagnostics.ownership_mark('term')
         try:
             os.killpg(process.pid, signal.SIGTERM)
+            diagnostics.ownership_mark('term', status='returned')
         except ProcessLookupError:
             pass
         else:
             # Also terminate descendants when their group leader already exited.
+            diagnostics.ownership_mark('grace')
             deadline = time.monotonic() + (_TERM_GRACE if grace_seconds is None else grace_seconds)
             while time.monotonic() < deadline:
                 process.poll()
@@ -185,32 +334,45 @@ def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> N
                 except ProcessLookupError:
                     break
                 time.sleep(0.01)
+            diagnostics.ownership_mark('grace', status='returned')
+            diagnostics.ownership_mark('kill')
             try:
                 os.killpg(process.pid, signal.SIGKILL)
+                diagnostics.ownership_mark('kill', status='returned')
             except ProcessLookupError:
                 pass
     elif job is not None:
         # The job holds every descendant, also those whose parent already exited;
         # Windows has no catchable SIGTERM, so termination is immediate.
+        diagnostics.ownership_mark('kill')
         try:
             emptied = job.terminate(_KILL_REAP_TIMEOUT)
+            diagnostics.ownership_mark('kill', status='returned')
         finally:
             job.close()  # kill-on-close remains the last resort if termination failed
         if not emptied:
             raise RunnerError('owned process tree refused to exit after Job Object termination')
     elif process.poll() is None:
+        diagnostics.ownership_mark('kill')
         if fsx.WINDOWS:
             # taskkill /T ends the live tree; without a Job Object, descendants that
             # outlive an already-exited child are not reachable (no group kill).
             fsx.kill_process_tree(process.pid)
         if process.poll() is None:
             process.kill()
+            diagnostics.ownership_mark('kill', status='returned')
+    diagnostics.ownership_mark('reap')
     try:
         process.wait(timeout=_KILL_REAP_TIMEOUT)
+        diagnostics.ownership_mark('reap', status='returned')
     except subprocess.TimeoutExpired:
+        diagnostics.ownership_mark('kill')
         process.kill()
+        diagnostics.ownership_mark('kill', status='returned')
+        diagnostics.ownership_mark('reap')
         try:
             process.wait(timeout=_KILL_REAP_TIMEOUT)
+            diagnostics.ownership_mark('reap', status='returned')
         except subprocess.TimeoutExpired:
             raise RunnerError('owned process refused to exit after SIGKILL') from None
 
@@ -242,13 +404,19 @@ def _cancellation():
 
 
 @contextmanager
-def _output_resource(manager, retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+def _output_resource(manager, retained: dict[str, ProcessResult | CleanupMetadata], label: str, cancellation: Cancellation, *,
+                     stage: str | None = None):
     """Close capture resources without replacing a result or primary exception."""
     handle = manager.__enter__()
     primary: BaseException | None = None
     try:
         yield handle
     except BaseException as exc:
+        diagnostics.retain_stop(exc, retained.get('stop_metadata', diagnostics.updated_stop(exc)))
+        if retained.get('result') is None:
+            pending = retained.pop('cleanup_metadata', None)
+            if pending is not None:
+                _retain_cleanup(exc, pending)
         primary = exc
         raise
     finally:
@@ -256,10 +424,13 @@ def _output_resource(manager, retained: dict[str, ProcessResult], label: str, ca
             manager.__exit__(type(primary) if primary else None, primary,
                              primary.__traceback__ if primary else None)
         except Exception as cleanup:
-            diagnostic = f'{label} output cleanup failed: {type(cleanup).__name__}: {cleanup}'[:512]
             result = retained.get('result')
             if result is None and isinstance(primary, RunCancelled):
                 result = primary.result
+            _retain_cleanup(result if result is not None else (primary if primary is not None else cleanup),
+                            _merge_cleanup(retained.pop('cleanup_metadata', CleanupMetadata()),
+                                           _cleanup_failure(stage, cleanup)))
+            diagnostic = f'{label} output cleanup failed: {type(cleanup).__name__}: {cleanup}'[:512]
             if result is not None:
                 result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
             elif primary is None:
@@ -271,19 +442,27 @@ def _output_resource(manager, retained: dict[str, ProcessResult], label: str, ca
 
 
 @contextmanager
-def _output_file(retained: dict[str, ProcessResult], label: str, cancellation: Cancellation):
+def _output_file(retained: dict[str, ProcessResult | CleanupMetadata], label: str, cancellation: Cancellation, *,
+                 file_stage: str | None = None, directory_stage: str | None = None):
     # Anonymous files still emit parent-directory events on Linux. Keep their
     # continuous writes below a stable sibling of child fixture trees, so a
     # fixture's bounded ancestor guard does not consume runner output noise.
     with _output_resource(tempfile.TemporaryDirectory(prefix='grok-capture-'), retained,
-                          f'{label} directory', cancellation) as directory:
-        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation) as handle:
+                          f'{label} directory', cancellation,
+                          stage=directory_stage) as directory:
+        with _output_resource(tempfile.TemporaryFile(dir=directory), retained, label, cancellation,
+                              stage=file_stage) as handle:
             yield handle
 
 
+@diagnostics.observed('owned-command', stage='command')
 def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT,
             termination_grace: float | None = None) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
+    diagnostics.ownership_mark('execute')
+    run = diagnostics.current()
+    if run:
+        environment = run.child_environment(environment)
     started = time.monotonic()
     if termination_grace is not None and not 0 < termination_grace <= 180:
         raise RunnerError('termination grace must be bounded by 180 seconds')
@@ -292,9 +471,11 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
             _stop(process)
         else:
             _stop(process, grace_seconds=termination_grace)
-    retained: dict[str, ProcessResult] = {}
-    with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled) as stdout, \
-            _output_file(retained, 'stderr', cancelled) as stderr:
+    retained: dict[str, ProcessResult | CleanupMetadata] = {}
+    with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled,
+            file_stage='stdout_capture_file', directory_stage='stdout_capture_directory') as stdout, \
+            _output_file(retained, 'stderr', cancelled, file_stage='stderr_capture_file',
+                         directory_stage='stderr_capture_directory') as stderr:
         cancelled.check(ProcessResult(command, 128 + (cancelled() or 0), terminal_state='cancelled'))
         try:
             process = fsx.owned_popen(command, cwd=root, env=environment, stdout=stdout, stderr=stderr)
@@ -302,36 +483,54 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
             detail = str(exc)
             if command and command[0] not in detail:
                 detail = f'{detail}: {command[0]}'  # Windows WinError 2 names no file
-            result = ProcessResult(command, 127, stderr=detail)
+            result = ProcessResult(command, 127, stderr=detail,
+                                   stop_metadata=diagnostics.StopMetadata(decision='spawn_error', result_policy='spawn_127', scope='process'))
             retained['result'] = result
+            diagnostics.ownership_mark('result', status='returned')
             return result
+        if run and run.writer:
+            run.writer.emit('command', 'unknown', step='owned-process', process=process.pid)
         reason = ''
         cleanup_error = ''
+        cleanup_metadata = CleanupMetadata()
+        stop_metadata = diagnostics.StopMetadata(cancel='none', scope='process')
         try:
             while process.poll() is None:
                 if cancelled():
                     reason = f'test process cancelled by {signal.Signals(cancelled()).name}'
+                    stop_metadata = replace(stop_metadata, decision='owned_cancel')
                     break
                 elif time.monotonic() - started > timeout:
                     reason = 'test process timeout'
+                    stop_metadata = replace(stop_metadata, decision='deadline')
                 elif os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > OUTPUT_LIMIT:
                     reason = 'test process output limit exceeded'
+                    stop_metadata = replace(stop_metadata, decision='output_limit')
                 if reason:
                     break
                 time.sleep(0.05)
         except BaseException as exc:
+            diagnostics.retain_stop(exc, replace(stop_metadata, decision='primary_exception'))
             try:
                 stop(process)
             except Exception as cleanup:
+                _retain_cleanup(exc, _cleanup_failure('owned_stop_reap', cleanup))
                 exc.add_note(f'owned process cleanup failed: {cleanup}')
             raise
         original_returncode = process.returncode
+        stop_metadata = (diagnostics.child_stop(original_returncode) if stop_metadata.decision == 'unavailable' else stop_metadata)
+        retained['stop_metadata'] = stop_metadata
         try:
             stop(process)
         except Exception as exc:
+            cleanup_metadata = _merge_cleanup(cleanup_metadata, _cleanup_failure('owned_stop_reap', exc))
+            retained['cleanup_metadata'] = cleanup_metadata
             cleanup_error = f'{type(exc).__name__}: {exc}'[:512]
         if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > OUTPUT_LIMIT:
             reason = 'test process output limit exceeded'
+            stop_metadata = replace(stop_metadata, late_output='exceeded')
+        stop_metadata = replace(stop_metadata, late_output='not_exceeded' if stop_metadata.late_output == 'unavailable' else stop_metadata.late_output)
+        retained['stop_metadata'] = stop_metadata
         stdout.seek(0)
         stderr.seek(0)
         out = stdout.read(OUTPUT_LIMIT).decode('utf-8', errors='backslashreplace')
@@ -342,14 +541,21 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         code = original_returncode if original_returncode is not None else process.returncode
         if cancelled():
             code = code if original_returncode is not None else 128 + cancelled()
+            stop_metadata = replace(stop_metadata, result_policy='cancel_preserve_child' if original_returncode is not None else 'cancel_128_signal')
         elif reason:
             code = 124
+            stop_metadata = replace(stop_metadata, result_policy='limit_124')
         if code is None:
             code = 1
+            stop_metadata = replace(stop_metadata, result_policy='fallback_1')
         result = ProcessResult(command, code, out, err + reason, time.monotonic() - started,
-                               'timeout' if reason == 'test process timeout' else 'completed', cleanup_error)
+                               'timeout' if reason == 'test process timeout' else 'completed', cleanup_error,
+                               cleanup_metadata, stop_metadata)
+        retained.pop('cleanup_metadata', None)
         retained['result'] = result
+        diagnostics.ownership_mark('result', cleanup='recorded' if cleanup_error else 'none-reported')
         cancelled.check(result)
+        diagnostics.ownership_mark('result', status='returned', cleanup='recorded' if cleanup_error else 'none-reported')
         return result
 
 
@@ -371,6 +577,80 @@ def _environment(root: Path, data_file: Path, *, temporary_root: Path | None = N
     return environment
 
 
+def _unittest_command(result_file: Path, *arguments: str) -> list[str]:
+    # STACK_DIR remains a real directory when the engine lives in getzilla.zip.
+    return [sys.executable, str(STACK_DIR.parent / 'scripts/getzilla_unittest.py'),
+            '--result', str(result_file), '--nonce', uuid.uuid4().hex, *arguments]
+
+
+def _application_coverage_config(config: Path, directory: Path, *, root: Path) -> Path:
+    """Preserve application coverage; omit exact external instrumentation only."""
+    from . import pytest_progress
+
+    harness = str((STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+    # Coverage's omit values are comma/newline-separated glob patterns with
+    # environment expansion. Never broaden an exact infrastructure exclusion.
+    if any(character in harness for character in '[]*?,\n\r$'):
+        raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
+    omissions = [harness]  # Retain the existing bootstrap-only exception.
+    consumer = root.resolve()
+    for origin in (fsx.__file__, pytest_progress.__file__, diagnostics.__file__):
+        path = Path(origin).resolve()
+        if path.is_relative_to(consumer):
+            continue
+        exact = str(path)
+        if any(character in exact for character in '[]*?,\n\r$'):
+            raise RunnerError('managed instrumentation path cannot be represented as an exact coverage omission')
+        omissions.append(exact)
+    settings = configparser.RawConfigParser()
+    try:
+        settings.read_string(config.read_text(encoding='utf-8'))
+        if not settings.has_section('run'):
+            settings.add_section('run')
+        original = settings.get('run', 'omit', fallback='')
+        settings.set('run', 'omit', original + '\n' + '\n'.join(omissions))
+        overlay = directory / 'application.coveragerc'
+        with overlay.open('x', encoding='utf-8') as output:
+            settings.write(output)
+        return overlay
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise RunnerError('cannot preserve consumer coverage configuration') from exc
+
+
+def _unittest_result(result: ProcessResult, result_file: Path) -> ProcessResult:
+    if result.returncode:
+        return result
+    try:
+        nonce = result.command[result.command.index('--nonce') + 1]
+        initial = result_file.lstat()
+        if (not re.fullmatch('[0-9a-f]{32}', nonce) or fsx.is_link(initial)
+                or not stat.S_ISREG(initial.st_mode)):
+            raise ValueError('invalid collection result identity')
+        descriptor = os.open(result_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(descriptor, 'rb') as source:
+            identity = os.fstat(source.fileno())
+            if (not stat.S_ISREG(identity.st_mode)
+                    or (identity.st_dev, identity.st_ino) != (initial.st_dev, initial.st_ino)
+                    or (hasattr(os, 'getuid') and identity.st_uid != os.getuid())):
+                raise ValueError('invalid collection result owner or type')
+            content = source.read(513)
+        if len(content) > 512:
+            raise ValueError('oversized collection result')
+        report = json.loads(content)
+        if (not isinstance(report, dict) or set(report) != {'schema_version', 'nonce', 'tests_run', 'successful'}
+                or type(report['schema_version']) is not int or report['schema_version'] != 1
+                or report['nonce'] != nonce
+                or type(report['tests_run']) is not int or report['tests_run'] < 1
+                or report['successful'] is not True):
+            raise ValueError('no successful nonempty collection')
+    except (OSError, ValueError, TypeError, IndexError):
+        return replace(result, returncode=5,
+                       stderr=result.stderr + '\nunittest collection result missing or invalid\n',
+                       stop_metadata=diagnostics.updated_stop(result, result_policy='collection_refusal'))
+    return result
+
+
+@diagnostics.entrypoint('named-tests')
 def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> ProcessResult:
     """Run explicit Core unittest names as a bounded observation, without coverage."""
     if type(budget) is not int or not 1 <= budget <= 180:
@@ -384,8 +664,10 @@ def run_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> Pro
         raise RunnerError('named tests require nonempty existing tests.test_module[.Class[.test_method]] targets')
     retained: dict[str, ProcessResult] = {}
     with _run_directory('grok-named-smoke-', retained) as directory:
-        retained['tests'] = execute([sys.executable, '-m', 'unittest', *targets], root,
-                                    _environment(root, Path(directory) / '.coverage'), timeout=budget)
+        result_file = Path(directory) / 'unittest-result.json'
+        retained['tests'] = _unittest_result(
+            execute(_unittest_command(result_file, *targets), root,
+                    _environment(root, Path(directory) / '.coverage'), timeout=budget), result_file)
     return retained['tests']
 
 
@@ -435,6 +717,12 @@ def select_engine(workers: int, measured: bool) -> tuple[int, str]:
     return 0, "unittest"
 
 
+def _progress_arguments(directory: Path, nonce: str, workers: int) -> list[str]:
+    return ['-p', 'getzilla.pytest_progress', '--getzilla-progress-dir', str(directory),
+            '--getzilla-progress-nonce', nonce, '--getzilla-progress-workers', str(workers),
+            '--getzilla-progress-phases']
+
+
 def _pytest_command(workers: int, distribution: str) -> list[str]:
     if not _parallel_process_cleanup_supported():
         raise RunnerError('parallel process cleanup requires POSIX sessions or Windows Job Objects; '
@@ -461,21 +749,31 @@ def _read_limited(path: Path) -> str:
         return f'{type(exc).__name__}: {exc}'
 
 
+def _diagnostic_pid(process):
+    try:
+        value = getattr(process, 'pid', None)
+    except Exception:
+        return None
+    return value if type(value) is int and value > 0 else None
+
+
 def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, workers: int, environment: dict[str, str], *,
                                 test_files: list[str] | None = None) -> ProcessResult:
     if test_files is None:
         test_files = _unittest_files(root)
-    command = [
-        sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
-        '-m', 'unittest', 'discover', '-s', 'tests', '-p', '<test-file>',
-    ]
+    command = [sys.executable, '-m', 'coverage', 'run', '--parallel-mode', f'--rcfile={config}',
+               *_unittest_command(Path('<result>'), 'discover', '-s', 'tests', '-p', '<test-file>')[1:]]
     if not test_files:
-        return ProcessResult(command, 5, stderr='no unittest modules discovered')
+        return ProcessResult(command, 5, stderr='no unittest modules discovered',
+                             stop_metadata=diagnostics.StopMetadata(result_policy='collection_refusal', scope='parallel_batch'))
     started = time.monotonic()
-    active: list[tuple[str, subprocess.Popen, Path, Path]] = []
+    active: list[tuple[str, subprocess.Popen, Path, Path, Path]] = []
     completed: list[ProcessResult] = []
     cleanup_errors: list[str] = []
     next_file = 0
+    run = diagnostics.current()
+    actors = {}
+    stop_metadata = diagnostics.StopMetadata(scope='parallel_batch')
     workers = max(1, min(workers, len(test_files)))
     with _cancellation() as cancelled, tempfile.TemporaryDirectory(prefix='grok-core-parallel-') as out_dir:
         output_root = Path(out_dir)
@@ -487,58 +785,86 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
                     next_file += 1
                     stdout = output_root / f'{test_file}.stdout'
                     stderr = output_root / f'{test_file}.stderr'
+                    result_file = output_root / f'{test_file}.result.json'
                     out_handle = stdout.open('wb')
                     err_handle = stderr.open('wb')
+                    actor = next(i for i in range(workers) if i not in actors.values())
+                    child_env = {**environment, '_GETZILLA_TEST_CHILD': '1'}
+                    if run:
+                        child_env = run.child_environment(child_env, actor)
+                        if run.writer:
+                            run.writer.emit('command', 'start', step='unittest-shard')
                     try:
                         process = fsx.owned_popen(
                             [
                                 sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                                f'--rcfile={config}', '-m', 'unittest', 'discover',
-                                '-s', 'tests', '-p', test_file,
+                                f'--rcfile={config}',
+                                *_unittest_command(result_file, 'discover', '-s', 'tests', '-p', test_file)[1:],
                             ],
                             cwd=root,
-                            env={**environment, '_GETZILLA_TEST_CHILD': '1'},
+                            env=child_env,
                             stdout=out_handle,
                             stderr=err_handle,
                         )
                     except OSError as exc:
                         out_handle.close()
                         err_handle.close()
-                        completed.append(ProcessResult(command, 127, stderr=f'{test_file}: {exc}'))
+                        completed.append(ProcessResult(command, 127, stderr=f'{test_file}: {exc}',
+                            stop_metadata=diagnostics.StopMetadata(decision='spawn_error', result_policy='spawn_127', scope='selected_shard')))
                         continue
                     out_handle.close()
                     err_handle.close()
-                    active.append((test_file, process, stdout, stderr))
+                    actors[id(process)] = actor
+                    if run and run.writer:
+                        run.writer.emit('command', 'unknown', step='unittest-shard',
+                                        process=_diagnostic_pid(process))
+                    active.append((test_file, process, stdout, stderr, result_file))
                 for item in list(active):
-                    test_file, process, stdout, stderr = item
+                    test_file, process, stdout, stderr, result_file = item
                     if process.poll() is None:
                         continue
                     active.remove(item)
+                    actors.pop(id(process), None)
+                    if run and run.writer:
+                        run.writer.emit('command', 'end', step='unittest-shard', code=process.returncode,
+                                        outcome='pass' if process.returncode == 0 else 'fail',
+                                        process=_diagnostic_pid(process))
                     job = fsx.owned_job(process)
                     if job is not None:
                         job.close()  # a finished shard's leftover descendants end with its job
-                    completed.append(ProcessResult(
-                        [
-                            sys.executable, '-m', 'coverage', 'run', '--parallel-mode',
-                            f'--rcfile={config}', '-m', 'unittest', 'discover',
-                            '-s', 'tests', '-p', test_file,
-                        ],
+                    completed.append(_unittest_result(ProcessResult(
+                        list(process.args),
                         process.returncode if process.returncode is not None else 1,
                         stdout=_read_limited(stdout),
                         stderr=_read_limited(stderr),
-                    ))
+                        stop_metadata=diagnostics.child_stop(process.returncode, scope='selected_shard'),
+                    ), result_file))
                 if time.monotonic() - started > TIMEOUT:
-                    for _test_file, process, _stdout, _stderr in active:
+                    stop_metadata = diagnostics.StopMetadata(decision='deadline', result_policy='limit_124', cancel='none', scope='parallel_batch')
+                    for _test_file, process, _stdout, _stderr, _result_file in active:
                         _stop(process)
+                        if run and run.writer:
+                            run.writer.emit('command', 'end', step='unittest-shard', outcome='timeout',
+                                            process=_diagnostic_pid(process))
                     return ProcessResult(command, 124, stderr='parallel coverage unittest timeout',
-                                         seconds=time.monotonic() - started, terminal_state='timeout')
+                                         seconds=time.monotonic() - started, terminal_state='timeout',
+                                         stop_metadata=stop_metadata,
+                                         cleanup_metadata=_merge_cleanup(*(
+                                             _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                                             for item in completed)))
                 if active:
                     time.sleep(0.05)
-        except BaseException:
-            for test_file, process, _stdout, _stderr in active:
+        except BaseException as primary:
+            diagnostics.retain_stop(primary, stop_metadata if stop_metadata.decision != 'unavailable' else
+                                    diagnostics.updated_stop(primary, scope='parallel_batch', decision=(
+                                        'owned_cancel' if isinstance(primary, RunCancelled) else 'primary_exception')))
+            _retain_cleanup(primary, _merge_cleanup(*(
+                _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard') for item in completed)))
+            for test_file, process, _stdout, _stderr, _result_file in active:
                 try:
                     _stop(process)
                 except Exception as exc:
+                    _retain_cleanup(primary, _cleanup_failure('owned_stop_reap', exc))
                     cleanup_errors.append(f'{test_file}: {type(exc).__name__}: {exc}'[:256])
             raise
     failed = [result for result in completed if result.returncode != 0]
@@ -546,7 +872,11 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
     stderr = ''.join(result.stderr[-4000:] for result in failed[-20:])
     if failed:
         return ProcessResult(command, failed[0].returncode, stdout=stdout, stderr=stderr,
-                             seconds=time.monotonic() - started)
+                             seconds=time.monotonic() - started,
+                             stop_metadata=diagnostics.updated_stop(failed[0], result_policy='aggregate', scope='selected_shard'),
+                             cleanup_metadata=_merge_cleanup(*(
+                                 _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                                 for item in completed)))
     combine = execute(
         [sys.executable, '-m', 'coverage', 'combine', f'--rcfile={config}', str(data_file.parent)],
         root,
@@ -555,7 +885,12 @@ def _parallel_coverage_unittest(root: Path, config: Path, data_file: Path, worke
     )
     return ProcessResult(command, combine.returncode, stdout=combine.stdout, stderr=combine.stderr,
                          seconds=time.monotonic() - started,
-                         cleanup_error=combine.cleanup_error)
+                         stop_metadata=diagnostics.updated_stop(combine, scope='coverage_combine'),
+                         cleanup_error=combine.cleanup_error,
+                         cleanup_metadata=_merge_cleanup(*(
+                             _with_cleanup_origin(_stored_cleanup(item), 'parallel_shard')
+                             for item in completed),
+                             _with_cleanup_origin(_stored_cleanup(combine), 'coverage_combine')))
 
 
 @contextmanager
@@ -575,6 +910,8 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
             result = retained.get('tests')
             if result is None and isinstance(primary, RunCancelled):
                 result = primary.result
+            _retain_cleanup(result if result is not None else (primary if primary is not None else cleanup),
+                            _cleanup_failure('run_scratch_directory', cleanup))
             if result is not None:
                 diagnostic = f'{type(cleanup).__name__}: {cleanup}'[:512]
                 result.cleanup_error = '; '.join(filter(None, (result.cleanup_error, diagnostic)))
@@ -584,6 +921,7 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
                 primary.add_note(f'coverage scratch cleanup failed: {cleanup}')
 
 
+@diagnostics.entrypoint('core-tests')
 def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
     measured = mode in {'pr', 'release'}
     workers, engine = select_engine(workers, measured)
@@ -604,11 +942,27 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
         # storage, outside the fixture guards' nonrecursive ancestor watches.
         coverage_root = Path(directory) / 'coverage'
         coverage_root.mkdir(mode=0o700)
+        if measured:
+            config = _application_coverage_config(config, coverage_root, root=root)
         data_file = coverage_root / '.coverage'
         report_file = coverage_root / 'coverage.json'
+        result_file = coverage_root / 'unittest-result.json'
         environment = _environment(root, data_file, temporary_root=Path(directory) / 'tmp')
+        progress_root = Path(directory) / 'progress'
+        progress_nonce = uuid.uuid4().hex
         if workers and engine == 'pytest-xdist':
+            if diagnostics.current():
+                diagnostics.current().expect_workers(workers)
             command = _pytest_command(workers, 'worksteal')
+            if 1 <= workers <= 64:
+                # The source CLI also serves uninstalled consumer roots. Load
+                # this running engine's plugin; STACK_DIR is real for ZIP installs.
+                environment['PYTHONPATH'] = os.pathsep.join((str(STACK_DIR), environment['PYTHONPATH']))
+                try:
+                    progress_root.mkdir(mode=0o700)
+                except OSError:
+                    pass  # Diagnostic storage cannot prevent the real backend.
+                command += _progress_arguments(progress_root, progress_nonce, workers)
             if measured:
                 command += ['-p', 'pytest_cov.plugin', '--cov', f'--cov-config={config}', '--cov-report=term']
             command += ['tests']
@@ -618,34 +972,47 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                 '-m', 'unittest', '<module>',
             ]
         else:
-            command = [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests']
+            command = _unittest_command(result_file, 'discover', '-s', 'tests')
             if measured:
                 command = [sys.executable, '-m', 'coverage', 'run', f'--rcfile={config}', *command[1:]]
-        if workers and engine == 'coverage-unittest-parallel':
-            test_files = _unittest_files(root)
-            workers = min(workers, len(test_files))
-            tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
-        else:
-            tests = execute(command, root, environment)
+        with diagnostics.core_stop_scope():
+            if workers and engine == 'coverage-unittest-parallel':
+                test_files = _unittest_files(root)
+                workers = min(workers, len(test_files))
+                tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
+            else:
+                tests = execute(command, root, environment)
+                if engine != 'pytest-xdist':
+                    tests = _unittest_result(tests, result_file)
+            diagnostics.record_core_stop(tests)
         retained['tests'] = tests
+        progress = None
+        if engine == 'pytest-xdist':
+            from .pytest_progress import read_progress
+            progress = read_progress(progress_root, progress_nonce, workers)
         coverage = None
+        exported = None
         facts: dict[str, object] = {}
         if measured:
             coverage_command = [sys.executable, '-m', 'coverage', 'report', f'--rcfile={config}']
             if not data_file.is_file():
-                coverage = ProcessResult(coverage_command, 1, stderr='current run produced no coverage data')
+                coverage = ProcessResult(coverage_command, 1, stderr='current run produced no coverage data',
+                                         stop_metadata=diagnostics.StopMetadata(result_policy='coverage_refusal'))
             else:
+                exporting = False
                 try:
                     coverage = execute(coverage_command, root, environment, timeout=120)
+                    exporting = True
                     exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
-                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts)
+                    exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress,
+                                              exc.result if exporting else None)
                     raise
                 try:
+                    from coverage import Coverage
+                    from coverage.exceptions import CoverageException
                     document = json.loads(report_file.read_text(encoding='utf-8'))
-                    settings = configparser.ConfigParser()
-                    settings.read(config)
-                    expected_branch = settings.getboolean('run', 'branch', fallback=False)
+                    expected_branch = Coverage(config_file=str(config)).get_option('run:branch')
                     if (not isinstance(document, dict)
                             or not isinstance(document.get('files'), dict) or not document['files']
                             or not isinstance(document.get('meta'), dict)
@@ -654,13 +1021,15 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
                             or not isinstance(document.get('totals'), dict)):
                         raise ValueError('coverage source or branch data missing')
                     facts = {'totals': document['totals'], 'branch_coverage': expected_branch, 'files': sorted(document['files'])}
-                except (OSError, ValueError, TypeError, KeyError, configparser.Error) as exc:
+                except (OSError, ValueError, TypeError, KeyError, CoverageException) as exc:
                     coverage.returncode = 1
+                    coverage.stop_metadata = diagnostics.updated_stop(coverage, result_policy='coverage_refusal')
                     coverage.stderr += f'\ninvalid current-run coverage: {exc}'
                 if exported.returncode or tests.returncode or 'failed to return coverage data' in tests.stdout + tests.stderr:
                     coverage.returncode = 1
+                    coverage.stop_metadata = diagnostics.updated_stop(coverage, result_policy='coverage_refusal')
                     coverage.stderr += '\ncoverage does not qualify an unsuccessful or incomplete test run'
-        return CoreTestRun(tests, coverage, workers, versions, facts)
+        return CoreTestRun(tests, coverage, workers, versions, facts, progress, exported)
 
 
 def run_trust_tests(root: Path, workers: int) -> ProcessResult:
@@ -670,15 +1039,17 @@ def run_trust_tests(root: Path, workers: int) -> ProcessResult:
         raise RunnerError('trust-ci/tests is missing')
     workers, _engine = select_engine(workers, measured=False)
     _tool_versions(['pytest', 'pytest-xdist'] if workers else [])
-    command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else [
-        sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
-    ]
     retained: dict[str, ProcessResult] = {}
     # Child temp files now live in this folder, so its cleanup must not replace the verdict (#134).
     with _run_directory('grok-trust-tests-', retained) as directory:
+        result_file = Path(directory) / 'unittest-result.json'
+        command = (_pytest_command(workers, 'loadfile') + ['tests']) if workers else _unittest_command(
+            result_file, 'discover', '-s', 'tests')
         environment = _environment(suite, Path(directory) / '.coverage')
         environment['PYTHONPATH'] = os.pathsep.join(str(path) for path in (suite / 'src', suite / 'tests', suite))
         retained['tests'] = execute(command, suite, environment)
+        if not workers:
+            retained['tests'] = _unittest_result(retained['tests'], result_file)
     return retained['tests']
 
 
@@ -698,6 +1069,7 @@ def main() -> int:
           f'seconds={result.seconds:.3f}; exit={result.returncode}')
     print(result.stdout, end='')
     print(result.stderr, end='', file=sys.stderr)
+    print('stop=' + json.dumps(diagnostics.stop_details(result), sort_keys=True), file=sys.stderr)
     if result.cleanup_error:
         print(f'owned test cleanup failed: {result.cleanup_error}', file=sys.stderr)
         return 1

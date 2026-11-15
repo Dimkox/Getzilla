@@ -318,61 +318,163 @@ class _PathTools:
 
 
 class VerificationTests(unittest.TestCase):
-    def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
-        failure = ('================ FAILURES ================\n'
-                   'tests/test_peer.py:174: AssertionError: secret-token-123\n'
-                   'E   AssertionError: secret-token-123\n')
-        output = failure + ('coverage rows\n' * 2000) + 'FAILED tests/test_peer.py::test_close - AssertionError: secret-token-123\n'
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:174: AssertionError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('secret-token-123', result)
-        self.assertLessEqual(len(result), 12000)
+    def _public_core_cleanup_checks(self, exitcode: int, *, backend: str = 'pytest-xdist',
+                                    cleanup_target: str = 'tests', cleanup_fails: bool = True):
+        from getzilla import python_test_runner as runner
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
 
-    def test_failed_core_excerpt_bounds_many_locations_and_omits_controlled_values(self) -> None:
-        output = ('==== ERRORS ====\r\n' +
-                  ''.join(f'tests/test_case_{n}.py:1: ValueError: SECRET_{n}\r\n' for n in range(1000)) +
-                  'FAILED tests/test_peer.py::test_close - SECRET\r\n')
-        trusted = {f'tests/test_case_{n}.py': (1, set()) for n in range(1000)}
-        trusted['tests/test_peer.py'] = (200, {'test_close'})
-        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
-        self.assertIn('tests/test_case_0.py:1: ValueError', result)
-        self.assertIn('additional failure locations omitted', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('SECRET', result)
-        self.assertNotIn('\r', result)
-        self.assertLessEqual(len(result), 12000)
+        class PublicManager:
+            def __enter__(self):
+                return object()
 
-    def test_core_excerpt_keeps_existing_output_without_pytest_failure_marker(self) -> None:
-        output = 'safe-output' * 2000
-        self.assertEqual(verification_module._core_output_excerpt(output, failed=False), output[-12000:])
-        self.assertEqual(verification_module._core_output_excerpt(output, failed=True), output[-12000:])
+            def __exit__(self, *args):
+                if cleanup_fails:
+                    raise OSError('SYNTHETIC_CLEANUP_VALUE\n' + '\x1b[31mPUBLIC_VALUE' * 80)
 
-    def test_core_excerpt_caps_locations_before_output_character_limit(self) -> None:
-        output = '==== FAILURES ====\n' + ''.join(f'tests/t.py:{n}: ValueError\n' for n in range(1, 102))
-        self.assertLess(len(output), 5500)
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/t.py': (101, set())})
-        self.assertEqual(sum(line.startswith('tests/t.py:') for line in result.splitlines()), 100)
-        self.assertIn('tests/t.py:100: ValueError', result)
-        self.assertNotIn('tests/t.py:101:', result)
-        self.assertIn('additional failure locations omitted', result)
+        class PublicCancellation:
+            result = None
 
-    def test_core_excerpt_removes_ansi_and_unsafe_failure_text(self) -> None:
-        output = ('\x1b[31m==== FAILURES ====\x1b[0m\n'
-                  '\x1b[31mtests/test_peer.py:42: RuntimeError: SECRET\x1b[0m\n'
-                  'FAILED tests/test_peer.py::test_close - SECRET\n')
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
-        self.assertNotIn('SECRET', result)
-        self.assertNotIn('\x1b', result)
+            def check(self, result):
+                self.result = result
 
-    def test_core_excerpt_normalizes_windows_paths(self) -> None:
-        output = ('==== FAILURES ====\r\ntests\\test_peer.py:42: RuntimeError: SECRET\r\n'
-                  'FAILED tests\\test_peer.py::test_close - SECRET\r\n')
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('SECRET', result)
+        process = ProcessResult(['public-pytest-metadata'], exitcode,
+                                stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR')
+        coverage = ProcessResult(['public-coverage-metadata'], 0)
+        target = process if cleanup_target == 'tests' else coverage
+        cancellation = PublicCancellation()
+        with runner._output_resource(PublicManager(), {'result': target}, 'public capture', cancellation):
+            pass
+        self.assertIs(cancellation.result, target)
+        self.assertEqual(process.returncode, exitcode)
+        if cleanup_fails:
+            self.assertIn('SYNTHETIC_CLEANUP_VALUE', target.cleanup_error)
+        else:
+            self.assertEqual(target.cleanup_error, '')
+        workers = 2 if backend == 'pytest-xdist' else 0
+        core = CoreTestRun(process, coverage, workers, {'engine': backend}, {})
+
+        def blocked(*args, **kwargs):
+            raise AssertionError('actual test backend is forbidden in this public metadata fixture')
+
+        with contextlib.ExitStack() as stack:
+            guards = [
+                stack.enter_context(patch.object(verification_module, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, 'run_named_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(verification_module, '_command_check', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'execute', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_core_tests', side_effect=blocked)),
+                stack.enter_context(patch.object(runner, 'run_named_tests', side_effect=blocked)),
+            ]
+            stack.enter_context(patch.object(verification_module, 'core_worker_selection',
+                                            return_value=WorkerSelection(workers, 'configuration')))
+            stack.enter_context(patch.object(verification_module, '_trusted_pytest_metadata', return_value={}))
+            port = stack.enter_context(patch.object(verification_module, 'run_core_tests', return_value=core))
+            checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+            port.assert_called_once_with(ROOT, 'pr', workers)
+            for guard in guards:
+                guard.assert_not_called()
+        return process, checks
+
+    def test_producer_cleanup_effective_pytest_failures_sanitize_both_streams(self) -> None:
+        for exitcode in (0, 1):
+            with self.subTest(exitcode=exitcode):
+                process, checks = self._public_core_cleanup_checks(exitcode)
+                self.assertEqual(process.returncode, exitcode)
+                self.assertEqual([item.status for item in checks], ['fail', 'pass'])
+                self.assertIn(f'exit={exitcode}', checks[0].summary)
+                self.assertIn('test_timeout=900s', checks[0].summary)
+                self.assertFalse('SYNTHETIC' in checks[0].stdout + checks[0].stderr,
+                                 'producer cleanup failure must not publish fixture values')
+                self.assertFalse(any(value in checks[0].stderr for value in ('PUBLIC_VALUE', '\x1b')),
+                                 'cleanup exception text and controls must remain private')
+                self.assertIn('pytest_failure_ids=null', checks[0].stdout)
+                self.assertIn('pytest_failure_ids=null', checks[0].stderr)
+                self.assertIn('cleanup failed:', checks[0].stderr)
+                self.assertLessEqual(len(checks[0].stderr), 12000)
+
+    def test_core_cleanup_details_disclose_missing_provenance_without_private_values(self) -> None:
+        process, checks = self._public_core_cleanup_checks(0)
+        self.assertIn('SYNTHETIC_CLEANUP_VALUE', process.cleanup_error)
+        metadata = checks[0].details[0].get('cleanup')
+        self.assertIsNotNone(metadata, 'Core must disclose cleanup provenance availability')
+        self.assertEqual(metadata['status'], 'unavailable')
+        self.assertNotIn('SYNTHETIC_CLEANUP_VALUE', json.dumps(metadata))
+
+    def test_handled_runner_cleanup_sidecar_keeps_exception_private(self) -> None:
+        from getzilla import python_test_runner as runner
+        primary = runner.RunnerError('PRIVATE_PRIMARY_CANARY')
+        runner._retain_cleanup(primary, runner._cleanup_failure(
+            'stdout_capture_file', PermissionError(13, 'PRIVATE_CLEANUP_CANARY')))
+
+        def blocked(*args, **kwargs):
+            raise AssertionError('actual backend forbidden')
+
+        with patch.object(verification_module, 'core_worker_selection',
+                          return_value=WorkerSelection(0, 'configuration')), \
+                patch.object(verification_module, 'run_core_tests', side_effect=primary), \
+                patch.object(verification_module, 'execute', side_effect=blocked), \
+                patch.object(verification_module, 'run_named_tests', side_effect=blocked), \
+                patch.object(verification_module, '_command_check', side_effect=blocked):
+            checks = verification_module._core_python_checks(ROOT, 'pr', False, keep_going=True)
+        self.assertEqual(primary.args, ('PRIVATE_PRIMARY_CANARY',))
+        self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+        self.assertEqual(checks[0].details[0]['cleanup']['facts'][0]['category'], 'permission')
+        self.assertNotIn('PRIVATE_', json.dumps([item.to_dict() for item in checks]))
+
+    def test_producer_cleanup_keeps_clean_and_nonpytest_stream_contracts(self) -> None:
+        process, clean = self._public_core_cleanup_checks(0, cleanup_fails=False)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in clean], ['pass', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', clean[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', clean[0].stderr)
+        _, legacy = self._public_core_cleanup_checks(0, backend='unittest')
+        self.assertEqual([item.status for item in legacy], ['fail', 'pass'])
+        self.assertIn('SYNTHETIC_STDOUT', legacy[0].stdout)
+        self.assertIn('SYNTHETIC_STDERR', legacy[0].stderr)
+        self.assertFalse(any(value in legacy[0].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'legacy stream compatibility must not append cleanup exception values')
+        self.assertIn('cleanup failed:', legacy[0].stderr)
+
+    def test_producer_coverage_cleanup_preserves_status_without_exception_values(self) -> None:
+        process, checks = self._public_core_cleanup_checks(0, cleanup_target='coverage')
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual([item.status for item in checks], ['pass', 'fail'])
+        self.assertIn('SYNTHETIC_STDOUT', checks[0].stdout)
+        self.assertIn('exit=0', checks[1].summary)
+        self.assertIn('cleanup failed:', checks[1].stderr)
+        self.assertFalse(any(value in checks[1].stderr for value in
+                             ('SYNTHETIC_CLEANUP_VALUE', 'PUBLIC_VALUE', '\x1b')),
+                         'coverage cleanup metadata must not publish exception values')
+        self.assertLessEqual(len(checks[1].stderr), 12000)
+
+
+
+
+
+
+
+    def test_known_pytest_caller_sanitizes_both_streams_without_changing_result(self) -> None:
+        from getzilla.python_test_runner import CoreTestRun, ProcessResult
+        core = CoreTestRun(ProcessResult(['pytest'], 1, stdout='SYNTHETIC_STDOUT', stderr='SYNTHETIC_STDERR'),
+                           ProcessResult(['coverage'], 1), 2, {'engine': 'pytest-xdist'}, {})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tests').mkdir()
+            with patch.object(verification_module, '_trusted_pytest_metadata', return_value={}), \
+                    patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(2, 'configuration')), \
+                    patch.object(verification_module, 'run_core_tests', return_value=core):
+                checks = verification_module._core_python_checks(root, 'pr', False, keep_going=True)
+        self.assertEqual([item.status for item in checks], ['fail', 'fail'])
+        self.assertNotIn('SYNTHETIC', checks[0].stdout + checks[0].stderr)
+        self.assertIn('workers=2 exit=1', checks[0].summary)
+        self.assertIn('test_timeout=900s', checks[0].summary)
+
+
+
+
+
+
 
     def test_core_result_records_sanitized_failure_location_before_coverage(self) -> None:
         from getzilla.python_test_runner import CoreTestRun, ProcessResult
@@ -413,28 +515,6 @@ class VerificationTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_VALUE', result.stdout)
                 self.assertNotIn('untracked_private', result.stdout)
 
-    def test_core_excerpt_rejects_captured_path_and_untrusted_node_spoof(self) -> None:
-        output = ('==== FAILURES ====\n'
-                  'tests/test_peer.py:42: AssertionError\n'
-                  'tests/test_peer.py:43: PRIVATE_SENTINELError\n'
-                  '---- Captured stdout call ----\n'
-                  'tests/test_peer.py:99: AssertionError\n'
-                  'FAILED tests/test_peer.py::test_captured - AssertionError\n'
-                  'tests/test_secret_value.py:123: AssertionError\n'
-                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - AssertionError\n'
-                  '==== short test summary info ====\n'
-                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - secret-token\n'
-                  'FAILED tests/test_peer.py::test_close - AssertionError\n')
-        trusted = {'tests/test_peer.py': (200, {'test_close', 'test_captured'})}
-        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
-        self.assertIn('tests/test_peer.py:42: AssertionError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('PRIVATE_SENTINEL', result)
-        self.assertNotIn('secret_value', result)
-        self.assertNotIn('secret-token', result)
-        self.assertIn('tests/test_peer.py:43', result)
-        self.assertNotIn('tests/test_peer.py:99', result)
-        self.assertNotIn('::test_captured', result)
 
     def test_pytest_metadata_only_trusts_tracked_source_names(self) -> None:
         path = 'tests/test_verification_doctor.py'
@@ -500,8 +580,10 @@ class VerificationTests(unittest.TestCase):
                 self.assertEqual(os.environ[key], value)
             with full_project_copy() as root:
                 self.assertTrue((root / '.getzilla/sast/rules').is_dir())
-                for key, value in ambient.items():
-                    self.assertEqual(os.environ[key], value)
+                for key in ambient:
+                    self.assertNotIn(key, os.environ)
+            for key, value in ambient.items():
+                self.assertEqual(os.environ[key], value)
 
     def test_scanner_fixture_keeps_real_checks_and_full_source_negative_control(self) -> None:
         from getzilla.verification import _bandit, _ruff
@@ -1925,6 +2007,109 @@ class VerificationTests(unittest.TestCase):
             self.assertNotIn('python-unittest', names)
 
 
+class TrustedHistoricalRangeTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _history(self):
+        # A tiny real history owns its origin and archive; no project copy or
+        # mocked range/manifest producer can stand in for comparison evidence.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            subprocess.run(['git', 'init', '-q', '--initial-branch=main'], cwd=root, check=True)
+            origin = 'engineering/changes/20260826-origin/change-spec.yaml'
+            original = root / origin
+            original.parent.mkdir(parents=True)
+            original.write_text('schema_version: 1\nchange_id: 20260826-origin\n')
+            subprocess.run(['git', 'add', origin], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'historical source'], cwd=root, check=True)
+            base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            blob = subprocess.check_output(['git', 'rev-parse', f'{base}:{origin}'], cwd=root, text=True).strip()
+            subprocess.run(['git', 'checkout', '-qb', 'candidate'], cwd=root, check=True)
+            target = 'engineering/changes/20260826-archive/historical-spec.yaml'
+            archived = root / target
+            archived.parent.mkdir(parents=True)
+            archived.write_text('schema_version: 1\nchange_id: 20260826-archive\n')
+            original.unlink()
+            manifest = {'schema_version': 1, 'source_base': base, 'entries': [{
+                'kind': 'legacy_archive', 'original_blob': blob, 'target': target,
+                'sha256': hashlib.sha256(archived.read_bytes()).hexdigest()}]}
+            (root / 'engineering/archived-change-specs.json').write_text(json.dumps(manifest))
+            route = {'base_commit': base, 'delivery_expected': True,
+                     'risk': 'low', 'complexity': 'micro', 'light_diff': {'admitted': True}}
+            ranges = verification_module._git_range_selection(root, route, 'pr')
+            self.assertEqual(ranges.findings, [])
+            self.assertTrue(ranges.bases)
+            yield root, origin, target, route, ranges
+
+    def test_fast_preserves_established_historical_comparison_ranges(self):
+        with self._history() as (root, origin, target, route, ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(metadata['specs'], [])
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+            migration = metadata['historical_migrations'][0]
+            self.assertEqual(migration['source_base'], route['base_commit'])
+            self.assertEqual(migration['evidence_kind'], 'historical_archival')
+
+    def test_fast_pipeline_keeps_historical_comparison_evidence(self):
+        from getzilla.continuity import submit
+        from tests._support import _session_environment
+
+        class HistoricalBoundaryReached(Exception):
+            pass
+
+        with self._history() as (root, _origin, _target, _route, _ranges), _session_environment():
+            route = submit(root, 'Fix the small historical typo.', 'fixture-fast-historical')
+            self.assertEqual(route['delivery_lane'], 'light')
+            actual_change_specs = verification_module._change_specs
+            observed = {}
+
+            def finish_at_historical_boundary(*args, **kwargs):
+                observed['check'], observed['metadata'] = actual_change_specs(*args, **kwargs)
+                # The real pipeline, Git comparison selection and archival
+                # validator ran. Stop before unrelated checks or external work.
+                raise HistoricalBoundaryReached
+
+            with patch.object(verification_module, '_change_specs', side_effect=finish_at_historical_boundary), \
+                 self.assertRaises(HistoricalBoundaryReached):
+                verify(root, 'fast', record=False)
+            self.assertEqual(observed['check'].status, 'pass', observed['check'].details)
+            self.assertEqual(observed['metadata']['specs'], [])
+            migrations = observed['metadata']['historical_migrations']
+            self.assertEqual(len(migrations), 1)
+            self.assertEqual(migrations[0]['source_base'], route['base_commit'])
+            self.assertEqual(migrations[0]['evidence_kind'], 'historical_archival')
+
+    def test_explicit_empty_or_failed_ranges_never_fall_back(self):
+        with self._history() as (root, origin, target, route, ranges):
+            invalid = (GitRangeSelection(), GitRangeSelection(bases=ranges.bases, findings=[{
+                'severity': 'error', 'code': 'fixture-range-failed', 'message': 'untrusted comparison'}]))
+            for supplied in invalid:
+                with self.subTest(findings=supplied.findings):
+                    check, _ = _change_specs(root, [origin, target], route, 'pr', ranges=supplied)
+                    self.assertEqual(check.status, 'fail')
+                    self.assertIn('historical-spec-migration-invalid', {row['code'] for row in check.details})
+
+    def test_trusted_ranges_still_reject_tampered_archive(self):
+        with self._history() as (root, origin, target, route, ranges):
+            (root / target).write_text('schema_version: 1\nchange_id: tampered\n')
+            check, _ = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('digest mismatch' in row['message'] for row in check.details))
+
+    def test_legacy_callers_still_resolve_their_pr_ranges(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'pr')
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+
+    def test_fast_without_established_ranges_cannot_invent_a_base(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, _ = _change_specs(root, [origin, target], route, 'fast')
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('trusted comparison ranges' in row['message'] for row in check.details))
+
+
 class TypedSpecVerificationTests(unittest.TestCase):
     def _migration_fixture(self, root: Path, *, version: int = 1, kind: str = 'legacy_archive'):
         origin = 'engineering/changes/20260826-origin/change-spec.yaml'
@@ -2149,7 +2334,7 @@ class QualityContourTests(unittest.TestCase):
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             recorded: list[str] = []
-            real_check = __import__('getzilla.verification', fromlist=['_command_check'])._command_check
+            real_check = verification_module._command_check
 
             def fake_exists(name: str) -> bool:
                 if name == 'ruff':
@@ -2502,6 +2687,31 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertIsNotNone(checks['factory-postgres-exit'].command)
             self.assertEqual(os.environ.get('GETZILLA_VERIFY_CAPABILITY'), 'repository-sandbox')
 
+    def test_missing_or_altered_factory_report_blocks_postgres_dispatch(self):
+        for mutation in ('missing', 'altered'):
+            def corrupt(report):
+                if mutation == 'missing':
+                    report.unlink()
+                else:
+                    document = json.loads(report.read_text(encoding='utf-8'))
+                    document['executed'] = []
+                    report.write_text(json.dumps(document), encoding='utf-8')
+
+            with self.subTest(mutation=mutation), self.python_tree(factory_report_mutator=corrupt) as root:
+                executed = []
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    executed.append(name)
+                    return CheckResult(name, 'pass', 'dispatch fixture', command=args)
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    checks = {item.name: item for item in _python(root, 'pr')}
+                self.assertEqual(checks['factory-unit'].status, 'fail')
+                self.assertNotIn('factory-postgres-exit', executed)
+                self.assertEqual(checks['factory-postgres-exit'].status, 'skip')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['blocked_by'], 'factory-unit')
+                self.assertEqual(checks['factory-postgres-exit'].details[0]['execution'], 'not_executed')
+
     def test_early_refusal_still_detects_mutation_and_refuses_receipt(self):
         with self.routed_tree() as (root, route):
             def refusal(project, files):
@@ -2556,7 +2766,7 @@ class FailFastVerificationTests(unittest.TestCase):
                 self.assertTrue(all(item.status == 'skip' and item.command is None for item in checks[1:]))
 
     @contextlib.contextmanager
-    def python_tree(self):
+    def python_tree(self, *, factory_report_mutator=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for rel in ('tests', 'pilot/tests', 'factory/tests'):
@@ -2564,10 +2774,34 @@ class FailFastVerificationTests(unittest.TestCase):
             for rel in ('tests/test_ok.py', 'pilot/tests/test_ok.py', 'factory/tests/test_contracts.py',
                         'factory/tests/run_disposable_exit.py', 'factory/pyproject.toml'):
                 (root / rel).write_text('# dispatch fixture\n')
+            for rel in ('factory/__init__.py', 'factory/tests/__init__.py'):
+                (root / rel).write_text('')
+            (root / 'factory/tests/test_contracts.py').write_text(_PASSING_UNITTEST)
+            factory_unit = verification_module._factory_unit
+            actual_command = verification_module._command_check
+
+            def bound_factory_unit(project):
+                dispatch_command = verification_module._command_check
+
+                def command(project, name, args, timeout=300, **kwargs):
+                    selected = dispatch_command(project, name, args, timeout, **kwargs)
+                    # Dispatch tests stub command outcomes. A successful Factory
+                    # child must still produce its real source-bound report.
+                    if selected.status != 'pass':
+                        return selected
+                    result = actual_command(project, name, args, timeout, **kwargs)
+                    if factory_report_mutator is not None:
+                        factory_report_mutator(Path(args[args.index('--report') + 1]))
+                    return result
+
+                with patch.object(verification_module, '_command_check', side_effect=command):
+                    return factory_unit(project)
+
             with patch.object(verification_module, '_ruff', return_value=CheckResult('ruff', 'pass', 'ok')), \
                  patch.object(verification_module, '_bandit', return_value=CheckResult('bandit', 'skip', 'no non-test python paths')), \
                  patch.object(verification_module, 'core_worker_selection', return_value=WorkerSelection(None, 'consumer')), \
                  patch.object(verification_module, 'run_core_tests', return_value=None), \
+                 patch.object(verification_module, '_factory_unit', side_effect=bound_factory_unit), \
                  patch.object(verification_module, 'command_exists', side_effect=lambda name: name == 'coverage'), \
                  patch.dict(os.environ, {}, clear=False):
                 # The fake dispatcher models a local runner, not the outer CI sandbox.
@@ -2673,7 +2907,7 @@ class DoctorTests(unittest.TestCase):
 
     def test_unmanaged_agent_does_not_break_harness_doctor(self) -> None:
         with project_copy() as root:
-            custom = root / '.grok/agents/custom-user-agent.toml'
+            custom = root / '.getzilla/agents/custom-user-agent.toml'
             custom.write_text('this is not adaptive grok managed config', encoding='utf-8')
             items = run_doctor(root)
             failures = [item for item in items if item.status == 'fail']
@@ -2707,6 +2941,106 @@ class WorkflowArtifactsVerificationTests(unittest.TestCase):
             self.assertEqual(result.status, "fail")
             self.assertEqual(metadata["status"], "fail")
             self.assertEqual(before, after)
+
+class Low336ScannerOwnershipTests(unittest.TestCase):
+    def test_full_and_minimal_copies_own_both_selectors_and_restore_outer_values(self):
+        ambient = {'GETZILLA_OSV_DB': '/public-fixture-ambient', 'GETZILLA_OSV_ONLINE': '1'}
+        for minimal in (False, True):
+            with self.subTest(minimal=minimal), patch.dict(os.environ, ambient):
+                with full_project_copy(minimal_runtime=minimal) as root:
+                    for key in ambient:
+                        self.assertNotIn(key, os.environ)
+                    runtime = root / '.getzilla/getzilla/verification.py'
+                    rules = root / '.getzilla/sast/rules'
+                    self.assertEqual(runtime.is_file(), not minimal)
+                    self.assertEqual(rules.is_dir(), not minimal)
+                    if not minimal:
+                        self.assertEqual(runtime.read_bytes(), (ROOT / '.getzilla/getzilla/verification.py').read_bytes())
+                    os.environ.update({key: 'owned-inner-value' for key in ambient})
+                self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)
+
+    def test_nested_normal_and_exceptional_exits_restore_the_immediate_environment(self):
+        from tests._support import _scanner_environment
+
+        keys = ('GETZILLA_OSV_DB', 'GETZILLA_OSV_ONLINE')
+        for present in (False, True):
+            for outer_minimal in (False, True):
+                for inner_minimal in (False, True):
+                    with self.subTest(present=present, outer=outer_minimal, inner=inner_minimal):
+                        with patch.dict(os.environ):
+                            for key in keys:
+                                os.environ.pop(key, None)
+                            original = {key: 'owned-outer-value' for key in keys} if present else {}
+                            os.environ.update(original)
+                            with self.assertRaisesRegex(RuntimeError, 'owned exceptional exit'):
+                                with _scanner_environment(outer_minimal):
+                                    self.assertTrue(all(key not in os.environ for key in keys))
+                                    inner_values = {key: 'owned-middle-value' for key in keys}
+                                    os.environ.update(inner_values)
+                                    with self.assertRaisesRegex(RuntimeError, 'owned inner exit'):
+                                        with _scanner_environment(inner_minimal):
+                                            self.assertTrue(all(key not in os.environ for key in keys))
+                                            os.environ.update({key: 'owned-deep-value' for key in keys})
+                                            raise RuntimeError('owned inner exit')
+                                    self.assertEqual({key: os.environ.get(key) for key in keys}, inner_values)
+                                    with _scanner_environment(inner_minimal):
+                                        self.assertTrue(all(key not in os.environ for key in keys))
+                                        os.environ.update({key: 'owned-normal-inner' for key in keys})
+                                    self.assertEqual({key: os.environ.get(key) for key in keys}, inner_values)
+                                    raise RuntimeError('owned exceptional exit')
+                            self.assertEqual({key: os.environ[key] for key in keys if key in os.environ}, original)
+
+    def test_default_scan_cannot_borrow_ambient_but_inner_owned_sources_work(self):
+        import zipfile
+        from getzilla import known_vulns
+
+        for minimal in (False, True):
+            with self.subTest(minimal=minimal), tempfile.TemporaryDirectory() as directory:
+                ambient_mirror = Path(directory) / 'ambient'
+                (ambient_mirror / 'PyPI').mkdir(parents=True)
+                with zipfile.ZipFile(ambient_mirror / 'PyPI/all.zip', 'w'):
+                    pass
+                ambient = {'GETZILLA_OSV_DB': str(ambient_mirror), 'GETZILLA_OSV_ONLINE': '1'}
+                with patch.dict(os.environ, ambient):
+                    with full_project_copy(minimal_runtime=minimal) as root:
+                        (root / 'requirements.txt').write_text('owned-fixture==1.0\n', encoding='utf-8')
+                        with patch.object(known_vulns, '_tracked_files', return_value=['requirements.txt']), \
+                                patch.object(known_vulns, 'query_offline', wraps=known_vulns.query_offline) as offline, \
+                                patch.object(known_vulns, 'query_online', wraps=known_vulns.query_online) as online:
+                            def forbidden_fetch(_url, _body):
+                                self.fail('default synthetic scan attempted online access')
+
+                            report = known_vulns.scan(root, fetch=forbidden_fetch)
+                            self.assertEqual((report['status'], report['dependencies']), ('skip', 1))
+                            offline.assert_not_called()
+                            online.assert_not_called()
+                            owned_mirror = root / 'owned-mirror'
+                            (owned_mirror / 'PyPI').mkdir(parents=True)
+                            record = {'id': 'OWNED-2026-1', 'aliases': [], 'affected': [{
+                                'package': {'ecosystem': 'PyPI', 'name': 'owned-fixture'}, 'versions': ['1.0']}]}
+                            with zipfile.ZipFile(owned_mirror / 'PyPI/all.zip', 'w') as archive:
+                                archive.writestr('OWNED-2026-1.json', json.dumps(record))
+                            os.environ['GETZILLA_OSV_DB'] = str(owned_mirror)
+                            report = known_vulns.scan(root, fetch=forbidden_fetch)
+                            self.assertEqual(report['status'], 'fail')
+                            self.assertEqual([item['id'] for item in report['findings']], ['OWNED-2026-1'])
+                            offline.assert_called_once()
+                            self.assertEqual(offline.call_args.args[1], owned_mirror)
+                            online.assert_not_called()
+                            os.environ.pop('GETZILLA_OSV_DB')
+                            os.environ['GETZILLA_OSV_ONLINE'] = '1'
+                            requests = []
+
+                            def fetch(_url, body):
+                                requests.append(json.loads(body))
+                                return json.dumps({'results': [{}]}).encode('utf-8')
+
+                            self.assertEqual(known_vulns.scan(root, fetch=fetch)['status'], 'pass')
+                            online.assert_called_once()
+                            self.assertEqual(len(requests), 1)
+                            self.assertEqual(requests[0]['queries'][0]['package']['name'], 'owned-fixture')
+                    self.assertEqual({key: os.environ.get(key) for key in ambient}, ambient)
+
 
 if __name__ == '__main__':
     unittest.main()

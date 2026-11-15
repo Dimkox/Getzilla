@@ -27,6 +27,105 @@ def cli(*args: str, env: dict | None = None) -> tuple[int, dict]:
     return proc.returncode, json.loads(proc.stdout.decode('utf-8'))
 
 
+def assert_no_adoption_refusal(case: unittest.TestCase, code: int, record: object) -> None:
+    if type(code) is int and code == 0:
+        return
+    category = 'UNKNOWN'
+    if type(record) is dict:
+        reason = record.get('reason_code')
+        if type(reason) is str and reason in {
+            'INVALID_ARGUMENTS', 'QUIESCENCE_REQUIRED', 'PLAN_DIGEST_MISMATCH', 'BLOCKED_SECURITY',
+            'BLOCKED_UNSAFE_SOURCE', 'BLOCKED_UNSUPPORTED_FS', 'GIT_PRESENT', 'STALE_PLAN',
+            'PLAN_NOT_READY', 'PLAN_TAMPERED', 'TARGET_CONFLICT', 'TARGET_EXISTS', 'OPERATION_LOCKED',
+            'UNKNOWN_OPERATION', 'PUBLISHED', 'VERIFICATION_FAILED', 'STORE_OBJECT_MODIFIED',
+            'STORE_OBJECT_MISSING', 'TOOL_ERROR', 'STATE_CORRUPT', 'ERROR',
+        }:
+            category = reason
+    # Each closed category has its own source location in sanitized failure reports.
+    case.assertNotEqual(category, 'INVALID_ARGUMENTS', 'adoption refusal: INVALID_ARGUMENTS')
+    case.assertNotEqual(category, 'QUIESCENCE_REQUIRED', 'adoption refusal: QUIESCENCE_REQUIRED')
+    case.assertNotEqual(category, 'PLAN_DIGEST_MISMATCH', 'adoption refusal: PLAN_DIGEST_MISMATCH')
+    case.assertNotEqual(category, 'BLOCKED_SECURITY', 'adoption refusal: BLOCKED_SECURITY')
+    case.assertNotEqual(category, 'BLOCKED_UNSAFE_SOURCE', 'adoption refusal: BLOCKED_UNSAFE_SOURCE')
+    case.assertNotEqual(category, 'BLOCKED_UNSUPPORTED_FS', 'adoption refusal: BLOCKED_UNSUPPORTED_FS')
+    case.assertNotEqual(category, 'GIT_PRESENT', 'adoption refusal: GIT_PRESENT')
+    case.assertNotEqual(category, 'STALE_PLAN', 'adoption refusal: STALE_PLAN')
+    case.assertNotEqual(category, 'PLAN_NOT_READY', 'adoption refusal: PLAN_NOT_READY')
+    case.assertNotEqual(category, 'PLAN_TAMPERED', 'adoption refusal: PLAN_TAMPERED')
+    case.assertNotEqual(category, 'TARGET_CONFLICT', 'adoption refusal: TARGET_CONFLICT')
+    case.assertNotEqual(category, 'TARGET_EXISTS', 'adoption refusal: TARGET_EXISTS')
+    case.assertNotEqual(category, 'OPERATION_LOCKED', 'adoption refusal: OPERATION_LOCKED')
+    case.assertNotEqual(category, 'UNKNOWN_OPERATION', 'adoption refusal: UNKNOWN_OPERATION')
+    case.assertNotEqual(category, 'PUBLISHED', 'adoption refusal: PUBLISHED')
+    case.assertNotEqual(category, 'VERIFICATION_FAILED', 'adoption refusal: VERIFICATION_FAILED')
+    case.assertNotEqual(category, 'STORE_OBJECT_MODIFIED', 'adoption refusal: STORE_OBJECT_MODIFIED')
+    case.assertNotEqual(category, 'STORE_OBJECT_MISSING', 'adoption refusal: STORE_OBJECT_MISSING')
+    case.assertNotEqual(category, 'TOOL_ERROR', 'adoption refusal: TOOL_ERROR')
+    case.assertNotEqual(category, 'STATE_CORRUPT', 'adoption refusal: STATE_CORRUPT')
+    case.assertNotEqual(category, 'ERROR', 'adoption refusal: ERROR')
+    case.assertNotEqual(category, 'UNKNOWN', 'adoption refusal: UNKNOWN')
+
+
+class ClosedAdoptionDiagnosticTests(unittest.TestCase):
+    """Pure dictionary/trace controls; no adoption fixture, CLI or payload is used."""
+
+    def refusal(self, code, record):
+        try:
+            assert_no_adoption_refusal(self, code, record)
+        except self.failureException as failure:
+            location = None
+            trace = failure.__traceback__
+            while trace is not None:
+                if trace.tb_frame.f_code.co_name == 'assert_no_adoption_refusal':
+                    location = trace.tb_lineno
+                trace = trace.tb_next
+            self.assertIsNotNone(location)
+            return str(failure), location
+        self.fail('nonzero adoption result has no closed diagnostic')
+
+    def test_success_never_inspects_private_record(self):
+        class Unreadable:
+            def __repr__(self):
+                raise AssertionError('private record was inspected')
+        assert_no_adoption_refusal(self, 0, Unreadable())
+        assert_no_adoption_refusal(self, 0, {'details': Unreadable()})
+
+    def test_tool_and_conflict_have_distinct_fixed_trace_lines(self):
+        tool, tool_line = self.refusal(8, {'reason_code': 'TOOL_ERROR', 'details': 'PRIVATE-CANARY'})
+        conflict, conflict_line = self.refusal(6, {'reason_code': 'TARGET_CONFLICT'})
+        self.assertIn('adoption refusal: TOOL_ERROR', tool)
+        self.assertIn('adoption refusal: TARGET_CONFLICT', conflict)
+        self.assertNotEqual(tool_line, conflict_line)
+        self.assertNotIn('PRIVATE-CANARY', tool)
+
+    def test_stale_and_integrity_have_distinct_fixed_trace_lines(self):
+        stale, stale_line = self.refusal(5, {'reason_code': 'STALE_PLAN'})
+        integrity, integrity_line = self.refusal(7, {'reason_code': 'VERIFICATION_FAILED'})
+        self.assertIn('adoption refusal: STALE_PLAN', stale)
+        self.assertIn('adoption refusal: VERIFICATION_FAILED', integrity)
+        self.assertNotEqual(stale_line, integrity_line)
+
+    def test_unknown_private_reason_and_details_are_never_disclosed(self):
+        class Unreadable:
+            def __repr__(self):
+                raise AssertionError('private details were inspected')
+        message, unknown_line = self.refusal(8, {'reason_code': 'PRIVATE-CANARY-REASON',
+                                               'details': Unreadable(), 'PRIVATE-CANARY-KEY': 'private'})
+        missing, missing_line = self.refusal(2, {})
+        self.assertIn('adoption refusal: UNKNOWN', message)
+        self.assertNotIn('PRIVATE', message)
+        self.assertNotIn('private', message)
+        self.assertEqual(unknown_line, missing_line)
+        self.assertIn('adoption refusal: UNKNOWN', missing)
+
+    def test_non_string_or_non_dictionary_reason_is_fixed_unknown(self):
+        for record in ({'reason_code': None}, {'reason_code': 7}, {'reason_code': {'private': 'value'}}, None):
+            with self.subTest():
+                message, _line = self.refusal(8, record)
+                self.assertIn('adoption refusal: UNKNOWN', message)
+                self.assertNotIn('private', message)
+
+
 class _Case(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory(prefix='zg-cli-')
@@ -111,6 +210,7 @@ class CliTests(_Case):
     def test_full_cli_round_trip(self) -> None:
         self.plan()
         code, record = self.apply(None, '--writers-stopped')
+        assert_no_adoption_refusal(self, code, record)
         self.assertEqual(code, 0, record)
         self.assertEqual(record['details']['integrity_status'], 'verified')
         self.assertTrue((self.target / '.git').is_dir())

@@ -283,7 +283,13 @@ class ManifestTests(unittest.TestCase):
     def test_disposition_helper_ships_without_target_review_policy(self) -> None:
         rels = {path.relative_to(ROOT).as_posix() for path in included_files(ROOT)}
         self.assertIn('.getzilla/getzilla/verification_dispositions.py', rels)
-        self.assertNotIn('engineering/verification-dispositions.json', rels)
+        self.assertIn('engineering/verification-dispositions.json', rels)
+        policy = json.loads((ROOT / 'engineering/verification-dispositions.json').read_bytes())
+        self.assertTrue(policy['dispositions'])
+        self.assertEqual({x['kind'] for x in policy['dispositions']}, {'immutable-vendored-whitespace'})
+        self.assertTrue(all(x['path'].startswith('.getzilla/templates/baseline/blobs/')
+                            and x['catalog']['path'] == '.getzilla/config/vendored-source-catalog.json'
+                            for x in policy['dispositions']))
 
 
 class PackageHostTests(unittest.TestCase):

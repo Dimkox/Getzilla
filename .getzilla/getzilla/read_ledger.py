@@ -82,7 +82,7 @@ def _relative(root: Path, raw: str, cwd: Path) -> str | None:
 def _entries(path: Path) -> list[str] | None:
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         return None
     entries = data.get('seen') if isinstance(data, dict) else None
     return [item for item in entries if isinstance(item, str)] if isinstance(entries, list) else None
@@ -92,9 +92,10 @@ def seen(root: Path, session: str) -> set[str] | None:
     """Files this session saw; None when the session keeps no ledger yet."""
     root = _ledger_root(root)
     path = _ledger(root, session)
-    if path is None or not path.is_file():
+    try:
+        entries = _entries(path) if path is not None and path.is_file() else None
+    except OSError:
         return None
-    entries = _entries(path)
     return set(entries) if entries is not None else None
 
 
@@ -123,6 +124,7 @@ def record(root: Path, session: str, paths: set[str]) -> None:
     try:
         with runtime_lock(root, 'reads'):
             new_session = not path.is_file()
+            # A read I/O error leaves the old snapshot intact and declines this update.
             current = _entries(path) or []
             fresh = sorted(paths)
             merged = [item for item in current if item not in paths] + fresh

@@ -75,6 +75,32 @@ def _branch() -> str:
 
 
 class InstallScriptContractTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == 'win32' or shutil.which('bash') is None,
+                     'public shell configuration boundary needs POSIX bash; PowerShell has separate controls')
+    def test_configure_agent_is_one_local_configuration_child_without_model_execution(self):
+        # This is the cost contract's existing one-shot boundary, not a model
+        # call budget or authority to execute a configured coding agent.
+        text = SHELL.read_text(encoding='utf-8')
+        function = re.search(r'^configure_agent\(\) \{.*?^\}', text, re.M | re.S)
+        self.assertIsNotNone(function)
+        self.assertEqual(len(re.findall(r'^\s*configure_agent\b', text, re.M)), 2)
+        self.assertNotRegex(function.group(), r'(?m)^\s*(?:for|while|until)\b')
+        with tempfile.TemporaryDirectory(prefix='public-configure-boundary-') as temporary:
+            root = Path(temporary)
+            capture = root / 'public-argv.txt'
+            child = root / 'public-python'
+            child.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$PUBLIC_CAPTURE"\n', encoding='utf-8', newline='\n')
+            child.chmod(0o700)
+            # No ambient environment or key reaches this inert public child.
+            env = {'PATH': os.defpath, 'HOME': str(root), 'PUBLIC_CAPTURE': str(capture)}
+            command = ('say() { :; }; can_ask() { return 1; };\n' + function.group() +
+                       '\nconfigure_agent "$1" "$2" qwen openrouter\n')
+            result = subprocess.run(['bash', '-eu', '-c', command, 'public-boundary', str(root), str(child)],
+                                    env=env, capture_output=True, text=True, encoding='utf-8', timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(capture.read_text(encoding='utf-8').splitlines(),
+                             ['scripts/getzilla_setup_agent.py', '--agent', 'qwen', '--provider', 'openrouter'])
+
     def test_documented_install_checks_sha256_of_the_pinned_installer_before_running_it(self) -> None:
         # Issue #63: the documented install path must not pipe an unverified download into a shell.
         # Install commands use the observed immutable publication, which can precede the source candidate.
@@ -383,7 +409,10 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         self.fake_bin = self.tmp / 'bin'
         self.fake_bin.mkdir()
         # The pinned uv, so the installer does not reach PyPI; Spec Kit's `uv tool install` succeeds.
-        (self.fake_bin / 'uv').write_text('#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\nexit 0\n')
+        (self.fake_bin / 'uv').write_text(
+            '#!/bin/sh\n[ "$1" = "--version" ] && echo "uv 0.11.12" && exit 0\n'
+            'if [ "$1" = "tool" ] && [ "$2" = "dir" ] && [ "$3" = "--bin" ]; then dirname "$0"; fi\n'
+            'exit 0\n')
         (self.fake_bin / 'uv').chmod(0o755)
         self._offline: dict[str, str] = {}
 

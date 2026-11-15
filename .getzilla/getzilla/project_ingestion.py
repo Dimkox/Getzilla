@@ -58,10 +58,11 @@ def _env() -> dict[str, str]:
     return env
 
 
-def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+def _git(root: Path, *args: str, check: bool = True, _pass_fds=()) -> subprocess.CompletedProcess[bytes]:
     command = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false',
                '-c', 'protocol.allow=never', '-C', str(root), *args]
-    result = subprocess.run(command, capture_output=True, check=False, env=_env())
+    options = {'pass_fds': _pass_fds} if _pass_fds else {}
+    result = subprocess.run(command, capture_output=True, check=False, env=_env(), **options)
     if check and result.returncode != 0:
         raise IngestionError('GIT_READ_FAILED', result.stderr.decode('utf-8', 'replace').strip()[:200])
     return result

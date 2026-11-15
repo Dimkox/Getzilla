@@ -15,7 +15,7 @@ from jsonschema import Draft202012Validator
 
 from getzilla_factory.landing_observation import FALLBACK_CATEGORIES, LandingProviderObservation
 from getzilla_factory.landing_contracts import LandingInputV1, LandingProviderEvidenceV2, landing_digest
-from getzilla_factory.landing_failover_contracts import validate_receipt
+from getzilla_factory.landing_failover_contracts import backend_capability, validate_receipt
 from getzilla_factory.landing_service import LandingJobRecord
 from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
 from factory.tests.test_landing_contracts import provider_facts
@@ -28,6 +28,26 @@ from getzilla_factory.landing_service import InMemoryLandingJobStore, LandingApp
 from getzilla_factory.models import Actor
 from getzilla_factory.landing_renderer import TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE
 from factory.tests.test_landing_normalizer import draft
+
+
+class BackendContractVersionTests(unittest.TestCase):
+    def test_current_successor_is_sealed_v3_and_legacy_profiles_stay_frozen(self):
+        profile = HttpLandingProfile.for_provider("qwen-intl", available=True)
+        document = backend_capability(profile, "public-actor", TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE)
+        self.assertEqual(document['schema_version'], 3)
+        self.assertEqual(document['digest'], landing_digest('landing-backend-v3',
+                         {key: value for key, value in document.items() if key != 'digest'}))
+        directory = Path(__file__).parents[1] / 'contracts'
+        old = json.loads((directory / 'jsonschema/landing-backend-capability.v2.schema.json').read_bytes())
+        current = json.loads((directory / 'jsonschema/landing-backend-capability.v3.schema.json').read_bytes())
+        self.assertEqual(old['properties']['schema_version']['const'], 2)
+        self.assertEqual(current['properties']['schema_version']['const'], 3)
+        self.assertEqual({item['profile_id'] for item in old['properties']['profile']['enum']},
+                         {item['profile_id'] for item in current['properties']['profile']['enum']})
+        self.assertEqual(len(current['properties']['profile']['enum']), 9)
+        self.assertEqual({item['pdf_decoder_digest'] for item in old['properties']['profile']['enum']},
+                         {'469ae9fae00ac602384e3ad8cabb91dc668659edc404b83afaff5dd65e191dec'})
+        Draft202012Validator(current).validate(document)
 
 
 class BackendObservationTests(unittest.TestCase):
@@ -54,22 +74,24 @@ class BackendObservationTests(unittest.TestCase):
             app = create_app(None, auth, landing_service=service, landing_only=True, execution_enabled=False)
             with TestClient(app) as client:
                 headers = {"Authorization": "Bearer " + token, "X-Correlation-ID": "cap-test", "X-Repository-ID": TARGET_REPOSITORY_ID}
-                capability = client.get("/v3/landing-backend", headers=headers)
+                capability = client.get("/v4/landing-backend", headers=headers)
                 self.assertEqual(200, capability.status_code)
                 document = capability.json()
-                self.assertEqual(2, document['schema_version'])
+                self.assertEqual(3, document['schema_version'])
                 self.assertEqual(profile.profile_digest, document["profile_digest"])
-                self.assertEqual(landing_digest('landing-backend-v2',
+                self.assertEqual(landing_digest('landing-backend-v3',
                                                {key: value for key, value in document.items() if key != 'digest'}),
                                  document['digest'])
                 schema = json.loads((Path(__file__).parents[1] /
-                                     'contracts/jsonschema/landing-backend-capability.v2.schema.json').read_text(encoding='utf-8'))
+                                     'contracts/jsonschema/landing-backend-capability.v3.schema.json').read_text(encoding='utf-8'))
                 Draft202012Validator(schema).validate(document)
-                legacy = client.get('/v2/landing-backend', headers=headers)
-                self.assertEqual(409, legacy.status_code)
-                self.assertNotIn('profile', legacy.json())
-                self.assertEqual('cap-test', legacy.headers['X-Correlation-ID'])
-                for route in ('/v2/landing-backend', '/v3/landing-backend'):
+                for legacy_route in ('/v2/landing-backend', '/v3/landing-backend'):
+                    legacy = client.get(legacy_route, headers=headers)
+                    self.assertEqual(409, legacy.status_code)
+                    self.assertNotIn('profile', legacy.json())
+                    self.assertEqual('cap-test', legacy.headers['X-Correlation-ID'])
+                    self.assertEqual([], calls, 'legacy capability discovery must not execute the provider')
+                for route in ('/v2/landing-backend', '/v3/landing-backend', '/v4/landing-backend'):
                     self.assertEqual(401, client.get(route, headers={**headers, 'Authorization': 'Bearer bad'}).status_code)
                     self.assertEqual(403, client.get(route, headers={**headers, 'X-Repository-ID': 'other-repository'}).status_code)
                     for limited_token in (read_token, submit_token):

@@ -4,7 +4,7 @@ globs: **/*.tsx,**/*.jsx,**/*.vue,**/*.html,**/*.css,**/*.scss
 alwaysApply: false
 ---
 
-<!-- Generated from .grok/cursor-rules/60-frontend.toml by scripts/getzilla_harness.py --write; do not edit. -->
+<!-- Generated from .getzilla/cursor-rules/60-frontend.toml by scripts/getzilla_harness.py --write; do not edit. -->
 
 # Frontend changes
 

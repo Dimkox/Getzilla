@@ -69,6 +69,49 @@ def which_all(name: str) -> str:
 
 
 class InstallerScriptTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX installer shell control')
+    def test_observed_uv_tool_bin_is_inherited_before_project_baseline(self):
+        text = (ROOT/'scripts/install.sh').read_text()
+        start = text.index('install_workflow_baseline() {')
+        function = text[start:text.index('\n}\n', start)+3]
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            home = folder/'installation'
+            venv = home/'.venv/bin'
+            venv.mkdir(parents=True)
+            tools = folder/'observed tool bin'
+            tools.mkdir()
+            for name, content in {
+                    'uv': '#!/bin/sh\nif [ "$1" = --version ]; then echo "uv 0.11.12"; else printf "%s\\n" "$FIXTURE_UV_BIN"; fi\n',
+                    'python': '#!/bin/sh\nexit 0\n'}.items():
+                path = venv/name
+                path.write_text(content)
+                path.chmod(0o755)
+            specify = tools/'specify'
+            specify.write_text('#!/bin/sh\necho observed-tool-bin-control\n')
+            specify.chmod(0o755)
+            driver = folder/'probe.sh'
+            driver.write_text('set -eu\nensure_node() { :; }\nnode_ok() { return 0; }\n'
+                              'have() { command -v "$1" >/dev/null; }\nsay() { :; }\nfail() { exit 21; }\n'
+                              + function + '\ninstall_workflow_baseline "$1" "$1/.venv/bin/python"\nspecify --version\n')
+            result = subprocess.run(['bash', str(driver), str(home)], capture_output=True, text=True, timeout=10,
+                    env={**os.environ, 'PATH': str(venv)+':/usr/bin:/bin', 'FIXTURE_UV_BIN': str(tools)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('observed-tool-bin-control', result.stdout)
+            unsafe_bin = folder/'unsafe:bin'
+            unsafe_bin.mkdir()
+            for value in ('', 'relative-bin', str(folder/'missing-bin'), str(unsafe_bin)):
+                with self.subTest(tool_bin=value):
+                    refused = subprocess.run(['bash', str(driver), str(home)], capture_output=True, text=True, timeout=10,
+                        env={**os.environ, 'PATH': str(venv)+':/usr/bin:/bin', 'FIXTURE_UV_BIN': value})
+                    self.assertEqual(refused.returncode, 21)
+
+    def test_missing_tool_is_a_structured_failed_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = baseline.default_runner([str(Path(directory)/'absent-specify'), '--version'], None)
+        self.assertEqual(result.returncode, 127)
+        self.assertIn('not found', result.stderr)
+
     def test_no_option_to_skip_and_failures_stop_the_install(self) -> None:
         shell = (ROOT / 'scripts' / 'install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts' / 'install.ps1').read_text(encoding='utf-8')
@@ -96,8 +139,8 @@ class InstallUserTests(unittest.TestCase):
         clones = [command for command in tools.commands if 'clone' in command]
         self.assertEqual({command[command.index('--branch') + 1] for command in clones},
                          {item['upstream_tag'] for item in baseline.components().values()})
-        uv = next(command for command in tools.commands if command[1:3] == ['tool', 'install'])
-        self.assertTrue(uv[-1].endswith('spec-kit.git@' + baseline.components()['spec-kit']['upstream_tag']))
+        self.assertFalse([command for command in tools.commands if command[1:3] == ['tool', 'install']])
+        self.assertEqual(next(step for step in steps if step.component == 'baseline:spec-kit-assets').status, 'ok')
         again = FakeTools()
         again.heads = tools.heads
         baseline.install_user(self.home, run=again, which=which_all)
@@ -111,10 +154,10 @@ class InstallUserTests(unittest.TestCase):
         self.assertIn('PINNED_COMMIT_MISMATCH', steps['baseline:bmad'].detail)
         self.assertFalse((baseline.pinned_checkout(self.home) / 'bmad').exists())
 
-    def test_missing_prerequisites_fail(self) -> None:
+    def test_generated_assets_do_not_require_ambient_installers(self) -> None:
         steps = {step.component: step for step in baseline.install_user(self.home, run=FakeTools(), which=lambda name: None)}
-        self.assertEqual(steps['baseline:specify-cli'].status, 'fail')
-        self.assertEqual(steps['baseline:node'].status, 'fail')
+        self.assertEqual(steps['baseline:spec-kit-assets'].status, 'ok')
+        self.assertEqual(steps['baseline:bmad-assets'].status, 'ok')
 
 
 class ApplyProjectTests(unittest.TestCase):
@@ -141,14 +184,9 @@ class ApplyProjectTests(unittest.TestCase):
         self.assertTrue((self.project / '_bmad' / 'core' / 'config.yaml').is_file())
         self.assertTrue((self.project / '.specify' / 'memory' / 'constitution.md').is_file())
         self.assertEqual((self.project / 'README.md').read_text(encoding='utf-8'), 'my project\n')
-        self.assertIn('existing files kept', steps['project:bmad'].detail)
+        self.assertIn('bound asset files added', steps['project:bmad'].detail)
         self.assertFalse((self.project / '.git').exists())
-        npx = next(command for command in self.tools.commands if command[:1] == ['npx'])
-        self.assertIn('bmad-method@' + baseline.components()['bmad']['pinned'], npx)
-        self.assertEqual(npx[npx.index('--tools') + 1], 'claude-code')
-        specify = next(command for command in self.tools.commands if command[:2] == ['specify', 'init'])
-        self.assertEqual(specify[specify.index('--integration') + 1], 'claude')
-        self.assertIn('--non-interactive', specify)
+        self.assertFalse([command for command in self.tools.commands if command[0] in ('npx', 'specify')])
 
     def test_existing_tool_folders_are_left_alone(self) -> None:
         (self.project / '_bmad').mkdir()
@@ -158,9 +196,12 @@ class ApplyProjectTests(unittest.TestCase):
         self.assertIn('left as it is', steps['project:spec-kit'].detail)
         self.assertTrue((self.project / '.qwen' / 'skills' / 'writing-plans' / 'SKILL.md').is_file())
 
-    def test_installer_failure_and_unknown_agent_fail(self) -> None:
-        steps = self.apply('codex', FakeTools(fail='npx'))
-        self.assertEqual(steps['project:bmad'].status, 'fail')
+    def test_unavailable_ambient_installer_is_not_called_and_unknown_agent_fails(self) -> None:
+        tools = FakeTools(fail='npx')
+        tools.heads = self.tools.heads
+        steps = self.apply('codex', tools)
+        self.assertTrue(all(step.status == 'ok' for step in steps.values()))
+        self.assertFalse([command for command in tools.commands if command[0] in ('npx', 'specify')])
         self.assertEqual(baseline.apply_project(self.project, 'notepad', self.home, run=self.tools)[0].status, 'fail')
 
     def test_inspect_reports_missing_then_complete(self) -> None:

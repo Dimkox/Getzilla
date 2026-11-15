@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .known_vulns import Dependency, VulnerabilityError, load_config, query_offline
+from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
 from .security_data import SecurityDataError, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
 from .security_inventory import canonical_digest, collect_inventory

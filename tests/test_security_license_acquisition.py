@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import http.client
 import io
 import json
 import tempfile
@@ -151,7 +150,8 @@ class NetworkBoundaryTests(unittest.TestCase):
                 else:
                     self.assertEqual(acquisition.bounded_default('https://pypi.org/pypi/example/1.0.0/json', maximum=10), expected)
         opener.open.return_value = Response(b'')
-        opener.open.return_value.read1 = mock.Mock(side_effect=http.client.IncompleteRead(b'partial'))
+        # Use the producer's identical exception type; this fixture opens no transport.
+        opener.open.return_value.read1 = mock.Mock(side_effect=acquisition.http.client.IncompleteRead(b'partial'))
         with mock.patch('urllib.request.build_opener', return_value=opener), self.assertRaises(ArtifactError):
             acquisition.bounded_default('https://pypi.org/pypi/example/1.0.0/json', maximum=10)
 

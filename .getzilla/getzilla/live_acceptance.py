@@ -39,8 +39,15 @@ def validate_components(output, cell):
             suite, restart = read("factory-suite.json"), read("factory-restart.json")
             skipped = {row["id"] for row in suite.get("skipped", [])}
             executed = suite.get("executed", [])
-            return (suite.get("status") == "pass" and suite.get("tests_run", 0) > 0
-                    and suite.get("tests_run") == len(executed) and suite.get("failures") == 0 and suite.get("errors") == 0
+            # RecordedResult counts every started test, but never credits skips as execution.
+            started = suite.get("started", executed)
+            accounting = (isinstance(started, list) and isinstance(executed, list)
+                          and all(isinstance(item, str) for item in started + executed)
+                          and len(started) == len(set(started)) and len(executed) == len(set(executed))
+                          and len(skipped) == len(suite.get("skipped", []))
+                          and skipped <= set(started) and set(executed) == set(started) - skipped)
+            return (accounting and suite.get("status") == "pass" and suite.get("tests_run", 0) > 0
+                    and suite.get("tests_run") == len(started) and suite.get("failures") == 0 and suite.get("errors") == 0
                     and any("FreshClusterArtifactAttestorMigrationTests." in item and item not in skipped for item in executed)
                     and any("test_postgres_integration." in item and item not in skipped for item in executed)
                     and not any("DATABASE_URL" in row["reason"] for row in suite.get("skipped", []))

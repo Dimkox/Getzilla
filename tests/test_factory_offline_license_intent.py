@@ -29,18 +29,47 @@ class FactoryLicenseScopeTests(unittest.TestCase):
                         'https://github.com/Dimkox/Getzilla.git'], check=True)
         self.policy = licenses.load_policy(self.root)
 
-    def test_actual_validated_profile_has_exact_intent_not_delivery(self):
+    def synthetic_profile(self):
+        """An explicit private fixture decision, never a reanchor of main's policy."""
+        lock = self.root / PATHS[0]
+        lock.write_bytes(b'synthetic exact lock input; not an executable resolver\n')
+        builder = self.root / PATHS[1]
+        builder.write_bytes(b'synthetic builder input; never executed\n')
+        record = {'schema_version': 'factory-runtime-wheels/v1',
+                  'profile': 'ubuntu-24.04-x86_64-cpython312',
+                  'lock_sha256': hashlib.sha256(lock.read_bytes()).hexdigest(),
+                  'wheels': [{'name': 'fixture', 'version': '1.0.0',
+                              'filename': 'fixture-1.0.0-py3-none-any.whl', 'sha256': '1' * 64}]}
+        inventory = self.root / PATHS[2]
+        inventory.write_text(json.dumps(record))
+        policy = json.loads((self.root / PATHS[3]).read_bytes())
+        for field, path in (('lock_sha256', lock), ('builder_sha256', builder),
+                            ('wheel_inventory_sha256', inventory)):
+            policy['factory_offline_profile'][field] = hashlib.sha256(path.read_bytes()).hexdigest()
+        (self.root / PATHS[3]).write_text(json.dumps(policy))
+        self.policy = licenses.load_policy(self.root)
+
+    def test_changed_synthetic_profile_is_not_silently_reanchored(self):
+        self.synthetic_profile()
+        lock = self.root / PATHS[0]
+        lock.write_bytes(lock.read_bytes() + b' ')
+        info = licenses.factory_offline_intent(self.root, self.policy)
+        self.assertEqual(info['code'], 'license-factory-profile-changed')
+        self.assertEqual(info['components'], [])
+
+    def test_synthetic_exact_profile_has_intent_but_never_delivery_acceptance(self):
+        self.synthetic_profile()
         info = licenses.factory_offline_intent(self.root, self.policy)
         source = json.loads((self.root / PATHS[2]).read_bytes())
         self.assertEqual(info['components'], source['wheels'])
-        self.assertEqual(len(info['components']), 20)
+        self.assertEqual(len(info['components']), 1)
         self.assertEqual(source['lock_sha256'], hashlib.sha256((self.root / PATHS[0]).read_bytes()).hexdigest())
-        names = {x['name'] for x in info['components']}
-        self.assertFalse({'attrs','jsonschema','jsonschema-specifications','referencing','rpds-py','tzdata'} & names)
+        self.assertEqual({x['name'] for x in info['components']}, {'fixture'})
         self.assertEqual(info['code'], 'license-factory-archive-delivery-unverified')
         self.assertEqual(info['distribution'], 'redistributed')
 
     def test_each_changed_input_and_foreign_project_refuse_the_selected_profile(self):
+        self.synthetic_profile()
         for name in PATHS[:3]:
             with self.subTest(name=name):
                 path = self.root / name
@@ -56,6 +85,7 @@ class FactoryLicenseScopeTests(unittest.TestCase):
                          'license-factory-project-mismatch')
 
     def test_output_declaration_does_not_mutate_flat_catalog_or_acceptance(self):
+        self.synthetic_profile()
         info = licenses.factory_offline_intent(self.root, self.policy)
         for outcome, status in [('pass','pass'), ('blocked','fail')]:
             with self.subTest(outcome=outcome):
@@ -72,7 +102,10 @@ class FactoryLicenseScopeTests(unittest.TestCase):
                 self.assertEqual(check['details'][0]['factory_offline_use']['assurance'],'declared-output-scope-only')
                 self.assertEqual(check['details'][0]['factory_offline_use']['final_archive_evidence'],'not_evaluated')
 
-    def test_actual_incomplete_gate_reports_known_scope_and_remains_blocked(self):
+    def test_actual_incomplete_gate_reports_profile_gap_and_remains_blocked(self):
+        self.synthetic_profile()
+        lock = self.root / PATHS[0]
+        lock.write_bytes(lock.read_bytes() + b' ')
         inv = {'complete': False, 'digest':'a'*64,'gaps':[{'code':'unresolved-image'}],
                'dependencies':[], 'images':[], 'tools':[], 'files':[], 'manifests':[], 'excluded_fixture_paths':[]}
         result = expanded_security.run_checks(self.root, inventory=inv)
@@ -82,6 +115,6 @@ class FactoryLicenseScopeTests(unittest.TestCase):
         gaps = check['details'][0]['gaps']
         self.assertIn({'code':'unresolved-image'}, gaps)
         output = check['details'][0]['factory_offline_use']
-        self.assertEqual(output['code'],'license-factory-archive-delivery-unverified')
+        self.assertEqual(output['code'],'license-factory-profile-changed')
         self.assertEqual(output['assurance'],'declared-output-scope-only')
-        self.assertEqual(len(output['components']),20)
+        self.assertEqual(output['components'], [])

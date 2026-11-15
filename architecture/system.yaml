@@ -435,6 +435,14 @@
     },
     {
       "compatibility": "bidirectional",
+      "id": "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/landing-backend-capability.v3.schema.json",
+      "role": "bidirectional",
+      "version": "3"
+    },
+    {
+      "compatibility": "bidirectional",
       "id": "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
       "kind": "json_schema",
       "path": "factory/contracts/jsonschema/landing-attempt-status.v1.schema.json",
@@ -488,6 +496,14 @@
       "path": "factory/contracts/openapi/landing-failover.v2.json",
       "role": "bidirectional",
       "version": "2"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3",
+      "kind": "openapi",
+      "path": "factory/contracts/openapi/landing-failover.v3.json",
+      "role": "bidirectional",
+      "version": "3"
     },
     {
       "compatibility": "bidirectional",
@@ -1973,6 +1989,215 @@
     },
     {
       "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-LOCAL-CI-GATE",
+      "id": "EDGE-LOCAL-CI-GITHUB-VISIBILITY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-OSV-API",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-API",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-OSV-BUCKET",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OSV-ADVISORY-BUCKET",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-CISA",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CISA-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-EPSS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-EPSS-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-PYPI",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PYPI-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 15000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 15000
+      },
+      "from": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "id": "EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
         "DATA-PACKAGE-IDENTITY",
         "DATA-VULNERABILITY-ADVISORY",
         "DATA-REPOSITORY-SOURCE"
@@ -2262,7 +2487,8 @@
         "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
         "CONTRACT-FACTORY-SEMANTIC-OPENAPI",
         "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2"
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3"
       ],
       "repository_paths": [
         "factory/.env.example",
@@ -2483,10 +2709,16 @@
         ".claude",
         ".codex",
         ".gemini",
+        ".getzilla/agents",
+        ".getzilla/config",
+        ".getzilla/cursor-rules",
         ".getzilla/getzilla",
         ".getzilla/getzilla/component_state.py",
         ".getzilla/getzilla/model_data_admission.py",
+        ".getzilla/hooks",
         ".getzilla/managed-components.json",
+        ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
+        ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/templates",
         ".grok",
         ".qwen"
@@ -2496,6 +2728,24 @@
         "kind": "python_process",
         "lifecycle": "on_demand",
         "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LOCAL-CI-GATE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/ci_gate.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
@@ -2895,7 +3145,8 @@
         "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V2",
         "CONTRACT-FACTORY-LANDING-ATTEMPT-STATUS-V1",
         "CONTRACT-FACTORY-LANDING-FAILOVER-CONFIG-V1",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1"
+        "CONTRACT-FACTORY-LANDING-FAILOVER-RESULT-V1",
+        "CONTRACT-FACTORY-LANDING-BACKEND-CAPABILITY-V3"
       ],
       "repository_paths": [
         "factory/contracts/jsonschema/landing-attempt.v1.schema.json",
@@ -2931,7 +3182,8 @@
         "factory/contracts/jsonschema/landing-backend-capability.v2.schema.json",
         "factory/contracts/jsonschema/landing-attempt-status.v1.schema.json",
         "factory/contracts/jsonschema/landing-failover-config.v1.schema.json",
-        "factory/contracts/jsonschema/landing-failover-result.v1.schema.json"
+        "factory/contracts/jsonschema/landing-failover-result.v1.schema.json",
+        "factory/contracts/jsonschema/landing-backend-capability.v3.schema.json"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3389,6 +3641,108 @@
       "type": "external_system"
     },
     {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/security_acquisition.py",
+        ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_osv_snapshot.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-CISA-SECURITY-FEED",
+      "owner": "public CISA feed endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-EPSS-SECURITY-FEED",
+      "owner": "public EPSS feed endpoint",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-PYPI-REGISTRY",
+      "owner": "public PyPI registry and artifact endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "owner": "repository engineering; explicit optional fixture capture only",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/optional-modules/design-reference/0.2.0/preview.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "owner": "caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "external_system"
+    },
+    {
       "data_classification": "DATA-CHANGE-EVIDENCE",
       "id": "NODE-SECURITY-SNAPSHOT-EVALUATOR",
       "owner": "repository engineering",
@@ -3419,8 +3773,6 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        ".getzilla/getzilla/security_acquisition.py",
-        ".getzilla/getzilla/security_license_acquisition.py",
         ".getzilla/getzilla/security_cli.py",
         "scripts/getzilla_security.py"
       ],

@@ -24,8 +24,8 @@ from .manifest import ManifestError, _open_root
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES,
                                  allowed_download_url, archive_files, artifact_context, artifact_identity, package_key,
                                  package_metadata, pypi_index_url, read_file, safe_parts,
-                                 verify_origin)
-from .security_data import SecurityDataError, _clock, _json
+                                 verify_origin, family_evidence)
+from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
 
 MAX_BATCH_BYTES = 512 * 1024 * 1024
 MAX_PACKAGES = 512
@@ -94,6 +94,7 @@ def _write(root_descriptor: int, relative: str, payload: bytes, *, immutable=Fal
     descriptor = os.dup(root_descriptor)
     temporary = None
     file_descriptor = None
+    committed = False
     try:
         for part in parts[:-1]:
             try:
@@ -125,9 +126,12 @@ def _write(root_descriptor: int, relative: str, payload: bytes, *, immutable=Fal
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, parts[-1], src_dir_fd=descriptor, dst_dir_fd=descriptor)
+        committed = True
         temporary = None
         os.fsync(descriptor)
     except OSError as exc:
+        if committed:
+            raise ArtifactError('artifact-publication-uncertain', 'publication replaced its pointer but durability is uncertain; reconcile without automatic retry') from exc
         raise ArtifactError('artifact-path', 'cannot publish artifact evidence without following links') from exc
     finally:
         if file_descriptor is not None:
@@ -176,10 +180,11 @@ def _select(index: dict, dep: dict) -> dict:
 
 
 def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_digest: str,
-                 fetch=bounded_default, now: datetime | None = None) -> dict:
+                 fetch=bounded_default, now: datetime | None = None, families: list[dict] | None = None) -> dict:
     """Save fixed-origin artifacts and commit manifest last; no dependency resolution.
 
-    A network or verification failure leaves an existing manifest unchanged.
+    Failure before pointer replacement leaves an existing manifest unchanged.
+    A post-replacement durability error is explicitly uncertain, never retried.
     Unsupported ecosystems appear as explicit gaps. Only the selected inventory
     identity is bound here; independent runner qualification binds its authority.
     The producer requires POSIX directory-descriptor writes; pure readers also
@@ -199,6 +204,36 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             raise ArtifactError('artifact-platform', 'qualified POSIX producer required; this platform remains an acquisition gap')
         records, gaps, seen = [], [], set()
         total = 0
+        retained = []
+        try:
+            named = os.stat('manifest.json', dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            named = None
+        if named is not None:
+            previous = _json(read_file(destination, 'manifest.json', MAX_INDEX_BYTES))
+            if not isinstance(previous, dict) or not isinstance(previous.get('records'), list):
+                raise ArtifactError('artifact-manifest', 'prior artifact catalog is malformed')
+            retained = [record for record in previous['records'] if isinstance(record, dict) and 'kind' in record]
+            if retained and previous.get('inventory_digest') != inventory_digest:
+                raise ArtifactError('artifact-inventory-binding', 'cannot carry family evidence into another source inventory')
+        if families is not None and (not isinstance(families, list) or len(families) > MAX_PACKAGES
+                                     or not all(isinstance(record, dict) and 'kind' in record for record in families)):
+            raise ArtifactError('artifact-manifest', 'selected family records are malformed or unbounded')
+        for record in [*retained, *(families or [])]:
+            key = artifact_identity(record)
+            if key in seen:
+                if next(old for old in records if artifact_identity(old) == key) != record:
+                    raise ArtifactError('artifact-manifest', 'duplicate family identity has conflicting acquisition metadata')
+                continue
+            evidence = family_evidence(destination, record)
+            age = (current - _timestamp(record.get('acquired_at'))).total_seconds()
+            if not 0 <= age <= MAX_AGE_SECONDS:
+                raise ArtifactError('artifact-stale', 'retained family source age is unavailable, future or stale')
+            total += evidence['bound_bytes']
+            if total > MAX_BATCH_BYTES:
+                raise ArtifactError('artifact-size', 'selected catalog exceeds its aggregate byte budget')
+            seen.add(key)
+            records.append(record)
         for dep in dependencies:
             if dep.get('ecosystem') != 'PyPI':
                 gaps.append({'code': 'artifact-acquisition-ecosystem', 'ecosystem': dep.get('ecosystem'),
@@ -228,6 +263,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             index_digest = hashlib.sha256(index_bytes).hexdigest()
             record = {'ecosystem': 'PyPI', 'name': dep['name'], 'version': dep['version'], 'filename': filename,
                       'path': f'objects/{digest}', 'sha256': digest, 'context': context,
+                      'acquired_at': (current if now is not None else _clock(None)).isoformat(),
                       'origin': {'index_url': index_url, 'index_path': f'indexes/{index_digest}.json',
                                  'index_sha256': index_digest, 'artifact_url': selected['url']}}
             _write(descriptor, record['origin']['index_path'], index_bytes, immutable=True)
@@ -235,8 +271,9 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             _write(descriptor, record['path'], payload, immutable=True)
             if artifact_identity(record) not in {artifact_identity(old) for old in records}:
                 records.append(record)
+        acquired = min([current if now is not None else _clock(None), *(_timestamp(record['acquired_at']) for record in records)])
         bundle = {'schema_version': 1, 'inventory_digest': inventory_digest,
-                  'last_verified_sync_utc': (current if now is not None else _clock(None)).isoformat(),
+                  'last_verified_sync_utc': acquired.isoformat(),
                   'producer': 'getzilla-security-license-acquisition-v1', 'records': records, 'gaps': gaps,
                   'assurance': 'artifact-integrity-only'}
         body = json.dumps(bundle, sort_keys=True, separators=(',', ':')).encode()

@@ -1,0 +1,211 @@
+{
+  "agent": "gemini",
+  "argv": [
+    "/usr/bin/prlimit",
+    "--core=0",
+    "--as=2147483648",
+    "--cpu=20",
+    "--nproc=1024",
+    "--nofile=256",
+    "--fsize=16777216",
+    "--",
+    "/usr/bin/python3",
+    "-c",
+    "from specify_cli import main; main()",
+    "init",
+    "--here",
+    "--integration",
+    "gemini",
+    "--non-interactive",
+    "--ignore-agent-tools",
+    "--script",
+    "ps"
+  ],
+  "binding": {
+    "dependency_lock_sha256": "cc93d484da0a09a4134d212e7a4a33e8353a3f4223b13f6a4dd463414fed1fd0",
+    "source_archive_sha256": "15192dfc3770ac170e6b026f495ec157e42d31c96bd1cf9e19ebe5c68527bab4",
+    "source_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342"
+  },
+  "component": "spec-kit",
+  "files": [
+    {
+      "bytes": 11529,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.analyze.toml",
+      "sha256": "4b420b73a4a20b977df05ed7f23ae459da606a9ee52452d4f7184ec3d03eb27a"
+    },
+    {
+      "bytes": 22145,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.checklist.toml",
+      "sha256": "5fc9c0b795d20bd1685553e1d8c5bcd2cafec424011fbd6a9dcade9fba8922a4"
+    },
+    {
+      "bytes": 19201,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.clarify.toml",
+      "sha256": "00f8dc0d848d987d9ccf5b2bfa72b788d698b8b72ac42509b768c752c32b31cb"
+    },
+    {
+      "bytes": 10005,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.constitution.toml",
+      "sha256": "c220664c3546920b980ca88fea0a64428c71895d9d93ba76a70fb069ac396d15"
+    },
+    {
+      "bytes": 12949,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.converge.toml",
+      "sha256": "ea9c8695a394b2d7eb57c629c7591d1b5ff25137a783ef5c17957467dc142c6d"
+    },
+    {
+      "bytes": 12575,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.implement.toml",
+      "sha256": "f7f0bc8e6d10fe5de3c818e8a98578ff17e0bafcfc167699f212d586406d0345"
+    },
+    {
+      "bytes": 7741,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.plan.toml",
+      "sha256": "7204af64afa802f2443990cab11bc63bccc7c48cb7e0796ab71a7ed683b93cca"
+    },
+    {
+      "bytes": 18510,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.specify.toml",
+      "sha256": "317d4f4783a6b703f944d52ce2c795257eaffafe920d5636e1399b470bcc5e9c"
+    },
+    {
+      "bytes": 11080,
+      "mode": 420,
+      "path": ".gemini/commands/speckit.tasks.toml",
+      "sha256": "f3e8ffb6705e3f91e3b3508944471448b7edffb230cbaf496f5970bfc7639032"
+    },
+    {
+      "bytes": 586,
+      "mode": 420,
+      "path": ".specify/.gitignore",
+      "sha256": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
+    },
+    {
+      "bytes": 176,
+      "mode": 420,
+      "path": ".specify/init-options.json",
+      "sha256": "019205a0e3bf4ac1f396d9378c1b836170ceda173fb34ee3df594a2dea9aa2f6"
+    },
+    {
+      "bytes": 275,
+      "mode": 420,
+      "path": ".specify/integration.json",
+      "sha256": "6b85ceb30adeaed51093906baeb7c9467fc4ffd0ad6564fc115c09fb33032ae0"
+    },
+    {
+      "bytes": 1145,
+      "mode": 420,
+      "path": ".specify/integrations/gemini.manifest.json",
+      "sha256": "f0e703450fbfae33729631f5c868a5bb5b93b6941b9163ce2b54693c4aff116c"
+    },
+    {
+      "bytes": 1516,
+      "mode": 420,
+      "path": ".specify/integrations/speckit.manifest.json",
+      "sha256": "215a0cccea3720db01d571d7417766d871462b993a4a2acf25d18e3b669955a0"
+    },
+    {
+      "bytes": 103,
+      "mode": 420,
+      "path": ".specify/memory/.constitution-template.json",
+      "sha256": "8fc4b39294bae0c10d59547ad7d415b6f0e890d656cbf7171dd567f4e9054711"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/memory/constitution.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 7085,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/check-prerequisites.ps1",
+      "sha256": "1c01b9ca6e71f1044e799da30bde484866c896ae76fe8aa34f66facf5a3519ed"
+    },
+    {
+      "bytes": 35316,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/common.ps1",
+      "sha256": "c4816519ffb0b930427559b3ec729ef04a56162f4ef334958c8c50a3f92def9d"
+    },
+    {
+      "bytes": 14876,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/create-new-feature.ps1",
+      "sha256": "481c7368541a816b1679e5ed65fa9e5aea84b09f8be3a02ff8a340e3b48dd58a"
+    },
+    {
+      "bytes": 889,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/resolve-template.ps1",
+      "sha256": "e49c565a09902e4ebd4b5a51c4e014d5067fdee5b1592f15cb44ef31f430d745"
+    },
+    {
+      "bytes": 3062,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-plan.ps1",
+      "sha256": "5939ef98418e8dc8cc722ef53ba359fc814f3d2a9fd7620f04e8d145a7041f1a"
+    },
+    {
+      "bytes": 3977,
+      "mode": 420,
+      "path": ".specify/scripts/powershell/setup-tasks.ps1",
+      "sha256": "01f1898ee31a1ef6317e6e290e8bba2acdb49a61d43f017f3d879dad6bf46efd"
+    },
+    {
+      "bytes": 2033,
+      "mode": 420,
+      "path": ".specify/templates/checklist-template.md",
+      "sha256": "3f4124a13ffbc0c2d8e979d9a08248f29ce53cc6c324a8303a6ae0d231b78836"
+    },
+    {
+      "bytes": 2346,
+      "mode": 420,
+      "path": ".specify/templates/constitution-template.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "bytes": 3682,
+      "mode": 420,
+      "path": ".specify/templates/plan-template.md",
+      "sha256": "5ef0e4c97b36e9f91372dc6eb8e5a7e515af8958cf1a9286e43a1ebd9bd48540"
+    },
+    {
+      "bytes": 4556,
+      "mode": 420,
+      "path": ".specify/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "bytes": 9171,
+      "mode": 420,
+      "path": ".specify/templates/tasks-template.md",
+      "sha256": "c731575d8099b3f871861186fbd1a592b51b2ba57fb99e1a0dab439ff6d5608f"
+    },
+    {
+      "bytes": 2118,
+      "mode": 420,
+      "path": ".specify/workflows/speckit/workflow.yml",
+      "sha256": "177761c5e7df28126beea043b5cb45aeaf7958090c022dc11ac71399422fcfbc"
+    },
+    {
+      "bytes": 369,
+      "mode": 420,
+      "path": ".specify/workflows/workflow-registry.json",
+      "sha256": "3b7ec20e939ab34bf4503b2bb79d63227f8b2f86470e4d4543f02b51d95bb41a"
+    }
+  ],
+  "generator": "linux-bubblewrap-offline-v1",
+  "permissions_granted": false,
+  "schema_version": 1,
+  "script": "ps",
+  "semantic_safety": "unqualified"
+}

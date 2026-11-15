@@ -21,40 +21,56 @@ class DoctorItem:
 
 
 def _engine_archive_item(archive: Path) -> DoctorItem:
-    """The archive carries bytecode for the Python that installed it; another Python reads the sources."""
+    """Recognize source archives and retain diagnostics for legacy ABI bytecode."""
     import importlib.util
     import zipfile
     try:
         with zipfile.ZipFile(archive) as bundle:
-            header = bundle.read('getzilla/policy.pyc')[:4]
-    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+            source = None
+            if 'getzilla/policy.py' in bundle.namelist():
+                source = bundle.read('getzilla/policy.py')
+                if not source:
+                    raise ValueError('empty engine policy source')
+                compile(source, 'getzilla/policy.py', 'exec', dont_inherit=True)
+            if not any(name.endswith('.pyc') for name in bundle.namelist()):
+                if source is None:
+                    raise ValueError('missing engine policy source')
+                return DoctorItem('pass', 'engine-archive', 'source-only engine archive; imports compile for the current Python')
+            header = bundle.read('getzilla/policy.pyc')[:16]
+            if len(header) < 16 or int.from_bytes(header[4:8], 'little') & ~3:
+                raise ValueError('invalid legacy bytecode header')
+            if header[:4] != importlib.util.MAGIC_NUMBER and source is None:
+                raise ValueError('foreign bytecode without engine policy source')
+    except (OSError, KeyError, ValueError, SyntaxError, zipfile.BadZipFile) as exc:
         return DoctorItem('fail', 'engine-archive', f'unreadable: {exc}')
-    if header != importlib.util.MAGIC_NUMBER:
-        return DoctorItem('warn', 'engine-archive', 'bytecode is for another Python, so hooks compile the engine '
-                          'on every call; reinstall Getzilla into this project with the current Python')
-    return DoctorItem('pass', 'engine-archive', 'engine archive with bytecode for this Python')
+    if header[:4] != importlib.util.MAGIC_NUMBER:
+        return DoctorItem('warn', 'engine-archive', 'legacy bytecode targets another Python; imports compile '
+                          'the validated source for the current interpreter')
+    return DoctorItem('warn', 'engine-archive', 'legacy current-Python bytecode header-only check; importability unverified')
 
 
 def run_doctor(root: Path) -> list[DoctorItem]:
     items: list[DoctorItem] = []
 
     required = [
-        'AGENTS.md', '.grok/config.toml', '.grok/hooks.json',
+        'AGENTS.md', '.getzilla/config/hooks.json',
         '.agents/skills/getzilla-delivery/SKILL.md', '.getzilla/config/routing.json',
     ]
     for rel in required:
         items.append(DoctorItem('pass' if (root / rel).exists() else 'fail', f'file:{rel}', 'present' if (root / rel).exists() else 'missing'))
 
     for rel in ('.grok/config.toml',):
+        if not (root / rel).exists():
+            continue
         try:
             tomllib.loads((root / rel).read_text(encoding='utf-8'))
             items.append(DoctorItem('pass', f'toml:{rel}', 'valid TOML'))
         except Exception as exc:
             items.append(DoctorItem('fail', f'toml:{rel}', str(exc)))
 
-    for rel in ('.grok/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json',
+    for rel in ('.getzilla/config/hooks.json', '.qwen/settings.json', '.claude/settings.json', '.codex/hooks.json',
                 '.gemini/settings.json', '.github/hooks/getzilla.json'):
-        if rel != '.grok/hooks.json' and not (root / rel).exists():
+        if rel != '.getzilla/config/hooks.json' and not (root / rel).exists():
             items.append(DoctorItem('info', f'json:{rel}', 'harness not installed'))
             continue
         try:
@@ -74,7 +90,7 @@ def run_doctor(root: Path) -> list[DoctorItem]:
     extra_agents = managed.get('extra_agents') if isinstance(managed.get('extra_agents'), dict) else {}
 
     for name in managed_agents:
-        path = root / '.grok/agents' / f'{name}.toml'
+        path = root / '.getzilla/agents' / f'{name}.toml'
         if not path.is_file():
             if name in extra_agents:
                 items.append(DoctorItem('info', f'agent:{name}', f'not installed; add it with getzilla components add {extra_agents[name]}'))
@@ -100,7 +116,7 @@ def run_doctor(root: Path) -> list[DoctorItem]:
         valid = skill_text.startswith('---\n') and '\nname:' in skill_text[:500] and '\ndescription:' in skill_text[:1000]
         items.append(DoctorItem('pass' if valid else 'fail', f'skill:{name}', 'valid frontmatter' if valid else 'invalid frontmatter'))
 
-    unmanaged_agents = [path.name for path in (root / '.grok/agents').glob('*.toml') if path.stem not in managed_agents]
+    unmanaged_agents = [path.name for path in (root / '.getzilla/agents').glob('*.toml') if path.stem not in managed_agents]
     unmanaged_skills = [path.parent.name for path in (root / '.agents/skills').glob('*/SKILL.md')
                         if path.parent.name not in managed_skills and path.parent.name not in extra_skills]
     if unmanaged_agents:
