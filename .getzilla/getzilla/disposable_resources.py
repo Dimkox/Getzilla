@@ -119,8 +119,15 @@ def _inspect(kind: str, key: str) -> dict:
 
 def _canonical_mounts(mounts):
     """Mount ordering is not identity; every entry and field remains significant."""
-    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
-        raise ValueError("Invalid container mount identity")
+    if (type(mounts) is not list or any(type(item) is not dict
+            or not {"Type", "Source", "Destination", "RW"} <= set(item)
+            or item["Type"] not in ("bind", "volume") or type(item["RW"]) is not bool
+            or item["Type"] == "volume" and (type(item.get("Name")) is not str or not _NAME.fullmatch(item["Name"]))
+            or any(type(item[field]) is not str or not item[field].strip() or len(item[field]) > 4096
+                   or any(ord(char) < 32 or ord(char) == 127 for char in item[field])
+                   for field in ("Source", "Destination"))
+            or not _absolute_posix_path(item["Destination"]) for item in mounts)):
+        raise ValueError("Incomplete container observation")
     return sorted(mounts, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
 
 
@@ -344,6 +351,8 @@ class OwnedDocker:
                 elif (identity.get("name", identity.get("Name")) != item["name"]
                       or identity.get("labels", identity.get("Labels")) != self.labels):
                     raise ValueError("Foreign journal identity")
+                if item["kind"] == "container":
+                    _canonical_mounts(identity["mounts"])
                 if item["kind"] == "network" and not _ID.fullmatch(identity.get("Id", "")):
                     raise ValueError("Invalid full network identity")
                 if item["kind"] == "volume" and (type(identity["CreatedAt"]) is not str
