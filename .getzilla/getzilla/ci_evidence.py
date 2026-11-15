@@ -101,7 +101,11 @@ def export_live_evidence(source: Path, output: Path) -> None:
     manifest = _read(source / 'manifest.json')
     if manifest.get('schema') != 'getzilla-live-acceptance-v1':
         raise ValueError('unknown live evidence schema')
-    _verify_files(source, manifest)
+    _verify_files(source, manifest, maximum=128)
+    # Export retains the original decision; the required aggregator independently
+    # derives source/job expectations and validates it. Export never measures parser state.
+    if not isinstance(manifest.get('binding'), dict):
+        raise ValueError('live invocation binding is absent')
     names = [entry['path'] for entry in manifest['files']]
     if not all(evidence_name(name) for name in names):
         raise ValueError('unselected file in live evidence inventory')

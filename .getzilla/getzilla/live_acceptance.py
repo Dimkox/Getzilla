@@ -23,6 +23,8 @@ from .factory_tests import RecordedResult, cases, test_id
 from .python_test_runner import execute, cleanup_details, RunCancelled
 from . import fsx
 from . import factory_tests
+from . import live_contracts
+from .disposable_resources import image_pins
 
 OUTPUT_LIMIT = 2 * 1024 * 1024
 CELLS = {'factory': ('factory-postgres-exit',),
@@ -36,8 +38,7 @@ _EVIDENCE_NAMES = frozenset({'invocation.json','observer.json','command.log','fa
 
 
 def evidence_name(name):
-    plain = name.removesuffix('.envelope.json')
-    return plain in _EVIDENCE_NAMES or re.fullmatch(r'gz-[a-z0-9-]+-(resources|sample|ack)\.json',plain) is not None
+    return live_contracts.evidence_name(name)
 
 
 def _pairs(rows):
@@ -402,7 +403,7 @@ def _observe_bound(command, *, root, environment, output, timeout, namespace=Non
                     owner = OwnedDocker.recover(path)
                     if namespace is None or not (owner.namespace == namespace or owner.namespace.startswith(namespace+'-')):
                         raise ValueError('Foreign resource journal')
-                    ack = read_document(path.with_name(path.name.replace('-resources.json', '-ack.json')))
+                    ack = _cleanup_ack(output, owner, namespace)
                     required_ack = {'cleanup': 'removed', 'namespace': owner.namespace, 'nonce': owner.nonce}
                     if (any(ack.get(key) != value for key, value in required_ack.items())
                             or set(ack) - set(required_ack) not in (set(), {'allocator_pid', 'primary_exit', 'primary_error'})):
@@ -476,9 +477,9 @@ def _run(command, *, root=None, environment=None, timeout=60):
 
 
 def _producer_digest(root, cell):
-    from . import disposable_resources, factory_tests, python_test_runner, live_lifecycle
+    from . import disposable_resources, factory_tests, python_test_runner, live_lifecycle, live_contracts
     hashes = {}
-    for module in (sys.modules[__name__], disposable_resources, factory_tests, python_test_runner, live_lifecycle):
+    for module in (sys.modules[__name__], disposable_resources, factory_tests, python_test_runner, live_lifecycle, live_contracts):
         hashes[module.__name__] = hashlib.sha256(module.__loader__.get_data(module.__file__)).hexdigest()
     files = {'factory': ('factory/tests/run_live_suite.py', 'factory/tests/run_disposable_exit.py',
                          'factory/tests/postgres_restart_probe.py', 'factory/tests/test_postgres_integration.py',
@@ -493,10 +494,10 @@ def _producer_digest(root, cell):
 def _trust_ci(root, output, binding):
     """Use pre-acquired pinned images and an explicit offline wheelhouse only."""
     _require_trust_producer(root)
-    from .disposable_resources import OwnedDocker, image_pins
     wheelhouse = Path(os.environ['GETZILLA_LIVE_WHEELHOUSE']).absolute()
     if not wheelhouse.is_dir() or wheelhouse.is_symlink():
         raise ValueError('An explicit offline wheelhouse is required')
+    expected_inventory, expected_ids = live_contracts.trust_source_contract(root)
     pins = image_pins(root)
     owner = OwnedDocker(output/'trust-ci-resources.json', binding['namespace'])
     primary = None
@@ -559,7 +560,8 @@ def _trust_ci(root, output, binding):
                 raise ValueError('Trust image configuration identity mismatch')
         endpoint()
         suite = json.loads(_run(['docker','exec',tester['id'],'python3','tests/run_postgres_suite.py','--stdout'], timeout=600), object_pairs_hook=_pairs)
-        if not accepted_suite(suite, binding):
+        if (not accepted_suite(suite, binding) or suite.get('source_inventory') != expected_inventory
+                or set(suite['expected_ids']) != set(expected_ids)):
             raise ValueError('Trust suite did not complete all required cases')
         _write(output/'trust-ci-suite.json', suite)
         def observation():
@@ -584,14 +586,7 @@ def _trust_ci(root, output, binding):
     except BaseException as error:
         primary = error
     finally:
-        try:
-            owner.cleanup()
-            acknowledge_cleanup(owner)
-        except BaseException as error:
-            if primary is None:
-                primary = error
-            else:
-                BaseException.add_note(primary, 'Trust resource cleanup unconfirmed: '+type(error).__name__)
+        primary = live_contracts.finish_owned(owner, primary, acknowledge_cleanup)
     if primary is not None:
         raise primary
     for name in ('trust-ci-suite.json', 'trust-ci-restart.json'):
@@ -609,9 +604,13 @@ def validate_components(output, cell, binding, *, parser_observation=None):
             journals = {path.name for path in output.glob('*-resources.json')}
             if index['binding'] != binding or set(index['journals']) != journals or len(journals) != 101:
                 return False
+            if index.get('cleanup_ledger_sha256') != hashlib.sha256(_held_bytes(output/'lifecycle-cleanup-ledger.json')).hexdigest():
+                return False
             for name, digest in index['journals'].items():
                 if hashlib.sha256(_held_bytes(output/name)).hexdigest() != digest:
                     return False
+                journal = read_document(output/name)
+                _cleanup_ack(output, type('RetainedOwner', (), dict(manifest=output/name, namespace=journal['namespace'], nonce=journal['nonce']))(), binding['namespace'])
             return (report['binding'] == binding and report['status'] == 'pass' and cycles_accepted(report['cycles'])
                     and report['resources_before'] == report['resources_after'])
         suite = read_component(output, cell+'-suite.json', binding)
@@ -638,7 +637,17 @@ def validate_components(output, cell, binding, *, parser_observation=None):
 def _require_trust_producer(root):
     producer = Path(root)/'trust-ci/tests/run_postgres_suite.py'
     if producer.is_symlink() or not producer.is_file():
-        raise ValueError('Trust CI source producer is unavailable; delivery and real acceptance remain OPEN')
+        raise ValueError('Trust CI complete source producer is unavailable; acceptance remains OPEN')
+    tree = ast.parse(_held_bytes(producer))
+    schemas = [node.value.value for node in tree.body if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == 'LIVE_SUITE_SCHEMA' for target in node.targets)
+               and isinstance(node.value, ast.Constant)]
+    if schemas != ['getzilla-live-suite-v1']:
+        raise ValueError('Trust CI source producer does not declare the complete bound suite contract')
+    selected = os.environ.get('GETZILLA_LIVE_WHEELHOUSE')
+    if not selected:
+        raise ValueError('GETZILLA_LIVE_WHEELHOUSE is required before any Trust allocation; prepare the hash-locked cp313/Linux inputs')
+    live_contracts.validate_wheelhouse(Path(selected), Path(root)/'trust-ci/requirements-test.txt')
 
 
 def _directory_birth(info):
@@ -778,6 +787,8 @@ def _run_factory_cell(command,*,root,output,environment,binding,timeout,required
             measured=observe_parser_applicability(root,binding,python=owned.python,required=required_parser)
             if not validate_components(output,'factory',binding,parser_observation=measured):
                 result.update(status='fail',component_evidence='missing_or_failed')
+            else:
+                _record_controller(output, 'factory', binding, parser_observation=measured)
     except BaseException as error:
         primary=error
     finally:
@@ -828,6 +839,9 @@ def main(argv=None):
         'attempt':os.environ.get('GITHUB_RUN_ATTEMPT','1'),'cell':args.cell,
         'namespace':'gz-'+args.cell+'-'+uuid.uuid4().hex[:12], 'nonce':uuid.uuid4().hex,
         'producer_sha256':_producer_digest(root,args.cell)}
+    if os.environ.get('GITHUB_RUN_ID'):
+        binding = live_contracts.ci_binding(head=head, tree=tree, run_id=os.environ['GITHUB_RUN_ID'],
+            attempt=os.environ['GITHUB_RUN_ATTEMPT'], cell=args.cell, producer_sha256=binding['producer_sha256'])
     if not valid_binding(binding):
         raise ValueError('Invalid live invocation identity')
     output.mkdir(mode=0o700, exist_ok=False)
@@ -847,14 +861,15 @@ def main(argv=None):
                          namespace=binding['namespace'], require_resources=True)
         if not validate_components(output,args.cell,binding):
             result.update(status='fail',component_evidence='missing_or_failed')
+        elif result['status'] == 'pass':
+            _record_controller(output, args.cell, binding)
     if (_run(['git','rev-parse','HEAD'],root=root) != head or _run(['git','rev-parse','HEAD^{tree}'],root=root) != tree
             or _run(['git','status','--porcelain'],root=root) or _producer_digest(root,args.cell) != binding['producer_sha256']):
         result.update(status='fail',source_mutation=True)
     report = {'schema':'getzilla-live-acceptance-v1','binding':binding,**result,
         'checks':[{'id':name,'status':result['status']} for name in CELLS[args.cell]],
         'authority':'Candidate source observations; no independent attestation or parent acceptance'}
-    report['files'] = [{'path':path.name,'sha256':hashlib.sha256(_held_bytes(path)).hexdigest()}
-                       for path in sorted(output.iterdir()) if evidence_name(path.name)]
+    report['files'] = live_contracts.evidence_inventory(output)
     _write(output/'manifest.json', report)
     return 0 if result['status'] == 'pass' else 1
 
@@ -965,3 +980,30 @@ def observe(command, *, root, environment, output, timeout, grace=None, namespac
                                require_resources=require_resources)
     return _observe_bound(command, root=root, environment=environment, output=output,
                           timeout=timeout, namespace=namespace, require_resources=require_resources)
+
+
+def _cleanup_ack(output, owner, namespace):
+    path = owner.manifest.with_name(owner.manifest.name.replace('-resources.json', '-ack.json'))
+    if path.exists():
+        return read_document(path)
+    binding = read_document(output / 'invocation.json')
+    if not valid_binding(binding) or binding['namespace'] != namespace:
+        raise ValueError('Cleanup ledger original invocation is unavailable')
+    return live_contracts.ledger_ack(read_document(output / 'lifecycle-cleanup-ledger.json'), binding,
+                                    path.name, {'namespace': owner.namespace, 'nonce': owner.nonce})
+
+
+def _record_controller(output, cell, binding, *, parser_observation=None):
+    if cell == 'factory' and not _measured(parser_observation, binding):
+        raise ValueError('Controller receipt requires actual parser measurement before environment cleanup')
+    if not validate_components(output, cell, binding, parser_observation=parser_observation):
+        raise ValueError('Controller receipt requires complete actual bound component validation')
+    names = (('lifecycle.json', 'lifecycle.json.envelope.json', 'lifecycle-resource-index.json',
+              'lifecycle-cleanup-ledger.json') if cell == 'lifecycle' else
+             (cell+'-suite.json', cell+'-suite.json.envelope.json', cell+'-restart.json',
+              cell+'-restart.json.envelope.json', cell+'-resources.json'))
+    files = {name: hashlib.sha256(_held_bytes(output/name)).hexdigest() for name in names}
+    parser_digest = (live_contracts.digest(read_document(output/'factory-suite.json')['applicability'])
+                     if cell == 'factory' else None)
+    _write(output/'controller-validation.json', live_contracts.controller_observation(
+        binding, files, parser_evidence_sha256=parser_digest))

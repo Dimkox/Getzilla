@@ -891,7 +891,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(receipt['details'], report)
             self.assertEqual(receipts.validate_evidence(root, route),
-                ['verification: current required plan or individual evidence is unavailable or stale'])
+                ['verification: required-plan-unavailable: required_plan: current required plan and evidence could not be established'])
 
     def test_large_verification_report_preserves_complete_logs_and_scope(self):
         with routed_fixture(legacy=True) as (root, route):
@@ -929,7 +929,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(len(report['changed_files']), len(paths))
             self.assertEqual(report['checks'][0]['stdout'], captured)
             self.assertEqual(receipts.validate_evidence(root, route),
-                ['verification: current required plan or individual evidence is unavailable or stale'])
+                ['verification: required-plan-unavailable: required_plan: current required plan and evidence could not be established'])
             with (root / 'VERSION').open('a', encoding='utf-8') as handle:
                 handle.write('\nstale product edit\n')
             self.assertIn('verification: stale after repository changes', receipts.validate_evidence(root, route))

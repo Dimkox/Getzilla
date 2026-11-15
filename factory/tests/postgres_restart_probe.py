@@ -17,7 +17,7 @@ import uuid
 SOURCE = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SOURCE))
 sys.path.insert(0, str(SOURCE.parents[1] / '.getzilla'))
-from getzilla.disposable_resources import image_pins
+from getzilla.disposable_resources import image_pins, internal_postgres_endpoint as internal_postgres_endpoint
 from getzilla.live_acceptance import owned_postgres_endpoint, restart_observation, _write, read_document
 POSTGRES = image_pins(SOURCE.parents[1])['postgres']
 _RESTART_OBSERVATIONS = []
@@ -1774,3 +1774,15 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _bound_endpoint(container_name, container_id, nonce):
+    """Compatibility entry preserves strict partial-authority refusal."""
+    keys = ('FACTORY_TEST_POSTGRES_NETWORK_ID', 'FACTORY_TEST_POSTGRES_NAMESPACE', 'FACTORY_TEST_POSTGRES_JOURNAL')
+    if any(key in os.environ for key in keys):
+        if not all(os.environ.get(key) for key in keys):
+            raise RuntimeError('Incomplete original internal PostgreSQL authority')
+        return _owned_endpoint(container_name, container_id, nonce)
+    if container_name.startswith('gz-'):
+        raise RuntimeError('Original owned PostgreSQL authority is absent')
+    return '127.0.0.1', _published_port(container_id)

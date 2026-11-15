@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
-import subprocess
+import os
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -229,10 +229,10 @@ class OperationsTests(unittest.TestCase):
                     primary=primary, cleanup_error=cleanup) as (live, state, output):
                 if primary is not None or cleanup is not None:
                     with self.assertRaises(type(primary or cleanup)) as raised:
-                        live._trust_ci(ROOT, output, 'gz-test')
+                        live._trust_ci(ROOT, output, state.binding)
                     self.assertIs(raised.exception, primary or cleanup)
                 else:
-                    live._trust_ci(ROOT, output, 'gz-test')
+                    live._trust_ci(ROOT, output, state.binding)
                 self.assertEqual(state.cleanup_calls, 1)
                 if primary is not None:
                     self.assertFalse((output / 'trust-ci-restart.json').exists())
@@ -242,7 +242,7 @@ class OperationsTests(unittest.TestCase):
         script = (ROOT / 'trust-ci/scripts/postgres-restart-drill.sh').read_text(encoding='utf-8')
         self.assertIn('--cell trust-ci', script)
         with self._trust_ci_harness() as (live, state, output):
-            live._trust_ci(ROOT, output, 'gz-test')
+            live._trust_ci(ROOT, output, state.binding)
             postgres = state.containers['db']
             self.assertEqual(postgres['volume'], state.volumes['data'])
             self.assertEqual(postgres['network'], state.network)
@@ -253,70 +253,84 @@ class OperationsTests(unittest.TestCase):
             self.assertLess(commands.index('b' * 64), commands.index('verify'))
             report = json.loads((output / 'trust-ci-restart.json').read_text(encoding='utf-8'))
             self.assertEqual(report['status'], 'pass')
-            self.assertEqual(report['postmaster_before'].split('|')[-1], report['postmaster_after'].split('|')[-1])
-            self.assertNotEqual(report['postmaster_before'], report['postmaster_after'])
+            self.assertEqual(report['restarts'][0]['cluster'], '123456789')
+            self.assertNotEqual(report['restarts'][0]['before'], report['restarts'][0]['after'])
 
     def test_postgres_restart_refuses_changed_cluster_job_or_unchanged_postmaster(self) -> None:
         for drift in ('cluster', 'job', 'postmaster'):
             with self.subTest(drift=drift), self._trust_ci_harness(drift=drift) as (live, state, output):
-                with self.assertRaises(RuntimeError):
-                    live._trust_ci(ROOT, output, 'gz-test')
+                with self.assertRaises((RuntimeError, ValueError)):
+                    live._trust_ci(ROOT, output, state.binding)
                 self.assertEqual(state.cleanup_calls, 1)
                 self.assertFalse((output / 'trust-ci-restart.json').exists())
 
     @contextmanager
     def _trust_ci_harness(self, *, primary=None, cleanup_error=None, drift=None):
-        # Exercise the real orchestration and acceptance decisions. Only Docker
-        # resources/process results are replaced; this is not live DB evidence.
+        # Closed current-protocol orchestration fixture. No real input, DB,
+        # allocation, discovery or execution qualification is asserted.
         from getzilla import live_acceptance as live
+        from getzilla import live_contracts
+        binding = dict(head='a'*40, tree='b'*40, run_id='local', attempt='1', cell='trust-ci',
+                       namespace='gz-test', nonce='c'*32, producer_sha256='d'*64)
+        expected = ['test_postgres_integration.Owned.test_case']
+        inventory = {'trust-ci/tests/test_postgres_integration.py': 'e'*64}
         pins = live.image_pins(ROOT)
         state = SimpleNamespace(commands=[], volumes={}, containers={}, cleanup_calls=0,
-                                postmaster_reads=0, network={'identity': {'Id': 'd' * 64}})
-
-        def volume(suffix):
-            item = {'kind': 'volume', 'name': 'gz-test-' + suffix}
-            state.volumes[suffix] = item
-            return item
-
-        def container(suffix, image, **options):
-            state.containers[suffix] = options
-            key = 'postgres' if suffix == 'db' else 'python'
-            self.assertEqual(image, pins[key]['reference'])
-            return {'id': {'provision': 'a', 'db': 'b', 'tests': 'c'}[suffix] * 64,
-                    'image_id': pins[key]['image_id']}
-
-        def cleanup():
-            state.cleanup_calls += 1
-            if cleanup_error is not None:
-                raise cleanup_error
-
-        def command(argv, **_options):
-            state.commands.append(argv)
-            if argv[-1] == 'tests/run_postgres_suite.py':
-                if primary is not None:
-                    raise primary
-                return json.dumps({'status': 'pass', 'tests_run': 1, 'executed': ['bound-db-case'],
-                                   'failures': 0, 'errors': 0, 'skipped': []})
-            if 'psql' in argv:
-                state.postmaster_reads += 1
-                after = state.postmaster_reads > 1
-                clock = 'before' if not after or drift == 'postmaster' else 'after'
-                cluster = 'changed' if after and drift == 'cluster' else 'cluster'
-                return clock + '|' + cluster
-            if argv[-1] in ('seed', 'verify'):
-                return 'changed' if argv[-1] == 'verify' and drift == 'job' else 'durable-job'
-            if argv[:2] == ['docker', 'restart']:
-                return ''
-            raise AssertionError('Unexpected Docker operation')
-
-        owner = SimpleNamespace(volume=volume, network=lambda _suffix: state.network,
-                                container=container, cleanup=cleanup)
-        with tempfile.TemporaryDirectory() as raw, \
-                patch.object(live, 'OwnedDocker', return_value=owner), \
-                patch.object(live, '_wait_container'), \
-                patch.object(live, '_run', side_effect=command), \
-                patch.object(live.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
-            yield live, state, Path(raw)
+            postmaster_reads=0, network={'identity': {'Id': 'd'*64}}, binding=binding)
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            output = Path(raw)
+            def volume(suffix):
+                item = {'kind':'volume', 'name':'gz-test-'+suffix}
+                state.volumes[suffix] = item
+                return item
+            def container(suffix, image, **options):
+                state.containers[suffix] = options
+                key = 'postgres' if suffix == 'db' else 'python'
+                self.assertEqual(image, pins[key]['reference'])
+                return {'id': {'provision':'a','db':'b','tests':'c'}[suffix]*64,
+                        'name':'gz-test-'+suffix, 'image_id':pins[key]['image_id']}
+            def cleanup():
+                state.cleanup_calls += 1
+                if cleanup_error is not None:
+                    raise cleanup_error
+                owner.cleanup_status = 'removed'
+                owner.manifest.write_text('{}')
+            def command(argv, **options):
+                state.commands.append(argv)
+                if argv[:3] == ['docker','container','inspect']:
+                    return json.dumps({'Running':False, 'ExitCode':0})
+                if 'pg_isready' in argv[-1]:
+                    return ''
+                if 'tests/run_postgres_suite.py' in argv:
+                    if primary is not None:
+                        raise primary
+                    return json.dumps({'schema':'getzilla-live-suite-v1', 'binding':binding, 'status':'pass',
+                        'expected_ids':expected, 'collected_ids':expected, 'required_ids':expected,
+                        'started':expected, 'executed':expected, 'missing_required':[], 'inapplicable_ids':[],
+                        'tests_run':1, 'failures':0, 'errors':0, 'loader_errors':0, 'problems':[],
+                        'requirements_complete':True, 'source_stable':True, 'allowed_skips':{},
+                        'skipped':[], 'applicability':None, 'source_inventory':inventory})
+                if 'psql' in argv:
+                    state.postmaster_reads += 1
+                    after = state.postmaster_reads > 1
+                    clock = '2026-11-01T00:00:01+00:00' if after and drift != 'postmaster' else '2026-11-01T00:00:00+00:00'
+                    cluster = '987654321' if after and drift == 'cluster' else '123456789'
+                    return clock+'|'+cluster
+                if argv[-1] in ('seed','verify'):
+                    return 'changed' if argv[-1]=='verify' and drift=='job' else 'durable-job'
+                if argv[:2] == ['docker','restart']:
+                    return ''
+                raise AssertionError('Unexpected owned command')
+            owner = SimpleNamespace(volume=volume, network=lambda suffix:state.network, container=container,
+                cleanup=cleanup, manifest=output/'trust-ci-resources.json', namespace='gz-test',
+                nonce='f'*32, resources=[], cleanup_status='allocated')
+            with patch.object(live, '_require_trust_producer'), \
+                 patch.dict(os.environ, {'GETZILLA_LIVE_WHEELHOUSE':raw}), \
+                 patch.object(live_contracts, 'trust_source_contract', return_value=(inventory,expected)), \
+                 patch.object(live, 'OwnedDocker', return_value=owner), \
+                 patch.object(live, 'owned_postgres_endpoint', return_value=('172.28.0.2',5432)), \
+                 patch.object(live, '_run', side_effect=command):
+                yield live, state, output
 
     def test_repository_workflows_are_hardened(self) -> None:
         workflows = ROOT / '.github' / 'workflows'

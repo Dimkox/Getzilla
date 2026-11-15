@@ -18,14 +18,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.disposable_resources import OwnedDocker, image_pins
 from getzilla.live_acceptance import (owned_postgres_endpoint, read_document, valid_binding,
-    acknowledge_cleanup, seal_component)
+    acknowledge_cleanup, seal_component, _write, _producer_digest)
 
 POSTGRES = image_pins(ROOT)['postgres']
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla.disposable_resources import image_pins, ensure_images, internal_postgres_endpoint
+from getzilla.disposable_resources import image_pins, ensure_images
 
 POSTGRES = image_pins(ROOT)["postgres"]
 
@@ -178,10 +178,6 @@ def _new_owner() -> OwnedDocker:
 
 
 
-def _internal_endpoint(owner, item, network):
-    return internal_postgres_endpoint(container_id=item["id"], container_name=item["name"],
-        image=POSTGRES["reference"], image_id=POSTGRES["image_id"], nonce=owner.nonce,
-        namespace=owner.namespace, network_id=network["identity"]["Id"])
 
 
 def _internal_endpoint(owner, item, network):
@@ -268,6 +264,21 @@ def _live_main() -> int:
     return 0
 
 
+def _default_binding(root, namespace, nonce):
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=root, check=True, capture_output=True,
+                              text=True, timeout=15).stdout.strip()
+    head, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
+    if git('status', '--porcelain') or os.environ.get('GETZILLA_EXPECTED_HEAD', head) != head:
+        raise ValueError('Default Factory evidence requires unchanged expected committed source')
+    binding = {'head': head, 'tree': tree, 'run_id': os.environ.get('GITHUB_RUN_ID', 'local'),
+        'attempt': os.environ.get('GITHUB_RUN_ATTEMPT', '1'), 'cell': 'factory',
+        'namespace': namespace, 'nonce': nonce, 'producer_sha256': _producer_digest(root, 'factory')}
+    if not valid_binding(binding):
+        raise ValueError('Default Factory invocation is not source-bound')
+    return binding
+
+
 def main() -> int:
     if os.environ.get('GETZILLA_LIVE_BINDING'):
         return _live_main()
@@ -282,9 +293,13 @@ def main() -> int:
     try:
         owner = _new_owner()
         nonce = owner.nonce
+        binding = _default_binding(ROOT, owner.namespace, nonce)
+        _write(owner.manifest.parent/'invocation.json', binding)
         password = f"local-{uuid.uuid4().hex}"
         environment = os.environ.copy()
         environment["GETZILLA_LIVE_ARTIFACTS"] = str(owner.manifest.parent)
+        environment['GETZILLA_LIVE_BINDING'] = str(owner.manifest.parent/'invocation.json')
+        environment['FACTORY_TEST_POSTGRES_JOURNAL'] = str(owner.manifest)
         for variable in ("FACTORY_TEST_DATABASE_URL", "FACTORY_FRESH_CLUSTER_DATABASE_URL",
                          "FACTORY_TEST_POSTGRES_CONTAINER", "FACTORY_TEST_POSTGRES_CONTAINER_ID", "FACTORY_TEST_POSTGRES_NONCE",
                          "FACTORY_TEST_POSTGRES_NETWORK_ID", "FACTORY_TEST_POSTGRES_NAMESPACE"):
@@ -305,7 +320,7 @@ def main() -> int:
                            FACTORY_TEST_POSTGRES_CONTAINER_ID=container_id,
                            FACTORY_TEST_POSTGRES_NONCE=nonce)
         phase = "venv-create"
-        venv = tempfile.TemporaryDirectory(prefix="adaptive-factory-exit-venv-")
+        venv = tempfile.TemporaryDirectory(prefix="adaptive-factory-exit-venv-", dir=owner.manifest.parent)
         environment["UV_PROJECT_ENVIRONMENT"] = venv.name
         uv = ["uv", "run", "--locked", "--project", "factory"]
         phase = "preflight"
@@ -326,6 +341,8 @@ def main() -> int:
         _run([*uv, "python", "factory/tests/postgres_restart_probe.py", "--preflight-only"],
              environment=fresh_environment)
         environment["FACTORY_FRESH_CLUSTER_DATABASE_URL"] = fresh_url
+        environment['FACTORY_FRESH_POSTGRES_CONTAINER'] = fresh['name']
+        environment['FACTORY_FRESH_POSTGRES_CONTAINER_ID'] = fresh['id']
         phase = "suite-bind"
         for database, url in ((item, database_url), (fresh, fresh_url)):
             endpoint = urlsplit(url)

@@ -18,6 +18,7 @@ import time
 from .disposable_resources import OwnedDocker, image_pins
 from .python_test_runner import RunCancelled, execute, cleanup_details
 from .live_acceptance import _write, _held_bytes, read_document, acknowledge_cleanup, seal_component
+from .live_contracts import cleanup_ledger, cycle_budget
 
 
 def _run(*args, timeout=30):
@@ -150,7 +151,8 @@ def _child_cycle(root, output, namespace, mode):
     cancellation = None
     try:
         try:
-            result = execute(command, root, dict(os.environ), timeout=35 if mode == "timeout" else 45)
+            active, grace = cycle_budget(mode)
+            result = execute(command, root, dict(os.environ), timeout=active, termination_grace=grace)
         except RunCancelled as exc:
             cancellation = exc.signal_number
             result = exc.result
@@ -186,6 +188,8 @@ def _child_cycle(root, output, namespace, mode):
     owner.cleanup()
     if owner.cleanup_status != "removed":
         raise RuntimeError("Lifecycle cleanup readback failed")
+    if mode == 'kill':
+        acknowledge_cleanup(owner)
     sample = read_document(output / (namespace + "-sample.json"))
     return {**sample, "mode": mode, "cleanup_kind": cleanup_kind,
             "child_returncode": result.returncode, "cancellation": cancellation,
@@ -199,6 +203,12 @@ def run(root, output, namespace, binding=None):
     protected_digest = hashlib.sha256(protected_file.read_bytes()).hexdigest()
     foreign = OwnedDocker(output / "protected-resources.json", namespace + "-protected")
     rows = []
+    acknowledgements = {}
+    def retain_ack(owner):
+        if owner.cleanup_status != 'removed' or any(row['status'] != 'removed' for row in owner.resources):
+            raise ValueError('Original cleanup is unconfirmed')
+        name = owner.manifest.name.replace('-resources.json', '-ack.json')
+        acknowledgements[name] = json.dumps({'cleanup': 'removed', 'namespace': owner.namespace, 'nonce': owner.nonce}, sort_keys=True, indent=2) + '\n'
     primary = None
     started = time.monotonic()
     try:
@@ -233,7 +243,7 @@ def run(root, output, namespace, binding=None):
                             raise
                         cycle_error.add_note("Cycle cleanup unconfirmed: " + type(cleanup).__name__)
                 owner.cleanup()  # at-least-once finalization must preserve other runs
-                acknowledge_cleanup(owner)
+                retain_ack(owner)
                 row = {**sample, "mode": mode, "cleanup_kind": "native",
                        "disposable_remaining": sum(item["status"] != "removed" for item in owner.resources)}
             else:
@@ -252,7 +262,7 @@ def run(root, output, namespace, binding=None):
     cleanup_error = None
     try:
         foreign.cleanup()
-        acknowledge_cleanup(foreign)
+        retain_ack(foreign)
     except BaseException as exc:
         cleanup_error = exc
         if primary is None:
@@ -279,9 +289,11 @@ def run(root, output, namespace, binding=None):
     if not passed:
         raise RuntimeError("Disposable resource inventory did not return to baseline")
     if binding is not None:
+        _write(output/'lifecycle-cleanup-ledger.json', cleanup_ledger(binding, acknowledgements))
         index = {path.name: hashlib.sha256(_held_bytes(path)).hexdigest()
                  for path in sorted(output.glob('*-resources.json'))}
-        _write(output/'lifecycle-resource-index.json', {'binding': binding, 'journals': index})
+        _write(output/'lifecycle-resource-index.json', {'binding': binding, 'journals': index,
+            'cleanup_ledger_sha256': hashlib.sha256(_held_bytes(output/'lifecycle-cleanup-ledger.json')).hexdigest()})
         seal_component(output, 'lifecycle.json', 'lifecycle-resource-index.json', binding)
 
 

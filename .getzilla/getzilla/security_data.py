@@ -109,15 +109,21 @@ def _json(data: bytes) -> dict[str, Any]:
 
 
 def osv_aliases(record: dict[str, Any]) -> list[str]:
-    """Validate identifiers used for exception and CVE matching without coercion."""
+    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    from .security_osv_diagnostics import alias_rejection
+    def rejected(index=None):
+        detail = alias_rejection(record, index)
+        return SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
     if not isinstance(record, dict):
-        raise SecurityDataError('OSV aliases require a record object')
-    aliases = record.get('aliases', [])
+        raise rejected()
+    aliases = record.get('aliases')
     if aliases is None:
         return []
-    if (not isinstance(aliases, list) or not all(
-            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases)):
-        raise SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers')
+    if not isinstance(aliases, list):
+        raise rejected()
+    for index, alias in enumerate(aliases):
+        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+            raise rejected(index)
     return list(aliases)
 
 

@@ -245,6 +245,7 @@ jobs:
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
       - name: Set up pinned uv
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.13.4"
@@ -381,6 +382,12 @@ jobs:
         with:
           version: "0.13.4"
           enable-cache: false
+      - name: Prepare hash-locked offline Trust inputs for the pinned cp313 Linux image
+        if: matrix.cell == 'trust-ci'
+        shell: bash
+        run: |
+          python scripts/getzilla_live_inputs.py --wheelhouse "$RUNNER_TEMP/trust-live-wheelhouse"
+          echo "GETZILLA_LIVE_WHEELHOUSE=$RUNNER_TEMP/trust-live-wheelhouse" >> "$GITHUB_ENV"
       - name: Record capacity and load immutable component images
         shell: bash
         run: |
@@ -466,7 +473,9 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: |
-          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --refresh --provision-tools --json-out "$RUNNER_TEMP/security-expanded.json"
+          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --write-input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-profile-declaration.json"
+          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --prepare-inputs --refresh --provision-tools --json-out "$RUNNER_TEMP/security-input-preparation.json"
+          python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"
       - name: Bind scanner observations to this workflow and source
         if: always()
         shell: bash

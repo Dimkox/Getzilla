@@ -483,15 +483,21 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
 
 
 def _aliases(record: dict[str, Any]) -> list[str]:
-    """Validate decision-relevant identifiers without coercion or mutation."""
+    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    from .security_osv_diagnostics import alias_rejection
+    def rejected(index=None):
+        detail = alias_rejection(record, index)
+        return VulnerabilityError('OSV aliases must be null or a list of valid identifiers' + '; ' + json.dumps(detail, sort_keys=True))
     if not isinstance(record, dict):
-        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+        raise rejected()
     aliases = record.get('aliases')
     if aliases is None:
         return []
-    if not isinstance(aliases, list) or not all(
-            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases):
-        raise VulnerabilityError('OSV aliases must be null or a list of valid identifiers')
+    if not isinstance(aliases, list):
+        raise rejected()
+    for index, alias in enumerate(aliases):
+        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+            raise rejected(index)
     return list(aliases)
 
 

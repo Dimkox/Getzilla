@@ -193,9 +193,9 @@ def _read(path):
     return json.loads(_bytes(path), object_pairs_hook=_pairs)
 
 
-def _verify_files(directory, manifest):
+def _verify_files(directory, manifest, *, maximum=600):
     entries = manifest.get("files")
-    if not isinstance(entries, list) or not entries or len(entries) > 600:
+    if not isinstance(entries, list) or not entries or len(entries) > maximum:
         raise ValueError("Evidence file inventory missing or excessive")
     names, total = set(), 0
     for entry in entries:
@@ -226,13 +226,21 @@ def load_records(artifacts, run_id, attempt, *, root=None):
                 "unit": _read(directory / "factory-unit.json"), "unit_source": _factory_unit_source(root)}
         else:
             record = _read(directory / "manifest.json")
-            _verify_files(directory, record)
-            if name in CELL_CHECKS and record.get("cell") != name:
-                raise ValueError("Live cell artifact name mismatch")
+            _verify_files(directory, record, maximum=128 if name in CELL_CHECKS else 600)
             if name in CELL_CHECKS:
-                from .live_acceptance import validate_components
-                if not validate_components(directory, name):
-                    raise ValueError("Live component observations are incomplete")
+                from .live_acceptance import _producer_digest
+                from .live_contracts import ci_binding, read_live_record
+                expected = ci_binding(head=_git(root, 'rev-parse', 'HEAD'), tree=_git(root, 'rev-parse', 'HEAD^{tree}'),
+                    run_id=run_id, attempt=attempt, cell=name, producer_sha256=_producer_digest(root, name))
+                if name == 'factory':
+                    source = records['linux-core']['unit_source']
+                    inventory, expected_ids = source['source_inventory'], source['declared_ids']
+                elif name == 'trust-ci':
+                    from .live_contracts import trust_source_contract
+                    inventory, expected_ids = trust_source_contract(root)
+                else:
+                    inventory, expected_ids = None, None
+                record = read_live_record(directory, expected, expected_source_inventory=inventory, expected_ids=expected_ids)
             records[name] = record
     return records
 
@@ -293,3 +301,8 @@ def main(argv=None):
         problems = ["Required CI evidence unavailable: " + type(exc).__name__]
     print(json.dumps({"status": "fail" if problems else "pass", "problems": problems, "authority": BOUNDARY}, indent=2))
     return 1 if problems else 0
+
+
+def trust_source_inventory(root):
+    from .live_contracts import source_inventory
+    return source_inventory(Path(root), 'trust-ci')

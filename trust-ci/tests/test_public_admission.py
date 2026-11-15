@@ -93,6 +93,7 @@ class PublicAdmissionTests(unittest.TestCase):
             'qualification_gaps': [],
             'checks': [{'name': name, 'status': 'pass', 'details': [{
                 'kind': 'security-result', 'schema_version': 1, 'outcome': 'pass',
+                'assurance': 'local-input-integrity-only',
                 'policy_sha256': POLICY, 'inventory_sha256': inventory,
                 'findings': [], 'gaps': [], 'data_sources': [],
             }]} for name in FAMILIES],

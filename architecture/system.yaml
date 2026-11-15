@@ -2991,6 +2991,29 @@
       "sync_or_async": "synchronous",
       "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-LIVE-COMPONENT-OBSERVER",
+      "id": "EDGE-LIVE-OBSERVER-OWNED-RESOURCES",
+      "network_policy": "local_only",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-ISOLATED-ACCEPTANCE",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -3665,17 +3688,12 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
+        ".getzilla/config/ci-images.json",
         ".getzilla/getzilla/disposable_resources.py",
         ".getzilla/getzilla/factory_tests.py",
-        ".getzilla/getzilla/live_acceptance.py",
-        ".getzilla/getzilla/live_lifecycle.py",
-        ".getzilla/config/ci-images.json",
-        "scripts/getzilla_live.py",
-        "scripts/getzilla_live_lifecycle.py",
-        "factory/tests/run_live_suite.py",
-        "trust-ci/tests/run_postgres_suite.py",
         "trust-ci/scripts/postgres-integration.sh",
-        "trust-ci/scripts/postgres-restart-drill.sh"
+        "trust-ci/scripts/postgres-restart-drill.sh",
+        "trust-ci/tests/run_postgres_suite.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3730,8 +3748,8 @@
       "owner": "local component test operators",
       "public_contracts": [],
       "repository_paths": [
-        ".getzilla/getzilla/disposable_resources.py",
         ".getzilla/getzilla/live_acceptance.py",
+        ".getzilla/getzilla/live_contracts.py",
         ".getzilla/getzilla/live_lifecycle.py",
         "factory/tests/postgres_restart_probe.py",
         "factory/tests/run_disposable_exit.py",
@@ -4433,7 +4451,8 @@
         ".getzilla/getzilla/security_license_texts.py",
         ".getzilla/getzilla/security_licenses.py",
         ".getzilla/getzilla/expanded_security.py",
-        ".getzilla/config/license-policy.json"
+        ".getzilla/config/license-policy.json",
+        ".getzilla/getzilla/security_osv_diagnostics.py"
       ],
       "runtime": {
         "evidence": "source_described",

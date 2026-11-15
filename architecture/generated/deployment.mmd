@@ -105,6 +105,7 @@ flowchart LR
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-INPUT-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-RESOURCE-CONTROL | dependency | docker_api"| node_29363a281e26c870
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api"| node_4e78270f61d78ed8
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-OWNED-RESOURCES | dependency | python_import"| node_a02e5f5306abe637
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql"| node_15647433e781e546
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd

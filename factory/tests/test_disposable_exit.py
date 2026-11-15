@@ -1,5 +1,6 @@
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import io
+import tempfile
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -109,20 +110,23 @@ class DisposableExitTests(unittest.TestCase):
         def endpoint(_owner, item, _network):
             return ("172.28.0.2" if item["id"] == CONTAINER_ID else "172.28.0.3"), 5432
 
-        with (
-            patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': ''}),
-            patch.object(runner.subprocess, "run", side_effect=docker),
-            patch.object(runner, "_binding_matches", return_value=True),
-            patch.object(runner, "_final_postgres_ready", return_value=True),
-            patch.object(runner, "_run", side_effect=execute),
-            patch.object(runner, "_new_owner", return_value=owner),
-            patch.object(runner, "_postgres", side_effect=create),
-            patch.object(runner, "_internal_endpoint", side_effect=endpoint),
-            patch.object(runner.tempfile, "TemporaryDirectory", return_value=Environment()),
-            redirect_stdout(stdout),
-            redirect_stderr(stderr),
-        ):
-            yield SimpleNamespace(events=events, commands=commands, owner=owner, stdout=stdout, stderr=stderr)
+        with tempfile.TemporaryDirectory(dir=runner.ROOT / '.getzilla/runtime') as owned_output:
+            owner.manifest = Path(owned_output) / 'factory-resources.json'
+            with (
+                patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': ''}),
+                patch.object(runner.subprocess, "run", side_effect=docker),
+                patch.object(runner, "_binding_matches", return_value=True),
+                patch.object(runner, "_final_postgres_ready", return_value=True),
+                patch.object(runner, "_run", side_effect=execute),
+                patch.object(runner, "_new_owner", return_value=owner),
+                patch.object(runner, '_default_binding', return_value=dict(head='a'*40, tree='b'*40, run_id='local', attempt='1', cell='factory', namespace=owner.namespace, nonce=owner.nonce, producer_sha256='c'*64)),
+                patch.object(runner, "_postgres", side_effect=create),
+                patch.object(runner, "_internal_endpoint", side_effect=endpoint),
+                patch.object(runner.tempfile, "TemporaryDirectory", return_value=Environment()),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                yield SimpleNamespace(events=events, commands=commands, owner=owner, stdout=stdout, stderr=stderr)
 
     def test_pass_is_emitted_only_after_both_finalizers_succeed(self):
         with self.harness() as run:
