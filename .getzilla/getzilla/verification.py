@@ -3207,6 +3207,17 @@ def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
     try:
         record = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
         checks = record['checks']
+        from .live_acceptance import evidence_name, _held_bytes
+        files = record.get('files')
+        if (not isinstance(files, list) or not 1 <= len(files) <= 128
+                or any(not isinstance(row, dict) or set(row) != {'path', 'sha256'}
+                       or not isinstance(row['path'], str) or Path(row['path']).name != row['path']
+                       or not evidence_name(row['path']) for row in files)
+                or len({row['path'] for row in files}) != len(files)):
+            raise ValueError('live retained-file index is incomplete or malformed')
+        for row in files:
+            if hashlib.sha256(_held_bytes(output / row['path'])).hexdigest() != row['sha256']:
+                raise ValueError('live retained component bytes changed')
         from .live_acceptance import read_document, valid_binding, validate_components, _producer_digest
         binding = read_document(output / 'invocation.json')
         if (not valid_binding(binding) or record.get('binding') != binding
