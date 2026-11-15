@@ -112,14 +112,14 @@ def included_files(root: Path) -> list[Path]:
     canonical_root = root.resolve(strict=True)
     result: list[Path] = []
     for path in canonical_root.rglob('*'):
+        rel = path.relative_to(canonical_root).as_posix()
+        if not is_included_relative_path(rel):
+            continue
         try:
             metadata = path.lstat()
         except OSError as exc:
             raise ManifestError(f'cannot inspect package source path: {path.relative_to(canonical_root)}') from exc
         if not stat.S_ISREG(metadata.st_mode):
-            continue
-        rel = path.relative_to(canonical_root).as_posix()
-        if not is_included_relative_path(rel):
             continue
         result.append(path)
     return sorted(result, key=lambda item: item.relative_to(canonical_root).as_posix())

@@ -1,5 +1,5 @@
 {
-  "lock_sha256": "e6d5f3f021055951d5273d323051953fb2314a2b2a011d01cf59fa33f08ac929",
+  "lock_sha256": "95e088718f76ad545b03c3e11bf62f765beb1f75a6955a61c13d7bfe77115bab",
   "profile": "ubuntu-24.04-x86_64-cpython312",
   "schema_version": "factory-runtime-wheels/v1",
   "wheels": [
@@ -13,7 +13,7 @@
     {"filename":"httpcore-1.0.9-py3-none-any.whl","name":"httpcore","sha256":"2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55","version":"1.0.9"},
     {"filename":"httpx-0.28.1-py3-none-any.whl","name":"httpx","sha256":"d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad","version":"0.28.1"},
     {"filename":"idna-3.19-py3-none-any.whl","name":"idna","sha256":"815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4","version":"3.19"},
-    {"filename":"opentelemetry_api-1.45.1-py3-none-any.whl","name":"opentelemetry-api","sha256":"b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb","version":"1.45.1"},
+    {"filename":"opentelemetry_api-1.45.2-py3-none-any.whl","name":"opentelemetry-api","sha256":"2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34","version":"1.45.2"},
     {"filename":"psycopg-3.3.4-py3-none-any.whl","name":"psycopg","sha256":"b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a","version":"3.3.4"},
     {"filename":"psycopg_binary-3.3.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl","name":"psycopg-binary","sha256":"e7510c37550f91a187e3660a8cc50d4b760f8c3b8b2f89ebc5698cd2c7f2c85d","version":"3.3.4"},
     {"filename":"pydantic-2.13.5-py3-none-any.whl","name":"pydantic","sha256":"346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73","version":"2.13.5"},

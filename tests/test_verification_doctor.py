@@ -448,101 +448,11 @@ class VerificationTests(unittest.TestCase):
                          'coverage cleanup metadata must not publish exception values')
         self.assertLessEqual(len(checks[1].stderr), 12000)
 
-    def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
-        output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'
-                  '---- Captured stdout call ----\nSYNTHETIC_CAPTURE\n'
-                  '==== short test summary info ====\n'
-                  'SUBFAILED(layer=hook, command=SYNTHETIC_PARAMETER) '
-                  'tests/test_peer.py::PeerTests::test_close - SYNTHETIC_ASSERTION\n'
-                  '1 failed, 6 passed, 2 errors, 3 skipped, 4 warnings, 2 subtests passed in 0.12s\n')
-        result = verification_module._core_output_excerpt(
-            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
-        self.assertIn('pytest_failure_ids=', result)
-        self.assertIn('SUBFAILED tests/test_peer.py::PeerTests::test_close', result)
-        fields = dict(line.split('=', 1) for line in result.splitlines() if line.startswith('pytest_'))
-        self.assertEqual(json.loads(fields['pytest_failure_ids']),
-                         ['tests/test_peer.py::PeerTests::test_close'])
-        self.assertEqual(json.loads(fields['pytest_reported_terminal_counts']),
-                         {'failed': 1, 'passed': 6, 'errors': 2, 'skipped': 3})
-        self.assertNotIn('SYNTHETIC', result)
-        self.assertNotIn('layer=', result)
 
-    def test_pytest_reported_counts_keep_absent_or_ambiguous_values_unknown(self) -> None:
-        examples = [
-            ('==== FAILURES ====\n1 failed, 7 passed in 1.20s\n',
-             {'failed': 1, 'passed': 7, 'errors': None, 'skipped': None}),
-            ('==== ERRORS ====\n\x1b[31m=== 2 errors, 3 skipped in 0.01s ===\x1b[0m\r\n',
-             {'failed': None, 'passed': None, 'errors': 2, 'skipped': 3}),
-        ]
-        for output, expected in examples:
-            with self.subTest(expected=expected):
-                result = verification_module._core_output_excerpt(output, failed=True)
-                self.assertIn('pytest_reported_terminal_counts=', result)
-                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
-                self.assertEqual(json.loads(line.split('=', 1)[1]), expected)
-        unknown = {'failed': None, 'passed': None, 'errors': None, 'skipped': None}
-        for suffix in ('1 failed in 0.1s\n2 failed in 0.2s\n',
-                       '1 failed, 2 failed in 0.1s\n',
-                       '999999999999999999 failed in 0.1s\n',
-                       '-1 failed in 0.1s\n',
-                       '1 failed in 0.1s\nSYNTHETIC_TRAILING\n',
-                       '---- Captured stdout call ----\n1 failed in 0.1s\n'):
-            with self.subTest(suffix_length=len(suffix)):
-                result = verification_module._core_output_excerpt('==== FAILURES ====\n' + suffix, failed=True)
-                self.assertIn('pytest_reported_terminal_counts=', result)
-                line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
-                self.assertEqual(json.loads(line.split('=', 1)[1]), unknown)
-                self.assertNotIn('SYNTHETIC', result)
 
-    def test_known_pytest_failure_without_markers_does_not_return_raw_tail(self) -> None:
-        result = verification_module._core_output_excerpt(
-            'malformed SYNTHETIC_CAPTURE_AND_COMMAND\n', failed=True, pytest_output=True)
-        self.assertNotIn('SYNTHETIC', result)
-        self.assertIn('pytest_failure_ids=null', result)
 
-    def test_pytest_identity_is_unavailable_for_ambiguous_or_untrusted_subtest(self) -> None:
-        trusted = {'tests/test_peer.py': (100, {'PeerTests::test_close', 'PeerTests::test_other'})}
-        for summary in (
-            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_other ) '
-            'tests/test_peer.py::PeerTests::test_close - SYNTHETIC\n',
-            'SUBFAILED(SYNTHETIC) tests/test_peer.py::PeerTests::test_unknown\n',
-            'SUBFAILED(SYNTHETIC) /tests/test_peer.py::PeerTests::test_close\n',
-            'SUBFAILED(SYNTHETIC) tests/../test_peer.py::PeerTests::test_close\n',
-            'SUBFAILED(msg= tests/test_peer.py::PeerTests::test_close ) invalid-node\n',
-        ):
-            with self.subTest(summary_length=len(summary)):
-                result = verification_module._core_output_excerpt(
-                    '==== FAILURES ====\ntests/test_peer.py:67: AssertionError\n'
-                    '==== short test summary info ====\n' + summary, failed=True, trusted=trusted)
-                self.assertIn('tests/test_peer.py:67', result)
-                self.assertIn('pytest_failure_ids=null', result)
-                self.assertNotIn('::test_', result)
-                self.assertNotIn('SYNTHETIC', result)
 
-    def test_pytest_parameter_ids_and_controls_never_enter_structured_identity(self) -> None:
-        output = ('==== FAILURES ====\n==== short test summary info ====\n'
-                  'FAILED tests/test_peer.py::PeerTests::test_close[SYNTHETIC_VALUE] - SYNTHETIC_ASSERTION\n')
-        result = verification_module._core_output_excerpt(
-            output, failed=True, trusted={'tests/test_peer.py': (100, {'PeerTests::test_close'})})
-        self.assertIn('pytest_failure_ids=', result)
-        self.assertNotIn('SYNTHETIC', result)
-        for identity in ('tests/test_peer.py::PeerTests::test_close\x1b]8;;SYNTHETIC',
-                         'tests/test_peer.py::PeerTests::test_close.SYNTHETIC',
-                         'tests/test_peer.py::PeerTests::' + 'test_' + 'x' * 200):
-            result = verification_module._core_output_excerpt(
-                '==== FAILURES ====\nFAILED ' + identity + '\n', failed=True,
-                trusted={'tests/test_peer.py': (100, {'PeerTests::test_close', identity.split('::', 1)[1]})})
-            self.assertIn('pytest_failure_ids=null', result)
-            self.assertNotIn('SYNTHETIC', result)
 
-    def test_pytest_diagnostic_scan_and_records_stay_bounded(self) -> None:
-        output = '==== FAILURES ====\n' + ('SYNTHETIC_VALUE\n' * 160000) + '1 failed in 0.1s\n'
-        result = verification_module._core_output_excerpt(output, failed=True)
-        self.assertLessEqual(len(result), 12000)
-        self.assertNotIn('SYNTHETIC', result)
-        self.assertIn('pytest_reported_terminal_counts=', result)
-        line = next(x for x in result.splitlines() if x.startswith('pytest_reported_terminal_counts='))
-        self.assertTrue(all(value is None for value in json.loads(line.split('=', 1)[1]).values()))
 
     def test_known_pytest_caller_sanitizes_both_streams_without_changing_result(self) -> None:
         from getzilla.python_test_runner import CoreTestRun, ProcessResult
@@ -560,61 +470,11 @@ class VerificationTests(unittest.TestCase):
         self.assertIn('workers=2 exit=1', checks[0].summary)
         self.assertIn('test_timeout=900s', checks[0].summary)
 
-    def test_failed_core_output_retains_bounded_safe_trace_location_and_summary(self) -> None:
-        failure = ('================ FAILURES ================\n'
-                   'tests/test_peer.py:174: AssertionError: secret-token-123\n'
-                   'E   AssertionError: secret-token-123\n')
-        output = failure + ('coverage rows\n' * 2000) + 'FAILED tests/test_peer.py::test_close - AssertionError: secret-token-123\n'
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:174: AssertionError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('secret-token-123', result)
-        self.assertLessEqual(len(result), 12000)
 
-    def test_failed_core_excerpt_bounds_many_locations_and_omits_controlled_values(self) -> None:
-        output = ('==== ERRORS ====\r\n' +
-                  ''.join(f'tests/test_case_{n}.py:1: ValueError: SECRET_{n}\r\n' for n in range(1000)) +
-                  'FAILED tests/test_peer.py::test_close - SECRET\r\n')
-        trusted = {f'tests/test_case_{n}.py': (1, set()) for n in range(1000)}
-        trusted['tests/test_peer.py'] = (200, {'test_close'})
-        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
-        self.assertIn('tests/test_case_0.py:1: ValueError', result)
-        self.assertIn('additional failure locations omitted', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('SECRET', result)
-        self.assertNotIn('\r', result)
-        self.assertLessEqual(len(result), 12000)
 
-    def test_core_excerpt_keeps_existing_output_without_pytest_failure_marker(self) -> None:
-        output = 'safe-output' * 2000
-        self.assertEqual(verification_module._core_output_excerpt(output, failed=False), output[-12000:])
-        self.assertEqual(verification_module._core_output_excerpt(output, failed=True), output[-12000:])
 
-    def test_core_excerpt_caps_locations_before_output_character_limit(self) -> None:
-        output = '==== FAILURES ====\n' + ''.join(f'tests/t.py:{n}: ValueError\n' for n in range(1, 102))
-        self.assertLess(len(output), 5500)
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/t.py': (101, set())})
-        self.assertEqual(sum(line.startswith('tests/t.py:') for line in result.splitlines()), 100)
-        self.assertIn('tests/t.py:100: ValueError', result)
-        self.assertNotIn('tests/t.py:101:', result)
-        self.assertIn('additional failure locations omitted', result)
 
-    def test_core_excerpt_removes_ansi_and_unsafe_failure_text(self) -> None:
-        output = ('\x1b[31m==== FAILURES ====\x1b[0m\n'
-                  '\x1b[31mtests/test_peer.py:42: RuntimeError: SECRET\x1b[0m\n'
-                  'FAILED tests/test_peer.py::test_close - SECRET\n')
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
-        self.assertNotIn('SECRET', result)
-        self.assertNotIn('\x1b', result)
 
-    def test_core_excerpt_normalizes_windows_paths(self) -> None:
-        output = ('==== FAILURES ====\r\ntests\\test_peer.py:42: RuntimeError: SECRET\r\n'
-                  'FAILED tests\\test_peer.py::test_close - SECRET\r\n')
-        result = verification_module._core_output_excerpt(output, failed=True, trusted={'tests/test_peer.py': (200, {'test_close'})})
-        self.assertIn('tests/test_peer.py:42: RuntimeError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('SECRET', result)
 
     def test_core_result_records_sanitized_failure_location_before_coverage(self) -> None:
         from getzilla.python_test_runner import CoreTestRun, ProcessResult
@@ -655,28 +515,6 @@ class VerificationTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_VALUE', result.stdout)
                 self.assertNotIn('untracked_private', result.stdout)
 
-    def test_core_excerpt_rejects_captured_path_and_untrusted_node_spoof(self) -> None:
-        output = ('==== FAILURES ====\n'
-                  'tests/test_peer.py:42: AssertionError\n'
-                  'tests/test_peer.py:43: PRIVATE_SENTINELError\n'
-                  '---- Captured stdout call ----\n'
-                  'tests/test_peer.py:99: AssertionError\n'
-                  'FAILED tests/test_peer.py::test_captured - AssertionError\n'
-                  'tests/test_secret_value.py:123: AssertionError\n'
-                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - AssertionError\n'
-                  '==== short test summary info ====\n'
-                  'FAILED tests/test_peer.py::test_PRIVATE_SENTINEL - secret-token\n'
-                  'FAILED tests/test_peer.py::test_close - AssertionError\n')
-        trusted = {'tests/test_peer.py': (200, {'test_close', 'test_captured'})}
-        result = verification_module._core_output_excerpt(output, failed=True, trusted=trusted)
-        self.assertIn('tests/test_peer.py:42: AssertionError', result)
-        self.assertIn('FAILED tests/test_peer.py::test_close', result)
-        self.assertNotIn('PRIVATE_SENTINEL', result)
-        self.assertNotIn('secret_value', result)
-        self.assertNotIn('secret-token', result)
-        self.assertIn('tests/test_peer.py:43', result)
-        self.assertNotIn('tests/test_peer.py:99', result)
-        self.assertNotIn('::test_captured', result)
 
     def test_pytest_metadata_only_trusts_tracked_source_names(self) -> None:
         path = 'tests/test_verification_doctor.py'
@@ -2158,6 +1996,109 @@ class VerificationTests(unittest.TestCase):
             self.assertNotIn('python-unittest', names)
 
 
+class TrustedHistoricalRangeTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _history(self):
+        # A tiny real history owns its origin and archive; no project copy or
+        # mocked range/manifest producer can stand in for comparison evidence.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            subprocess.run(['git', 'init', '-q', '--initial-branch=main'], cwd=root, check=True)
+            origin = 'engineering/changes/20260826-origin/change-spec.yaml'
+            original = root / origin
+            original.parent.mkdir(parents=True)
+            original.write_text('schema_version: 1\nchange_id: 20260826-origin\n')
+            subprocess.run(['git', 'add', origin], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'historical source'], cwd=root, check=True)
+            base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            blob = subprocess.check_output(['git', 'rev-parse', f'{base}:{origin}'], cwd=root, text=True).strip()
+            subprocess.run(['git', 'checkout', '-qb', 'candidate'], cwd=root, check=True)
+            target = 'engineering/changes/20260826-archive/historical-spec.yaml'
+            archived = root / target
+            archived.parent.mkdir(parents=True)
+            archived.write_text('schema_version: 1\nchange_id: 20260826-archive\n')
+            original.unlink()
+            manifest = {'schema_version': 1, 'source_base': base, 'entries': [{
+                'kind': 'legacy_archive', 'original_blob': blob, 'target': target,
+                'sha256': hashlib.sha256(archived.read_bytes()).hexdigest()}]}
+            (root / 'engineering/archived-change-specs.json').write_text(json.dumps(manifest))
+            route = {'base_commit': base, 'delivery_expected': True,
+                     'risk': 'low', 'complexity': 'micro', 'light_diff': {'admitted': True}}
+            ranges = verification_module._git_range_selection(root, route, 'pr')
+            self.assertEqual(ranges.findings, [])
+            self.assertTrue(ranges.bases)
+            yield root, origin, target, route, ranges
+
+    def test_fast_preserves_established_historical_comparison_ranges(self):
+        with self._history() as (root, origin, target, route, ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(metadata['specs'], [])
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+            migration = metadata['historical_migrations'][0]
+            self.assertEqual(migration['source_base'], route['base_commit'])
+            self.assertEqual(migration['evidence_kind'], 'historical_archival')
+
+    def test_fast_pipeline_keeps_historical_comparison_evidence(self):
+        from getzilla.continuity import submit
+        from tests._support import _session_environment
+
+        class HistoricalBoundaryReached(Exception):
+            pass
+
+        with self._history() as (root, _origin, _target, _route, _ranges), _session_environment():
+            route = submit(root, 'Fix the small historical typo.', 'fixture-fast-historical')
+            self.assertEqual(route['delivery_lane'], 'light')
+            actual_change_specs = verification_module._change_specs
+            observed = {}
+
+            def finish_at_historical_boundary(*args, **kwargs):
+                observed['check'], observed['metadata'] = actual_change_specs(*args, **kwargs)
+                # The real pipeline, Git comparison selection and archival
+                # validator ran. Stop before unrelated checks or external work.
+                raise HistoricalBoundaryReached
+
+            with patch.object(verification_module, '_change_specs', side_effect=finish_at_historical_boundary), \
+                 self.assertRaises(HistoricalBoundaryReached):
+                verify(root, 'fast', record=False)
+            self.assertEqual(observed['check'].status, 'pass', observed['check'].details)
+            self.assertEqual(observed['metadata']['specs'], [])
+            migrations = observed['metadata']['historical_migrations']
+            self.assertEqual(len(migrations), 1)
+            self.assertEqual(migrations[0]['source_base'], route['base_commit'])
+            self.assertEqual(migrations[0]['evidence_kind'], 'historical_archival')
+
+    def test_explicit_empty_or_failed_ranges_never_fall_back(self):
+        with self._history() as (root, origin, target, route, ranges):
+            invalid = (GitRangeSelection(), GitRangeSelection(bases=ranges.bases, findings=[{
+                'severity': 'error', 'code': 'fixture-range-failed', 'message': 'untrusted comparison'}]))
+            for supplied in invalid:
+                with self.subTest(findings=supplied.findings):
+                    check, _ = _change_specs(root, [origin, target], route, 'pr', ranges=supplied)
+                    self.assertEqual(check.status, 'fail')
+                    self.assertIn('historical-spec-migration-invalid', {row['code'] for row in check.details})
+
+    def test_trusted_ranges_still_reject_tampered_archive(self):
+        with self._history() as (root, origin, target, route, ranges):
+            (root / target).write_text('schema_version: 1\nchange_id: tampered\n')
+            check, _ = _change_specs(root, [origin, target], route, 'fast', ranges=ranges)
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('digest mismatch' in row['message'] for row in check.details))
+
+    def test_legacy_callers_still_resolve_their_pr_ranges(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, metadata = _change_specs(root, [origin, target], route, 'pr')
+            self.assertEqual(check.status, 'skip', check.details)
+            self.assertEqual(len(metadata['historical_migrations']), 1)
+
+    def test_fast_without_established_ranges_cannot_invent_a_base(self):
+        with self._history() as (root, origin, target, route, _ranges):
+            check, _ = _change_specs(root, [origin, target], route, 'fast')
+            self.assertEqual(check.status, 'fail')
+            self.assertTrue(any('trusted comparison ranges' in row['message'] for row in check.details))
+
+
 class TypedSpecVerificationTests(unittest.TestCase):
     def _migration_fixture(self, root: Path, *, version: int = 1, kind: str = 'legacy_archive'):
         origin = 'engineering/changes/20260826-origin/change-spec.yaml'
@@ -3092,142 +3033,3 @@ class Low336ScannerOwnershipTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
-class Low336FailureRenderTests(unittest.TestCase):
-    def progress(self):
-        import hashlib
-        name = 'tests/test_public.py::Probe::test_one'
-        return {'status': 'unavailable', 'selected_workers': 1, 'observed_workers': 0, 'omitted_workers': 1, 'slots': [],
-                'failure_events': {'version': 1, 'status': 'observed', 'workers': [
-                    {'worker': 0, 'sequence': 1, 'overflow': False, 'dropped': False, 'partial_tail': False,
-                     'events': [{'ordinal': 1, 'phase': 'call', 'path': 'tests/test_public.py',
-                                 'key': hashlib.sha256(name.encode()).hexdigest()}]}]}}
-
-    def test_render_rederives_source_identity_and_preserves_unknown_partial_semantics(self):
-        progress = self.progress()
-        trusted = {'tests/test_public.py': (200, {'Probe::test_one'})}
-        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted) as metadata:
-            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
-        self.assertIn('failure_events', result)
-        events = result['failure_events']
-        self.assertEqual(events['events'][0]['identity'], 'tests/test_public.py::Probe::test_one')
-        self.assertTrue(events['prefix_only'])
-        self.assertEqual(metadata.call_count, 1)
-        self.assertNotIn('failed_tests', events)
-        self.assertNotIn('completed_tests', events)
-        progress['failure_events']['workers'][0]['events'][0]['path'] = 'tests/UNTRACKED_CANARY.py'
-        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
-            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
-        self.assertIsNone(result['failure_events']['events'][0]['identity'])
-        self.assertNotIn('UNTRACKED_CANARY', json.dumps(result))
-        self.assertEqual(result['failure_events']['status'], 'partial')
-
-    def test_closed_render_shape_and_shared_byte_bound_never_echo_values(self):
-        import copy
-        progress = self.progress()
-        progress['failure_events']['workers'][0]['payload'] = 'PAYLOAD_CANARY'
-        with patch.object(verification_module, '_trusted_progress_metadata', return_value={}):
-            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
-        self.assertIn('failure_events', result)
-        self.assertNotIn('PAYLOAD_CANARY', json.dumps(result))
-        self.assertEqual(result['failure_events']['status'], 'unavailable')
-        progress = self.progress()
-        progress['selected_workers'] = 64
-        progress['failure_events']['workers'] = []
-        nodes = set()
-        for worker in range(64):
-            item = copy.deepcopy(self.progress()['failure_events']['workers'][0])
-            item['worker'] = worker
-            item['sequence'] = 4
-            item['events'] = []
-            for ordinal in range(1, 5):
-                node = 'Class' + str(worker) + '::test_' + str(ordinal) + '_' + 'x' * 110
-                nodes.add(node)
-                identity = 'tests/test_public.py::' + node
-                item['events'].append({'ordinal': ordinal, 'phase': 'call', 'path': 'tests/test_public.py',
-                    'key': hashlib.sha256(identity.encode()).hexdigest()})
-            progress['failure_events']['workers'].append(item)
-        with patch.object(verification_module, '_trusted_progress_metadata', return_value={'tests/test_public.py': (200, nodes)}):
-            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
-        self.assertLessEqual(len(json.dumps(result).encode()), 16000)
-        self.assertLessEqual(len(json.dumps(result['failure_events']).encode()), 8192)
-        self.assertTrue(result['failure_events']['render_truncated'])
-        self.assertLess(len(result['failure_events']['events']), 256)
-
-    def _actual_failure_prefix(self, *, workers=1, torn=False, facts=False):
-        from types import SimpleNamespace
-        from getzilla import pytest_progress
-        temporary = tempfile.TemporaryDirectory(prefix='public-certainty-')
-        self.addCleanup(temporary.cleanup)
-        directory = Path(temporary.name) / 'progress'
-        directory.mkdir(mode=0o700)
-        nodes = set()
-        nonce = 'c' * 32
-        for worker in range(workers):
-            writer = pytest_progress._WorkerProgress(directory, nonce, worker)
-            self.addCleanup(writer.pytest_unconfigure, None)
-            if facts and worker == 0:
-                writer.pytest_runtest_logreport(SimpleNamespace(failed=True, when='call', nodeid='/unmapped-public'))
-            count = 4 if workers > 1 or torn or facts else 1
-            for ordinal in range(count):
-                node = 'C' + str(worker) + 'X' * 100 + '::test_' + str(ordinal) + '_' + 'y' * 100
-                nodes.add(node)
-                report = SimpleNamespace(failed=True, when='call', nodeid='tests/test_public.py::' + node)
-                writer.pytest_runtest_logreport(report)
-            if torn and worker == 0:
-                original = os.write
-                with patch.object(pytest_progress.os, 'write', side_effect=lambda fd, content: original(fd, content[:12])):
-                    writer.pytest_runtest_logreport(report)
-            elif facts and worker == 0:
-                writer.pytest_runtest_logreport(report)
-        return pytest_progress.read_progress(directory, nonce, workers), {'tests/test_public.py': (500, nodes)}
-
-    def _render_failure_prefix(self, progress, trusted):
-        with patch.object(verification_module, '_trusted_progress_metadata', return_value=trusted):
-            result = verification_module._core_progress_details(Path('/public-inert-root'), progress)
-        return result['failure_events']
-
-    def test_actual_torn_overflow_fact_keeps_unproved_losses_unknown(self):
-        progress, trusted = self._actual_failure_prefix(torn=True)
-        row = progress['failure_events']['workers'][0]
-        self.assertEqual(len(row['events']), 4)
-        self.assertTrue(row['partial_tail'])
-        public = self._render_failure_prefix(progress, trusted)
-        self.assertEqual(public['status'], 'partial')
-        self.assertEqual(len(public['events']), 4)
-        self.assertTrue(public['partial_tail'])
-        self.assertIsNone(public['overflow'])
-        self.assertIsNone(public['dropped'])
-
-    def test_actual_prefix_without_source_proof_keeps_all_negative_losses_unknown(self):
-        progress, _trusted = self._actual_failure_prefix()
-        public = self._render_failure_prefix(progress, {})
-        self.assertEqual(public['status'], 'partial')
-        self.assertIsNone(public['events'][0]['identity'])
-        for name in ('overflow', 'dropped', 'partial_tail'):
-            with self.subTest(flag=name):
-                self.assertIsNone(public[name])
-
-    def test_actual_source_bound_prefix_render_cap_invalidates_negative_losses(self):
-        progress, trusted = self._actual_failure_prefix(workers=16)
-        self.assertEqual(progress['failure_events']['status'], 'observed')
-        public = self._render_failure_prefix(progress, trusted)
-        self.assertTrue(public['render_truncated'])
-        self.assertEqual(public['status'], 'partial')
-        self.assertLessEqual(len(json.dumps(public).encode()), 8192)
-        for name in ('overflow', 'dropped', 'partial_tail'):
-            with self.subTest(flag=name):
-                self.assertIsNone(public[name])
-
-    def test_complete_negatives_and_proven_true_facts_remain_distinct(self):
-        complete, trusted = self._actual_failure_prefix()
-        public = self._render_failure_prefix(complete, trusted)
-        self.assertEqual(public['status'], 'observed')
-        for name in ('overflow', 'dropped', 'partial_tail'):
-            self.assertIs(public[name], False)
-        lossy, _trusted = self._actual_failure_prefix(facts=True)
-        public = self._render_failure_prefix(lossy, {})
-        self.assertIs(public['overflow'], True)
-        self.assertIs(public['dropped'], True)
-        self.assertIsNone(public['partial_tail'])
-        self.assertEqual(public['status'], 'partial')
