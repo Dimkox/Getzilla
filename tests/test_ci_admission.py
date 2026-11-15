@@ -17,6 +17,69 @@ NAMES = ("security-inventory", "known-vulnerabilities", "security-kev", "securit
          "secret-scan", "bandit", "trivy-config")
 
 
+def unit_fixture(*, include_skip=False):
+    """New tiny public sources; these records never represent a real CI run."""
+    import hashlib
+    from getzilla.factory_tests import declared_ids, skip_allowance
+    contents = {
+        "factory/tests/test_disposable_exit.py": b"class DisposableExitTests:\n def test_cleanup(self): pass\n",
+        "factory/tests/test_postgres_fixture_reset.py": b"class FixtureResetTests:\n def test_reset(self): pass\n",
+    }
+    if include_skip:
+        contents["factory/tests/test_postgres_integration.py"] = b"class PostgresFactoryTests:\n def test_public_fixture_skip(self): pass\n"
+    identifiers = declared_ids(Path("/owned-fixture"), contents=contents)
+    context = {"unit_database_bindings": "scrubbed", "host_supported": False,
+               "procfs_descriptor_reopen": False, "pypdf_version": None, "jsonschema_cli": None}
+    expected_source = {"source_inventory": {name: hashlib.sha256(raw).hexdigest() for name, raw in contents.items()},
+                       "declared_ids": identifiers, "engine_sha256": "f" * 64}
+    binding = {**expected_source, "root": "/owned-fixture", "python": "/fixture/python",
+               "invocation_id": "0" * 32, "source_bindings": {"ancestry": {}, "directories": {}, "files": {}},
+               "context": context}
+    skipped = [{"id": item, "reason": skip_allowance(item, context)[1],
+                "applicability": skip_allowance(item, context)[0]}
+               for item in identifiers if skip_allowance(item, context)]
+    executed = [item for item in identifiers if not skip_allowance(item, context)]
+    unit = {"schema_version": 3, "check_id": "factory-unit", "status": "pass", "binding": binding,
+            "collected": len(identifiers), "collected_ids": identifiers, "expected_ids": identifiers,
+            "required_ids": executed, "tests_run": len(identifiers), "started": identifiers,
+            "executed": executed, "failures": 0, "errors": 0, "loader_errors": 0, "skipped": skipped,
+            "unqualified_skips": [], "missing_required": [], "source_stable": True,
+            "database_obligations": "not_run_in_unit_mode", "problems": []}
+    return unit, expected_source
+
+
+class CiSchema3RepairTests(unittest.TestCase):
+    def test_owned_three_started_two_executed_one_qualified_skip(self):
+        from getzilla.ci_admission import _factory_unit_valid
+        unit, source = unit_fixture(include_skip=True)
+        self.assertTrue(_factory_unit_valid(unit, source))
+
+    def test_owned_accounting_and_skip_provenance_refuse(self):
+        from getzilla.ci_admission import _factory_unit_valid
+        unit, source = unit_fixture(include_skip=True)
+        changed = deepcopy(unit)
+        changed["executed"].append(changed["skipped"][0]["id"])
+        self.assertFalse(_factory_unit_valid(changed, source))
+        changed = deepcopy(unit)
+        changed["skipped"][0]["reason"] = "unmeasured skip"
+        self.assertFalse(_factory_unit_valid(changed, source))
+        changed = deepcopy(unit)
+        changed["started"].append("factory.tests.test_owned.Unaccounted.test_case")
+        self.assertFalse(_factory_unit_valid(changed, source))
+
+    def test_owned_source_and_missing_evidence_refuse(self):
+        from getzilla.ci_admission import _factory_unit_valid
+        unit, source = unit_fixture()
+        self.assertTrue(_factory_unit_valid(unit, source))
+        changed = deepcopy(source)
+        changed["engine_sha256"] = "e" * 64
+        self.assertFalse(_factory_unit_valid(unit, changed))
+        changed = deepcopy(source)
+        changed["source_inventory"][next(iter(changed["source_inventory"]))] = "d" * 64
+        self.assertFalse(_factory_unit_valid(unit, changed))
+        self.assertFalse(_factory_unit_valid(unit, None))
+
+
 class CiAdmissionTests(unittest.TestCase):
     def test_required_linux_depends_on_every_new_mandatory_job(self):
         source = (Path(__file__).resolve().parents[1] / ".github/workflows/getzilla.yml").read_text()
@@ -40,10 +103,8 @@ class CiAdmissionTests(unittest.TestCase):
     def records(self):
         common = {"source": {"head": HEAD, "tree": TREE}, "run_id": "123", "attempt": "2", "status": "pass"}
         records = {name: deepcopy(common) for name in ("linux-core", "factory", "trust-ci", "lifecycle", "security-expanded")}
-        records["linux-core"]["unit"] = {"status": "pass", "collected": 2, "tests_run": 2,
-            "failures": 0, "errors": 0, "skipped": [], "database_obligations": "not_run_in_unit_mode",
-            "executed": ["factory.tests.test_disposable_exit.DisposableExitTests.test_cleanup",
-                         "factory.tests.test_postgres_fixture_reset.FixtureResetTests.test_reset"]}
+        unit, source = unit_fixture()
+        records["linux-core"].update(unit=unit, unit_source=source)
         for cell, names in (("factory", ["factory-postgres-exit"]), ("trust-ci", ["trust-ci-postgres", "trust-ci-postgres-restart"]),
                             ("lifecycle", ["factory-lifecycle"])):
             records[cell].update(primary_outcome="passed", cleanup_outcome="confirmed",

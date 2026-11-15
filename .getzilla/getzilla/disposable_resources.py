@@ -6,7 +6,9 @@ the live object, and a successful independent list must confirm its absence.
 from __future__ import annotations
 
 import json
+import hashlib
 import ipaddress
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import os
 from pathlib import Path
@@ -16,30 +18,64 @@ import stat
 import time
 import uuid
 
+from . import fsx
+
 _PIN = re.compile(r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}\Z")
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,100}\Z")
 _ID = re.compile(r"[0-9a-f]{64}\Z")
 _DEADLINE = ContextVar("disposable_cleanup_deadline", default=None)
+_RECOVERY_BOOT = ContextVar("disposable_recovery_boot", default=None)
+_LIMIT = 1024 * 1024
+
+
+def _read(path, *, private=False):
+    with fsx.ReadOnlyBoundRoot(path.parent) as root:
+        snapshot = root.read(path.name, limit=_LIMIT)
+        if snapshot is None:
+            raise FileNotFoundError(path)
+        info = fsx.lstat_at(root.handle, path.name)
+        if fsx._file_identity(info) != snapshot.identity or info.st_uid != os.getuid() or private and snapshot.mode != 0o600:
+            raise ValueError("Unowned or nonprivate source")
+        return snapshot
+
+
+def _execute(command, root, environment, *, timeout):
+    from .python_test_runner import execute
+    return execute(command, root, environment, timeout=timeout)
 
 
 def _process_identity(pid: int) -> dict:
-    current = Path("/proc/self/stat").read_text(encoding="utf-8")
+    try:
+        current = Path("/proc/self/stat").read_text(encoding="utf-8")
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except FileNotFoundError as error:
+        raise CleanupUnconfirmed("Observer procfs identity is unavailable") from error
+    if not boot or len(boot) > 128 or _RECOVERY_BOOT.get() not in (None, boot):
+        raise CleanupUnconfirmed("Observer boot identity is inconsistent")
     if int(current.split(" ", 1)[0]) != os.getpid():
         raise CleanupUnconfirmed("Process and procfs namespaces disagree; resource ownership cannot be established")
     value = current if pid == os.getpid() else Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     fields = value[value.rfind(")") + 2:].split()
-    return {"pid": pid, "start": fields[19], "boot": Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()}
+    return {"pid": pid, "start": fields[19], "boot": boot}
 
 
 class CleanupUnconfirmed(RuntimeError):
     """A resource remains, changed identity, or could not be observed."""
 
 
+def _cleanup_time():
+    if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+        raise CleanupUnconfirmed("Cleanup deadline exhausted")
+
+
 def image_pins(root: Path) -> dict:
-    data = json.loads((root / ".getzilla/config/ci-images.json").read_text(encoding="utf-8"))
-    if data.get("schema_version") != 1 or data.get("platform") != "linux/amd64":
+    data = json.loads(_read(root / ".getzilla/config/ci-images.json").content)
+    if (type(data) is not dict or set(data) != {"schema_version", "platform", "postgres", "python"}
+            or type(data["schema_version"]) is not int or data["schema_version"] != 1 or data["platform"] != "linux/amd64"):
         raise ValueError("Unknown CI image configuration")
     for key in ("postgres", "python"):
+        if type(data[key]) is not dict or set(data[key]) != {"reference", "image_id", "source"} or any(type(v) is not str for v in data[key].values()):
+            raise ValueError("Invalid CI image descriptor")
         if not _PIN.fullmatch(data[key]["reference"]) or not re.fullmatch(r"sha256:[0-9a-f]{64}", data[key]["image_id"]):
             raise ValueError("CI image must bind both manifest and configuration digest")
     return data
@@ -52,8 +88,7 @@ def ensure_images(root: Path, names=("postgres", "python")) -> None:
         try:
             inspected = json.loads(_docker("image", "inspect", pin["reference"]))
         except subprocess.CalledProcessError:
-            subprocess.run(["docker", "pull", "--platform", "linux/amd64", pin["reference"]],
-                           check=True, timeout=120)
+            _docker("pull", "--platform", "linux/amd64", pin["reference"], timeout=120)
             inspected = json.loads(_docker("image", "inspect", pin["reference"]))
         if len(inspected) != 1 or inspected[0]["Id"] != pin["image_id"] or pin["reference"] not in inspected[0].get("RepoDigests", []):
             raise ValueError("Pulled image does not match the configured manifest and image digest")
@@ -66,8 +101,13 @@ def _docker(*args: str, timeout: int = 30) -> str:
         if remaining <= 0:
             raise CleanupUnconfirmed("Cleanup deadline exhausted; no additional Docker operation authorized")
         timeout = min(timeout, remaining)
-    return subprocess.run(["docker", *args], check=True, capture_output=True,
-                          text=True, encoding="utf-8", timeout=timeout).stdout.strip()
+    result = _execute(["docker", *args], Path.cwd(), dict(os.environ), timeout=timeout)
+    if (result.terminal_state != "completed" or result.cleanup_error
+            or result.cleanup_metadata.unavailable or result.cleanup_metadata.overflow):
+        raise CleanupUnconfirmed("Docker process completion or cleanup is unconfirmed")
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, ["docker"])
+    return result.stdout.strip()
 
 
 def _inspect(kind: str, key: str) -> dict:
@@ -79,21 +119,43 @@ def _inspect(kind: str, key: str) -> dict:
 
 def _canonical_mounts(mounts):
     """Mount ordering is not identity; every entry and field remains significant."""
-    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
-        raise ValueError("Invalid container mount identity")
+    if (type(mounts) is not list or any(type(item) is not dict
+            or not {"Type", "Source", "Destination", "RW"} <= set(item)
+            or item["Type"] not in ("bind", "volume") or type(item["RW"]) is not bool
+            or item["Type"] == "volume" and (type(item.get("Name")) is not str or not _NAME.fullmatch(item["Name"]))
+            or any(type(item[field]) is not str or not item[field].strip() or len(item[field]) > 4096
+                   or any(ord(char) < 32 or ord(char) == 127 for char in item[field])
+                   for field in ("Source", "Destination"))
+            or not _absolute_posix_path(item["Destination"]) for item in mounts)):
+        raise ValueError("Incomplete container observation")
     return sorted(mounts, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
 
 
 def _identity(kind: str, value: dict) -> dict:
     if kind == "container":
+        if type(value["Config"].get("Labels")) is not dict:
+            raise ValueError("Incomplete container labels")
+        if (type(value.get("Mounts")) is not list
+                or any(type(m) is not dict or not {"Type", "Source", "Destination", "RW"} <= set(m)
+                       or m["Type"] not in ("bind", "volume")
+                       or m["Type"] == "volume" and (type(m.get("Name")) is not str or not _NAME.fullmatch(m["Name"]))
+                       or type(m["RW"]) is not bool for m in value["Mounts"])):
+            raise ValueError("Incomplete container observation")
         return {"id": value["Id"], "name": value["Name"].removeprefix("/"),
                 "image_id": value["Image"], "image": value["Config"]["Image"],
                 "labels": value["Config"].get("Labels") or {},
                 "mounts": _canonical_mounts([
-                    {key: item.get(key) for key in ("Type", "Name", "Source", "Destination")}
+                    {key: item.get(key) for key in ("Type", "Name", "Source", "Destination", "RW")}
                     for item in value.get("Mounts", [])])}
-    result = {key: value.get(key) for key in ("Name", "Labels", "Driver", "Options")}
+    if (not {"Name", "Labels", "Driver", "Options"} <= set(value)
+            or type(value["Labels"]) is not dict or type(value["Driver"]) is not str
+            or not value["Driver"] or value["Options"] is not None and type(value["Options"]) is not dict):
+        raise ValueError("Incomplete resource observation")
+    result = {key: value[key] for key in ("Name", "Labels", "Driver", "Options")}
     if kind == "volume":
+        if (type(value.get("CreatedAt")) is not str or not 0 < len(value["CreatedAt"]) <= 128
+                or not _absolute_posix_path(value.get("Mountpoint"))):
+            raise ValueError("Incomplete volume birth or location")
         result.update({key: value.get(key) for key in ("CreatedAt", "Mountpoint")})
     else:
         result["Id"] = value["Id"]
@@ -194,15 +256,17 @@ class OwnedDocker:
         self.owner_process = _process_identity(os.getpid())
         self.cleanup_status = "not_run"
         self._save()
+        with self._anchors(create=True):
+            pass
 
     @classmethod
     def recover(cls, manifest: Path):
         """Called only by the observer after it confirms its child has exited."""
         path = Path(manifest)
-        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
-            raise ValueError("Unsafe ownership journal")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("schema") != "getzilla-disposable-owner-v1":
+        snapshot = _read(path, private=True)
+        data = json.loads(snapshot.content)
+        if (type(data) is not dict or set(data) != {"schema", "namespace", "nonce", "resources", "cleanup_status", "owner_process"}
+                or data.get("schema") != "getzilla-disposable-owner-v1"):
             raise ValueError("Unknown ownership journal")
         if not _NAME.fullmatch(data.get("namespace", "")) or not re.fullmatch(r"[0-9a-f]{32}", data.get("nonce", "")):
             raise ValueError("Invalid ownership identity")
@@ -211,44 +275,232 @@ class OwnedDocker:
         instance.resources = data["resources"]
         instance.cleanup_status = data["cleanup_status"]
         instance.owner_process = data["owner_process"]
+        instance._journal_identity = snapshot.identity
+        parent = path.parent.stat(follow_symlinks=False)
+        instance._parent_identity = (parent.st_dev, parent.st_ino)
+        instance._validate()
         owner = instance.owner_process
         if type(owner.get("pid")) is not int or owner["pid"] <= 0:
             raise ValueError("Invalid allocator identity")
-        if owner.get("boot") != Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip():
-            raise CleanupUnconfirmed("Allocator boot identity is unavailable")
         try:
-            if _process_identity(owner["pid"]) == owner:
-                raise CleanupUnconfirmed("Allocator is still alive; recovery would race allocation")
-        except FileNotFoundError:
-            pass
-        for item in instance.resources:
-            if (item.get("kind") not in ("container", "volume", "network", "directory")
-                    or not _NAME.fullmatch(item.get("name", ""))
-                    or not item.get("name", "").startswith(instance.namespace + "-")):
-                raise ValueError("Resource outside ownership namespace")
-            if "id" in item and not _ID.fullmatch(item["id"]):
-                raise ValueError("Invalid full container identity")
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        except FileNotFoundError as error:
+            raise CleanupUnconfirmed("Allocator boot observation is unavailable") from error
+        if owner.get("boot") != boot:
+            raise CleanupUnconfirmed("Allocator boot identity is unavailable")
+        token = _RECOVERY_BOOT.set(boot)
+        try:
+            try:
+                observed = _process_identity(owner["pid"])
+                if (type(observed) is not dict or set(observed) != set(owner)
+                        or type(observed["pid"]) is not int or observed["pid"] != owner["pid"]
+                        or type(observed["start"]) is not str or not 0 < len(observed["start"]) <= 128
+                        or observed["boot"] != boot):
+                    raise CleanupUnconfirmed("Allocator observation is incomplete or inconsistent")
+                if observed == owner:
+                    raise CleanupUnconfirmed("Allocator is still alive; recovery would race allocation")
+            except FileNotFoundError:
+                pass
+        finally:
+            _RECOVERY_BOOT.reset(token)
         return instance
+
+    def _validate(self):
+        if (type(self.resources) is not list or len(self.resources) > 128
+                or self.cleanup_status not in ("not_run", "unconfirmed", "removed")
+                or type(self.owner_process) is not dict
+                or set(self.owner_process) != {"pid", "start", "boot"}
+                or type(self.owner_process["pid"]) is not int or self.owner_process["pid"] <= 0
+                or any(type(self.owner_process[k]) is not str or not 0 < len(self.owner_process[k]) <= 128 for k in ("start", "boot"))):
+            raise ValueError("Invalid allocator journal")
+        seen = set()
+        for item in self.resources:
+            if (type(item) is not dict or item.get("kind") not in ("container", "network", "volume", "directory")
+                    or type(item.get("name")) is not str or not _NAME.fullmatch(item["name"])
+                    or not item["name"].startswith(self.namespace + "-")
+                    or item.get("status") not in ("pending", "bound", "unconfirmed", "removed")
+                    or (item["kind"], item["name"]) in seen):
+                raise ValueError("Invalid resource journal")
+            allowed = {"kind", "name", "status", "identity", "cleanup_error", "cleanup_mismatch_fields"}
+            if item["kind"] == "container":
+                allowed |= {"id", "image", "image_id"}
+            if item["kind"] == "directory":
+                allowed.add("directory_removal")
+            if set(item) - allowed:
+                raise ValueError("Unknown resource journal fields")
+            seen.add((item["kind"], item["name"]))
+            if item["status"] == "bound" and type(item.get("identity")) is not dict:
+                raise ValueError("Missing bound resource identity")
+            identity = item.get("identity")
+            if "directory_removal" in item:
+                transition = item["directory_removal"]
+                if (identity is None or type(transition) is not dict or set(transition) != {"marker", "nonce"}
+                        or transition["nonce"] != self.nonce or type(transition["marker"]) is not list
+                        or len(transition["marker"]) != 8 or any(type(v) is not int or v < 0 for v in transition["marker"])
+                        or transition["marker"][2:4] != [stat.S_IFREG, 32] or transition["marker"][6:] != [1, 0o600]):
+                    raise ValueError("Invalid directory removal transition")
+            if identity is not None:
+                keys = {"device", "inode"} if item["kind"] == "directory" else (
+                    {"id", "name", "image_id", "image", "labels", "mounts"} if item["kind"] == "container" else
+                    {"Name", "Labels", "Driver", "Options", *( ("CreatedAt", "Mountpoint") if item["kind"] == "volume" else ("Id",) )})
+                if type(identity) is not dict or set(identity) != keys:
+                    raise ValueError("Incomplete resource identity")
+                if item["kind"] == "directory":
+                    if any(type(identity[k]) is not int or identity[k] <= 0 for k in keys):
+                        raise ValueError("Invalid directory identity")
+                elif (identity.get("name", identity.get("Name")) != item["name"]
+                      or identity.get("labels", identity.get("Labels")) != self.labels):
+                    raise ValueError("Foreign journal identity")
+                if item["kind"] == "container":
+                    _canonical_mounts(identity["mounts"])
+                if item["kind"] == "network" and not _ID.fullmatch(identity.get("Id", "")):
+                    raise ValueError("Invalid full network identity")
+                if item["kind"] == "volume" and (type(identity["CreatedAt"]) is not str
+                        or not 0 < len(identity["CreatedAt"]) <= 128 or not _absolute_posix_path(identity["Mountpoint"])):
+                    raise ValueError("Incomplete volume journal identity")
+            if item["kind"] == "container" and (not _PIN.fullmatch(item.get("image", ""))
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", item.get("image_id", ""))
+                    or item["status"] == "bound" and not _ID.fullmatch(item.get("id", ""))):
+                raise ValueError("Invalid container journal identity")
 
     @property
     def labels(self):
         return {"getzilla.ci.namespace": self.namespace, "getzilla.ci.nonce": self.nonce}
 
+    @staticmethod
+    def _private(root, name, limit=2048):
+        value = root.read(name, limit=limit)
+        if value is not None:
+            info = fsx.lstat_at(root.handle, name)
+            if value.mode != 0o600 or info.st_uid != os.getuid() or fsx._file_identity(info) != value.identity:
+                raise ValueError("Unowned or changed anchor file")
+        return value
+
+    def _anchor_path(self):
+        return self.manifest.parent / (".getzilla-owner-" + hashlib.sha256(os.fsencode(self.manifest.name)).hexdigest())
+
+    @contextmanager
+    def _anchors(self, create=False, *, witness=None):
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as parent:
+            info = fsx.fstat_dir(parent.handle)
+            if (info.st_dev, info.st_ino) != self._parent_identity:
+                raise ValueError("Anchor parent changed")
+            if create:
+                fsx.mkdir_at(parent.handle, self._anchor_path().name, 0o700)
+            with fsx.ReadOnlyBoundRoot(self._anchor_path()) as root:
+                info = fsx.fstat_dir(root.handle)
+                if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                    raise ValueError("Unowned anchor root")
+                header = {"journal": [*self._parent_identity, self.manifest.name], "namespace": self.namespace,
+                          "nonce": self.nonce, "owner": self.owner_process}
+                if create:
+                    self._put_anchor(root, "owner", header)
+                value = self._private(root, "owner")
+                if value is None or value.content != json.dumps(header, sort_keys=True).encode():
+                    raise ValueError("Anchor owner binding changed")
+                if witness is not None:
+                    witness.append(value)
+                parent.check()
+                yield root
+
+    def _anchor_bytes(self, root):
+        total = 0
+        with os.scandir(root.handle) as entries:
+            for count, entry in enumerate(entries, 1):
+                if count > 258 or not (entry.name == "owner" or re.fullmatch(r"[0-9a-f]{64}\.(record|marker|tmp)", entry.name)):
+                    raise ValueError("Unknown anchor metadata")
+                value = self._private(root, entry.name)
+                if value is None:
+                    raise ValueError("Anchor metadata disappeared")
+                total += len(value.content)
+        return total
+
+    def _put_anchor(self, root, name, value):
+        raw = json.dumps(value, sort_keys=True).encode()
+        if len(raw) > 2048:
+            raise ValueError("Anchor record exceeds limit")
+        current = self._private(root, name)
+        if current is not None:
+            if current.content != raw:
+                raise ValueError("Anchor record changed")
+            return
+        temporary = name.removesuffix(".record") + ".tmp"
+        pending = self._private(root, temporary)
+        if pending is not None:
+            if pending.content != raw:
+                raise ValueError("Uncertain anchor publication")
+            _cleanup_time()
+            root.check()
+            fsx.replace_at(root.handle, temporary, root.handle, name)
+            fsx.fsync_dir(root.handle)
+            return
+        if len(_read(self.manifest, private=True).content) + self._anchor_bytes(root) + len(raw) + 32 * len(self.resources) > _LIMIT:
+            raise ValueError("Combined metadata exceeds limit")
+        _cleanup_time()
+        fd = fsx.open_at(root.handle, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            root.check()
+            if self._private(root, name) is not None:
+                raise ValueError("Anchor publication raced")
+            _cleanup_time()
+            fsx.replace_at(root.handle, temporary, root.handle, name)
+            fsx.fsync_dir(root.handle)
+        finally:
+            try:
+                if _DEADLINE.get() is None or time.monotonic() < _DEADLINE.get():
+                    fsx.unlink_at(root.handle, temporary)
+            except FileNotFoundError:
+                pass
+
     def _save(self):
-        self.manifest.parent.mkdir(parents=True, exist_ok=True)
+        self._validate()
         data = {"schema": "getzilla-disposable-owner-v1", "namespace": self.namespace,
                 "nonce": self.nonce, "resources": self.resources, "cleanup_status": self.cleanup_status,
                 "owner_process": self.owner_process}
-        temporary = self.manifest.with_name(self.manifest.name + "." + uuid.uuid4().hex)
-        try:
-            with temporary.open("x", encoding="utf-8", newline="\n") as stream:
-                os.chmod(temporary, 0o600)
-                json.dump(data, stream, sort_keys=True, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.manifest)
-        finally:
-            temporary.unlink(missing_ok=True)
+        payload = json.dumps(data, sort_keys=True, indent=2).encode()
+        if len(payload) > _LIMIT:
+            raise ValueError("Ownership journal exceeds limit")
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as root:
+            info = fsx.fstat_dir(root.handle)
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise ValueError("Ownership journal parent is not private")
+            parent_identity = (info.st_dev, info.st_ino)
+            if parent_identity != getattr(self, "_parent_identity", parent_identity):
+                raise ValueError("Ownership journal parent changed")
+            self._parent_identity = parent_identity
+            current = root.read(self.manifest.name, limit=_LIMIT)
+            usage = 0
+            if self._anchor_path().exists():
+                with self._anchors() as anchors:
+                    usage = self._anchor_bytes(anchors)
+            if len(payload) + (len(current.content) if current else 0) + usage + 32 * len(self.resources) > _LIMIT:
+                raise ValueError("Combined metadata exceeds limit")
+            expected = getattr(self, "_journal_identity", None)
+            if (None if current is None else current.identity) != expected:
+                raise ValueError("Ownership journal identity changed")
+            temporary = self.manifest.name + "." + uuid.uuid4().hex
+            descriptor = fsx.open_at(root.handle, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                root.check()
+                observed = root.read(self.manifest.name, limit=_LIMIT)
+                if (None if observed is None else observed.identity) != expected:
+                    raise ValueError("Ownership journal changed before publication")
+                fsx.replace_at(root.handle, temporary, root.handle, self.manifest.name)
+                fsx.fsync_dir(root.handle)
+                self._journal_identity = root.read(self.manifest.name, limit=_LIMIT).identity
+            finally:
+                try:
+                    fsx.unlink_at(root.handle, temporary)
+                except FileNotFoundError:
+                    pass
 
     def _intent(self, kind: str, suffix: str, **extra):
         name = f"{self.namespace}-{suffix}"
@@ -256,26 +508,40 @@ class OwnedDocker:
             raise ValueError("Invalid or repeated resource name")
         item = {"kind": kind, "name": name, "status": "pending", **extra}
         self.resources.append(item)
-        self._save()
+        try:
+            self._save()
+        except (OSError, ValueError):
+            self.resources.pop()
+            raise
         return item
 
     def _labels(self):
         return [part for key, value in self.labels.items() for part in ("--label", f"{key}={value}")]
 
     def _bind(self, item, key):
+        previous = dict(item)
         value = _inspect(item["kind"], key)
         identity = _identity(item["kind"], value)
+        recovering = key == item["name"] and item["status"] in ("pending", "unconfirmed") and "identity" not in item
         labels = identity.get("labels", identity.get("Labels")) or {}
         if any(labels.get(key) != val for key, val in self.labels.items()):
             raise ValueError("New resource did not retain ownership labels")
         if identity.get("name", identity.get("Name")) != item["name"]:
             raise ValueError("New resource name differs from intent")
         if item["kind"] == "container":
-            if identity["name"] != item["name"] or identity["image"] != item["image"] or identity["image_id"] != item["image_id"]:
+            if (not _ID.fullmatch(identity["id"]) or not recovering and identity["id"] != key
+                    or identity["image"] != item["image"] or identity["image_id"] != item["image_id"]):
                 raise ValueError("New container identity differs from intent")
             item["id"] = identity["id"]
+        if item["kind"] == "network" and (not _ID.fullmatch(identity["Id"]) or not recovering and identity["Id"] != key):
+            raise ValueError("New network identity differs from returned ID")
         item["identity"], item["status"] = identity, "bound"
-        self._save()
+        try:
+            self._save()
+        except (OSError, ValueError):
+            item.clear()
+            item.update(previous)
+            raise
         return item
 
     def volume(self, suffix: str):
@@ -285,37 +551,182 @@ class OwnedDocker:
 
     def network(self, suffix: str):
         item = self._intent("network", suffix)
-        _docker("network", "create", "--internal", *self._labels(), item["name"])
-        return self._bind(item, item["name"])
+        key = _docker("network", "create", "--internal", *self._labels(), item["name"])
+        if not _ID.fullmatch(key):
+            raise ValueError("Docker did not return a full network ID")
+        return self._bind(item, key)
 
     def directory(self, suffix: str):
         item = self._intent("directory", suffix)
         path = self.manifest.parent / item["name"]
-        path.mkdir(mode=0o700)
-        (path / ".owner").write_text(self.nonce, encoding="utf-8", newline="\n")
-        value = path.lstat()
-        item.update(identity={"device": value.st_dev, "inode": value.st_ino}, status="bound")
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as root:
+            if (fsx.fstat_dir(root.handle).st_dev, fsx.fstat_dir(root.handle).st_ino) != self._parent_identity:
+                raise ValueError("Ownership parent changed")
+            fsx.mkdir_at(root.handle, item["name"], 0o700)
+            with fsx.ReadOnlyBoundRoot(path) as directory:
+                descriptor = fsx.open_at(directory.handle, ".owner", os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as marker:
+                    marker.write(self.nonce.encode())
+                    marker.flush()
+                    os.fsync(marker.fileno())
+                value = fsx.fstat_dir(directory.handle)
+                directory.check()
+                item.update(identity={"device": value.st_dev, "inode": value.st_ino}, status="bound")
+            root.check()
         self._save()
         return path
 
     def _remove_directory(self, item):
         path = self.manifest.parent / item["name"]
-        if not path.exists() and not path.is_symlink():
-            return
-        value = path.lstat()
-        if not stat.S_ISDIR(value.st_mode) or {"device": value.st_dev, "inode": value.st_ino} != item.get("identity"):
-            raise CleanupUnconfirmed("Disposable directory identity changed")
-        marker = path / ".owner"
-        if marker.is_symlink() or marker.read_text(encoding="utf-8") != self.nonce:
-            raise CleanupUnconfirmed("Disposable directory ownership changed")
-        entries = list(path.iterdir())
-        if any(entry.name not in (".owner", "payload") or entry.is_dir() for entry in entries):
-            raise CleanupUnconfirmed("Unexpected data in disposable directory")
-        for entry in entries:
-            entry.unlink()
-        path.rmdir()
-        if path.exists() or path.is_symlink():
-            raise CleanupUnconfirmed("Disposable directory removal unconfirmed")
+        key = hashlib.sha256(("directory:" + item["name"]).encode()).hexdigest()
+        def marker_id(value):
+            return list(value.identity[:5] + value.identity[6:])
+        def expired():
+            if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                raise CleanupUnconfirmed("Cleanup deadline exhausted")
+        header = []
+        with fsx.ReadOnlyBoundRoot(self.manifest.parent) as parent, self._anchors(witness=header) as anchor, ExitStack() as held:
+            snapshots, descriptors = {}, {}
+            def retain(root, name, value):
+                slot = (root, name)
+                snapshots[slot] = value
+                if value is not None:
+                    fd = fsx.open_at(root.handle, name, os.O_RDONLY | fsx.O_NOFOLLOW | fsx.O_NONBLOCK | fsx.O_CLOEXEC)
+                    descriptors[slot] = held.enter_context(os.fdopen(fd, "rb"))
+                    if fsx._file_identity(os.fstat(fd)) != value.identity:
+                        raise CleanupUnconfirmed("Authority changed while opening")
+            def authority():
+                # Finish all reads/ancestry checks before the final named/held checks.
+                for (root, name), value in snapshots.items():
+                    if self._private(root, name) != value:
+                        raise CleanupUnconfirmed("Live removal authority changed")
+                for (root, name), value in snapshots.items():
+                    try:
+                        info = fsx.lstat_at(root.handle, name)
+                    except FileNotFoundError:
+                        info = None
+                    if value is None:
+                        if info is not None:
+                            raise CleanupUnconfirmed("Absent authority slot changed")
+                    elif (info is None or fsx._file_identity(info) != value.identity
+                          or fsx._file_identity(os.fstat(descriptors[root, name].fileno())) != value.identity):
+                        raise CleanupUnconfirmed("Held removal authority changed")
+            retain(anchor, "owner", header[0])
+            info = fsx.fstat_dir(parent.handle)
+            if (info.st_dev, info.st_ino) != self._parent_identity:
+                raise CleanupUnconfirmed("Ownership parent changed")
+            saved = _read(self.manifest, private=True)
+            if saved.identity != self._journal_identity:
+                raise CleanupUnconfirmed("Ownership journal changed")
+            proof = self._private(anchor, key + ".record")
+            record = json.loads(proof.content) if proof else None
+            if record is not None:
+                if type(record) is not dict:
+                    raise CleanupUnconfirmed("Unknown anchor record")
+                marker = record.get("marker")
+                expected = {"kind": "directory", "name": item["name"], "identity": item.get("identity"),
+                            "nonce": self.nonce, "state": "armed", "marker": marker}
+                if (record != expected or proof.content != json.dumps(expected, sort_keys=True).encode()
+                        or type(marker) is not list or len(marker) != 7
+                        or any(type(v) is not int or v < 0 for v in marker)
+                        or marker[2:4] != [stat.S_IFREG, 32] or marker[-2:] != [1, 0o600]):
+                    raise CleanupUnconfirmed("Anchor resource binding changed")
+            retained = self._private(anchor, key + ".marker", 32)
+            if retained is not None and (not record or marker_id(retained) != record["marker"] or retained.content != self.nonce.encode()):
+                raise CleanupUnconfirmed("Live anchor marker changed")
+            retain(anchor, key + ".record", proof)
+            retain(anchor, key + ".marker", retained)
+            try:
+                named = fsx.lstat_at(parent.handle, item["name"])
+            except FileNotFoundError:
+                named = None
+            if named is not None:
+                if item["status"] not in ("bound", "unconfirmed"):
+                    raise CleanupUnconfirmed("Unbound directory removal")
+                with fsx.ReadOnlyBoundRoot(path) as directory:
+                    info = fsx.fstat_dir(directory.handle)
+                    if (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700
+                            or {"device": info.st_dev, "inode": info.st_ino} != item.get("identity")
+                            or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
+                        raise CleanupUnconfirmed("Disposable directory identity changed")
+                    original = self._private(directory, ".owner", 32)
+                    entries = os.listdir(directory.handle)
+                    if len(entries) > 2 or set(entries) - {".owner", "payload"}:
+                        raise CleanupUnconfirmed("Unexpected disposable payload")
+                    if original is not None:
+                        if retained is not None or original.content != self.nonce.encode():
+                            raise CleanupUnconfirmed("Disposable marker changed")
+                        retain(directory, ".owner", original)
+                        payloads = {name: original if name == ".owner" else directory.read(name, limit=_LIMIT) for name in entries}
+                        if any(directory.read(name, limit=_LIMIT) != value for name, value in payloads.items()):
+                            raise CleanupUnconfirmed("Disposable payload changed")
+                        if "payload" in payloads:
+                            if self._private(directory, ".owner", 32) != original:
+                                raise CleanupUnconfirmed("Disposable marker changed")
+                            directory.check()
+                            authority()
+                            expired()
+                            fsx.unlink_at(directory.handle, "payload")
+                        expected = {"kind": "directory", "name": item["name"], "identity": item["identity"],
+                                    "nonce": self.nonce, "state": "armed", "marker": marker_id(original)}
+                        if record is not None and record != expected:
+                            raise CleanupUnconfirmed("Original marker differs from anchor")
+                        authority()
+                        self._put_anchor(anchor, key + ".record", expected)
+                        if proof is None:
+                            proof = self._private(anchor, key + ".record")
+                            if proof is None or proof.content != json.dumps(expected, sort_keys=True).encode():
+                                raise CleanupUnconfirmed("Published authority changed")
+                            retain(anchor, key + ".record", proof)
+                        previous = item.get("directory_removal")
+                        item["directory_removal"] = {"marker": list(original.identity), "nonce": self.nonce}
+                        try:
+                            self._save()
+                        except (OSError, ValueError):
+                            if previous is None:
+                                item.pop("directory_removal", None)
+                            else:
+                                item["directory_removal"] = previous
+                            raise
+                        if self._private(directory, ".owner", 32) != original:
+                            raise CleanupUnconfirmed("Original marker changed before move")
+                        directory.check()
+                        anchor.check()
+                        authority()
+                        expired()
+                        fsx.replace_at(directory.handle, ".owner", anchor.handle, key + ".marker")
+                        fsx.fsync_dir(directory.handle)
+                        fsx.fsync_dir(anchor.handle)
+                        moved = self._private(anchor, key + ".marker", 32)
+                        original_fd = descriptors.pop((directory, ".owner"))
+                        if (moved is None or marker_id(moved) != marker_id(original) or moved.content != original.content
+                                or fsx._file_identity(os.fstat(original_fd.fileno())) != moved.identity):
+                            raise CleanupUnconfirmed("Original marker changed during move")
+                        # Only our known MOVE may change the original marker's ctime.
+                        del snapshots[directory, ".owner"]
+                        snapshots[anchor, key + ".marker"] = moved
+                        descriptors[anchor, key + ".marker"] = original_fd
+                    elif record is None or retained is None or entries:
+                        raise CleanupUnconfirmed("Unproved marker-less directory")
+                    directory.check()
+                    authority()
+                    expired()
+                    fsx.rmdir_at(parent.handle, item["name"])
+                parent.check()
+                try:
+                    fsx.lstat_at(parent.handle, item["name"])
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise CleanupUnconfirmed("Directory absence unconfirmed")
+            for suffix in (".marker", ".record"):
+                value = snapshots[anchor, key + suffix]
+                authority()
+                if value is not None:
+                    expired()
+                    fsx.unlink_at(anchor.handle, key + suffix)
+                    snapshots[anchor, key + suffix] = None
+            fsx.fsync_dir(anchor.handle)
 
     def container(self, suffix: str, image: str, *, volume=None, network=None,
                   publish_postgres=False, environment=None, command=(),
@@ -391,6 +802,8 @@ class OwnedDocker:
         errors = []
         for item in reversed(self.resources):
             try:
+                if _DEADLINE.get() is not None and time.monotonic() >= _DEADLINE.get():
+                    raise CleanupUnconfirmed("Cleanup deadline exhausted")
                 if item["kind"] == "directory":
                     self._remove_directory(item)
                     item["status"] = "removed"
@@ -402,7 +815,14 @@ class OwnedDocker:
                 if "identity" not in item:
                     self._bind(item, key)
                     key = item.get("id", item["name"])
-                identity = _identity(item["kind"], _inspect(item["kind"], key))
+                if item["kind"] == "network":
+                    key = item["identity"]["Id"]
+                try:
+                    identity = _identity(item["kind"], _inspect(item["kind"], key))
+                except ValueError as error:
+                    if item["kind"] == "container" and error.args == ("Incomplete container observation",):
+                        item["cleanup_mismatch_fields"] = ["mounts"]
+                    raise
                 expected = item["identity"]
                 if item["kind"] == "container":
                     # Existing v1 journals may retain Docker's original order.
@@ -432,6 +852,9 @@ class OwnedDocker:
                 item["cleanup_error"] = type(exc).__name__
                 errors.append(type(exc).__name__)
         self.cleanup_status = "unconfirmed" if errors else "removed"
-        self._save()
+        try:
+            self._save()
+        except (OSError, ValueError) as error:
+            errors.append(type(error).__name__)
         if errors:
             raise CleanupUnconfirmed("Disposable cleanup unconfirmed: " + ", ".join(errors))
