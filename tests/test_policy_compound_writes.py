@@ -12,10 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool, sensitive_action
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook
+from tests.test_policy_shell_state import _functional_policy_clock
 
 
 class CompoundWritePolicyTests(unittest.TestCase):
@@ -51,6 +53,7 @@ class CompoundWritePolicyTests(unittest.TestCase):
         cls.stack.close()
 
     def setUp(self) -> None:
+        self.enterContext(_functional_policy_clock())
         approvals_path(self.root).write_text('[]', encoding='utf-8')
 
     def grant(self, case: tuple[str, str, str, str]) -> None:
@@ -62,7 +65,7 @@ class CompoundWritePolicyTests(unittest.TestCase):
         event = {'tool_name': 'Bash', 'tool_input': {'command': command}}
         allowed, reason = evaluate_pre_tool(self.root, event)
         with self.subTest(layer='policy', command=command):
-            self.assertEqual(allowed, expected, (command, reason))
+            self.assertEqual(allowed, expected, policy_diagnostic(allowed, reason))
         if hook:
             code, result, error = run_hook(self.root, 'pre_tool_use.py', {
                 **event, 'cwd': str(self.root), 'session_id': 'compound',

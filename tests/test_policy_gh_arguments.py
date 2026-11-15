@@ -20,6 +20,7 @@ from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
+from tests.test_policy_shell_state import _functional_policy_clock
 
 
 def _literal_hook_flags(code, result):
@@ -75,6 +76,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
         cls.stack.close()
 
     def setUp(self) -> None:
+        self.enterContext(_functional_policy_clock())
         approvals_path(self.root).write_text('[]', encoding='utf-8')
 
     def grant(self, resource: str, *, production: bool = False) -> None:

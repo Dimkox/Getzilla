@@ -59,6 +59,46 @@ class FunctionalPolicyClockTests(unittest.TestCase):
         self.assertEqual((legacy._SCAN_SECONDS, legacy._SCAN_ENTRY_LIMIT), (3.0, 20000))
 
 
+    def test_common_clock_fixture_preserves_discovery_and_restores_after_failures(self):
+        import time
+        from tests.test_policy_gh_arguments import GhArgumentPolicyTests
+        from tests.test_policy_compound_writes import CompoundWritePolicyTests
+        from tests.test_policy_bypasses import PullRequestReviewTests
+        loader = unittest.TestLoader()
+        for case in (ShellStatePolicyTests, GhArgumentPolicyTests,
+                     CompoundWritePolicyTests, PullRequestReviewTests):
+            self.assertTrue(isinstance(case, type) and issubclass(case, unittest.TestCase))
+            names = loader.getTestCaseNames(case)
+            self.assertTrue(names)
+            self.assertEqual(len(names), len(set(names)))
+        events = []
+        real_monotonic = time.monotonic
+        class OwnedLifecycle(unittest.TestCase):
+            def setUp(inner):
+                inner.enterContext(_functional_policy_clock())
+                events.append(('setup', legacy.time.monotonic()))
+            def test_a_failure(inner):
+                inner.assertIs(time.monotonic, real_monotonic)
+                inner.fail('owned expected lifecycle failure')
+            def test_b_reentrant_setup(inner):
+                inner.setUp()
+                budget = legacy._Budget()
+                budget.tick()
+                inner.assertEqual(budget._entries, 1)
+                inner.assertEqual(legacy.time.monotonic(), 0.0)
+        host = SimpleNamespace(monotonic=lambda: 123456.0)
+        with mock.patch.object(legacy, 'time', host):
+            suite = loader.loadTestsFromTestCase(OwnedLifecycle)
+            self.assertEqual(suite.countTestCases(), 2)
+            result = unittest.TestResult()
+            suite.run(result)
+            self.assertEqual((result.testsRun, len(result.failures), len(result.errors)), (2, 1, 0))
+            self.assertIs(legacy.time, host, 'enterContext cleanup must restore after failure and repeated setup')
+            self.assertIs(time.monotonic, real_monotonic)
+        self.assertEqual(events, [('setup', 0.0)] * 3)
+        self.assertIs(legacy.time, time)
+
+
 def _format_flags(code, result):
     """Closed diagnostic projections only; never return a hook value."""
     mapping = isinstance(result, dict)
@@ -296,6 +336,7 @@ class ShellStatePolicyTests(unittest.TestCase):
         cls.stack.close()
 
     def setUp(self) -> None:
+        self.enterContext(_functional_policy_clock())
         approvals_path(self.root).write_text('[]', encoding='utf-8')
         environment = mock.patch.dict(os.environ)
         environment.start()
@@ -435,7 +476,6 @@ class ShellStatePolicyTests(unittest.TestCase):
         ):
             self.check(prefix + '; ' + self.ISSUE, False)
 
-    @_functional_policy_clock()
     def test_only_bounded_literal_same_root_directory_forms_are_supported(self) -> None:
         for prefix in (f'cd {shlex.quote(str(self.root))}', 'cd .', 'cd dist', 'cd -- dist', 'pushd .', 'pushd dist'):
             self.check(prefix + ' && ' + self.ISSUE, True)
@@ -443,7 +483,6 @@ class ShellStatePolicyTests(unittest.TestCase):
                        'pushd -n .', 'pushd ..', 'popd', 'cd . extra'):
             self.check(prefix + '; ' + self.ISSUE, False)
 
-    @_functional_policy_clock()
     def test_command_local_target_environment_remains_local(self) -> None:
         for read in ("GH_REPO=Other/Project printf '%s' public", 'GH_REPO=Other/Project gh pr view 5'):
             self.check(read + '; ' + self.ISSUE, True)
