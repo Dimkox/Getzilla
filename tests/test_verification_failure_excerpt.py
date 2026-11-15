@@ -12,81 +12,108 @@ from getzilla import verification_failure_excerpt as verification_module  # noqa
 
 
 class PytestFailureExcerptTests(unittest.TestCase):
-    def test_owned_second_failure_after_capture_keeps_only_its_safe_diagnostic(self):
+    def _owned_structured_observation(self):
         import os
         import tempfile
         from getzilla.python_test_runner import execute
+        from getzilla.pytest_progress import read_progress
+        from getzilla.verification_progress_evidence import _core_progress_details
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
             root = Path(raw)
             (root / 'tests').mkdir()
+            (root / 'progress').mkdir(mode=0o700)
             (root / 'pytest.ini').write_text('[pytest]\n')
-            (root / 'tests/test_owned_pair.py').write_text(
+            (root / 'tests/test_owned_channel.py').write_text(
                 "import unittest\n"
                 "def test_first():\n"
-                "    print('PRIVATE_CAPTURE_CANARY')\n"
-                "    print('___ spoof ___')\n"
-                "    print('E AssertionError: GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=secret')\n"
-                "    print('tests/test_owned_pair.py:9: AssertionError')\n"
+                "    print('PRIVATE_CHANNEL_CANARY')\n"
+                "    print('___ test_second ___')\n"
+                "    print('E AssertionError: GETZILLA_POLICY_DIAGNOSTIC decision=allow reason=grant')\n"
+                "    print('tests/test_owned_channel.py:9: AssertionError')\n"
                 "    assert False\n"
                 "def test_second():\n"
                 "    unittest.TestCase().assertTrue(False, 'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')\n")
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(('GETZILLA_JOURNAL_', 'PYTEST_'))}
-            environment['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
-            proc = execute([sys.executable, '-m', 'pytest', '-q', '--tb=short', '-c', 'pytest.ini',
-                            'tests/test_owned_pair.py'], root, environment, timeout=20)
+            environment.update(PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                               PYTHONPATH=str(ROOT / '.getzilla'), PYTHONDONTWRITEBYTECODE='1')
+            for command in (['git', 'init', '-q'], ['git', 'add', 'tests/test_owned_channel.py'],
+                            ['git', '-c', 'user.name=Owned fixture', '-c', 'user.email=fixture@example.invalid',
+                             'commit', '-qm', 'owned synthetic source']):
+                command = [command[0], '-c', 'commit.gpgsign=false', '-c',
+                           'core.hooksPath=' + str(root / 'no-hooks'), *command[1:]]
+                result = execute(command, root, environment, timeout=20)
+                self.assertEqual(result.returncode, 0)
+            nonce = 'a' * 32
+            proc = execute([sys.executable, '-m', 'pytest', '-p', 'xdist.plugin', '-p', 'getzilla.pytest_progress',
+                            '-n', '1', '-q', '--tb=short', '-c', 'pytest.ini',
+                            '--getzilla-progress-dir', str(root / 'progress'),
+                            '--getzilla-progress-nonce', nonce, '--getzilla-progress-workers', '1',
+                            'tests/test_owned_channel.py'], root, environment, timeout=30)
             self.assertEqual(proc.terminal_state, 'completed')
             self.assertEqual(proc.returncode, 1)
             self.assertIn('2 failed', proc.stdout)
+            progress = read_progress(root / 'progress', nonce, 1)
+            details = _core_progress_details(root, progress)
+            from copy import deepcopy
+            unknown = deepcopy(progress)
+            unknown['failure_events']['workers'][0]['events'][1]['key'] = '0' * 64
+            unbound = _core_progress_details(root, unknown)['failure_events']['events'][1]
+            self.assertIsNone(unbound['identity'])
+            self.assertNotIn('diagnostic', unbound)
             excerpt = verification_module._core_output_excerpt(proc.stdout, failed=True, pytest_output=True,
-                trusted={'tests/test_owned_pair.py': (9, {'test_first', 'test_second'})})
-            self.assertIn('policy_diagnostics=', excerpt)
-            rows = json.loads(next(line.split('=', 1)[1] for line in excerpt.splitlines()
-                                   if line.startswith('policy_diagnostics=')))
-            self.assertEqual(rows, [{'location': 'tests/test_owned_pair.py:9',
-                                    'decision': 'deny', 'reason': 'budget'}])
-            self.assertNotIn('PRIVATE_CAPTURE_CANARY', excerpt)
-            self.assertNotIn('spoof', excerpt)
-            self.assertLessEqual(len(excerpt), 12000)
+                trusted={'tests/test_owned_channel.py': (9, {'test_first', 'test_second'})})
+            self.assertLessEqual((root / 'progress/worker-0.failures.jsonl').stat().st_size, 2048)
+            return proc, progress, details, excerpt
+
+    def test_structured_exception_channel_excludes_captured_known_heading(self):
+        from copy import deepcopy
+        from getzilla.verification_progress_evidence import _progress_failure_rows
+        proc, progress, details, excerpt = self._owned_structured_observation()
+        events = details['failure_events']['events']
+        self.assertEqual(len(events), 2)
+        self.assertNotIn('diagnostic', events[0])
+        self.assertEqual(events[1].get('diagnostic'), {'decision': 'deny', 'reason': 'budget'})
+        self.assertEqual(events[1]['identity'], 'tests/test_owned_channel.py::test_second')
+        self.assertEqual(events[1]['phase'], 'call')
+        self.assertNotIn('PRIVATE_CHANNEL_CANARY', json.dumps(progress))
+        self.assertNotIn('PRIVATE_CHANNEL_CANARY', json.dumps(details))
+        self.assertNotIn('policy_diagnostics=', excerpt)
+        self.assertNotIn('PRIVATE_CHANNEL_CANARY', excerpt)
+        self.assertLessEqual(len(excerpt), 12000)
+        legacy = deepcopy(progress)
+        del legacy['failure_events']['workers'][0]['events'][1]['diagnostic']
+        self.assertEqual(len(_progress_failure_rows(legacy, 1)), 1)
+        forged = deepcopy(progress)
+        forged['failure_events']['workers'][0]['events'][1]['diagnostic']['value'] = 'PRIVATE_CHANNEL_CANARY'
+        self.assertEqual(_progress_failure_rows(forged, 1), [])
+
+    def test_owned_second_failure_after_capture_keeps_only_its_safe_diagnostic(self):
+        proc, progress, details, excerpt = self._owned_structured_observation()
+        self.assertIn('___ test_second ___', proc.stdout)
+        self.assertIn('decision=allow reason=grant', proc.stdout)
+        rows = [event['diagnostic'] for event in details['failure_events']['events'] if 'diagnostic' in event]
+        self.assertEqual(rows, [{'decision': 'deny', 'reason': 'budget'}])
+        self.assertNotIn('PRIVATE_CHANNEL_CANARY', excerpt)
+        self.assertNotIn('policy_diagnostics=', excerpt)
+        self.assertLessEqual(len(excerpt), 12000)
 
     def test_owned_pytest_retains_safe_refusal_context_without_private_values(self):
-        import os
-        import tempfile
-        from getzilla.python_test_runner import execute
-        self.assertEqual(verification_module.policy_diagnostic(False,
-            'Policy resource budget exhausted: PRIVATE_DIAGNOSTIC_CANARY'),
-            'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')
-        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
-            root = Path(raw)
-            (root / 'tests').mkdir()
-            (root / 'pytest.ini').write_text('[pytest]\n')
-            path = root / 'tests/test_owned_refusal.py'
-            path.write_text("import unittest\n"
-                            "def test_owned_refusal():\n"
-                            "    unittest.TestCase().assertEqual(False, True, 'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget PRIVATE_DIAGNOSTIC_CANARY')\n")
-            environment = {key: value for key, value in os.environ.items()
-                           if not key.startswith(('GETZILLA_JOURNAL_', 'PYTEST_'))}
-            environment['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
-            proc = execute([sys.executable, '-m', 'pytest', '-q', '--tb=short', '-c', 'pytest.ini',
-                            'tests/test_owned_refusal.py'], root, environment, timeout=20)
-            self.assertEqual(proc.terminal_state, 'completed')
-            self.assertEqual(proc.returncode, 1)
-            excerpt = verification_module._core_output_excerpt(proc.stdout, failed=True, pytest_output=True,
-                trusted={'tests/test_owned_refusal.py': (3, {'test_owned_refusal'})})
-            self.assertIn('policy_diagnostics=', excerpt)
-            diagnostic = json.loads(next(line.split('=', 1)[1] for line in excerpt.splitlines()
-                                         if line.startswith('policy_diagnostics=')))
-            self.assertEqual(diagnostic, [{'location': 'tests/test_owned_refusal.py:3',
-                                          'decision': 'deny', 'reason': 'budget'}])
-            self.assertNotIn('policy_diagnostics=', verification_module._core_output_excerpt(
-                proc.stdout, failed=True, pytest_output=True, trusted={}))
-            alternate = verification_module._core_output_excerpt(
-                proc.stdout.replace('False != True', 'False is not true'), failed=True, pytest_output=True,
-                trusted={'tests/test_owned_refusal.py': (3, {'test_owned_refusal'})})
-            self.assertIn('policy_diagnostics=', alternate)
-            self.assertNotIn('PRIVATE_DIAGNOSTIC_CANARY', excerpt)
-            self.assertNotIn('assert False', excerpt)
-            self.assertLessEqual(len(excerpt), 12000)
+        safe = verification_module.policy_diagnostic(False,
+            'Policy resource budget exhausted: PRIVATE_DIAGNOSTIC_CANARY')
+        self.assertEqual(safe, 'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')
+        for prefix in ('', 'False != True : ', 'False is not true : '):
+            self.assertEqual(verification_module.policy_exception_diagnostic(AssertionError(prefix + safe)),
+                             {'decision': 'deny', 'reason': 'budget'})
+        self.assertIsNone(verification_module.policy_exception_diagnostic(
+            AssertionError(safe + ' PRIVATE_DIAGNOSTIC_CANARY')))
+        proc, progress, details, excerpt = self._owned_structured_observation()
+        self.assertEqual(details['failure_events']['events'][1]['diagnostic'],
+                         {'decision': 'deny', 'reason': 'budget'})
+        self.assertNotIn('PRIVATE_DIAGNOSTIC_CANARY', json.dumps(details))
+        self.assertNotIn('PRIVATE_CHANNEL_CANARY', excerpt)
+        self.assertNotIn('policy_diagnostics=', excerpt)
+        self.assertLessEqual(len(excerpt), 12000)
 
     def test_pytest_subtest_excerpt_keeps_source_identity_without_description(self) -> None:
         output = ('==== FAILURES ====\ntests/test_peer.py:67: AssertionError: SYNTHETIC_PRIVATE\n'

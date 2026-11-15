@@ -26,6 +26,24 @@ def policy_diagnostic(allowed, reason):
     return 'GETZILLA_POLICY_DIAGNOSTIC decision=' + decision + ' reason=' + category
 
 
+def valid_policy_diagnostic(value):
+    return (type(value) is dict and set(value) == {'decision', 'reason'}
+            and type(value['decision']) is str and value['decision'] in {'allow', 'deny', 'unavailable'}
+            and type(value['reason']) is str and value['reason'] in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'})
+
+
+def policy_exception_diagnostic(error):
+    """Observe one real builtin assertion value, never a report's captured sections."""
+    if (type(error) is not AssertionError or len(error.args) != 1
+            or type(error.args[0]) is not str or len(error.args[0]) > 4096):
+        return None
+    match = re.fullmatch(
+        r'(?:(?:False != True|True != False|False is not true|True is not false) : )?'
+        r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
+        r'reason=(budget|grant|secret|root|degraded|other)', error.args[0])
+    return dict(zip(('decision', 'reason'), match.groups())) if match else None
+
+
 def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
     """Descriptions are arbitrary data; return only an unambiguous source-bound node."""
     if len(line) > 1024:
@@ -116,8 +134,6 @@ def _core_output_excerpt(output: str, *, failed: bool,
     count_candidates: list[tuple[int, dict[str, int | None]]] = []
     omitted = oversized
     captured = False
-    diagnostic_blocks = []
-    block_locations, block_codes = set(), set()
     summary_section = False
     safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
                    'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
@@ -128,16 +144,6 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if len(line) > 1024 or any(ord(character) < 32 for character in line):
             omitted = True
             continue
-        failure_header = re.fullmatch(r'_{3,}\s+([A-Za-z_][A-Za-z0-9_.]*)\s+_{3,}', line)
-        if failure_header and any(failure_header.group(1).replace('.', '::') in names
-                                  for _, names in trusted.values()):
-            captured = False  # An unknown heading inside captured data is not a boundary.
-        if re.match(r'^_{3,}.*_{3,}$', line) or re.match(r'^={3,}\s*short test summary info', line):
-            if len(diagnostic_blocks) < 20:
-                diagnostic_blocks.append((block_locations, block_codes))
-            else:
-                omitted = True
-            block_locations, block_codes = set(), set()
         if re.match(r'^-{3,}\s*Captured\b', line):
             captured = True
             continue
@@ -148,12 +154,6 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if captured:
             omitted = True
             continue
-        diagnostic = re.match(
-            r'^E\s+AssertionError:\s+(?:(?:False != True|True != False|False is not true|True is not false) : )?'
-            r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
-            r'reason=(budget|grant|secret|root|degraded|other)(?:\s|$)', line)
-        if diagnostic and not summary_section and len(block_codes) < 16:
-            block_codes.add(diagnostic.groups())
         counts = _pytest_terminal_counts(line)
         if counts is not None:
             count_candidates.append((index, counts))
@@ -166,8 +166,6 @@ def _core_output_excerpt(output: str, *, failed: bool,
             if (path not in trusted or any(part in {'', '.', '..'} for part in path.split('/'))
                     or len(number) > 9 or not 1 <= int(number) <= trusted[path][0]):
                 continue
-            if len(block_locations) < 2:
-                block_locations.add(path + ':' + number)
             if len(locations) < 100:
                 locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
             else:
@@ -196,24 +194,5 @@ def _core_output_excerpt(output: str, *, failed: bool,
              'pytest_failure_ids=' + json.dumps(identities or None),
              'pytest_reported_terminal_counts=' + json.dumps(reported_counts, sort_keys=True)]
     if omitted:
-        parts.append('[additional failure locations omitted]')
-    diagnostic_blocks.append((block_locations, block_codes))
-    diagnostics = []
-    for reported_locations, codes in diagnostic_blocks:
-        if len(reported_locations) != 1:
-            continue  # An ambiguous traceback cannot bind a reported diagnostic.
-        for decision, reason in sorted(codes):
-            row = {'location': next(iter(reported_locations)), 'decision': decision, 'reason': reason}
-            if len(diagnostics) >= 16:
-                omitted = True
-                break
-            candidate = 'policy_diagnostics=' + json.dumps(diagnostics + [row], sort_keys=True)
-            if len('\n'.join(parts)) + len(candidate) + 64 > 12000:
-                omitted = True
-                break
-            diagnostics.append(row)
-    if diagnostics:
-        parts.append('policy_diagnostics=' + json.dumps(diagnostics, sort_keys=True))
-    if omitted and '[additional failure locations omitted]' not in parts:
         parts.append('[additional failure locations omitted]')
     return '\n'.join(part for part in parts if part)

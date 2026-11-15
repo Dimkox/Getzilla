@@ -9,6 +9,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from .util import run
+from .verification_failure_excerpt import valid_policy_diagnostic
 
 
 def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
@@ -123,13 +124,17 @@ def _progress_failure_rows(progress, workers):
         seen.add(row['worker'])
         previous, valid = 0, True
         for event in row['events']:
-            if (type(event) is not dict or set(event) != {'ordinal', 'phase', 'path', 'key'}
+            if (type(event) is not dict or set(event) not in ({'ordinal', 'phase', 'path', 'key'},
+                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic'})
                     or type(event['ordinal']) is not int or not previous < event['ordinal'] <= row['sequence']
                     or event['phase'] not in ('setup', 'call', 'teardown')
                     or type(event['path']) is not str or len(event['path']) > 256
                     or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', event['path'])
                     or any(part in {'', '.', '..'} for part in event['path'].split('/'))
                     or type(event['key']) is not str or not re.fullmatch('[0-9a-f]{64}', event['key'])):
+                valid = False
+                break
+            if 'diagnostic' in event and not valid_policy_diagnostic(event['diagnostic']):
                 valid = False
                 break
             previous = event['ordinal']
@@ -156,6 +161,8 @@ def _failure_progress_details(rows, identities, workers):
             unknown |= identity is None
             candidate = {'worker': row['worker'], 'ordinal': event['ordinal'],
                          'phase': event['phase'], 'identity': identity}
+            if identity is not None and 'diagnostic' in event:
+                candidate['diagnostic'] = dict(event['diagnostic'])
             proposed = {**output, 'events': output['events'] + [candidate]}
             # Reserve the longest final flag spelling without publishing a
             # provisional FALSE. Finalizing certainty must not exceed the cap.

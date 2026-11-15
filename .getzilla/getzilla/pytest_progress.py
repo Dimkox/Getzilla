@@ -11,6 +11,7 @@ import time
 
 from . import fsx
 from . import verification_journal as diagnostics
+from .verification_failure_excerpt import policy_exception_diagnostic, valid_policy_diagnostic
 
 MAX_WORKERS = 64
 MAX_SLOT_BYTES = 2048
@@ -130,6 +131,7 @@ class _WorkerProgress:
         self.failure_dropped = False
         self.failure_overflow = False
         self.failure_disabled = False
+        self._pending_diagnostic = None
         self.phases = None
 
     def configure_phases(self):
@@ -194,7 +196,18 @@ class _WorkerProgress:
             64 if record['kind'] == 'dropped' else 0)
         self._failure_write(record, reserve)
 
+    def pytest_runtest_makereport(self, item, call):
+        self._pending_diagnostic = None
+        yield
+        try:
+            value = policy_exception_diagnostic(call.excinfo.value) if call.excinfo is not None else None
+            if value is not None:
+                self._pending_diagnostic = (item.nodeid, call.when, value)
+        except Exception:
+            self._pending_diagnostic = None  # Observation cannot replace the primary verdict.
+
     def pytest_runtest_logreport(self, report):
+        pending, self._pending_diagnostic = self._pending_diagnostic, None
         _journal_report(getattr(self, 'journal', None), report)
         if self.failure_disabled or self.failure_overflow:
             return
@@ -216,7 +229,10 @@ class _WorkerProgress:
                     self._failure_append({'kind': 'dropped', 'ordinal': serial})
                     self.failure_dropped = True
                 return
-            self._failure_append({'kind': 'failure', 'ordinal': serial, 'phase': phase, 'path': path, 'key': key})
+            event = {'kind': 'failure', 'ordinal': serial, 'phase': phase, 'path': path, 'key': key}
+            if pending is not None and pending[:2] == (node, phase):
+                event['diagnostic'] = pending[2]
+            self._failure_append(event)
             self.failure_rows += 1
         except Exception:
             # This optional diagnostic must never replace a primary test error.
@@ -305,6 +321,8 @@ def pytest_configure(config):
         writer = _WorkerProgress(Path(directory), nonce, ordinal)
     except OSError:
         return  # Observation IO must never change the primary test verdict.
+    from pytest import hookimpl
+    hookimpl(hookwrapper=True, tryfirst=True)(_WorkerProgress.pytest_runtest_makereport)
     config.pluginmanager.register(writer, 'getzilla-core-progress-slot')
     if phases:
         writer.configure_phases()
@@ -511,14 +529,20 @@ def _read_failure_prefix(handle, ordinal, nonce):
             raise ValueError('invalid failure serial')
         serial = number
         if kind == 'failure':
-            if (set(row) != {'kind', 'ordinal', 'phase', 'path', 'key'} or len(events) >= MAX_FAILURE_EVENTS
+            if (set(row) not in ({'kind', 'ordinal', 'phase', 'path', 'key'},
+                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic'}) or len(events) >= MAX_FAILURE_EVENTS
                     or row['phase'] not in ('setup', 'call', 'teardown')
                     or type(row['path']) is not str or len(row['path']) > 256
                     or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', row['path'])
                     or any(part in {'', '.', '..'} for part in row['path'].split('/'))
                     or type(row['key']) is not str or not re.fullmatch('[0-9a-f]{64}', row['key'])):
                 raise ValueError('invalid failure source')
-            events.append({key: row[key] for key in ('ordinal', 'phase', 'path', 'key')})
+            if 'diagnostic' in row and not valid_policy_diagnostic(row['diagnostic']):
+                raise ValueError('invalid failure diagnostic')
+            event = {key: row[key] for key in ('ordinal', 'phase', 'path', 'key')}
+            if 'diagnostic' in row:
+                event['diagnostic'] = row['diagnostic']
+            events.append(event)
         elif kind == 'dropped' and set(row) == {'kind', 'ordinal'} and not dropped:
             dropped = True
         elif kind == 'overflow' and set(row) == {'kind', 'ordinal'} and len(events) == MAX_FAILURE_EVENTS:
