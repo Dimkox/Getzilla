@@ -7,6 +7,43 @@ import re
 from .process_limits import OUTPUT_LIMIT
 
 
+def policy_diagnostic(allowed, reason):
+    """Closed assertion context only; never retain the command or refusal value."""
+    decision = 'allow' if allowed is True else 'deny' if allowed is False else 'unavailable'
+    category = 'other'
+    if type(reason) is str and len(reason) <= 4096:
+        for code, prefixes in (
+            ('budget', ('Policy resource budget exhausted:',)),
+            ('grant', ('No active approval', 'Missing approval', 'Approval', 'Direct external write requires')),
+            ('secret', ('Blocked secret', 'Secret read', 'Blocked a secret')),
+            ('degraded', ('Getzilla policy did not load,',)),
+        ):
+            if reason.startswith(prefixes):
+                category = code
+                break
+        if reason.startswith('Sensitive action ') and ': root resolution status is ' in reason:
+            category = 'root'
+    return 'GETZILLA_POLICY_DIAGNOSTIC decision=' + decision + ' reason=' + category
+
+
+def valid_policy_diagnostic(value):
+    return (type(value) is dict and set(value) == {'decision', 'reason'}
+            and type(value['decision']) is str and value['decision'] in {'allow', 'deny', 'unavailable'}
+            and type(value['reason']) is str and value['reason'] in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'})
+
+
+def policy_exception_diagnostic(error):
+    """Observe one real builtin assertion value, never a report's captured sections."""
+    if (type(error) is not AssertionError or len(error.args) != 1
+            or type(error.args[0]) is not str or len(error.args[0]) > 4096):
+        return None
+    match = re.fullmatch(
+        r'(?:(?:False != True|True != False|False is not true|True is not false) : )?'
+        r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
+        r'reason=(budget|grant|secret|root|degraded|other)', error.args[0])
+    return dict(zip(('decision', 'reason'), match.groups())) if match else None
+
+
 def _pytest_summary_identity(line: str, trusted: dict[str, tuple[int, set[str]]]) -> tuple[str, str, str] | None:
     """Descriptions are arbitrary data; return only an unambiguous source-bound node."""
     if len(line) > 1024:

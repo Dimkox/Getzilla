@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "postgres": {
+    "reference": "postgres@sha256:e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4",
+    "image_id": "sha256:ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085",
+    "source": "https://github.com/docker-library/repo-info/blob/61b58bb5b27c01b2490b3f83d092f873418cb2b3/repos/postgres/remote/17-alpine.md"
+  },
+  "python": {
+    "reference": "python@sha256:70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9",
+    "image_id": "sha256:b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79",
+    "source": "https://github.com/docker-library/repo-info/blob/c42041158bdc54accabfa176497df786dcdd905b/repos/python/remote/3.13-slim-bookworm.md"
+  }
+}

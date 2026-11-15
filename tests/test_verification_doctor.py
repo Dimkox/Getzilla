@@ -61,6 +61,47 @@ def _installed_linters():
         yield
 
 
+@contextlib.contextmanager
+def _architecture_fixture_factory_boundary():
+    """Architecture/adoption fixture does not execute the unrelated Factory suite."""
+    with patch.object(verification_module, '_factory_unit', side_effect=lambda _root: [
+            CheckResult('factory-unit', 'skip', 'outside architecture/adoption fixture')]):
+        yield
+
+
+class ArchitectureFixtureBoundaryTests(unittest.TestCase):
+    def test_only_unrelated_factory_callback_is_scoped_and_restored(self):
+        original_factory = verification_module._factory_unit
+        real_guards = (verification_module.verify, verification_module._architecture_preflight_check,
+                       verification_module._architecture_check, VerificationTests._adopt_architecture)
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            root = Path(raw)
+            (root / 'factory').mkdir()
+            (root / 'factory/pyproject.toml').write_text('# genuinely owned dispatcher fixture\n')
+            with patch.object(verification_module, '_factory_unit',
+                              side_effect=RuntimeError('irrelevant owned Factory callback')) as sentinel:
+                results = []
+                with _architecture_fixture_factory_boundary():
+                    dispatch = verification_module._CheckDispatch(results, 'fast')
+                    try:
+                        verification_module._dispatch_factory_unit(root, dispatch)
+                        outcome = 'isolated'
+                    except RuntimeError:
+                        outcome = 'unrelated-callback-executed'
+                    self.assertEqual(outcome, 'isolated')
+                    self.assertEqual([(item.name, item.status) for item in results], [('factory-unit', 'skip')])
+                    self.assertEqual(real_guards, (verification_module.verify,
+                        verification_module._architecture_preflight_check, verification_module._architecture_check,
+                        VerificationTests._adopt_architecture))
+                    sentinel.assert_not_called()
+                self.assertIs(verification_module._factory_unit, sentinel)
+        self.assertIs(verification_module._factory_unit, original_factory)
+        with self.assertRaisesRegex(ValueError, 'owned context exit'):
+            with _architecture_fixture_factory_boundary():
+                raise ValueError('owned context exit')
+        self.assertIs(verification_module._factory_unit, original_factory)
+
+
 _PASSING_UNITTEST = (
     'import unittest\n'
     '\n'
@@ -1548,25 +1589,26 @@ class VerificationTests(unittest.TestCase):
             self.assertIn('missing', architecture['summary'])
 
     def test_missing_adoption_marker_cannot_disable_architecture_checks(self) -> None:
-        for delete_models, committed in ((False, False), (True, False), (False, True), (True, True)):
-            with self.subTest(delete_models=delete_models, committed=committed), project_copy(git=True) as root:
-                route = build_route(root, 'Review current architecture', 's1').to_dict()
-                route['quality_profiles'] = ['base']
-                activate_owned_route(root, route)
-                self._adopt_architecture(root)
-                subprocess.run(['git', 'add', '.'], cwd=root, check=True)
-                subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
-                (root / 'architecture/adoption.json').unlink()
-                if delete_models:
-                    (root / 'architecture/system.yaml').unlink()
-                    (root / 'architecture/rules.yaml').unlink()
-                if committed:
-                    subprocess.run(['git', 'add', '-u'], cwd=root, check=True)
-                    subprocess.run(['git', 'commit', '-qm', 'delete architecture authority'], cwd=root, check=True)
-                report = verify(root, mode='fast', record=False)
-                self.assertEqual(report['status'], 'fail')
-                self.assertEqual(_check(report, 'architecture')['status'], 'fail')
-                self.assertIn('missing', _check(report, 'architecture')['summary'])
+        with _architecture_fixture_factory_boundary():
+            for delete_models, committed in ((False, False), (True, False), (False, True), (True, True)):
+                with self.subTest(delete_models=delete_models, committed=committed), project_copy(git=True) as root:
+                    route = build_route(root, 'Review current architecture', 's1').to_dict()
+                    route['quality_profiles'] = ['base']
+                    activate_owned_route(root, route)
+                    self._adopt_architecture(root)
+                    subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+                    subprocess.run(['git', 'commit', '-qm', 'adopt architecture'], cwd=root, check=True)
+                    (root / 'architecture/adoption.json').unlink()
+                    if delete_models:
+                        (root / 'architecture/system.yaml').unlink()
+                        (root / 'architecture/rules.yaml').unlink()
+                    if committed:
+                        subprocess.run(['git', 'add', '-u'], cwd=root, check=True)
+                        subprocess.run(['git', 'commit', '-qm', 'delete architecture authority'], cwd=root, check=True)
+                    report = verify(root, mode='fast', record=False)
+                    self.assertEqual(report['status'], 'fail')
+                    self.assertEqual(_check(report, 'architecture')['status'], 'fail')
+                    self.assertIn('missing', _check(report, 'architecture')['summary'])
 
     def test_adopted_deletion_remains_invalid_after_unrelated_descendants(self) -> None:
         with project_copy(git=True) as root:
