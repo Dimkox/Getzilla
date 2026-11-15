@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
 from getzilla import fsx, python_test_runner, verification
+from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
@@ -1040,9 +1041,11 @@ class CoverageLayout(unittest.TestCase):
                 })
 
     def assert_descendant_stopped(self, pid_file: Path) -> None:
+        diagnostics.ownership_mark('descendant-check')
         if os.name == 'nt':
             if windows_process_running(int(pid_file.read_text()), pid_file.stat().st_mtime_ns):
                 self.fail('owned descendant continued after process cleanup')
+            diagnostics.ownership_mark('descendant-check', status='returned')
             return
         if sys.platform != 'linux':
             self.skipTest('descendant verification reads /proc on Linux or process handles on Windows')
@@ -1050,10 +1053,13 @@ class CoverageLayout(unittest.TestCase):
         for _ in range(100):
             try:
                 if 'Z (zombie)' in status.read_text():
+                    diagnostics.ownership_mark('descendant-check', status='returned', descendant='zombie')
                     return
             except FileNotFoundError:
+                diagnostics.ownership_mark('descendant-check', status='returned', descendant='absent')
                 return
             time.sleep(0.01)
+        diagnostics.ownership_mark('descendant-check', status='failed', descendant='nonzombie')
         self.fail('owned descendant continued after process cleanup')
 
     def test_trust_cli_uses_own_imports_and_keeps_each_file_on_one_worker(self) -> None:
@@ -1858,7 +1864,7 @@ class CoverageLayout(unittest.TestCase):
             '    time.sleep(60)\n'
         )
         for then in ('exit', 'flood', 'timeout', 'controller'):
-            with self.subTest(then=then), fixture() as root:
+            with self.subTest(then=then), diagnostics.ownership_case(then), fixture() as root:
                 pid_file = root / 'grandchild.pid'
                 command = [sys.executable, '-c', child, str(pid_file), 'sleep' if then == 'controller' else then]
                 if then == 'controller':
@@ -1868,14 +1874,20 @@ class CoverageLayout(unittest.TestCase):
                         f'execute({command!r}, Path.cwd(), os.environ.copy())\n'
                     )
                     environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
+                    diagnostics.ownership_mark('execute')
                     controller = subprocess.Popen([sys.executable, '-c', code], cwd=root, env=environment)
                     try:
                         deadline = time.monotonic() + 30
                         while not pid_file.exists() and time.monotonic() < deadline:
                             time.sleep(0.01)
                         self.assertTrue(pid_file.exists(), 'grandchild did not start')
+                        diagnostics.ownership_mark('ready', status='returned')
+                        diagnostics.ownership_mark('controller-stop')
                         controller.terminate()
+                        diagnostics.ownership_mark('controller-stop', status='returned')
+                        diagnostics.ownership_mark('controller-reaped')
                         self.assertNotEqual(controller.wait(timeout=10), 0)
+                        diagnostics.ownership_mark('controller-reaped', status='returned')
                     finally:
                         if controller.poll() is None:
                             controller.kill()
@@ -1883,6 +1895,7 @@ class CoverageLayout(unittest.TestCase):
                 else:
                     with patch.object(python_test_runner, 'OUTPUT_LIMIT', 1024):
                         result = execute(command, root, os.environ.copy(), timeout=5 if then == 'timeout' else 30)
+                    diagnostics.ownership_mark('result', status='returned', cleanup='recorded' if result.cleanup_error else 'none-reported')
                     self.assertTrue(pid_file.exists(), f'grandchild did not start: {result.stderr}')
                     self.assertEqual(result.returncode, 0 if then == 'exit' else 124, result.stderr)
                     self.assertEqual(result.cleanup_error, '')

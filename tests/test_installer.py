@@ -1698,5 +1698,239 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertEqual(_snapshot(target), before)
 
 
+class GeneratedFactoryMetadataTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _source(self):
+        # Exercise the real builder on a new, Git-free source with only its
+        # required templates/config and representative Factory assets.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            files = {
+                MODULE.CONSUMER_AGENTS_TEMPLATE: b'fixture consumer contract\n',
+                '.getzilla/config/toolchain.json': CLOSED_BASELINE_METADATA,
+                'factory/src/getzilla_factory/resources/fixture.json': b'{"asset": true}\n',
+                'factory/src/getzilla_factory/resources/fixture.sql': b'SELECT 1;\n',
+                'factory/src/getzilla_factory/landing_pdf_worker.py': b'# owned source\n',
+                'factory/src/getzilla_factory/tests/getzilla_factory.egg-info/fixture.txt': b'test asset\n',
+                'factory/src/getzilla_factory.egg-info-assets/fixture.txt': b'required asset\n',
+            }
+            for relative, content in files.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            with patch.object(MODULE, 'MANAGED_DIRS', ('factory/src',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', (
+                     MODULE.CONSUMER_AGENTS_TEMPLATE, '.getzilla/config/toolchain.json')):
+                yield source, files
+
+    def test_generated_egg_info_does_not_change_payload_or_source_files(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, files):
+            baseline = MODULE.build_payload(source)
+            baseline_inventory = source_inventory(source)
+            expected = {**files, 'AGENTS.md':
+                b'<!-- ADAPTIVE-GROK-PRO:START -->\nfixture consumer contract\n<!-- ADAPTIVE-GROK-PRO:END -->\n'}
+            self.assertEqual({entry.path: entry.content for entry in baseline}, expected)
+            self.assertEqual(baseline_inventory, {
+                name: hashlib.sha256(content).hexdigest()
+                for name, content in files.items() if name.startswith('factory/')
+            })
+            metadata = source / 'factory/src/getzilla_factory.egg-info'
+            metadata.mkdir()
+            for name in ('PKG-INFO', 'SOURCES.txt', 'dependency_links.txt',
+                         'entry_points.txt', 'requires.txt', 'top_level.txt'):
+                (metadata / name).write_bytes((name + '\n').encode())
+            before = _snapshot(source)
+            self.assertEqual(MODULE.build_payload(source), baseline)
+            self.assertEqual(source_inventory(source), baseline_inventory)
+            self.assertEqual(_snapshot(source), before)
+            self.assertFalse((source / '.git').exists())
+
+    def test_regular_file_at_egg_info_path_is_still_delivered(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            path.write_bytes(b'regular source asset\n')
+            payload = {entry.path: entry.content for entry in MODULE.build_payload(source)}
+            self.assertEqual(payload['factory/src/getzilla_factory.egg-info'], b'regular source asset\n')
+            self.assertEqual(source_inventory(source)['factory/src/getzilla_factory.egg-info'],
+                             hashlib.sha256(b'regular source asset\n').hexdigest())
+            self.assertEqual(path.read_bytes(), b'regular source asset\n')
+
+    def test_egg_info_symlink_is_rejected_without_touching_target(self):
+        from getzilla.factory_tests import source_inventory
+
+        for target_kind in ('directory', 'file', 'missing'):
+            with self.subTest(target_kind=target_kind), self._source() as (source, _files):
+                target = source / 'private-target'
+                if target_kind == 'directory':
+                    target.mkdir()
+                    (target / 'sentinel').write_bytes(b'private content\n')
+                elif target_kind == 'file':
+                    target.write_bytes(b'private content\n')
+                link = source / 'factory/src/getzilla_factory.egg-info'
+                try:
+                    link.symlink_to(target, target_is_directory=target_kind == 'directory')
+                except (NotImplementedError, OSError) as exc:
+                    if os.name != 'nt':
+                        raise
+                    self.skipTest(f'symlink creation is unavailable: {exc}')
+                before = _snapshot(source)
+                with self.assertRaises(MODULE.UnsafeInstallTarget):
+                    MODULE.build_payload(source)
+                with self.assertRaises(ValueError):
+                    source_inventory(source)
+                self.assertEqual(_snapshot(source), before)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO creation requires POSIX')
+    def test_egg_info_special_file_is_rejected_without_opening(self):
+        from getzilla.factory_tests import source_inventory
+
+        with self._source() as (source, _files):
+            path = source / 'factory/src/getzilla_factory.egg-info'
+            os.mkfifo(path)
+            before = _snapshot(source)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(source)
+            with self.assertRaises(ValueError):
+                source_inventory(source)
+            self.assertEqual(_snapshot(source), before)
+
+
+class TransientRuntimeInventoryTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'source'
+            files = {
+                MODULE.CONSUMER_AGENTS_TEMPLATE: b'fixture consumer contract\n',
+                '.getzilla/config/toolchain.json': CLOSED_BASELINE_METADATA,
+                '.getzilla/config/required.json': b'{"required": true}\n',
+                '.getzilla/runtime/.gitignore': b'*\n!.gitignore\n!.gitkeep\n',
+                '.getzilla/runtime/.gitkeep': b'',
+                '.getzilla/runtime/record.gitkeep': b'required suffix sentinel\n',
+            }
+            for relative, content in files.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            with patch.object(MODULE, 'MANAGED_DIRS', ('.getzilla',)), \
+                 patch.object(MODULE, 'MANAGED_FILES', ()):
+                yield source
+
+    @contextlib.contextmanager
+    def _remove_after_listing(self, victim, *, directory=False):
+        parent = victim.parent.stat()
+        parent_identity = (parent.st_dev, parent.st_ino)
+        actual_listdir = MODULE.fsx.listdir
+        removed = []
+
+        def list_then_remove(descriptor):
+            names = actual_listdir(descriptor)
+            info = MODULE._fstat_directory(descriptor)
+            if (info.st_dev, info.st_ino) == parent_identity and not removed:
+                self.assertIn(victim.name, names)
+                victim.rmdir() if directory else victim.unlink()
+                removed.append(victim.name)
+            return names
+
+        with patch.object(MODULE.fsx, 'listdir', side_effect=list_then_remove):
+            yield
+        self.assertEqual(removed, [victim.name])
+
+    def _link(self, link, target, *, directory=False):
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except (NotImplementedError, OSError) as exc:
+            if os.name != 'nt':
+                raise
+            self.skipTest(f'symlink creation is unavailable: {exc}')
+
+    def test_ignored_runtime_entries_can_disappear_after_enumeration(self):
+        for directory in (False, True):
+            with self.subTest(directory=directory), self._source() as source:
+                baseline = MODULE.build_payload(source)
+                victim = source / '.getzilla/runtime/ephemeral'
+                if directory:
+                    victim.mkdir()
+                else:
+                    victim.write_bytes(b'transient state\n')
+                with self._remove_after_listing(victim, directory=directory):
+                    self.assertEqual(MODULE.build_payload(source), baseline)
+                self.assertFalse(os.path.lexists(victim))
+
+    def test_ignored_runtime_links_and_special_entries_do_not_enter_payload(self):
+        cases = ('file-link', 'directory-link', 'missing-link',
+                 *(('fifo',) if hasattr(os, 'mkfifo') else ()))
+        for kind in cases:
+            with self.subTest(kind=kind), self._source() as source:
+                baseline = MODULE.build_payload(source)
+                outside = source.parent / 'private-target'
+                victim = source / '.getzilla/runtime/ignored'
+                if kind == 'fifo':
+                    os.mkfifo(victim)
+                else:
+                    if kind == 'file-link':
+                        outside.write_bytes(b'private content\n')
+                    elif kind == 'directory-link':
+                        outside.mkdir()
+                        (outside / 'sentinel').write_bytes(b'private content\n')
+                    self._link(victim, outside, directory=kind == 'directory-link')
+                before, outside_before = _snapshot(source), _snapshot(outside)
+                self.assertEqual(MODULE.build_payload(source), baseline)
+                self.assertEqual(_snapshot(source), before)
+                self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_runtime_root_link_is_rejected_without_touching_target(self):
+        with self._source() as source:
+            runtime = source / '.getzilla/runtime'
+            outside = source.parent / 'private-runtime'
+            runtime.rename(outside)
+            self._link(runtime, outside, directory=True)
+            before, outside_before = _snapshot(source), _snapshot(outside)
+            with self.assertRaises(MODULE.UnsafeInstallTarget):
+                MODULE.build_payload(source)
+            self.assertEqual(_snapshot(source), before)
+            self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_required_runtime_files_cannot_disappear_after_enumeration(self):
+        for name in ('.gitkeep', '.gitignore', 'record.gitkeep'):
+            with self.subTest(name=name), self._source() as source:
+                victim = source / '.getzilla/runtime' / name
+                with self._remove_after_listing(victim):
+                    with self.assertRaisesRegex(MODULE.UnsafeInstallTarget,
+                                                '^managed source changed during enumeration:'):
+                        MODULE.build_payload(source)
+
+    def test_required_runtime_files_reject_links_and_special_files(self):
+        cases = ('link', *(('fifo',) if hasattr(os, 'mkfifo') else ()))
+        for name in ('.gitkeep', '.gitignore', 'record.gitkeep'):
+            for kind in cases:
+                with self.subTest(name=name, kind=kind), self._source() as source:
+                    victim = source / '.getzilla/runtime' / name
+                    victim.unlink()
+                    outside = source.parent / 'private-sentinel'
+                    outside.write_bytes(b'private content\n')
+                    if kind == 'fifo':
+                        os.mkfifo(victim)
+                    else:
+                        self._link(victim, outside)
+                    before, outside_before = _snapshot(source), _snapshot(outside)
+                    with self.assertRaises(MODULE.UnsafeInstallTarget):
+                        MODULE.build_payload(source)
+                    self.assertEqual(_snapshot(source), before)
+                    self.assertEqual(_snapshot(outside), outside_before)
+
+    def test_real_managed_source_cannot_disappear_after_enumeration(self):
+        with self._source() as source:
+            victim = source / '.getzilla/config/required.json'
+            with self._remove_after_listing(victim):
+                with self.assertRaisesRegex(MODULE.UnsafeInstallTarget,
+                                            '^managed source changed during enumeration:'):
+                    MODULE.build_payload(source)
+
+
 if __name__ == "__main__":
     unittest.main()

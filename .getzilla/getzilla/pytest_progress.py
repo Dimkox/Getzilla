@@ -341,11 +341,14 @@ def _journal_report(writer, report):
         except (ValueError, AttributeError, TypeError):
             pass
     writer.emit(phase, 'end', nodeid=report.nodeid.partition('[')[0], outcome=outcome, **fields)
+    if report.failed is True and phase in {'setup', 'call', 'teardown'}:
+        diagnostics._observe(writer, 'record_test_failure', report.nodeid, phase)
 
 
 def _journal_phase(stage):
     def phase(self, item):
         with diagnostics.bind_sink(self.journal, item.nodeid):
+            diagnostics._observe(self.journal, 'begin_test_phase', item.nodeid, stage)
             self.journal.emit(stage, 'start', nodeid=item.nodeid)
             yield
     return phase
@@ -371,6 +374,7 @@ class _JournalHooks:
     def pytest_runtest_makereport(self, item, call):
         yield
         if call.excinfo is not None:
+            diagnostics._observe(self.journal, 'note_exception', item.nodeid, call.when, call.excinfo.value)
             self.journal.emit(call.when, 'error', nodeid=item.nodeid.partition('[')[0], error=call.excinfo.value)
 
     def pytest_runtest_logreport(self, report):

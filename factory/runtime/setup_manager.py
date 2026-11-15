@@ -554,6 +554,7 @@ class SetupManager:
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(content)
                 handle.flush()
+                os.fchmod(handle.fileno(), mode & ~0o222)
                 os.fsync(handle.fileno())
         _atomic_json(temporary / MARKER, {"archive_sha256": release.archive_sha256,
                                          "manifest_sha256": release.manifest_sha256,
