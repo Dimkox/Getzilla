@@ -159,7 +159,64 @@ def controller_observation(binding, component_files, *, parser_evidence_sha256=N
             'boundary': 'Earlier controller measurement; retained JSON grants no fresh execution credit'}
 
 
-def recorded_suite_valid(suite, binding):
+def retained_parser_allowances(suite, binding, contract):
+    """Check original observation consistency against independently derived rules.
+
+    Retained interpreter facts remain historical; JSON cannot select a policy,
+    grant a new measurement, or declare arbitrary cases inapplicable.
+    """
+    try:
+        if not isinstance(contract, dict) or set(contract) != {'policy', 'allowances_by_version'}:
+            raise ValueError('Independent canonical parser contract required')
+        value, policy = suite['applicability'], contract['policy']
+        if policy is None:
+            if (value is not None or contract['allowances_by_version']
+                    or any(v.startswith('factory.tests.test_landing_pdf_worker.') for v in suite['expected_ids'])):
+                raise ValueError('Unexpected parser applicability')
+            return {}
+        if (not isinstance(value, dict) or set(value) != {'policy', 'observations', 'module_fact'}
+                or value['policy'] != policy or not set(policy['eligible_ids']) <= set(suite['expected_ids'])):
+            raise ValueError('Retained parser source policy differs')
+        rows = value['observations']
+        if not isinstance(rows, list) or len(rows) != 3:
+            raise ValueError('Original parser observations missing')
+        first = rows[0]
+        keys = {'binding', 'python', 'python_identity', 'policy_digest', 'pypdf_version', 'observed_ns'}
+        if (not isinstance(first, dict) or set(first) != keys or first['binding'] != binding
+                or first['policy_digest'] != policy['digest']
+                or first['pypdf_version'] not in (None, policy['parser_pin'])
+                or policy['required_parser'] and first['pypdf_version'] is None
+                or not isinstance(first['python'], str) or not Path(first['python']).is_absolute()
+                or not isinstance(first['python_identity'], dict)
+                or set(first['python_identity']) != {'named', 'target'}
+                or any(not isinstance(v, list) or len(v) != 7 or any(type(n) is not int for n in v)
+                       for v in first['python_identity'].values())):
+            raise ValueError('Original parser identity or capability differs')
+        stamps = []
+        for row in rows:
+            if (not isinstance(row, dict) or set(row) != keys
+                    or any(row[k] != first[k] for k in keys - {'observed_ns'})
+                    or type(row['observed_ns']) is not int or row['observed_ns'] < 0):
+                raise ValueError('Conflicting original parser facts')
+            stamps.append(row['observed_ns'])
+        if stamps != sorted(stamps) or stamps[-1] - stamps[0] > 1800 * 1_000_000_000:
+            raise ValueError('Original parser observation lifetime differs')
+        facts = value['module_fact']
+        if not isinstance(facts, dict) or set(facts) != {'discovery', 'after'} or facts['discovery'] != facts['after']:
+            raise ValueError('Original parser module facts differ')
+        fact = facts['discovery']
+        if (not isinstance(fact, dict) or set(fact) != {'module', 'path', 'pypdf_version', 'observed'}
+                or fact['module'] != 'factory.tests.test_landing_pdf_worker' or fact['observed'] is not True
+                or fact['pypdf_version'] != first['pypdf_version'] or not isinstance(fact['path'], str)
+                or not Path(fact['path']).is_absolute()
+                or not fact['path'].endswith('/factory/tests/test_landing_pdf_worker.py')):
+            raise ValueError('Original module observation is incomplete')
+        return contract['allowances_by_version']['absent' if first['pypdf_version'] is None else 'pinned']
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError('Incomplete retained parser observation') from exc
+
+
+def recorded_suite_valid(suite, binding, *, expected_allowances=None):
     """Check retained accounting only. Actual execution uses accepted_suite with measured facts."""
     try:
         names = ('expected_ids', 'collected_ids', 'required_ids', 'started', 'executed', 'missing_required', 'inapplicable_ids')
@@ -178,6 +235,16 @@ def recorded_suite_valid(suite, binding):
             return False
         skipped = {r['id'] for r in skips}
         allowances = suite['allowed_skips']
+        if binding['cell'] == 'trust-ci':
+            if suite.get('applicability') is not None:
+                return False
+            canonical_allowances = {}
+        elif binding['cell'] == 'factory' and isinstance(expected_allowances, dict):
+            canonical_allowances = expected_allowances
+        else:
+            return False
+        if allowances != canonical_allowances:
+            return False
         if (not isinstance(allowances, dict) or len(skips) != len(skipped)
                 or skipped != set(allowances) or skipped != set(suite['inapplicable_ids'])
                 or any(allowances[r['id']] != {'reason': r['reason'], 'rule': r['applicability']} for r in skips)
@@ -196,7 +263,8 @@ def recorded_suite_valid(suite, binding):
         return False
 
 
-def read_live_record(directory, expected, *, expected_source_inventory=None, expected_ids=None):
+def read_live_record(directory, expected, *, expected_source_inventory=None, expected_ids=None,
+                     expected_factory_applicability=None):
     """Read a historical CI observation under independently supplied exact context."""
     directory = Path(directory)
     record = read_json(directory / 'manifest.json')
@@ -225,7 +293,9 @@ def read_live_record(directory, expected, *, expected_source_inventory=None, exp
     cell = expected['cell']
     if cell != 'lifecycle':
         suite = read_json(directory / (cell + '-suite.json'))
-        if (not recorded_suite_valid(suite, expected) or expected_source_inventory is None
+        allowances = (retained_parser_allowances(suite, expected, expected_factory_applicability)
+                      if cell == 'factory' else None)
+        if (not recorded_suite_valid(suite, expected, expected_allowances=allowances) or expected_source_inventory is None
                 or suite['source_inventory'] != expected_source_inventory or not isinstance(expected_ids, list)
                 or set(suite['expected_ids']) != set(expected_ids)):
             raise ValueError('Retained suite differs from complete current source/accounting')

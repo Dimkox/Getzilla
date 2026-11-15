@@ -202,6 +202,29 @@ def _parser_allowances(observation,expected):
     return result
 
 
+def retained_parser_contract(root):
+    """Derive supported retained applicability from current canonical source rules.
+
+    This reads no old environment and makes no new capability measurement.
+    The required hosted cell uses the existing optional parser profile.
+    """
+    policy = _parser_policy(root, False)
+    variants = {}
+    for version in (None, policy['parser_pin']):
+        context = {'unit_database_bindings': 'live_required', 'host_supported': True,
+                   'procfs_descriptor_reopen': True, 'jsonschema_cli': 'required',
+                   'pypdf_version': version}
+        allowances = {}
+        for identifier in policy['eligible_ids']:
+            rule = factory_tests.skip_allowance(identifier, context)
+            if rule is not None:
+                if rule[0] not in {'parser-present', 'parser-absent'}:
+                    raise ValueError('Unsupported retained parser rule')
+                allowances[identifier] = {'rule': rule[0], 'reason': rule[1]}
+        variants['absent' if version is None else 'pinned'] = allowances
+    return {'policy': policy, 'allowances_by_version': variants}
+
+
 def _parser_module_fact(observation):
     returned=sys.modules.get(_PARSER_MODULE)
     value=getattr(returned,'CHILD_PYPDF_VERSION',None)

@@ -232,7 +232,10 @@ def load_records(artifacts, run_id, attempt, *, root=None):
                 from .live_contracts import ci_binding, read_live_record
                 expected = ci_binding(head=_git(root, 'rev-parse', 'HEAD'), tree=_git(root, 'rev-parse', 'HEAD^{tree}'),
                     run_id=run_id, attempt=attempt, cell=name, producer_sha256=_producer_digest(root, name))
+                applicability = None
                 if name == 'factory':
+                    from .live_acceptance import retained_parser_contract
+                    applicability = retained_parser_contract(root)
                     source = records['linux-core']['unit_source']
                     inventory, expected_ids = source['source_inventory'], source['declared_ids']
                 elif name == 'trust-ci':
@@ -240,7 +243,8 @@ def load_records(artifacts, run_id, attempt, *, root=None):
                     inventory, expected_ids = trust_source_contract(root)
                 else:
                     inventory, expected_ids = None, None
-                record = read_live_record(directory, expected, expected_source_inventory=inventory, expected_ids=expected_ids)
+                record = read_live_record(directory, expected, expected_source_inventory=inventory, expected_ids=expected_ids,
+                                          expected_factory_applicability=applicability)
             records[name] = record
     return records
 
@@ -252,7 +256,31 @@ def _git(root, *args):
 
 def security_envelope(root, checker, selected_ref, selection, report_path, output):
     output.mkdir(parents=True, exist_ok=False)
-    report = _read(report_path) if report_path.is_file() else {"status": "fail", "reason": "trusted checker missing or bootstrap blocked"}
+    from .ci_security_context import closed_phase_report, primary_report, selected_run_environment
+    phase_inputs = {}
+    # Keep the closed primary refusal and original byte digest; never replace
+    # it with a fabricated bootstrap explanation or export arbitrary values.
+    for phase, filename in (('declaration', 'security-profile-declaration.json'),
+                            ('preparation', 'security-input-preparation.json'),
+                            ('event', 'security-event.json')):
+        path = report_path.parent / filename
+        if path.is_file():
+            raw = _bytes(path)
+            if len(raw) > 2 * 1024 * 1024:
+                raise ValueError('Primary security phase exceeds existing bounded evidence budget')
+            observed = _read(path)
+            if phase == 'event':
+                _, expected_event = selected_run_environment(os.environ, _git(root, 'rev-parse', 'HEAD'))
+                if observed != expected_event:
+                    raise ValueError('Original event provenance differs from current invocation')
+                phase_inputs[phase] = observed
+            elif isinstance(observed, dict) and observed.get('status') in ('fail', 'unavailable'):
+                phase_inputs[phase] = closed_phase_report(observed, raw)
+            else:
+                continue
+            (output / filename).write_text(json.dumps(phase_inputs[phase], sort_keys=True))
+    phase, report = primary_report(_read(report_path) if report_path.is_file() else None,
+                                   phase_inputs.get('declaration'), phase_inputs.get('preparation'))
     source = {"head": _git(root, "rev-parse", "HEAD"), "tree": _git(root, "rev-parse", "HEAD^{tree}")}
     identity = {"selected_ref": selected_ref, "selection": selection, "boundary": "separate-checkout"}
     if checker.is_dir():
@@ -261,7 +289,7 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
         "status": "fail", "run_id": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
         "event_sha": os.environ.get("GITHUB_SHA"), "base_sha": os.environ.get("GETZILLA_BASE_SHA"),
         "workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"), "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF"),
-        "authority": BOUNDARY}
+        "authority": BOUNDARY, "primary_phase": phase, "event_provenance": phase_inputs.get("event")}
     problems = _security(record, source["head"], source["tree"], datetime.now(timezone.utc))
     if source["head"] != os.environ.get("GETZILLA_EXPECTED_HEAD") or _git(root, "status", "--porcelain"):
         problems.append("candidate changed or expected head mismatch")
@@ -271,7 +299,8 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
     record["status"] = "fail" if problems else "pass"
     encoded = json.dumps(report, sort_keys=True, indent=2).encode()
     (output / "security-expanded.json").write_bytes(encoded)
-    record["files"] = [{"path": "security-expanded.json", "sha256": hashlib.sha256(encoded).hexdigest()}]
+    record["files"] = [{"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                       for path in sorted(output.iterdir()) if path.is_file()]
     (output / "manifest.json").write_text(json.dumps(record, sort_keys=True, indent=2), encoding="utf-8", newline="\n")
     return not problems
 

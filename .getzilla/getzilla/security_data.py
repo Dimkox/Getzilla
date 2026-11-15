@@ -113,7 +113,9 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        return SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error.osv_alias_detail = detail
+        return error
     if not isinstance(record, dict):
         raise rejected()
     aliases = record.get('aliases')

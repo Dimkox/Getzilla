@@ -230,7 +230,7 @@ class NewContracts(unittest.TestCase):
                 "requirements_complete": True,
                 "skipped": [],
                 "allowed_skips": {},
-                "applicability": {"owned_fixture": "historical-only"},
+                "applicability": None,
                 "source_inventory": source,
             }
             write("factory-suite.json", suite)
@@ -290,13 +290,16 @@ class NewContracts(unittest.TestCase):
                 "files": a.evidence_inventory(p),
             }
             write("manifest.json", record)
-            loaded = a.read_live_record(p, b, expected_source_inventory=source, expected_ids=ids)
+            loaded = a.read_live_record(p, b, expected_source_inventory=source, expected_ids=ids,
+                expected_factory_applicability={"policy": None, "allowances_by_version": {}})
             self.assertFalse(loaded["fresh_execution_credit"])
             self.assertEqual(loaded["source"]["head"], "a" * 40)
             with self.assertRaises(ValueError):
-                a.read_live_record(p, {**b, "run_id": "999"}, expected_source_inventory=source, expected_ids=ids)
+                a.read_live_record(p, {**b, "run_id": "999"}, expected_source_inventory=source, expected_ids=ids,
+                expected_factory_applicability={"policy": None, "allowances_by_version": {}})
             with self.assertRaises(ValueError):
-                a.read_live_record(p, b, expected_source_inventory=source, expected_ids=ids + ["owned.case.omitted"])
+                a.read_live_record(p, b, expected_source_inventory=source, expected_ids=ids + ["owned.case.omitted"],
+                    expected_factory_applicability={"policy": None, "allowances_by_version": {}})
 
 
 if __name__ == "__main__":

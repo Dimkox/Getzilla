@@ -2,7 +2,7 @@
 
 The live entrypoints produce candidate test observations. They do not issue an independent attestation, activate hosted workflows, change branch protection, or grant production authority.
 
-This implementation-only stage ships Factory/lifecycle support and Trust parser, binding and unavailable-producer refusal. The Trust suite producer is deferred to a separate source delivery. Both public and direct Trust entrypoints refuse its absence before external work. Real runtime acceptance remains OPEN.
+This source stage ships Factory/lifecycle support and a complete source-bound Trust suite producer with discovery, accounting, restart and cleanup observations. The hosted caller prepares a hash-locked wheelhouse before the offline Trust cell; missing or unapproved inputs refuse before resource allocation. Real runtime and operator acceptance remain OPEN.
 
 `scripts/getzilla_live.py` selects the Factory, Trust CI, or lifecycle cell. Each invocation uses a new output directory and namespace. The invocation binds the committed source head and tree, run, attempt, cell, nonce and producer source digest. Component envelopes bind the exact suite or restart report and ownership journal bytes. The strict ownership journal remains `getzilla-disposable-owner-v1`.
 

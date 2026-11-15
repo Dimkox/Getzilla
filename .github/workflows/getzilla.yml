@@ -472,7 +472,24 @@ jobs:
       - name: Run all expanded checks with trusted tools and fresh security data
         timeout-minutes: 30
         shell: bash
+        env:
+          SELECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GETZILLA_EVENT_SHA: ${{ github.sha }}
         run: |
+          export GITHUB_SHA="$SELECTED_SOURCE_SHA"
+          python - <<'PYCONTEXT'
+          import json, os, pathlib, runpy, subprocess
+          api = runpy.run_path('candidate/.getzilla/getzilla/ci_security_context.py')
+          actual = subprocess.check_output(['git', '-C', 'candidate', 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != os.environ['SELECTED_SOURCE_SHA']:
+              raise SystemExit('selected source identity differs')
+          selected, provenance = api['selected_run_environment'](os.environ, actual)
+          if selected['GITHUB_SHA'] != os.environ['GITHUB_SHA']:
+              raise SystemExit('trusted CLI run head differs from selected source')
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'security-event.json'
+          path.write_text(json.dumps(provenance, sort_keys=True))
+          PYCONTEXT
           python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --write-input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-profile-declaration.json"
           python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --prepare-inputs --refresh --provision-tools --json-out "$RUNNER_TEMP/security-input-preparation.json"
           python -I trusted-checker/scripts/getzilla_security.py --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"

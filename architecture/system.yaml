@@ -3790,6 +3790,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/ci_admission.py",
+        ".getzilla/getzilla/ci_security_context.py",
         ".getzilla/getzilla/ci_evidence.py",
         "scripts/getzilla_ci_admission.py",
         "scripts/getzilla_ci_evidence.py"

@@ -487,7 +487,9 @@ def _aliases(record: dict[str, Any]) -> list[str]:
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        return VulnerabilityError('OSV aliases must be null or a list of valid identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = VulnerabilityError('OSV aliases must be null or a list of valid identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error.osv_alias_detail = detail
+        return error
     if not isinstance(record, dict):
         raise rejected()
     aliases = record.get('aliases')

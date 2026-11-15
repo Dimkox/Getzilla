@@ -980,7 +980,7 @@ class ContourTests(unittest.TestCase):
 
 
 _MISSING_REQUIRED_PLAN = ['verification: required-plan-unavailable: required_plan: '
-                          'qualifying verification requires an embedded required_plan']
+                          'current required plan and evidence could not be established']
 
 
 if __name__ == '__main__':

@@ -279,7 +279,8 @@ def update_osv(fetch: Fetch, root: Path, *, now: datetime | None = None,
                 detail += '; snapshot committed, legacy all.zip export unavailable'
             results.append(Result(f'osv:{ecosystem}', 'ok', detail))
         except Exception as exc:  # noqa: BLE001 - one ecosystem failing must not stop the others
-            results.append(Result(f'osv:{ecosystem}', 'fail', str(exc)[:200]))
+            from .security_osv_diagnostics import bounded_alias_message
+            results.append(Result(f'osv:{ecosystem}', 'fail', bounded_alias_message(exc) or str(exc)[:200]))
     return results
 
 
