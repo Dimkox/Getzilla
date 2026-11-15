@@ -1,0 +1,5 @@
+Independent Getzilla implementation, MIT.
+Idea provenance: https://github.com/dobryakov/ai-multi-search/tree/f670a50f384f978872e61f27ab6b43912e576ccd
+Inspected upstream revision: f670a50f384f978872e61f27ab6b43912e576ccd (2026-11-08T22:04:56Z)
+No upstream source, prompts or prose were copied. The inspected upstream has no license grant.
+Official contracts and source revision evidence: docs/search-gateway.md.
