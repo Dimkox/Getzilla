@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import verification_dispositions as dispositions
 from .python_test_runner import execute
+from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import MAX_DOWNLOAD, TRIVY_ARCHIVE_SHA256, TRIVY_VERSION, trivy_binary
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
 from .updater import OPENGREP_ASSETS
@@ -185,14 +186,20 @@ def _process_detail(result, failure: str) -> str:
     state = result.terminal_state if result.terminal_state in {'completed', 'timeout', 'cancelled'} else 'unknown'
     code = result.returncode if type(result.returncode) is int and -255 <= result.returncode <= 255 else 'unknown'
     cleanup = 'failed' if result.cleanup_error else 'complete'
-    return f'security {failure}: exit={code}, state={state}, cleanup={cleanup}, diagnostic={category}'
+    return f'security {failure}: exit={code}, state={state}, cleanup={cleanup}, diagnostic={category}; stop=' + json.dumps(stop_details(result), sort_keys=True)
+
+
+def _process_error(result, failure):
+    error = SecurityDataError(_process_detail(result, failure))
+    retain_stop(error, updated_stop(result))
+    return error
 
 
 def _process(command: list[str], cwd: Path, scratch: Path, *, timeout=900, finding_exit=False):
     result = execute(command, cwd, _environment(scratch), timeout=timeout)
     allowed = {0, 1} if finding_exit else {0}
     if result.returncode not in allowed or result.terminal_state != 'completed' or result.cleanup_error:
-        raise SecurityDataError(_process_detail(result, 'process-failed'))
+        raise _process_error(result, 'process-failed')
     return result
 
 
@@ -200,9 +207,9 @@ def _process_report(output: Path, result) -> dict:
     try:
         return _json(output)
     except FileNotFoundError as exc:
-        raise SecurityDataError(_process_detail(result, 'report-missing')) from exc
+        raise _process_error(result, 'report-missing') from exc
     except (OSError, ValueError, RuntimeError) as exc:
-        raise SecurityDataError(_process_detail(result, 'report-invalid')) from exc
+        raise _process_error(result, 'report-invalid') from exc
 
 
 def image_report(report: dict, reference: str, *, expected_image_id: str | None = None) -> dict:
@@ -239,8 +246,36 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
     return {'package_count': packages, 'findings': findings, 'image_id': metadata['ImageID']}
 
 
-def refresh_images(inventory: dict, tools: Path, *, now=None) -> list[dict]:
+def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
+    """Require finite aggregate bounds before selecting any image transport."""
+    keys = {'images', 'max_images', 'max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes',
+            'max_manifest_bytes', 'max_layers', 'deadline_seconds', 'platform'}
+    if not isinstance(profile, dict) or set(profile) != keys or profile.get('platform') not in {'linux/amd64', 'linux/arm64'}:
+        raise SecurityDataError('image acquisition needs a complete explicit bounded profile')
+    limits = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
+              'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
+              'max_manifest_bytes': MAX_REPORT, 'max_layers': 10000, 'deadline_seconds': 900}
+    if any(type(profile[key]) is not int or not 0 < profile[key] <= limit for key, limit in limits.items()):
+        raise SecurityDataError('image acquisition profile exceeds existing finite ceilings')
+    images = inventory.get('images')
+    if not isinstance(images, list) or not all(isinstance(item, dict) for item in images):
+        raise SecurityDataError('image inventory is malformed')
+    references = sorted({item.get('reference', '') for item in images})
+    if (profile['images'] != references or len(references) > profile['max_images']
+            or any(not _DIGEST_IMAGE.fullmatch(reference) for reference in references)):
+        raise SecurityDataError('image profile differs from complete immutable source identities')
+    return profile
+
+
+def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None) -> list[dict]:
     """Explicit acquisition for the isolated runner; never starts an image."""
+    if not isinstance(inventory.get('images'), list):
+        raise SecurityDataError('image acquisition requires a complete declared image list')
+    if inventory.get('images'):
+        image_acquisition_profile(inventory, profile)
+        # The daemon writes outside this process's byte budget. Descriptor
+        # estimates do not enforce compressed/unpacked/storage ceilings.
+        raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
     trivy = pinned_tool('trivy', tools)
     results = []
     tools.mkdir(parents=True, exist_ok=True)
@@ -255,16 +290,6 @@ def refresh_images(inventory: dict, tools: Path, *, now=None) -> list[dict]:
             results.append({'source_id': 'trivy-db', 'status': 'pass', 'snapshot': trivy_database_source(tools, now=now)})
         except (OSError, ValueError, RuntimeError) as exc:
             results.append({'source_id': 'trivy-db', 'status': 'fail', 'reason': str(exc)})
-        for reference in sorted({item['reference'] for item in inventory['images']}):
-            try:
-                if not _DIGEST_IMAGE.fullmatch(reference):
-                    raise SecurityDataError('unresolved image reference; no mutable tag is acquired')
-                result = _process(['docker', 'pull', '--platform', 'linux/amd64', reference], scratch, scratch)
-                if result.returncode != 0:
-                    raise SecurityDataError('immutable image acquisition failed')
-                results.append({'image': reference, 'status': 'pass'})
-            except (OSError, ValueError, RuntimeError) as exc:
-                results.append({'image': reference, 'status': 'fail', 'reason': str(exc)})
     return results
 
 

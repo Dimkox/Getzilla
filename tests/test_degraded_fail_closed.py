@@ -21,7 +21,7 @@ PROTECTED = (
     ('Bash', {'command': 'npm publish'}),
     ('Bash', {'command': 'rm -rf build'}),
     ('Bash', {'command': 'printf x >> AGENTS.md'}),
-    ('Bash', {'command': 'cp evil.py .grok/hooks/pre_tool_use.py'}),
+    ('Bash', {'command': 'cp evil.py .getzilla/hooks/pre_tool_use.py'}),
     ('exec_command', {'cmd': 'terraform destroy'}),
     ('Write', {'file_path': '.getzilla/config/policy.json', 'content': '{}'}),
     ('Edit', {'file_path': 'AGENTS.md', 'old_string': 'a', 'new_string': 'b'}),

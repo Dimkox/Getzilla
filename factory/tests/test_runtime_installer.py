@@ -56,14 +56,79 @@ class Runtime:
         return self.text
 
 
+class StagedReleaseModeTests(unittest.TestCase):
+    def test_staged_modes_are_exact_and_caller_umask_is_preserved(self):
+        # This fixture already owns verified bytes; no archive, service adapter,
+        # native installer or historical workload is involved.
+        files = (('app/data.json', b'{"owned": true}\n', 0o644),
+                 ('bin/worker', b'#!/bin/sh\nexit 0\n', 0o755))
+        manifest = json.dumps({'schema_version': 'factory-release/v1',
+            'product_version': '1.0.0', 'profile': 'factory-python', 'data_schema': 1,
+            'files': [{'path': name, 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
+                       'mode': mode} for name, content, mode in files]}).encode()
+        release = setup.VerifiedRelease('a' * 64, hashlib.sha256(manifest).hexdigest(), manifest, files)
+        for mask in (0o002, 0o022, 0o077, 0o027):
+            with self.subTest(mask=oct(mask)), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve() / 'installation'
+                root.mkdir(mode=0o700)
+                (root / 'releases').mkdir(mode=0o700)
+                manager = setup.SetupManager(root)
+                previous = os.umask(mask)
+                try:
+                    staged = manager._stage(release)
+                    self.assertEqual(os.umask(mask), mask)
+                finally:
+                    os.umask(previous)
+                self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o555)
+                self.assertEqual(stat.S_IMODE((staged / setup.MARKER).stat().st_mode), 0o444)
+                for name, content, mode in files:
+                    self.assertEqual((staged / name).read_bytes(), content)
+                    self.assertEqual(stat.S_IMODE((staged / name).stat().st_mode), mode & ~0o222)
+                    self.assertEqual(stat.S_IMODE((staged / name).parent.stat().st_mode), 0o555)
+                self.assertEqual(manager._release(release.identity), (staged, release.manifest))
+                self.assertEqual(release.files, files)
+                self.assertEqual(release.manifest_bytes, manifest)
+
+
 class InstallerTests(unittest.TestCase):
+    def test_inert_filesystem_contract_does_not_depend_on_ambient_host_label(self):
+        # The adapter is already inert. This does not qualify native services.
+        with patch.object(setup.platform, "system", return_value="Darwin"):
+            try:
+                release, _ = self.install()
+            except setup.InstallerError as error:
+                self.fail("inert filesystem fixture reached native host probe: " + str(error))
+        self.assertEqual(self.manager.status()["current"], release)
+
     def setUp(self):
         self.assertIsNotNone(setup, "Factory setup manager has not been implemented")
         self.temp = tempfile.TemporaryDirectory(prefix="factory-installer-")
         self.addCleanup(self.temp.cleanup)
-        self.parent = Path(self.temp.name)
+        # macOS's default /tmp may be a system alias. Only this newly owned
+        # fixture chooses its physical path; production no-follow stays strict.
+        self.parent = Path(self.temp.name).resolve()
         self.root = self.parent / "installation"
         self.runtime = Runtime()
+        # These are real filesystem/state contracts with an inert service
+        # adapter, not native host/service qualification. Keep the real root,
+        # inventory, disk, port and state checks; inject only host resources.
+        native_preflight, native_sysconf = setup.preflight, setup.os.sysconf
+
+        def resources(name):
+            if name == "SC_AVPHYS_PAGES":
+                return 65536
+            if name == "SC_PAGE_SIZE":
+                return 4096
+            return native_sysconf(name)
+
+        def filesystem_preflight(root, **kwargs):
+            kwargs.setdefault("platform_name", "Linux")
+            with patch.object(setup.os, "sysconf", side_effect=resources):
+                return native_preflight(root, **kwargs)
+
+        host_fixture = patch.object(setup, "preflight", side_effect=filesystem_preflight)
+        host_fixture.start()
+        self.addCleanup(host_fixture.stop)
         self.manager = setup.SetupManager(self.root, self.runtime)
 
     def package(self, version="1.0.0", schema=1, entries=None, manifest_edit=None):
@@ -666,6 +731,45 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(output.getvalue())["error"], "ADAPTER_REQUIRED")
         self.assertFalse(self.root.exists())
+
+
+class NativeHostPreflightTests(unittest.TestCase):
+    def test_inert_fixture_uses_physical_owned_temp_root_under_system_alias(self):
+        actual_temporary = tempfile.TemporaryDirectory
+        with actual_temporary(prefix="factory-alias-") as temporary:
+            parent = Path(temporary).resolve()
+            actual = parent / "physical"
+            actual.mkdir(mode=0o700)
+            alias = parent / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+
+            def aliased(*args, **kwargs):
+                return actual_temporary(*args, dir=alias, **kwargs)
+
+            result = unittest.TestResult()
+            with patch.object(tempfile, "TemporaryDirectory", side_effect=aliased):
+                InstallerTests("test_install_switches_after_health_and_release_bytes_are_readonly").run(result)
+            self.assertTrue(result.wasSuccessful(), "inert fixture used a system-alias path instead of its owned physical root")
+            self.assertEqual(list(actual.iterdir()), [])
+
+    def test_actual_host_keeps_its_native_admission_without_fixture_override(self):
+        with tempfile.TemporaryDirectory(prefix="factory-host-") as temporary:
+            root = Path(temporary).resolve() / "not-created"
+            if setup.platform.system() == "Linux":
+                self.assertTrue(setup.preflight(root)["ready"])
+            else:
+                with self.assertRaisesRegex(setup.InstallerError, "^UNSUPPORTED_HOST$"):
+                    setup.preflight(root)
+            self.assertFalse(root.exists())
+
+    def test_unsupported_host_refuses_before_resource_probes(self):
+        with tempfile.TemporaryDirectory(prefix="factory-host-") as temporary:
+            root = Path(temporary).resolve() / "not-created"
+            with patch.object(setup.platform, "system", return_value="Darwin"), \
+                    patch.object(setup.os, "sysconf", side_effect=AssertionError("resource probe")), \
+                    self.assertRaisesRegex(setup.InstallerError, "^UNSUPPORTED_HOST$"):
+                setup.preflight(root)
+            self.assertFalse(root.exists())
 
 
 if __name__ == "__main__":

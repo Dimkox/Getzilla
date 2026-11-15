@@ -300,11 +300,11 @@
         "id": "superpowers",
         "name": "Superpowers",
         "repository": "obra/superpowers",
-        "pinned": "6.4.2",
-        "upstream_tag": "v6.4.2",
-        "release_published_at": "2026-09-25",
-        "observed_latest": "6.4.2",
-        "observed_at": "2026-10-06",
+        "pinned": "7.0.2",
+        "upstream_tag": "v7.0.2",
+        "release_published_at": "2026-11-03",
+        "observed_latest": "7.0.2",
+        "observed_at": "2026-11-09",
         "roles": [
           "spec",
           "plan",
@@ -315,23 +315,60 @@
           ".superpowers/sdd/"
         ],
         "verification_tests": [
-          "tests.test_workflow_artifacts_adversarial.NativeStatusTests.test_unmodified_superpowers_and_richer_framework_documents_remain_advisory"
+          "tests.test_workflow_artifacts.CurrentUpstreamFormatTests.test_superpowers_v702_workspace_prose_remains_advisory"
         ],
-        "pinned_commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+        "pinned_commit": "22f0b463e7a5e579904dd6211a520321035526f7",
         "install": {
           "user": "git clone --branch <upstream_tag>, HEAD must equal pinned_commit",
-          "project": "skills/ copied into .agents/skills and the agent skill directory without overwriting; Copilot additionally needs the upstream marketplace plugin (not pinned)"
+          "project": "fixed pinned-source assets copied into canonical and selected agent skill directories; no marketplace plugin or semantic safety approval"
+        },
+        "asset_inputs": {
+          "source_commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+          "source_archive_sha256": "5f15e6bfa1b628ebabc84f88508b9652f5c7b8cb4529731e266006ba8f798976",
+          "dependency_lock_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-claude-sh.json",
+            "sha256": "7efce49461d0ca87a17ab7b7428ff5563f87ae6e56c6cd59c0993f422295a7af",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-codex-sh.json",
+            "sha256": "88e03e06f5f913376aeb047f70d740490f2e0c668a1f38d98146685e682449c2",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-qwen-sh.json",
+            "sha256": "a06bd0aaed94ad11b36b6219bfbf6b354c8cf3b7f3e3cf6e23f284c279556217",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-gemini-sh.json",
+            "sha256": "9087d00da976e77d26c37060a43be036e020c84504f9ce407e2f0aa62e61bf06",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-grok-sh.json",
+            "sha256": "0b07aab02e0e1457b0aed57c56d996054ab848dfec0fd7591a22b5cbcee4789e",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/superpowers-copilot-sh.json",
+            "sha256": "e4ddc5eede6407f17a6c6e1cd93c46ebb124ca18b446ba67b21aacd380c0cb48",
+            "argv_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          }
         }
       },
       {
         "id": "bmad",
         "name": "BMAD Method",
         "repository": "bmad-code-org/BMAD-METHOD",
-        "pinned": "6.12.1",
-        "upstream_tag": "v6.12.1",
-        "release_published_at": "2026-10-04",
-        "observed_latest": "6.12.1",
-        "observed_at": "2026-10-06",
+        "pinned": "6.12.4",
+        "upstream_tag": "v6.12.4",
+        "release_published_at": "2026-10-14",
+        "observed_latest": "6.12.4",
+        "observed_at": "2026-11-09",
         "roles": [
           "prd",
           "spec",
@@ -347,17 +384,17 @@
           "_bmad-output/"
         ],
         "verification_tests": [
-          "tests.test_workflow_artifacts.WorkflowCompileTests.test_unmodified_bmad_story_subset_compiles_without_trusting_done_status"
+          "tests.test_workflow_artifacts.CurrentUpstreamFormatTests.test_bmad_v6124_plan_status_does_not_authorize_work"
         ],
         "breaking_notes": [
           "persistent_facts ships empty (project-context.md is no longer auto-loaded)",
           "{diff_output} is now {diff_file}",
           "bmad-checkpoint-preview renamed bmad-walkthrough (CK to WT; old ID still forwards)"
         ],
-        "pinned_commit": "790dae9c8e2a1d73575cb2d40b14dd4963391f29",
+        "pinned_commit": "bab9082c3e884e0d72c759bcd1a6d90bcc01be84",
         "install": {
           "user": "git clone --branch <upstream_tag> (pinned source of record); Node.js for the installer",
-          "project": "npx --yes bmad-method@<pinned> install --directory <staging> --tools <tool> --yes, merged without overwriting",
+          "project": "validated fixed generated assets; full source/dependency-lock/argv/file custody; no ambient npx execution",
           "tools": {
             "claude": "claude-code",
             "codex": "codex",
@@ -366,17 +403,54 @@
             "grok": "grok",
             "copilot": "github-copilot"
           }
+        },
+        "asset_inputs": {
+          "source_commit": "bab9082c3e884e0d72c759bcd1a6d90bcc01be84",
+          "source_archive_sha256": "804bb9e22a30c64bdd4f05858236995d9e4925d8acdfa2da8db5519cfcf14576",
+          "dependency_lock_sha256": "27206bc47d94738fadc0b12a728d0fa37dbb66356656f02ce5361f6aaf3da1cb"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/bmad-claude-sh.json",
+            "sha256": "e327255d568dd2134724ee339a7981968fc66b782f934079b0de9ebcbe09bce9",
+            "argv_sha256": "24cb43ba277880e4558a820b7e91b6bfbfd9431d123b15e03eda05940b262d82"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/bmad-codex-sh.json",
+            "sha256": "1920cbf071c5c56d30116212ff75c931ae7ceb9a67652f2fdbfb42d99a11a6b8",
+            "argv_sha256": "7d14dffc63128b1ad8162d406c62f7e630b1c4a1a8d93eb0df5778722fa57f4e"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/bmad-qwen-sh.json",
+            "sha256": "21b7bbe5f1cc904ff06fa03db196bfbe38eccf08c4bbd72d789cadbf3d4f69f6",
+            "argv_sha256": "3459c37951d07f583764a2f63bd7c26850cae73b6405c1929ef408ecb6a76ba8"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/bmad-gemini-sh.json",
+            "sha256": "68c821211c6d3ccb378d7c81f8b7887693fded00bcb8122dd900bdba3389f648",
+            "argv_sha256": "c35f4895085fc0e38b383d58f7b2d6ed1b874f51feb25d2f83331670e8fafea5"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/bmad-grok-sh.json",
+            "sha256": "bb88f639a09a48d9e59ca2eab6e628c1fda6222be97162c014b01acd35fbb7b7",
+            "argv_sha256": "aaa09f497986b72ab14af0fb738b6ac5ec8d17e2243b3c872621605129886589"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/bmad-copilot-sh.json",
+            "sha256": "b666b7c2237d62b516a2fe9e71d229fe650a8a184a049a6f250ac86a76329843",
+            "argv_sha256": "d0d28b1c32a1a9aa6e32a9d0f89ee529387acaa824ed310a50191f85f0abcbc5"
+          }
         }
       },
       {
         "id": "spec-kit",
         "name": "GitHub Spec Kit",
         "repository": "github/spec-kit",
-        "pinned": "1.1.0",
-        "upstream_tag": "v1.1.0",
-        "release_published_at": "2026-10-02",
-        "observed_latest": "1.1.0",
-        "observed_at": "2026-10-06",
+        "pinned": "1.3.2",
+        "upstream_tag": "v1.3.2",
+        "release_published_at": "2026-11-06",
+        "observed_latest": "1.3.2",
+        "observed_at": "2026-11-09",
         "roles": [
           "constitution",
           "spec",
@@ -389,12 +463,12 @@
           "specs/"
         ],
         "verification_tests": [
-          "tests.test_workflow_artifacts.WorkflowCompileTests.test_unmodified_spec_kit_tasks_subset_compiles_phases_and_parallel_markers"
+          "tests.test_workflow_artifacts.CurrentUpstreamFormatTests.test_spec_kit_v132_tasks_keep_phase_and_parallel_dependencies"
         ],
-        "pinned_commit": "f1d3a4f8337ebbd3ae22760a9c12e3352b93a175",
+        "pinned_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342",
         "install": {
-          "user": "uv tool install --force specify-cli --from git+https://github.com/<repository>.git@<upstream_tag>",
-          "project": "specify init --here --integration <integration> --non-interactive --ignore-agent-tools in a staging directory, merged without overwriting",
+          "user": "full pinned Git source and bound assets; standalone specify CLI is not installed or required for project materialization",
+          "project": "validated fixed sh/ps assets for the selected integration; no ambient specify execution",
           "integrations": {
             "claude": "claude",
             "codex": "codex",
@@ -402,6 +476,73 @@
             "gemini": "gemini",
             "grok": "grok",
             "copilot": "copilot"
+          }
+        },
+        "asset_inputs": {
+          "source_commit": "55264c2f2f2d1146f02abc543cb913dcdf1f9342",
+          "source_archive_sha256": "15192dfc3770ac170e6b026f495ec157e42d31c96bd1cf9e19ebe5c68527bab4",
+          "dependency_lock_sha256": "cc93d484da0a09a4134d212e7a4a33e8353a3f4223b13f6a4dd463414fed1fd0"
+        },
+        "generated_assets": {
+          "claude-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-claude-sh.json",
+            "sha256": "2bb8c170e3a985f666f606f47a681c0453b9c4ef4cffcd169d95f7d1e2ba8b8e",
+            "argv_sha256": "4e82bdc57f083deeca3b3da617d1dae5754d9941b9febf6053fba73c86365001"
+          },
+          "claude-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-claude-ps.json",
+            "sha256": "f032986dd116c4caeb3ded2bf80b8fe835154922543036b1bb890055a60057b1",
+            "argv_sha256": "b70bdb0b9ff2f019bc23c5e606e882521e782a115717fc9096b96c39a50346c3"
+          },
+          "codex-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-codex-sh.json",
+            "sha256": "c9549077cf7d0ad2122ca7fe7f7b95f02d0fcbf2ad60c3f509e642c5628749fd",
+            "argv_sha256": "2faa3f5125eafbd88981cfbf98322de3a1fe50a554da218a38507c8b213bce46"
+          },
+          "codex-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-codex-ps.json",
+            "sha256": "2989cbb16be0f896ede5c3537d87881ba6a5d0f167f83956048841e672848094",
+            "argv_sha256": "dc44ee322abc779cd58d442580e6633a77d4bf1b56f92697660ad2680a9eee39"
+          },
+          "qwen-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-qwen-sh.json",
+            "sha256": "90f2b8a311db2b36ce8a03e7318b7dcd411e9152e2634d52637ea6bb40610764",
+            "argv_sha256": "133992e2561bd7a53c6556fdda86a6b946138def7566fb417b051315c501180b"
+          },
+          "qwen-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-qwen-ps.json",
+            "sha256": "285bfd3714a439f342d8a8d31c81ad49af73130dcf5ec99d43223fffa18c8146",
+            "argv_sha256": "e9e7f224d31a95093c4de1dfa19b53a8c71196aa55bded94db99a768da88756e"
+          },
+          "gemini-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-gemini-sh.json",
+            "sha256": "953e7715681318297e8e93afd6e310a2fb728047a94737302aadc62235af08b4",
+            "argv_sha256": "f4d378d0621a6dae7d9ad0c174f1e23e01bef2ab4b2520530efaae3acdbe730a"
+          },
+          "gemini-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-gemini-ps.json",
+            "sha256": "773d0e392b9d9e2e224e4990e5ad109d0db4c88debec46a7734dc46bc0cd0121",
+            "argv_sha256": "2d63024779672cace509948132134ad0fd92c29560ba3cd6c6c5b394d8d72eb3"
+          },
+          "grok-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-grok-sh.json",
+            "sha256": "990a3feb9c09e7e4ee6cce0076f1b556c616c06c86aa07409106f9f95aec1c8a",
+            "argv_sha256": "0645f60b725cab0edccb416c407bef6c67c025e4eea4d98ed23eba6660c4eb7a"
+          },
+          "grok-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-grok-ps.json",
+            "sha256": "bf3f976ef704268b39683f1ec718f9c2c05819238020fe148267df0078ed9190",
+            "argv_sha256": "6e8cf37bac1a5d963d8f3715ea0310558d05f069841fc03f7a03e978ae5713fd"
+          },
+          "copilot-sh": {
+            "path": ".getzilla/templates/baseline/spec-kit-copilot-sh.json",
+            "sha256": "3dce08d519d41bc788d771b3258945dff2653286f63a14adc1cf649b17a53810",
+            "argv_sha256": "aac04cfd2e33497d375525c1a3f08264d63de28629189cec7779071f9fc4fd31"
+          },
+          "copilot-ps": {
+            "path": ".getzilla/templates/baseline/spec-kit-copilot-ps.json",
+            "sha256": "5e7cd73197c5c65a660a099593c42e420da17c03ab40c2daa5a0a8b90a8fdc35",
+            "argv_sha256": "810485ccf94810e2204c0389999b69d480d406a39e1fbfba8e86a17b2520c68c"
           }
         }
       }

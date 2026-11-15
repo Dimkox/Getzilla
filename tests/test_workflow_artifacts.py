@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 import unicodedata
@@ -752,6 +754,57 @@ class CurrentUpstreamFormatTests(unittest.TestCase):
             tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
             self.assertEqual([task["key"] for task in tasks], ["story-1-1-1-001", "story-1-1-2-001"])
 
+    def test_bmad_v6124_plan_status_does_not_authorize_work(self) -> None:
+        """v6.12.4 epics-template.md retains this exact planning front matter."""
+        content = (
+            "---\nstatus: draft\nstepsCompleted: []\ninputDocuments: []\n---\n"
+            "# Auth System - Epic Breakdown\n"
+            "### Story 1.1: Loader bootstraps\n"
+            "- [ ] Implement AC-001 in src/loader.py\n"
+        )
+        for status in ("draft", "final"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest = self._docs(root, [("bmad", "epics", "_bmad-output/epics.md",
+                                             content.replace("status: draft", "status: " + status))], "6.12.4")
+                bundle = self.artifacts.load_source_manifest(root, manifest)
+                tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+                self.assertEqual([task["key"] for task in tasks], ["story-1-1-001"])
+                self.assertEqual(tasks[0]["status"], "pending")
+                self.assertEqual(self.artifacts._advanced_status_hints(bundle), set())
+
+    def test_spec_kit_v132_tasks_keep_phase_and_parallel_dependencies(self) -> None:
+        """Exact v1.3.2 tasks-template rows, with the next phase preserved."""
+        content = (
+            "## Phase 1: Setup (Shared Infrastructure)\n"
+            "- [ ] T001 Create project structure per implementation plan\n"
+            "- [ ] T002 Initialize [language] project with [framework] dependencies\n"
+            "- [ ] T003 [P] Configure linting and formatting tools\n"
+            "## Phase 2: Foundational (Blocking Prerequisites)\n"
+            "- [ ] T004 Setup database schema and migrations framework\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(root, [("spec-kit", "tasks", "specs/001-feature/tasks.md", content)], "1.3.2")
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            tasks = self.artifacts._native_framework_tasks(bundle.sources[0])
+            self.assertEqual([task["key"] for task in tasks], ["t001", "t002", "t003", "t004"])
+            self.assertEqual([task["depends_on"] for task in tasks], [[], ["t001"], [], ["t001", "t002", "t003"]])
+            self.assertTrue(all(task["status"] == "pending" for task in tasks))
+
+    def test_superpowers_v702_workspace_prose_remains_advisory(self) -> None:
+        """v7.0.2 still places its per-plan progress under .superpowers/sdd/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._docs(root, [
+                ("superpowers", "plan", "docs/superpowers/plans/update.md", "# Update\n1. Retain safety\n"),
+                ("superpowers", "sdd-evidence", ".superpowers/sdd/update/plan-path", "docs/superpowers/plans/update.md\n"),
+                ("superpowers", "sdd-evidence", ".superpowers/sdd/update/progress.md", "Final: clean\n"),
+            ], "7.0.2")
+            bundle = self.artifacts.load_source_manifest(root, manifest)
+            self.assertEqual(len(bundle.sources), 3)
+            self.assertEqual(self.artifacts._advanced_status_hints(bundle), set())
+
     def test_bmad_v6121_epics_front_matter_status_does_not_advance_imported_work(self) -> None:
         """BMAD v6.12.1 epics front matter (2026-10-06, exact tag).
 
@@ -971,6 +1024,83 @@ deferred: []
         self.assertTrue(placeholder.search("TBD"))
         self.assertTrue(placeholder.search("TODO"))
         self.assertFalse(placeholder.search("The status is stable and documented"))
+
+
+class StandalonePlatformImportTests(unittest.TestCase):
+    def _run_public_import(self, program: str, *arguments: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, '-I', '-B', '-c', program, str(ROOT), *arguments],
+                cwd=directory, capture_output=True, text=True, timeout=20,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fresh_standalone_and_canonical_orders_preserve_real_module_and_pickle(self) -> None:
+        program = r"""
+import importlib.util, pickle, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / '.getzilla'))
+def load(path):
+    spec = importlib.util.spec_from_file_location('public_standalone_workflow', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+if sys.argv[2] == 'canonical_first':
+    from getzilla import component_state
+path = root / '.getzilla/getzilla/workflow_artifacts.py'
+first, second = load(path), load(path)
+assert first.fsx is not second.fsx
+assert sys.modules[second.fsx.__name__] is second.fsx
+assert Path(second.fsx.__file__).resolve() == path.with_name('fsx.py').resolve()
+assert second.valid_package_path('.getzilla/runtime/changes/public', 'public')
+from getzilla import component_state, fsx
+assert component_state.FileSnapshot is fsx.FileSnapshot
+value = component_state.FileSnapshot(b'public', 0o644, (1, 2, 3))
+assert pickle.loads(pickle.dumps(value)) == value
+assert value.__class__.__module__ == 'getzilla.component_state'
+"""
+        for order in ('standalone_first', 'canonical_first'):
+            with self.subTest(order=order):
+                self._run_public_import(program, order)
+
+    def test_failed_sibling_execution_restores_prior_module_none_or_absence(self) -> None:
+        self._run_public_import(r"""
+import importlib.util, sys, tempfile
+from pathlib import Path
+root = Path(sys.argv[1])
+original = root / '.getzilla/getzilla/workflow_artifacts.py'
+key, missing = '_getzilla_workflow_artifacts_fsx', object()
+def load(path):
+    spec = importlib.util.spec_from_file_location('public_standalone_workflow', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+for prior in ('absent', 'none', 'loaded'):
+    if prior == 'absent':
+        sys.modules.pop(key, None)
+    elif prior == 'none':
+        sys.modules[key] = None
+    else:
+        actual = load(original).fsx
+        assert sys.modules[key] is actual
+    before = sys.modules.get(key, missing)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / 'workflow_artifacts.py'
+        path.write_bytes(original.read_bytes())
+        path.with_name('fsx.py').write_text(
+            "import sys\nassert sys.modules.get(__name__).__dict__ is globals()\n"
+            "raise RuntimeError('public sibling import failure')\n",
+            encoding='utf-8',
+        )
+        try:
+            load(path)
+        except RuntimeError as error:
+            assert str(error) == 'public sibling import failure'
+        else:
+            raise AssertionError('failed sibling import was swallowed')
+    assert sys.modules.get(key, missing) is before
+""")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import evaluate_pre_tool, production_action
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.router import build_route
 from getzilla.state import add_approval, approvals_path, has_valid_approval
 from tests._support import activate_owned_route
@@ -21,7 +22,7 @@ from tests._support import project_copy
 PATTERNS = ('*', '**', '.grok/**', '.getzilla/*', 'AGENTS.m?', '[A]GENTS.md', 'trust-ci/**/api.py')
 CONTROL_PLANE_TARGETS = (
     'AGENTS.md',
-    '.grok/hooks/pre_tool_use.py',
+    '.getzilla/hooks/pre_tool_use.py',
     '.getzilla/config/policy.json',
     'trust-ci/src/adaptive_trust_ci/api.py',
 )
@@ -94,7 +95,7 @@ class ApprovalResourceTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, {'tool_name': 'Edit', 'tool_input': {'path': 'AGENTS.md'}})
             self.assertTrue(allowed, reason)
             allowed, _ = evaluate_pre_tool(
-                root, {'tool_name': 'Edit', 'tool_input': {'path': '.grok/hooks/pre_tool_use.py'}},
+                root, {'tool_name': 'Edit', 'tool_input': {'path': '.getzilla/hooks/pre_tool_use.py'}},
             )
             self.assertFalse(allowed)
 
@@ -229,7 +230,7 @@ class ExactTargetGrantTests(unittest.TestCase):
                 resources=['github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'],
             )
             allowed, reason = self.bash(root, 'gh api repos/Dimkox/Getzilla/issues -f title=x')
-            self.assertTrue(allowed, reason)
+            self.assertTrue(allowed, policy_diagnostic(allowed, reason))
             self.assertFalse(self.bash(root, 'gh api -X PUT repos/Dimkox/Getzilla/pulls/1/merge')[0])
             for command in (
                 'gh api -X DELETE repos/Dimkox/Getzilla',

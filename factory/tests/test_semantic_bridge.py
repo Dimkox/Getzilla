@@ -164,6 +164,7 @@ class SemanticBridgeTests(unittest.TestCase):
             "landing-provider-observation.v1.schema.json",
             "landing-backend-capability.v1.schema.json",
             "landing-backend-capability.v2.schema.json",
+            "landing-backend-capability.v3.schema.json",
             "landing-attempt-status.v1.schema.json",
             "landing-failover-config.v1.schema.json",
             "landing-failover-result.v1.schema.json",
@@ -202,6 +203,7 @@ class SemanticBridgeTests(unittest.TestCase):
             "landing-provider-observation.v1.schema.json": 1,
             "landing-backend-capability.v1.schema.json": 1,
             "landing-backend-capability.v2.schema.json": 2,
+            "landing-backend-capability.v3.schema.json": 3,
             "landing-attempt-status.v1.schema.json": 1,
             "landing-failover-config.v1.schema.json": 1,
             "landing-failover-result.v1.schema.json": 1,
@@ -230,7 +232,7 @@ class SemanticBridgeTests(unittest.TestCase):
             self.assertEqual(set(variant["required"]), set(variant["properties"]))
             self.assertEqual(variant["properties"]["schema_version"], {"const": 2 if name == "cohort_evidence" else 1})
 
-    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed in this test environment")
+    @unittest.skipUnless(shutil.which("jsonschema"), "jsonschema CLI not installed; it is an optional external validator (no jsonschema dependency is declared)")
     def test_bridge_records_validate_with_jsonschema_cli(self):
         built = self.build()
         for name, value in (

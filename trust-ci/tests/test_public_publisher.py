@@ -1,6 +1,5 @@
 """Public controller qualification using real signatures, Git objects and a local HTTP boundary."""
 import copy
-from dataclasses import replace
 import hashlib
 import hmac
 import secrets

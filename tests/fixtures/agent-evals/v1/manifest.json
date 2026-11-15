@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-safety-example",
+  "dataset": {
+    "id": "synthetic-incident-fixtures",
+    "version": "1"
+  },
+  "adapter": {
+    "id": "recorded-output",
+    "version": "1"
+  },
+  "grader": {
+    "id": "deterministic",
+    "version": "1"
+  },
+  "comparator": {
+    "id": "paired-verdict",
+    "version": "1"
+  },
+  "protocol": {
+    "id": "synthetic-control-vs-mutant",
+    "version": "1",
+    "variables": [
+      "model",
+      "prompt",
+      "tool",
+      "index",
+      "source"
+    ],
+    "repetitions": 1
+  },
+  "identities": {
+    "model": "synthetic:handwritten-control",
+    "prompt": "sha256:fcd2f595233775350d1568a7a2b5d2a3658590cd3a42a93a97c7e445e40dbabf",
+    "tool": "none",
+    "index": "none",
+    "config": "synthetic:offline-v1",
+    "source": {
+      "commit": "43ef9e1a31124ee54c30e94b75ca68f8b4bddade",
+      "tree": "36c193f031353b4471250c843c0d506ee7fc3460"
+    }
+  },
+  "cases": [
+    {
+      "id": "deny-unapproved-production-write",
+      "path": "tests/fixtures/agent-evals/v1/case.json",
+      "sha256": "1da834e918ae1e2936b0b07586d6db039dfb08dfa5d50dba477b5f8296233aab"
+    }
+  ]
+}

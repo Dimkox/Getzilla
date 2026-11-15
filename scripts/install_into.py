@@ -19,12 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 
 from getzilla import fsx
+from getzilla.skill_inventory import inspect_payload as inspect_skill_payload
+from getzilla.baseline_assets import archive_entries, validate_resources, BLOB_PREFIX
 from getzilla.component_state import (
     AGENT_COMPONENT_PATHS as AGENT_COMPONENT_PATHS, KNOWN_AGENTS,
     EXTRA_COMPONENT_PATHS as EXTRA_COMPONENT_PATHS, KNOWN_EXTRAS,
     FACTORY_SUPPORT_FILES,
     COMPLIANCE_COMPONENT_PATHS as COMPLIANCE_COMPONENT_PATHS, KNOWN_COMPLIANCE, ComponentStateError,
-    MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest,
+    MANIFEST as COMPONENT_MANIFEST, BoundRoot, read_state, fresh_manifest, encode_manifest, decode_manifest,
     agent_of as _agent_of, component_of, parse_agents, validate_agents,
     STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, MAX_SYNC_RECORD_BYTES,
     LEGACY_PATH_RULES as LEGACY_PATH_RULES, legacy_to_current_path as legacy_to_current_path,
@@ -47,6 +49,8 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_design_reference.py",
+    "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
     "scripts/getzilla_duplicates.py",
     "factory/.env.example",
@@ -60,11 +64,14 @@ MANAGED_FILES = (
     "scripts/getzilla_governance.py",
     "scripts/getzilla_history.py",
     "scripts/getzilla_harness.py",
+    "scripts/getzilla_skill_preflight.py",
     "scripts/getzilla_route.py",
     "scripts/getzilla_change.py",
     "scripts/getzilla_spec.py",
     "scripts/getzilla_artifacts.py",
     "scripts/getzilla_verify.py",
+    "scripts/getzilla_evals.py",
+    "scripts/getzilla_unittest.py",
     "scripts/getzilla_verification_tools.py",
     "scripts/getzilla_audit_bundle.py",
     "scripts/getzilla_compliance.py",
@@ -75,6 +82,7 @@ MANAGED_FILES = (
     "scripts/getzilla_ci_admission.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
+    "scripts/getzilla_components.py",
     "scripts/getzilla_doctor.py",
     "scripts/getzilla_status.py",
     "scripts/getzilla_agent.py",
@@ -82,6 +90,8 @@ MANAGED_FILES = (
     "docs/deploy-preflight.md",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
+    "scripts/getzilla_platform_install.py",
+    "scripts/getzilla_update.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
@@ -96,6 +106,10 @@ MANAGED_FILES = (
     "ruff.toml",
     "bandit.yaml",
     ".coveragerc",
+    "schemas/optional-module-v1.schema.json",
+    "schemas/optional-module-registry-v1.schema.json",
+    "schemas/module-runtime-v1.schema.json",
+    "docs/optional-modules.md",
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
@@ -108,6 +122,11 @@ MANAGED_FILES = (
     "schemas/workflow-source-v1.schema.json",
     "schemas/workflow-task-graph-v1.schema.json",
     "schemas/workflow-convergence-report-v1.schema.json",
+    "schemas/skill-preflight.v1.schema.json",
+    "docs/skill-preflight.md",
+    "engineering/verification-dispositions.json",
+    "engineering/vendor-custody/bmad-whitespace.json",
+    "engineering/vendor-custody/bmad-whitespace.md",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {
@@ -123,7 +142,16 @@ ROOT_HOOK_SHIMS = frozenset(
     }
 )
 ROOT_HOOK_SHIM_TEMPLATE = ".getzilla/templates/hook_root_shim.py"
-SKIP_PREFIXES = (".getzilla/runtime/",)
+SKIP_PREFIXES = (".getzilla/runtime/", ".getzilla/modules/", ".getzilla/optional-modules/")
+DESIGN_REFERENCE_ARTIFACTS = tuple(
+    '.getzilla/optional-modules/design-reference/' + version + '/' + name
+    for version, names in (
+        ('0.1.0', ('module.json', 'reference.py', 'pack-v1.schema.json', 'LICENSE')),
+        ('0.2.0', ('module.json', 'reference.py', 'preview.py', 'pack-v1.schema.json', 'pack-v2.schema.json', 'LICENSE')),
+    )
+    for name in names
+)
+
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -189,7 +217,7 @@ _UNSUPPORTED_RENAME_ERRNOS = frozenset(
 
 # Grok Build reads these briefs; the router, doctor and generated harnesses read the .toml beside them.
 GROK_AGENT_BRIEFS = ".grok/agents/"
-# A fresh install ships the engine as one archive (sources plus bytecode for the installing Python);
+# A fresh install ships one source archive; zipimport compiles for the current interpreter.
 # __init__.py stays a file and adds the archive to the package path. Upgrades keep the file layout.
 ENGINE_DIR = ".getzilla/getzilla/"
 ENGINE_INIT = ".getzilla/getzilla/__init__.py"
@@ -211,7 +239,10 @@ class PayloadSelection:
 
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
                  compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
-                 root_shims: bool = False, engine_archive: bool = False) -> None:
+                 root_shims: bool = False, engine_archive: bool = False,
+                 design_reference: bool = False) -> None:
+        if type(design_reference) is not bool:
+            raise UnsafeInstallTarget('design-reference selection must be boolean')
         try:
             agents = validate_agents(agents)
         except ComponentStateError as exc:
@@ -228,12 +259,15 @@ class PayloadSelection:
         # Root hook shims serve hook configs from before .grok/hooks; only upgrades keep them.
         self.root_shims = root_shims
         self.engine_archive = engine_archive
+        self.design_reference = design_reference
 
     @classmethod
     def full_layout(cls) -> "PayloadSelection":
         return cls(KNOWN_AGENTS, factory=True, full=True)
 
     def includes(self, path: str) -> bool:
+        if path in DESIGN_REFERENCE_ARTIFACTS:
+            return self.design_reference
         if self.full:
             return True
         if path in ROOT_HOOK_SHIMS:
@@ -241,6 +275,8 @@ class PayloadSelection:
         if path == ENGINE_ARCHIVE:
             return self.engine_archive
         if self.engine_archive and path.startswith(ENGINE_DIR) and path != ENGINE_INIT:
+            return False
+        if self.engine_archive and path.startswith(BLOB_PREFIX):
             return False
         component = component_of(path)
         if component.startswith("extra:"):
@@ -261,6 +297,8 @@ class PayloadSelection:
             shape["compliance"] = list(self.compliance)
         if self.extras:
             shape["extras"] = list(self.extras)
+        if self.design_reference:
+            shape['design_reference'] = True
         return shape
 
 
@@ -288,26 +326,22 @@ def wants_engine_archive(target: Path) -> bool:
 
 
 def engine_archive_entry(entries: "list[InstallEntry]") -> "InstallEntry":
-    """One deterministic zip: every engine file plus unchecked-hash bytecode for this Python."""
-    import importlib.util
+    """One deterministic source zip; native zipimport compiles for its interpreter."""
     import io
     import zipfile
-    from importlib import _bootstrap_external  # type: ignore[attr-defined]
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for entry in sorted(entries, key=lambda item: item.path):
             name = entry.path[len(".getzilla/"):]
-            members = [(name, entry.content)]
             if name.endswith(".py"):
-                code = compile(entry.content, name, "exec", dont_inherit=True)
-                pyc = _bootstrap_external._code_to_hash_pyc(code, importlib.util.source_hash(entry.content), False)
-                members.append((name[:-3] + ".pyc", bytes(pyc)))
-            for member, data in members:
-                info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o644 << 16
-                archive.writestr(info, data)
+                # Preserve syntax refusal before publication without serializing
+                # interpreter-specific code constants or parent intern state.
+                compile(entry.content, name, "exec", dont_inherit=True)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, entry.content)
     return InstallEntry(ENGINE_ARCHIVE, buffer.getvalue(), 0o644)
 
 
@@ -648,6 +682,12 @@ class _SourceTree:
         for name in names:
             relative = f"{prefix}/{name}"
             _path_parts(relative)
+            if (relative.startswith(".getzilla/runtime/")
+                    and not relative.endswith(".gitkeep")
+                    and relative != ".getzilla/runtime/.gitignore"):
+                continue  # Ignored state can disappear after directory enumeration.
+            if relative in {".getzilla/modules", ".getzilla/optional-modules"}:
+                continue  # optional artifacts never enter Core inventory, even when unavailable or linked
             try:
                 metadata = fsx.lstat_at(descriptor, name)
             except OSError as exc:
@@ -656,6 +696,9 @@ class _SourceTree:
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
                 if name == "__pycache__":
+                    continue
+                if relative == "factory/src/getzilla_factory.egg-info":
+                    # Editable-install metadata is generated, never managed source.
                     continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.
@@ -734,7 +777,8 @@ class _SourceTree:
         relative: str,
         limit: int,
         expected_identity: tuple[int, int, int, int, int, int] | None = None,
-    ) -> tuple[bytes, int]:
+        *, missing_ok: bool = False,
+    ) -> tuple[bytes, int] | None:
         _check_directory_binding(self.binding)
         nofollow, _directory = _require_descriptor_primitives()
         parts = _path_parts(relative)
@@ -775,6 +819,10 @@ class _SourceTree:
             return content, stat.S_IMODE(opened.st_mode)
         except UnsafeInstallTarget:
             raise
+        except FileNotFoundError as exc:
+            if missing_ok and expected_identity is None:
+                return None
+            raise UnsafeInstallTarget(f"managed source disappeared: {relative}") from exc
         except OSError as exc:
             raise UnsafeInstallTarget(f"cannot read managed source {relative}: {exc}") from exc
         finally:
@@ -862,11 +910,17 @@ def build_payload(
     # a complete source for the same payload).
     payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
                     if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, COMPONENT_MANIFEST})
+    if selection is not None and selection.design_reference:
+        with _SourceTree(source) as tree:
+            payload += tuple(_source_entry(path, tree) for path in DESIGN_REFERENCE_ARTIFACTS)
     if selection is None or selection.full:
         return payload
     chosen = tuple(entry for entry in payload if selection.includes(entry.path))
     if selection.engine_archive:
-        engine = [entry for entry in payload if entry.path.startswith(ENGINE_DIR) and entry.path != ENGINE_INIT
+        engine_selection = PayloadSelection(selection.agents, factory=selection.factory, full=selection.full,
+                                            compliance=selection.compliance, extras=selection.extras,
+                                            root_shims=selection.root_shims, engine_archive=False)
+        engine = [entry for entry in payload if engine_selection.includes(entry.path) and (entry.path.startswith(ENGINE_DIR) or entry.path.startswith(BLOB_PREFIX)) and entry.path != ENGINE_INIT
                   and "/__pycache__/" not in entry.path]
         chosen += (engine_archive_entry(engine),)
     if selection.compliance:
@@ -886,14 +940,51 @@ def _build_full_payload(
         raise UnsafeInstallTarget(f"unsupported explicit profile kind: {profile_kind}")
     with _SourceTree(source) as tree:
         inventory = tree.inventory()
-        entries = [
-            _source_entry(relative, tree, expected_identity)
-            for relative, expected_identity in inventory
-            if relative not in ROOT_HOOK_SHIMS
-        ]
+        # A Core installation is a source for its installed components, not for
+        # absent Factory files. Its inventoried manifest declares that boundary.
+        installed = None
+        installed_components = {'core'}
+        manifest_identity = next((identity for path, identity in inventory
+                                  if path == COMPONENT_MANIFEST), None)
+        if manifest_identity is not None:
+            try:
+                manifest = decode_manifest(tree.read(COMPONENT_MANIFEST, MAX_SOURCE_FILE_BYTES,
+                                                     manifest_identity)[0])
+            except ComponentStateError as exc:
+                raise UnsafeInstallTarget('invalid installed source manifest') from exc
+            installed = {path for record in manifest['components'].values() for path in record['files']}
+            installed_components.update(manifest['components'])
+        entries = []
+        for relative, expected_identity in inventory:
+            if relative in ROOT_HOOK_SHIMS:
+                continue
+            if (installed is not None and expected_identity is None and relative not in installed
+                    and component_of(relative) not in installed_components):
+                optional = tree.read(relative, MAX_SOURCE_FILE_BYTES, missing_ok=True)
+                if optional is not None:
+                    entries.append(InstallEntry(relative, *optional))
+            else:
+                entries.append(_source_entry(relative, tree, expected_identity))
         # Render from the descriptor-validated inventory bytes, so the shipped
         # templates and generated documents belong to the same source snapshot.
         by_path = {entry.path: entry for entry in entries}
+        packed = by_path.pop(ENGINE_ARCHIVE, None)
+        if packed is not None:
+            try:
+                virtual = archive_entries(packed.content)
+                for path, (body, mode) in virtual.items():
+                    if path in by_path and (by_path[path].content, by_path[path].mode) != (body, mode):
+                        raise ValueError('conflicting loose/archive source')
+                    by_path[path] = InstallEntry(path, body, mode)
+                validate_resources(virtual, lambda path: by_path[path].content)
+                entries = list(by_path.values())
+            except (ValueError, KeyError) as exc:
+                raise UnsafeInstallTarget('invalid or incomplete source archive') from exc
+        try:
+            validate_resources({path: (entry.content, entry.mode) for path, entry in by_path.items()
+                                if path.startswith(BLOB_PREFIX)}, lambda path: by_path[path].content)
+        except (ValueError, KeyError) as exc:
+            raise UnsafeInstallTarget('invalid or incomplete baseline source resources') from exc
         try:
             aliases = [relative for relative, _ in inventory if relative in ROOT_HOOK_SHIMS]
             if aliases:
@@ -933,6 +1024,7 @@ def _build_full_payload(
         for length in range(1, len(parts)):
             if PurePosixPath(*parts[:length]).as_posix() in seen:
                 raise UnsafeInstallTarget(f"managed file/directory collision: {path}")
+    inspect_skill_payload((entry.path, entry.content) for entry in entries)
     return tuple(entries)
 
 
@@ -1174,12 +1266,13 @@ def _make_plan(
     include_dependencies: bool,
     include_optional: bool,
     payload: tuple[InstallEntry, ...] | None = None,
+    full_payload: tuple[InstallEntry, ...] | None = None,
     selection: PayloadSelection | None = None,
     accepted_kept_digests: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    full_payload = build_payload(source)
+    full_payload = build_payload(source) if full_payload is None else full_payload
     selected_payload = payload if payload is not None else build_payload(source, selection=selection)
     state = _target_state(target)
     if state == "absent" and payload is None:
@@ -1685,10 +1778,12 @@ def _materialize_new(
     include_dependencies: bool,
     include_optional: bool,
     selection: PayloadSelection | None = None,
+    prepared_payload: tuple[InstallEntry, ...] | None = None,
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    payload = with_fresh_sync_record(build_payload(source, selection=selection), selection)
+    payload = (with_fresh_sync_record(build_payload(source, selection=selection), selection)
+               if prepared_payload is None else prepared_payload)
     plan = _make_plan(
         source,
         target,
@@ -1696,6 +1791,7 @@ def _materialize_new(
         include_optional=include_optional,
         payload=payload,
         selection=selection,
+        full_payload=prepared_payload,
     )
     if plan["target_state"] != "absent":
         raise UnsafeInstallTarget("materialization requires an absent target")
@@ -1839,6 +1935,8 @@ def main() -> None:
              "manifest; a fresh target defaults to GETZILLA_AGENT or qwen.",
     )
     parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
+    parser.add_argument('--design-reference-artifacts', action='store_true',
+                        help='Copy the passive local design-reference artifact bundle; does not install or enable it.')
     parser.add_argument(
         "--compliance",
         help="Comma-separated opt-in compliance layers (eu-ai-act). Off by default.",
@@ -1877,6 +1975,7 @@ def main() -> None:
     target = Path(args.target)
     if args.full_layout:
         selection = PayloadSelection.full_layout()
+        selection.design_reference = args.design_reference_artifacts
     else:
         compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
         try:
@@ -1885,7 +1984,8 @@ def main() -> None:
             selection = PayloadSelection(agents, compliance=compliance,
                                          extras=extras or detect_extras(target),
                                          root_shims=has_root_shims(target),
-                                         engine_archive=wants_engine_archive(target))
+                                         engine_archive=wants_engine_archive(target),
+                                         design_reference=args.design_reference_artifacts)
         except (UnsafeInstallTarget, ComponentStateError) as exc:
             parser.error(str(exc))
     if args.materialize_new:

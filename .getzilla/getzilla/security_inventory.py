@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .known_vulns import MAX_MANIFEST_BYTES, REQUIREMENTS_RE, _manifest_parser, _tracked_files, normalize_name
+from .security_osv_snapshot import _cargo_manifest, _cargo_lock_pairs, MAX_MANIFEST_BYTES, REQUIREMENTS_RE, VulnerabilityError, _manifest_parser, _tracked_files, normalize_name
 
 MAX_FILES = 100_000
 MAX_YAML_BYTES = 1024 * 1024
@@ -180,6 +180,73 @@ def _logical_requirements(text: str):
         raise ValueError('truncated requirements continuation')
 
 
+def _closed_download_tail(lines: list[str], target: str) -> bool:
+    """Only these complete endings preserve the proved checked artifact state.
+
+    Unknown subsequent statements remain unresolved, even after a valid digest
+    prefix. This is a closed declaration grammar, not a shell interpreter.
+    """
+    return not lines or lines == [f'chmod 0755 "{target}"']
+
+
+def workflow_downloads(command: str, manifest: str, line: int, source: bytes, read_declared,
+                       *, platform: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Return source declarations only; artifact evidence never changes this set."""
+    tools, gaps = [], []
+    lines = [text.strip() for text in command.splitlines() if text.strip()]
+    downloads = [i for i, text in enumerate(lines) if re.search(r'\b(?:curl|wget|Invoke-WebRequest)\b', text)]
+    for offset in downloads:
+        text = lines[offset]
+        try:
+            # A deliberately closed straight-line shell subset. Unclassified
+            # shell is still an obligation, never inferred harmless.
+            if len(downloads) != 1 or not lines or lines[0] != 'set -euo pipefail' or offset + 1 >= len(lines):
+                raise ValueError('unproved shell control flow')
+            values, pins = {}, []
+            for prefix in lines[1:offset]:
+                assignment = re.fullmatch(r"([a-z][a-z0-9_]*)=\$\(sed -n 's/\^ARG ([A-Z][A-Z0-9_]*)=//p' ([A-Za-z0-9_./-]+)\)", prefix)
+                if assignment:
+                    variable, arg, path = assignment.groups()
+                    if variable in values or PurePosixPath(path).is_absolute() or '..' in path.split('/'):
+                        raise ValueError('ambiguous source variable')
+                    payload = read_declared(path)
+                    if not isinstance(payload, bytes) or len(payload) > MAX_MANIFEST_BYTES:
+                        raise ValueError('unbounded source pin')
+                    matches = re.findall(r'^ARG ' + re.escape(arg) + r'=([A-Za-z0-9_.-]+)$', payload.decode('utf-8'), re.M)
+                    if len(matches) != 1:
+                        raise ValueError('missing or duplicate exact source pin')
+                    values[variable] = matches[0]
+                    pins.append({'path': path, 'sha256': hashlib.sha256(payload).hexdigest(), 'arg': arg, 'value': matches[0]})
+                elif not re.fullmatch(r'mkdir -p "\$RUNNER_TEMP/[A-Za-z0-9_/-]+"', prefix):
+                    raise ValueError('unclassified pre-download operation')
+            download = re.fullmatch(r'curl -fsSL -o "(\$RUNNER_TEMP/[A-Za-z0-9_/-]+)" "(https://github.com/[^"\s]+)"', text)
+            if not download or any(part == '..' for part in download[1].split('/')):
+                raise ValueError('unsupported download grammar')
+            target, url = download.groups()
+            check = re.fullmatch(r'echo "\$\{([a-z][a-z0-9_]*)\}  ' + re.escape(target) + r'" \| sha256sum -c -', lines[offset + 1])
+            if not check or not re.fullmatch('[0-9a-f]{64}', values.get(check[1], '')):
+                raise ValueError('exact download must be checked before any next operation')
+            if not _closed_download_tail(lines[offset + 2:], target):
+                raise ValueError('post-check flow is unclassified; artifact replacement/use remains unknown')
+            for variable in re.findall(r'\$\{([a-z][a-z0-9_]*)\}', url):
+                if variable not in values or not re.fullmatch('[A-Za-z0-9_.-]+', values[variable]):
+                    raise ValueError('unbound release URL')
+                url = url.replace('${' + variable + '}', values[variable])
+            if not re.fullmatch(r'https://github.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', url):
+                raise ValueError('unresolved release URL')
+            tools.append({'kind': 'release-tool', 'reference': url, 'manifest': manifest, 'line': line,
+                          'source_sha256': hashlib.sha256(source).hexdigest(), 'usage': 'build-ci',
+                          'artifact_sha256': values[check[1]], 'platform': platform or 'unknown', 'pin_sources': pins})
+            continue
+        except (OSError, ValueError, UnicodeError):
+            pass
+        if re.search(r'\b(?:curl|wget|Invoke-WebRequest)\b', text):
+            tools.append({'kind': 'script-download', 'reference': text[:500], 'manifest': manifest, 'line': line})
+            gaps.append({'code': 'unresolved-ci-tool', 'path': manifest,
+                         'message': 'downloaded executable needs digest-bound artifact evidence'})
+    return tools, gaps
+
+
 def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
     bindings = image_bindings or {}
@@ -222,7 +289,9 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
             gap('unresolved-image', path, 'image requires an immutable sha256 reference')
         result['images'].append({'reference': reference or original,
                                  'source_reference': original if source_reference is None else source_reference,
-                                 'manifest': path, 'line': line})
+                                 'manifest': path, 'line': line, 'kind': 'oci-image', 'platform': 'unknown',
+                                 'usage': 'build-ci' if path.startswith('.github/') else 'runtime-and-development',
+                                 'source_sha256': hashlib.sha256(texts[path].encode()).hexdigest()})
 
     def yaml_image(value: _YamlNode | None, path: str, label: str, *, container=False):
         if container and value is not None and value.kind == 'mapping':
@@ -235,7 +304,8 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
         if reference.startswith('docker://') and not reusable:
             image(reference.removeprefix('docker://'), path, value.line, require_digest=True, source_reference=reference)
             return
-        result['tools'].append({'kind': 'github-action', 'reference': reference, 'manifest': path, 'line': value.line})
+        result['tools'].append({'kind': 'github-action', 'reference': reference, 'manifest': path, 'line': value.line,
+                                'usage': 'build-ci', 'source_sha256': hashlib.sha256(texts[path].encode()).hexdigest()})
         local = reference.startswith(('./', '$/'))
         if reusable or local or '/.github/workflows/' in reference:
             gap('unsupported-ci-composition', path, 'local or reusable workflow/action needs qualified referenced-source coverage')
@@ -290,15 +360,21 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                     action(definition['uses'], relative)
                 if 'run' in definition:
                     command = _yaml_text(definition['run'], 'Actions run')
-                    for line in command.splitlines():
-                        if re.search(r'\b(?:curl|wget|Invoke-WebRequest)\b', line):
-                            result['tools'].append({'kind': 'script-download', 'reference': line[:500],
-                                                    'manifest': relative, 'line': definition['run'].line})
-                            gap('unresolved-ci-tool', relative, 'downloaded executable needs digest-bound artifact evidence')
+                    tools, gaps = workflow_downloads(command, relative, definition['run'].line, text.encode(),
+                        lambda path: _safe_bytes(root, path) if path in files else b'',
+                        platform='linux/amd64' if fields.get('runs-on') is not None
+                        and isinstance(fields['runs-on'].value, str)
+                        and fields['runs-on'].value in {'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-latest'} else None)
+                    result['tools'].extend(tools)
+                    result['gaps'].extend(gaps)
                 if not set(definition) & {'uses', 'run'}:
                     gap('unsupported-ci-composition', relative, 'Actions step has no covered run/uses operation')
 
-    files = _tracked_files(root)
+    try:
+        files = _tracked_files(root)
+    except (VulnerabilityError, OSError, ValueError):
+        gap('source-root-unverified', '.', 'cannot establish complete inventory for the exact selected Git worktree root')
+        files = []
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []
@@ -340,7 +416,9 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                         gap('unresolved-image', relative, f'{key}: exact image reference and ID required')
                         continue
                     result['images'].append({'reference': reference, 'source_reference': reference,
-                                             'manifest': relative, 'line': 0, 'image_id': image_id})
+                        'manifest': relative, 'line': text[:text.index(key)].count('\n') + 1 if key in text else 1,
+                        'image_id': image_id, 'kind': 'oci-image', 'platform': data['platform'], 'usage': 'build-ci',
+                        'source_sha256': hashlib.sha256(payload).hexdigest()})
             elif name == 'pyproject.toml':
                 data = tomllib.loads(text)
                 project = data.get('project', {})
@@ -372,14 +450,22 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                         gap('unresolved-dependency', relative, 'non-registry lock source needs an artifact adapter')
                     else:
                         add('PyPI', package.get('name'), package.get('version'), relative, usage)
+            elif name == 'Cargo.lock':
+                manifest = str(pure.with_name('Cargo.toml'))
+                manifest_text = (_safe_bytes(root, manifest).decode('utf-8')
+                                 if (root / manifest).exists() else None)
+                for package, version in _cargo_lock_pairs(text, manifest_text):
+                    add('crates.io', package, version, relative, usage)
+            elif name == 'Cargo.toml':
+                _cargo_manifest(text)
+                if not (root / pure.parent / 'Cargo.lock').is_file():
+                    gap('unresolved-dependency', relative, 'Cargo manifest has no resolved lock')
             elif parser is not None:
                 ecosystem, parse = parser
                 for package, version in parse(text):
                     add(ecosystem, package, version, relative, usage)
             elif name in _UNSUPPORTED or name.endswith('.csproj'):
                 gap('unsupported-manifest', relative, 'manifest needs a qualified resolution adapter')
-            elif name == 'Cargo.toml' and not (root / pure.parent / 'Cargo.lock').is_file():
-                gap('unresolved-dependency', relative, 'Cargo manifest has no resolved lock')
         except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
             gap('unreadable-manifest', relative, str(exc)[:300])
 

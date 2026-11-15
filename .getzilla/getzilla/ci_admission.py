@@ -91,6 +91,60 @@ def _security(record, head, tree, now):
     return problems
 
 
+def _factory_unit_source(root):
+    """Read accepted Factory source custody without collecting or executing tests."""
+    from . import fsx
+    from .factory_tests import MAX_INPUT_BYTES, _source_snapshot, declared_ids
+    contents, _bindings = _source_snapshot(root)
+    with fsx.ReadOnlyBoundRoot(root) as bound:
+        engine = bound.read(".getzilla/getzilla/factory_tests.py", limit=MAX_INPUT_BYTES)
+        if engine is None:
+            raise ValueError("Factory runner source is missing")
+    return {"source_inventory": {name: hashlib.sha256(raw).hexdigest() for name, raw in contents.items()},
+            "declared_ids": declared_ids(root, contents=contents),
+            "engine_sha256": hashlib.sha256(engine.content).hexdigest()}
+
+
+def _factory_unit_valid(unit, expected_source):
+    """Validate schema3; inode bindings describe the producer's distinct CI checkout."""
+    from .factory_tests import validate_report
+    try:
+        if (type(expected_source) is not dict
+                or set(expected_source) != {"source_inventory", "declared_ids", "engine_sha256"}
+                or type(unit) is not dict or type(unit.get("binding")) is not dict):
+            return False
+        binding = unit["binding"]
+        if (set(binding) != {"root", "python", "invocation_id", "engine_sha256", "source_inventory",
+                             "source_bindings", "declared_ids", "context"}
+                or not isinstance(binding["root"], str) or not binding["root"]
+                or not isinstance(binding["python"], str) or not binding["python"]
+                or not isinstance(binding["invocation_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", binding["invocation_id"])
+                or type(binding["source_bindings"]) is not dict
+                or set(binding["source_bindings"]) != {"ancestry", "directories", "files"}):
+            return False
+        context = binding["context"]
+        if (type(context) is not dict or set(context) != {"unit_database_bindings", "host_supported",
+                "procfs_descriptor_reopen", "pypdf_version", "jsonschema_cli"}
+                or context["unit_database_bindings"] != "scrubbed"
+                or type(context["host_supported"]) is not bool
+                or type(context["procfs_descriptor_reopen"]) is not bool
+                or any(context[key] is not None and (not isinstance(context[key], str) or not context[key])
+                       for key in ("pypdf_version", "jsonschema_cli"))):
+            return False
+        # Source hashes/declared cases/engine come from this exact candidate,
+        # while producer context and inode observations retain their original provenance.
+        validate_report(unit, {**binding, **expected_source})
+        prefixes = ("factory.tests.test_disposable_exit.DisposableExitTests.",
+                    "factory.tests.test_postgres_fixture_reset.FixtureResetTests.")
+        skipped = {item["id"] for item in unit["skipped"]}
+        return (unit["status"] == "pass"
+                and all(any(item.startswith(prefix) for item in unit["executed"]) for prefix in prefixes)
+                and not any(item.startswith(prefixes) for item in skipped))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
     now = now or datetime.now(timezone.utc)
     problems = []
@@ -112,17 +166,7 @@ def evaluate(needs, records, *, head, tree, run_id, attempt, now=None):
                     or record.get("primary_outcome") != "passed" or record.get("cleanup_outcome") != "confirmed"):
                 problems.append(f"{name}: required component or native cleanup evidence incomplete")
         elif name == "linux-core":
-            unit = record.get("unit") or {}
-            executed = unit.get("executed") or []
-            prefixes = ("factory.tests.test_disposable_exit.DisposableExitTests.",
-                        "factory.tests.test_postgres_fixture_reset.FixtureResetTests.")
-            skipped = {item['id'] for item in unit.get('skipped', [])}
-            if (unit.get("status") != "pass" or not unit.get("tests_run") or unit.get("collected") != unit.get("tests_run")
-                    or len(executed) != unit.get("tests_run") or len(set(executed)) != len(executed)
-                    or unit.get("failures") != 0 or unit.get("errors") != 0
-                    or unit.get("database_obligations") != "not_run_in_unit_mode"
-                    or any(not any(item.startswith(prefix) and item not in skipped for item in executed) for prefix in prefixes)
-                    or any(item.startswith(prefixes) for item in skipped)):
+            if not _factory_unit_valid(record.get("unit") or {}, record.get("unit_source")):
                 problems.append("Factory unit discovery evidence is missing or incomplete")
         else:
             problems.extend(_security(record, head, tree, now))
@@ -165,7 +209,8 @@ def _verify_files(directory, manifest):
         names.add(name)
 
 
-def load_records(artifacts, run_id, attempt):
+def load_records(artifacts, run_id, attempt, *, root=None):
+    root = Path.cwd() if root is None else Path(root)
     records = {}
     for name in ("linux-core", *CELL_CHECKS, "security-expanded"):
         label = "live-" + name if name in CELL_CHECKS else name
@@ -178,7 +223,7 @@ def load_records(artifacts, run_id, attempt):
             records[name] = {"source": {"head": provenance["head"], "tree": provenance["tree"]},
                 "run_id": provenance["run_id"], "attempt": provenance["attempt"],
                 "status": "pass" if state["job_status"] == "success" else "fail",
-                "unit": _read(directory / "factory-unit.json")}
+                "unit": _read(directory / "factory-unit.json"), "unit_source": _factory_unit_source(root)}
         else:
             record = _read(directory / "manifest.json")
             _verify_files(directory, record)
@@ -240,9 +285,9 @@ def main(argv=None):
         raw_needs = json.loads(os.environ["GETZILLA_NEEDS"])
         needs = {name: value.get("result") for name, value in raw_needs.items()}
         head, tree = _git(args.root, "rev-parse", "HEAD"), _git(args.root, "rev-parse", "HEAD^{tree}")
-        if head != os.environ["GETZILLA_EXPECTED_HEAD"]:
-            raise ValueError("Aggregator checked out the wrong source head")
-        records = load_records(args.artifacts, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"])
+        if head != os.environ["GETZILLA_EXPECTED_HEAD"] or _git(args.root, "status", "--porcelain"):
+            raise ValueError("Aggregator source head is wrong or the worktree is not clean")
+        records = load_records(args.artifacts, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"], root=args.root)
         problems = evaluate(needs, records, head=head, tree=tree, run_id=os.environ["GITHUB_RUN_ID"], attempt=os.environ["GITHUB_RUN_ATTEMPT"])
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as exc:
         problems = ["Required CI evidence unavailable: " + type(exc).__name__]

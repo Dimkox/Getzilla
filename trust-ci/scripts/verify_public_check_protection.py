@@ -4,7 +4,8 @@ import argparse
 import copy
 import json
 import math
-from pathlib import Path
+import os
+import stat
 import sys
 
 MAX_BYTES = 1024 * 1024
@@ -12,21 +13,38 @@ GITHUB_ACTIONS_APP_ID = 15368
 PROTECTION_URL = "https://api.github.com/repos/Dimkox/Getzilla/branches/main/protection"
 
 
-def _bounded(value, depth=0):
-    if depth > 32:
-        raise ValueError("snapshot nesting exceeds limit")
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("non-finite JSON number")
-    if isinstance(value, (str, list, dict)) and len(value) > 65536:
-        raise ValueError("snapshot value exceeds limit")
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise ValueError("non-string JSON key")
-            _bounded(item, depth + 1)
-    elif isinstance(value, list):
-        for item in value:
-            _bounded(item, depth + 1)
+class SnapshotParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError("snapshot-invalid")
+
+
+def _bounded(value):
+    pending, nodes, text = [(value, 0)], 0, 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        kind = type(item)
+        if depth > 32 or nodes > 65536:
+            raise ValueError("snapshot-invalid")
+        if kind not in (dict, list, str, int, float, bool, type(None)):
+            raise ValueError("snapshot-invalid")
+        if kind in (str, list, dict) and len(item) > 65536:
+            raise ValueError("snapshot-invalid")
+        if kind is str:
+            text += len(item.encode("utf-8"))
+        elif kind is dict:
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError("snapshot-invalid")
+                pending.extend(((key, depth + 1), (child, depth + 1)))
+        elif kind is list:
+            pending.extend((child, depth + 1) for child in item)
+        elif kind in (int, float):
+            if (kind is float and not math.isfinite(item)) or (kind is int and item.bit_length() > MAX_BYTES * 4):
+                raise ValueError("snapshot-invalid")
+            text += len(str(item))
+        if text > MAX_BYTES:
+            raise ValueError("snapshot-invalid")
 
 
 def _policy(snapshot):
@@ -52,6 +70,8 @@ def _policy(snapshot):
         name, publisher = check["context"], check["app_id"]
         if not isinstance(name, str) or not name.strip() or name != name.strip():
             raise ValueError("invalid check context")
+        if any(character in name for character in "*?[]"):
+            raise ValueError("wildcard check context is unsupported")
         if publisher is not None and (type(publisher) is not int or publisher < -1 or publisher == 0):
             raise ValueError("invalid check publisher")
         if name in bindings:
@@ -104,27 +124,54 @@ def _unique_object(pairs):
 
 
 def read_snapshot(path):
-    with Path(path).open("rb") as stream:
-        data = stream.read(MAX_BYTES + 1)
-    if len(data) > MAX_BYTES:
-        raise ValueError("snapshot exceeds 1 MiB")
-    value = json.loads(data, object_pairs_hook=_unique_object)
-    _bounded(value)
-    return value
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+    fd = None
+    try:
+        if not getattr(os, "O_NOFOLLOW", 0) or not getattr(os, "O_NONBLOCK", 0):
+            raise ValueError("snapshot-invalid")
+        named = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(named.st_mode) or named.st_size > MAX_BYTES:
+            raise ValueError("snapshot-invalid")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or identity(named) != identity(opened):
+            raise ValueError("snapshot-invalid")
+        data = bytearray()
+        while len(data) <= MAX_BYTES:
+            block = os.read(fd, min(65536, MAX_BYTES + 1 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        if (len(data) > MAX_BYTES or identity(opened) != identity(os.fstat(fd))
+                or identity(opened) != identity(os.stat(path, follow_symlinks=False))):
+            raise ValueError("snapshot-invalid")
+        value = json.loads(data, object_pairs_hook=_unique_object)
+        _bounded(value)
+        return value
+    except (OSError, ValueError, TypeError, RecursionError, OverflowError):
+        raise ValueError("snapshot-invalid") from None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                raise ValueError("snapshot-invalid") from None
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SnapshotParser(description=__doc__)
     parser.add_argument("before", help="administrator GET snapshot before addition")
     parser.add_argument("after", help="administrator GET snapshot after addition")
     parser.add_argument("--context", required=True)
     parser.add_argument("--app-id", required=True, type=int)
-    args = parser.parse_args()
     try:
+        args = parser.parse_args()
         verify_protection(read_snapshot(args.before), read_snapshot(args.after),
                           args.context, args.app_id)
-    except (OSError, ValueError, TypeError, RecursionError) as exc:
-        print(json.dumps({"ready": False, "reason": str(exc)}))
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(json.dumps({"ready": False, "reason": "snapshot-invalid"}))
         return 1
     print(json.dumps({"ready": True, "context": args.context, "app_id": args.app_id,
                       "scope": "snapshot policy preservation only"}))

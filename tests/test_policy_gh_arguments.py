@@ -15,10 +15,48 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla._policy_legacy import _http_write_resource, analyze_command_authority, production_targets  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, sensitive_action  # noqa: E402
+from getzilla.verification_failure_excerpt import policy_diagnostic  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval, approvals_path
 from tests._support import activate_owned_route
 from tests._support import project_copy, run_hook  # noqa: E402
+from tests.test_policy_shell_state import _functional_policy_clock
+
+
+def _literal_hook_flags(code, result):
+    """Closed diagnostic categories; never return hook values or exceptions."""
+    mapping = isinstance(result, dict)
+    value = result.get('decision') if mapping else None
+    decision = value if value in ('allow', 'deny') else 'unknown'
+    reason = result.get('reason') if mapping else None
+    if not isinstance(reason, str) or not reason:
+        category = 'unknown'
+    elif reason.startswith('Policy resource budget exhausted:'):
+        category = 'budget'
+    elif reason.startswith(('No active approval', 'Missing approval', 'Approval')):
+        category = 'grant'
+    elif reason.startswith(('Blocked secret', 'Secret read', 'Blocked a secret')):
+        category = 'secret'
+    else:
+        category = 'other'
+    return {'exit_ok': type(code) is int and code == 0, 'mapping': mapping,
+            'decision': decision, 'reason_category': category}
+
+
+class LiteralTitleDiagnosticTests(unittest.TestCase):
+    def test_closed_categories_never_export_values(self):
+        for code, result, expected in (
+            (0, {'decision': 'allow'}, ('allow', 'unknown')),
+            (0, {'decision': 'deny', 'reason': 'Policy resource budget exhausted: CANARY'}, ('deny', 'budget')),
+            (0, {'decision': 'deny', 'reason': 'No active approval CANARY'}, ('deny', 'grant')),
+            (0, {'decision': 'deny', 'reason': 'Blocked secret CANARY'}, ('deny', 'secret')),
+            (0, {'decision': 'CANARY', 'reason': 'CANARY'}, ('unknown', 'other')),
+            (2, [], ('unknown', 'unknown')),
+        ):
+            flags = _literal_hook_flags(code, result)
+            self.assertEqual((flags['decision'], flags['reason_category']), expected)
+            self.assertNotIn('CANARY', str(flags))
+            self.assertEqual(flags['exit_ok'], code == 0)
 
 
 class GhArgumentPolicyTests(unittest.TestCase):
@@ -38,6 +76,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
         cls.stack.close()
 
     def setUp(self) -> None:
+        self.enterContext(_functional_policy_clock())
         approvals_path(self.root).write_text('[]', encoding='utf-8')
 
     def grant(self, resource: str, *, production: bool = False) -> None:
@@ -65,7 +104,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_quoted_option_values_do_not_select_a_repository(self) -> None:
         self.grant('gh:dimkox/getzilla pr create')
@@ -75,7 +114,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_quoted_selector_data_cannot_use_the_wrong_grant(self) -> None:
         self.grant('gh:other/project pr create')
@@ -100,7 +139,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 command = f'gh pr create -R Dimkox/Getzilla --head feature --title Fixture {option}'
                 with self.subTest(command=command):
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_body_text_is_not_a_secret_file_operand(self) -> None:
         self.grant('gh:dimkox/getzilla pr create')
@@ -109,7 +148,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(_http_write_resource(command, self.root), 'gh:dimkox/getzilla pr create')
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_literal_text_does_not_remove_the_grant_requirement(self) -> None:
         for value in ('$literal', '-Rother/project', '--repo'):
@@ -136,7 +175,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             command = f'gh {group} new -R Dimkox/Getzilla --title Fixture -b "-Rother/project"'
             with self.subTest(command=command):
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
                 allowed, reason = self.verdict(f'gh {group} new --repo Dimkox/Getzilla --title Fixture -F.env')
                 self.assertFalse(allowed)
                 self.assertIn('secret', reason or '')
@@ -157,7 +196,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
         self.grant('gh:dimkox/getzilla issue create')
         command = 'gh issue create -R Dimkox/Getzilla --title Fixture -b "-Rother/project"'
         allowed, reason = self.verdict(command)
-        self.assertTrue(allowed, reason)
+        self.assertTrue(allowed, policy_diagnostic(allowed, reason))
         self.assertFalse(self.verdict('gh issue create --repo Dimkox/Getzilla --title Fixture -F.env')[0])
 
     def test_edit_and_comment_share_only_their_body_file_roles(self) -> None:
@@ -168,7 +207,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 command = f'gh {group} {verb} 5 -R Dimkox/Getzilla -b "-Rother/project"'
                 with self.subTest(command=command):
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
                     allowed, reason = self.verdict(f'gh {group} {verb} 5 -R Dimkox/Getzilla -F.env')
                     self.assertFalse(allowed)
                     self.assertIn('secret', reason or '')
@@ -180,7 +219,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(_http_write_resource(command, self.root), 'github-pr-review:dimkox/getzilla#5')
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
         self.assertFalse(self.verdict('gh pr review -c 5 -R Dimkox/Getzilla -F.env')[0])
 
     def test_pr_review_text_does_not_authorize_a_different_repo(self) -> None:
@@ -193,7 +232,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             command = f'gh pr merge {flag} 5 --body "-Rother/project" --subject "--hostname=other.example" -R Dimkox/Getzilla'
             with self.subTest(command=command):
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
         self.assertFalse(self.verdict('gh pr merge 5 -R Dimkox/Getzilla -F.env')[0])
 
     def test_pr_merge_data_does_not_select_a_different_repo(self) -> None:
@@ -203,7 +242,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
     def test_merge_body_text_cannot_set_the_admin_option(self) -> None:
         self.grant('Dimkox/Getzilla#5', production=True)
         allowed, reason = self.verdict('gh pr merge 5 --repo Dimkox/Getzilla --body "--admin"')
-        self.assertTrue(allowed, reason)
+        self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
     def test_api_typed_fields_and_raw_fields_are_not_pr_body_files(self) -> None:
         resource = 'github-api:POST api.github.com/repos/Dimkox/Getzilla/issues'
@@ -214,7 +253,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(_http_write_resource(command, self.root), resource)
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
         for field in ('-F name=@.env', '-Fname=@.env', '--input=.env'):
             with self.subTest(field=field):
                 allowed, reason = self.verdict(f'gh api repos/Dimkox/Getzilla/issues {field}')
@@ -247,7 +286,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(_http_write_resource(command, self.root), resource)
                     allowed, reason = self.verdict(command)
-                    self.assertTrue(allowed, reason)
+                    self.assertTrue(allowed, policy_diagnostic(allowed, reason))
                     self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
 
     def test_api_merge_host_positions_cannot_borrow_default_host_scopes(self) -> None:
@@ -274,7 +313,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
                     self.assertEqual(production_targets(self.root, command),
                                      [('pull-request-merge', 'other.example/dimkox/getzilla#5')])
                     allowed, reason = self.verdict(command)
-                    self.assertEqual(allowed, api_grant and merge_grant, reason)
+                    self.assertEqual(allowed, api_grant and merge_grant, policy_diagnostic(allowed, reason))
                     self.assertEqual(self.hook_verdict(command).get('decision'),
                                      'allow' if api_grant and merge_grant else 'deny')
 
@@ -285,7 +324,7 @@ class GhArgumentPolicyTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(_http_write_resource(command, self.root), resource)
                 allowed, reason = self.verdict(command)
-                self.assertTrue(allowed, reason)
+                self.assertTrue(allowed, policy_diagnostic(allowed, reason))
                 self.assertEqual(self.hook_verdict(command).get('decision'), 'allow')
 
     def test_api_host_prefix_cannot_hide_duplicate_host_selectors(self) -> None:
@@ -340,19 +379,60 @@ class GhArgumentPolicyTests(unittest.TestCase):
                     self.assertTrue(analyze_command_authority(command).ambiguous)
 
     def test_hook_preserves_quoted_and_escaped_title_literals(self) -> None:
-        for group in ('pr', 'issue'):
+        for group_index, group in enumerate(('pr', 'issue')):
             self.setUp()
             resource = f'gh:dimkox/getzilla {group} create'
             self.grant(resource)
-            for value in ("'{Fixture,--body-file=.env}'", '"{Fixture,--body-file=.env}"',
+            for case_index, value in enumerate(("'{Fixture,--body-file=.env}'", '"{Fixture,--body-file=.env}"',
                           r'\{Fixture,--body-file=.env\}', '"--*/*"', r'--\*/\*',
                           "'$TITLE'", r'\$TITLE', r'"\$TITLE"', "'`literal`'", r'\`literal\`',
                           "'<(literal)'", r'\<\(literal\)', "'~'", "'[ab]'", r'\[ab\]',
-                          '"--repo=Other/Project"', '.env', 'Fixture'):
+                          '"--repo=Other/Project"', '.env', 'Fixture')):
                 command = f'gh {group} create --repo Dimkox/Getzilla --title {value} --body public'
-                with self.subTest(command=command):
-                    result = self.hook_verdict(command)
-                    self.assertEqual(result.get('decision'), 'allow', result)
+                with self.subTest(group_index=group_index, case_index=case_index):
+                    code, result, _ = run_hook(self.root, 'pre_tool_use.py', {
+                        'cwd': str(self.root), 'session_id': 'gh-arguments', 'tool_name': 'Bash',
+                        'tool_input': {'command': command},
+                    })
+                    flags = _literal_hook_flags(code, result)
+                    with self.subTest(diagnostic='exit'):
+                        self.assertTrue(flags['exit_ok'])
+                    with self.subTest(diagnostic='shape'):
+                        self.assertTrue(flags['mapping'])
+                    if flags['decision'] != 'allow' or not flags['exit_ok'] or not flags['mapping']:
+                        with self.subTest(diagnostic='reason'):
+                            if flags['reason_category'] == 'budget':
+                                self.fail('literal-title reason=budget')
+                            if flags['reason_category'] == 'grant':
+                                self.fail('literal-title reason=grant')
+                            if flags['reason_category'] == 'secret':
+                                self.fail('literal-title reason=secret')
+                            if flags['reason_category'] == 'other':
+                                self.fail('literal-title reason=other')
+                            self.fail('literal-title reason=unknown')
+                        with self.subTest(diagnostic='group'):
+                            if group_index == 0:
+                                self.fail('literal-title group=pr')
+                            self.fail('literal-title group=issue')
+                        with self.subTest(diagnostic='form'):
+                            if case_index <= 2:
+                                self.fail('literal-title form=brace')
+                            if case_index <= 4:
+                                self.fail('literal-title form=glob')
+                            if case_index <= 7:
+                                self.fail('literal-title form=dollar')
+                            if case_index <= 9:
+                                self.fail('literal-title form=backtick')
+                            if case_index <= 11:
+                                self.fail('literal-title form=process')
+                            if case_index == 12:
+                                self.fail('literal-title form=home')
+                            if case_index <= 14:
+                                self.fail('literal-title form=bracket')
+                            if case_index == 15:
+                                self.fail('literal-title form=option')
+                            self.fail('literal-title form=plain-path')
+                    self.assertEqual(flags['decision'], 'allow')
                     self.assertEqual(_http_write_resource(command, self.root), resource)
 
     def test_hook_title_literals_cannot_use_a_wrong_resource_grant(self) -> None:

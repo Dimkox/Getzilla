@@ -12,7 +12,7 @@ from getzilla.harnesses import drift, write
 parser = argparse.ArgumentParser(
     description=(
         'Render the selected Qwen Code, Claude Code, Codex, Gemini CLI, Copilot CLI and Cursor files '
-        'from the canonical .grok/hooks.json, .grok/agents/*.toml, .grok/cursor-rules/*.toml and .agents/skills/. '
+        'from the canonical .getzilla/config/hooks.json, .getzilla/agents/*.toml, .getzilla/cursor-rules/*.toml and .agents/skills/. '
         'Without --write it lists drift and exits 1 when the files are out of date. '
         'Full-source regeneration requires --repository-all --write.'
     ),

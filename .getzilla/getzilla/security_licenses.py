@@ -14,11 +14,13 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from .known_vulns import VulnerabilityError, _pypi_key, _semver_key, normalize_name
+from .security_osv_snapshot import VulnerabilityError, _pypi_key, _semver_key, normalize_name
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, archive_files,
-                                 package_key, package_metadata, read_file, verify_origin)
+                                 artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin)
+from .security_artifacts import family_evidence, select_family
 from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
 from .security_license_texts import recognized_license
+from .security_deliveries import verify_deliveries
 
 POLICY_PATH = '.getzilla/config/license-policy.json'
 ALLOWED = ('MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD')
@@ -149,7 +151,7 @@ def attach_factory_offline_intent(check: dict, intent: dict | None) -> None:
                                                        'final_archive_evidence': 'not_evaluated'}
 
 
-def _select_expression(expression: str, allowed: list[str]) -> tuple[list[str], set[str]]:
+def _select_expression(expression: str, allowed: list[str], *, require_all: bool = False) -> tuple[list[str], set[str]]:
     if not isinstance(expression, str) or not expression.strip() or len(expression) > 4096 or '\n' in expression:
         raise ArtifactError('license-unknown', 'artifact lacks one exact SPDX expression')
     lexeme_pattern = r'[A-Za-z0-9][A-Za-z0-9.+:-]*|[()]'
@@ -200,6 +202,25 @@ def _select_expression(expression: str, allowed: list[str]) -> tuple[list[str], 
     tree = disjunction(0)
     if offset != len(lexemes):
         raise ArtifactError('license-unknown', 'malformed SPDX expression')
+
+    if require_all:
+        # Report selections contain at most the six policy-allowed identifiers.
+        # Each subtree has at most 2**6 union masks, regardless of OR branch count.
+        if not allowed or len(allowed) > len(ALLOWED) or not set(allowed) <= set(ALLOWED):
+            raise ArtifactError('license-policy-review', 'exact branch proof requires bounded allowed identifiers')
+        positions = {name: 1 << index for index, name in enumerate(dict.fromkeys(allowed))}
+
+        def masks(node):
+            if node[0] == 'id':
+                return {positions[node[1]]} if node[1] in positions else set()
+            left, right = masks(node[1]), masks(node[2])
+            if node[0] == 'OR':
+                return left | right
+            return {a | b for a in left for b in right}
+
+        if (1 << len(positions)) - 1 not in masks(tree):
+            raise ArtifactError('license-policy-review', 'selected licenses do not match one complete original branch')
+        return list(positions), identifiers
 
     def choose(node):
         if node[0] == 'id':
@@ -305,6 +326,23 @@ def _extras(values: list[str]) -> set[str]:
     return {_extra_name(value) for value in values}
 
 
+def _validate_extra_scope(metadata: dict, dep: dict) -> None:
+    """Only exact artifact declarations can cover selected Python extras."""
+    if dep['ecosystem'] != 'PyPI':
+        return
+    values = metadata.get('provides_extra', [])
+    declared = _extras(values)
+    version = metadata.get('metadata_version')
+    if values and version not in {'2.1', '2.2', '2.3', '2.4', '2.5', '2.6'}:
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra is not defined for this metadata version')
+    if len(declared) != len(values):
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra declarations collide after normalization')
+    if version in {'2.3', '2.4', '2.5', '2.6'} and any(value != _extra_name(value) for value in values):
+        raise ArtifactError('license-transitive-coverage', 'Provides-Extra must be canonical in metadata 2.3 or newer')
+    if not _extras(dep.get('extras', [])) <= declared:
+        raise ArtifactError('license-transitive-coverage', 'selected extras are not declared by the exact artifact')
+
+
 def _marker_required(marker: str, dep: dict, environment: dict) -> bool:
     """Small explicit marker subset. Unknown target conditions stay unresolved."""
     match = re.fullmatch(r'''\s*([a-z_]+)\s*(==|!=|>=|<=|>|<)\s*(['"])([^'"\n]*)\3\s*''', marker)
@@ -345,7 +383,8 @@ def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: d
             name, extra, constraints = match.groups()
             extras = extra.split(',') if extra else []
         matches = [item for item in dependencies if item.get('ecosystem') == dep['ecosystem'] and
-                   normalize_name(dep['ecosystem'], item.get('name', '')) == normalize_name(dep['ecosystem'], name)]
+                   normalize_name(dep['ecosystem'], item.get('name', '')) == normalize_name(dep['ecosystem'], name)
+                   and item.get('delivery_context') == dep.get('delivery_context')]
         if len({item.get('version') for item in matches}) != 1 or not matches:
             raise ArtifactError('license-transitive-coverage', f'{name} requires an exact covered transitive version')
         if not _satisfies(matches[0]['version'], constraints, dep['ecosystem']):
@@ -376,10 +415,6 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             return {**result, 'status': 'skip', 'summary': 'complete inventory has no applicable third-party artifacts'}
         policy = _policy(policy)
         result['policy_digest'] = policy['digest']
-        for item in tools:
-            gap('license-tool-coverage', f"tool artifact license evidence is missing: {item.get('reference', item.get('kind', 'unknown'))}")
-        for item in images:
-            gap('license-image-coverage', f"image requires qualified exact-image SBOM/license evidence: {item.get('reference', 'unknown')}")
         raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
         bundle = _json(raw)
         if bundle.get('schema_version') != 1 or type(bundle.get('schema_version')) is not int:
@@ -398,13 +433,45 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             gap('artifact-acquisition-incomplete', 'artifact producer reported incomplete acquisition')
         indexed = {}
         for record in records:
-            key = package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
+            key = artifact_identity(record)
+            if 'kind' in record and record['subject'] not in (images if record['kind'] == 'image' else tools):
+                raise ArtifactError('artifact-inventory-binding', 'family record is not owned by this source inventory')
             if key in indexed:
-                raise ArtifactError('artifact-manifest', 'duplicate or conflicting artifacts for one package version')
+                raise ArtifactError('artifact-manifest', 'duplicate exact artifact/source/use identity')
             indexed[key] = record
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, dependencies)
         result['source_evidence'] = {'manifest_sha256': hashlib.sha256(raw).hexdigest(),
             'last_verified_sync_utc': bundle['last_verified_sync_utc'], 'age_seconds': age,
             'checked_at_utc': current.isoformat(), 'coverage': {'declared_packages': len(indexed)}}
+        for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
+                              *((item, 'image') for item in images)]:
+            try:
+                record = select_family(subject, kind, records)
+                evidence = family_evidence(artifacts, record)
+                _family_age(record, current, bundle['last_verified_sync_utc'])
+                distribution = _distribution_for(subject, policy['usage_distribution'])
+                if distribution != 'internal':
+                    raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
+                selected, licenses, notices = [], [], []
+                for component in evidence['components']:
+                    chosen, identifiers = _select_expression(component['expression'], policy['auto_allow'])
+                    owned = {item['path'] for item in component['files']}
+                    files = {name: body for name, body in evidence['files'].items() if name in owned}
+                    license_files, notice_files = _license_evidence(files, component, identifiers, chosen)
+                    if any(not files.get(path, b'').strip() for path in component['notice_paths']):
+                        raise ArtifactError('license-obligation-missing', 'declared component NOTICE is empty')
+                    selected.extend(chosen)
+                    licenses.extend(license_files)
+                    notices.extend(notice_files)
+                result['details'].append({'kind': kind, 'reference': subject['reference'], 'status': 'pass',
+                    'selected_expression': ' AND '.join(sorted(set(selected))), 'distribution': distribution,
+                    **evidence['binding'], 'license_files': licenses, 'notice_files': notices,
+                    'obligations': 'internal use; exact source/component/license evidence retained'})
+            except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
+                code = getattr(exc, 'code', 'artifact-invalid')
+                if code == 'license-artifact-missing':
+                    code = 'license-image-coverage' if kind == 'image' else 'license-tool-coverage'
+                gap(code, str(exc))
         for dep in dependencies:
             try:
                 if dep.get('ecosystem') == 'PyPI':
@@ -414,9 +481,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if not scope_known:
                     gap('license-scope-unknown', 'use/distribution scope requires an observed project decision', dep)
                 key = package_key(dep.get('ecosystem'), dep.get('name'), dep.get('version'))
-                record = indexed.get(key)
-                if record is None:
-                    raise ArtifactError('license-artifact-missing', 'exact package artifact is missing')
+                record = select_artifact(dep, records)
+                if 'acquired_at' in record:
+                    _family_age(record, current, bundle['last_verified_sync_utc'])
                 payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
                 origin = verify_origin(artifacts, record, payload)
                 if dep.get('artifact_sha256') and dep['artifact_sha256'] != record['sha256']:
@@ -433,9 +500,23 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     files.update(archive_files(payload, record['filename'], requested=missing_paths))
                 if package_key(dep['ecosystem'], metadata['name'], metadata['version']) != key:
                     raise ArtifactError('artifact-identity', 'artifact metadata Name/Version differs from inventory')
+                _validate_extra_scope(metadata, dep)
                 chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
                 license_files, notice_files = _license_evidence(files, metadata, identifiers, chosen)
-                if distribution == 'redistributed':
+                custody = None
+                context = dep.get('delivery_context')
+                if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:
+                    raise ArtifactError('license-obligation-missing', 'offline archive requires actual final output and composition evidence')
+                if context in deliveries:
+                    if distribution != 'redistributed':
+                        raise ArtifactError('license-scope-conflict', 'named archive components must retain redistributed scope')
+                    output = deliveries[context]
+                    retained = sorted('site-packages/' + item['path'] for item in license_files + notice_files)
+                    custody = {field: value for field, value in output.items() if field != 'members'}
+                    custody['retained_members'] = retained
+                elif distribution == 'redistributed':
+                    if context and dep.get('delivery_kind') != 'unchanged-artifact':
+                        raise ArtifactError('license-obligation-missing', 'named output needs its actual final delivery and composition evidence')
                     delivery = record.get('redistributed_path')
                     if not delivery:
                         raise ArtifactError('license-obligation-missing', 'redistribution needs evidence of the unchanged delivered artifact retaining LICENSE/NOTICE')
@@ -448,8 +529,11 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 result['details'].append({'ecosystem': dep['ecosystem'], 'package': dep['name'], 'version': dep['version'],
                     'manifest': dep.get('manifest'), 'status': 'pass', 'expression': metadata['expression'],
                     'selected_expression': ' AND '.join(chosen), 'distribution': distribution,
-                    'artifact_sha256': record['sha256'], 'origin': origin, 'license_files': license_files,
-                    'notice_files': notice_files, 'obligations': 'retained in exact artifact' if distribution == 'redistributed' else 'internal use; license evidence retained'})
+                    'artifact_sha256': record['sha256'], 'artifact_id': artifact_identity(record),
+                    'context': record.get('context', {}), **({'delivery': custody} if custody else {}),
+                    'origin': origin, 'license_files': license_files,
+                    'notice_files': notice_files, 'obligations': ('retained in final extracted archive' if custody else 'retained in exact artifact')
+                    if distribution == 'redistributed' else 'internal use; license evidence retained'})
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
                 gap(getattr(exc, 'code', 'artifact-invalid'), str(exc), dep)
     except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
@@ -458,6 +542,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
     result['summary'] = (f"{len(result['gaps'])} artifact license, scope or coverage gaps require resolution" if result['gaps']
                          else f"license policy and retained evidence verified for {len(result['details'])} exact package artifacts")
     return result
+
+
+def _family_age(record: dict, current: datetime, catalog_time: str) -> None:
+    acquired = _timestamp(record.get('acquired_at'))
+    age = (current - acquired).total_seconds()
+    if age < 0 or age > MAX_AGE_SECONDS or acquired < _timestamp(catalog_time):
+        raise ArtifactError('artifact-stale', 'family acquisition is stale/future or catalog timestamp renews older evidence')
 
 
 def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None) -> dict:
@@ -495,18 +586,32 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             raise ArtifactError('artifact-manifest', 'catalog has no bounded complete records')
         bindings, seen, total = [], set(), len(raw)
         for record in records:
-            key = package_key(record.get('ecosystem'), record.get('name'), record.get('version'))
+            key = artifact_identity(record)
             if key in seen:
                 raise ArtifactError('artifact-manifest', 'catalog repeats a package artifact identity')
             seen.add(key)
+            if 'kind' in record:
+                subjects = inventory.get('images' if record['kind'] == 'image' else 'tools', [])
+                if record['subject'] not in subjects:
+                    raise ArtifactError('artifact-inventory-binding', 'family does not belong to the current source inventory')
+                _family_age(record, current, acquired)
+                evidence = family_evidence(artifacts, record)
+                total += evidence['bound_bytes']
+                if total > 512 * 1024 * 1024:
+                    raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
+                bindings.append(evidence['binding'])
+                continue
             origin = record.get('origin')
             if not isinstance(origin, dict):
                 raise ArtifactError('artifact-origin', 'catalog record lacks its saved registry index')
+            if 'acquired_at' in record:
+                _family_age(record, current, acquired)
             payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
             index = read_file(artifacts, origin.get('index_path'), MAX_INDEX_BYTES)
             verified = verify_origin(artifacts, record, payload, index_bytes=index)
             bound = {'ecosystem': record['ecosystem'], 'name': record['name'], 'version': record['version'],
                      'path': record['path'], 'filename': record['filename'], 'artifact_size': len(payload),
+                     'artifact_id': key, 'context': record.get('context', {}),
                      'index_path': origin['index_path'], 'index_size': len(index), **verified}
             total += len(payload) + len(index)
             if record.get('redistributed_path') is not None:
@@ -519,6 +624,10 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             if total > 512 * 1024 * 1024:
                 raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
             bindings.append(bound)
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
+        total += sum(delivery['output_bytes'] for delivery in deliveries.values())
+        if total > 512 * 1024 * 1024:
+            raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')
         # Also bind the supplied input contents: a caller changing an input
         # while retaining its old digest must not obtain the same projection.
         inventory_body = json.dumps(inventory, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
@@ -527,7 +636,8 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
         binding = {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'inventory_digest': digest,
                    'inventory_content_sha256': hashlib.sha256(inventory_body).hexdigest(),
                    'policy_digest': selected_policy['digest'],
-                   'records': sorted(bindings, key=lambda item: (item['ecosystem'], item['name'], item['version']))}
+                   'records': sorted(bindings, key=lambda item: item['artifact_id']),
+                   'deliveries': deliveries}
         content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
                 'source_url': 'urn:getzilla:artifact-license-catalog:1',

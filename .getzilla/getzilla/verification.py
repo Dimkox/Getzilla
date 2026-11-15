@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+from . import verification_journal as diagnostics
+
+from .verification_failure_excerpt import (
+    _pytest_summary_identity as _pytest_summary_identity,
+    _pytest_terminal_counts as _pytest_terminal_counts,
+    _core_output_excerpt as _core_output_excerpt,
+)
+from .verification_progress_evidence import (
+    _pytest_source_metadata as _pytest_source_metadata,
+    _trusted_pytest_metadata as _trusted_pytest_metadata,
+    _trusted_progress_metadata as _trusted_progress_metadata,
+    _progress_failure_rows as _progress_failure_rows,
+    _failure_progress_details as _failure_progress_details,
+    _core_progress_details as _core_progress_details,
+)
+
 import ast
 import hashlib
 import json
@@ -8,11 +24,13 @@ import re
 import signal
 import sys
 import tempfile
+import time as time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .agent_evals import required_suites
 from .bitrix_checks import check_bitrix
 from .architecture import (
     ArchitectureError, architecture_inputs_present, load_architecture,
@@ -37,8 +55,8 @@ from .stacks import load_registry, stack_checks
 from .state import get_active_change, get_active_route, update_route
 from .python_test_runner import (
     DEFAULT_CORE_CPU_RESERVE, DEFAULT_CORE_WORKER_CAP, TIMEOUT as CORE_TEST_TIMEOUT,
-    ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
-    execute, run_core_tests, run_named_tests,
+    OUTPUT_LIMIT as OUTPUT_LIMIT, ProcessResult, RunCancelled, RunnerError, _cancellation, core_worker_selection,
+    cleanup_details, execute, run_core_tests, run_named_tests,
 )
 from .util import (
     find_tool,
@@ -78,6 +96,12 @@ class CheckResult:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@diagnostics.observed('agent-eval-checks')
+def _agent_eval_checks(root: Path, mode: str) -> list[CheckResult]:
+    """Use the optional replay suites inside the existing verification gate."""
+    return [CheckResult(**item) for item in required_suites(root, mode)]
 
 
 class VerificationCancelled(SystemExit):
@@ -154,6 +178,7 @@ def _required_quality_gate(root: Path, state: _RunState, mode: str, docs_scope=N
                        'QG-01 current required plan admission checks passed', details=findings)
 
 
+@diagnostics.observed('task-context-check')
 def _task_context_check(root: Path, state: _RunState) -> CheckResult:
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     from .state import task_transition, route_authority_present
@@ -204,7 +229,10 @@ class _CheckDispatch:
                 'execution': 'not_executed', 'blocked_by': self.blocked_by,
                 'message': f'not executed after {self.blocked_by} refused verification',
             }]))
-        check = callback()
+        with diagnostics.span(name) as detail:
+            check = callback()
+            if detail is not None and check is not None:
+                detail['outcome'] = check.status if check.status in {'pass', 'fail', 'skip', 'cancelled', 'error'} else 'unknown'
         return self.add(check) if check is not None else None
 
     def batch(self, names, callback):
@@ -212,8 +240,9 @@ class _CheckDispatch:
             for name in names:
                 self.run(name, None)
         else:
-            for check in callback():
-                self.add(check)
+            with diagnostics.span('check-batch'):
+                for check in callback():
+                    self.add(check)
 
 
 @contextmanager
@@ -299,6 +328,7 @@ def _risk_level(route: dict[str, object] | None) -> str:
     return {"low": "green", "medium": "yellow", "high": "red"}.get(risk, fallback)
 
 
+@diagnostics.observed('architecture-preflight-check')
 def _architecture_preflight_check(root: Path) -> CheckResult:
     if not architecture_inputs_present(root):
         return CheckResult("architecture-inputs", "skip", "architecture authority inputs are absent; not executed")
@@ -311,6 +341,7 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
     return CheckResult("architecture-inputs", "pass", "bounded model and referenced-input preflight executed")
 
 
+@diagnostics.observed('architecture-check')
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
@@ -437,6 +468,7 @@ def _architecture_check(
         )
 
 
+@diagnostics.observed('governance-check')
 def _governance_check(
     root: Path,
     route: dict[str, object] | None,
@@ -507,6 +539,7 @@ def _governance_check(
         )
 
 
+@diagnostics.observed('workflow-artifacts-check')
 def _workflow_artifacts_check(
     root: Path,
     route: dict[str, object] | None,
@@ -607,6 +640,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         exc.checks = [CheckResult(
             name, 'cancelled', f'cancelled exit={exc.code}', command=command,
             stdout=proc.stdout[-12000:] if proc else '', stderr=proc.stderr[-12000:] if proc else '',
+            details=[{'stop': diagnostics.stop_details(proc if proc is not None else exc)}],
         )]
         raise
     return CheckResult(
@@ -616,6 +650,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         command=command,
         stdout=proc.stdout[-12000:],
         stderr=(proc.stderr + ('\ncleanup failed: ' + proc.cleanup_error if proc.cleanup_error else ''))[-12000:],
+        details=[{'stop': diagnostics.stop_details(proc)}],
     )
 
 
@@ -1352,6 +1387,7 @@ def _focused_landing_contract(root: Path, scope: dict[str, object]) -> CheckResu
     return result
 
 
+@diagnostics.observed('git-diff-check')
 def _git_diff_check(
     root: Path,
     mode: str,
@@ -1456,6 +1492,7 @@ def _git_diff_check(
     )
 
 
+@diagnostics.observed('secret-scan')
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, object]] = []
     try:
@@ -1494,6 +1531,7 @@ def _secret_scan(root: Path, files: list[str]) -> CheckResult:
                        details=findings)
 
 
+@diagnostics.observed('php-lint')
 def _php_lint(root: Path, files: list[str]) -> CheckResult:
     php_files = [rel for rel in files if rel.lower().endswith('.php') and (root / rel).is_file()]
     if not php_files:
@@ -1510,6 +1548,7 @@ def _php_lint(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('php-lint', 'fail' if failures else 'pass', f'{len(php_files)} files linted', stdout='\n'.join(outputs[-100:]), details=failures)
 
 
+@diagnostics.observed('bitrix')
 def _bitrix(root: Path, files: list[str]) -> CheckResult:
     findings = check_bitrix(root, files)
     errors = [item for item in findings if item.severity == 'error']
@@ -1521,6 +1560,7 @@ def _bitrix(root: Path, files: list[str]) -> CheckResult:
     )
 
 
+@diagnostics.observed('contracts')
 def _contracts(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     checked = 0
@@ -1547,6 +1587,7 @@ def _contracts(root: Path, files: list[str]) -> CheckResult:
     return CheckResult('contract-structure', 'fail' if findings else 'pass', f'{checked} contracts checked', details=findings)
 
 
+@diagnostics.observed('sql-safety')
 def _sql_safety(root: Path, files: list[str]) -> CheckResult:
     findings: list[dict[str, str]] = []
     for rel in files:
@@ -1574,7 +1615,9 @@ def _docs_micro_exempt(route: dict[str, object] | None, files: list[str]) -> boo
     )
 
 
-def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None, route: dict[str, object] | None, mode: str) -> list[dict[str, object]]:
+def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str | None,
+                                route: dict[str, object] | None, mode: str, *,
+                                ranges: GitRangeSelection | None = None) -> list[dict[str, object]]:
     """Bind archival retirement/strict relocation to actual comparison-base blobs."""
     manifest_rel = 'engineering/archived-change-specs.json'
     if not (root / manifest_rel).exists():
@@ -1582,7 +1625,8 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     manifest = _parse_canonical_json(read_package_file(root, manifest_rel), Path(manifest_rel))
     if set(manifest) != {'schema_version', 'source_base', 'entries'} or manifest['schema_version'] != 1 or not isinstance(manifest['entries'], list):
         raise ValueError('invalid historical spec migration manifest')
-    ranges = _git_range_selection(root, route, mode)
+    if ranges is None:
+        ranges = _git_range_selection(root, route, mode)
     if ranges.findings or not ranges.bases:
         raise ValueError('historical spec migration requires trusted comparison ranges')
     bases = {item.comparison_base_sha for item in ranges.bases}
@@ -1656,7 +1700,9 @@ def _historical_spec_migrations(root: Path, selected: set[str], active_rel: str 
     return records
 
 
-def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str) -> tuple[CheckResult, dict[str, object]]:
+@diagnostics.observed('change-specs')
+def _change_specs(root: Path, files: list[str], route: dict[str, object] | None, mode: str, *,
+                  ranges: GitRangeSelection | None = None) -> tuple[CheckResult, dict[str, object]]:
     gate = mode in {'pr', 'release'}
     exempt = bool(route and (route.get('light_diff') or {}).get('admitted')) or _docs_micro_exempt(route, files)
     selected = {
@@ -1672,7 +1718,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     records: list[dict[str, object]] = []
     migrations: list[dict[str, object]] = []
     try:
-        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode)
+        migrations = _historical_spec_migrations(root, selected, active_rel, route, mode, ranges=ranges)
     except (OSError, ValueError) as exc:
         findings.append({'severity': 'error', 'code': 'historical-spec-migration-invalid', 'path': 'engineering/archived-change-specs.json', 'message': str(exc)})
     if gate and route and route.get('delivery_expected') and not active_rel and not exempt:
@@ -1717,6 +1763,7 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
     return CheckResult('change-spec', 'fail' if findings else ('skip' if exempt and not selected else 'pass'), f'{len(records)} specs checked; exempt={exempt}', details=findings), metadata
 
 
+@diagnostics.observed('composer')
 def _composer(root: Path, mode: str = 'fast', *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -1752,7 +1799,7 @@ QUALITY_PY_PATHS = (
     '.getzilla/integrations',
     'scripts',
     'tests',
-    '.grok/hooks',
+    '.getzilla/hooks',
     'user_prompt_submit.py',
     'pre_tool_use.py',
     'post_tool_use.py',
@@ -1785,6 +1832,7 @@ def _existing_quality_paths(root: Path) -> list[str]:
     return [rel for rel in paths if not any(rel.startswith(other + '/') for other in paths)]
 
 
+@diagnostics.observed('ruff')
 def _ruff(root: Path) -> CheckResult:
     paths = _existing_quality_paths(root)
     if not paths:
@@ -1798,6 +1846,7 @@ def _ruff(root: Path) -> CheckResult:
     return result
 
 
+@diagnostics.observed('bandit')
 def _bandit(root: Path) -> CheckResult:
     paths = [rel for rel in _existing_quality_paths(root) if rel != 'tests' and not rel.startswith('tests/')]
     if not paths:
@@ -1829,6 +1878,7 @@ def _bandit(root: Path) -> CheckResult:
     return replace(result, summary=f'{result.summary}; {len(issues)} issues in {lines} lines', details=details)
 
 
+@diagnostics.observed('semgrep')
 def _semgrep(root: Path) -> CheckResult | None:
     config = _semgrep_config(root)
     if config is None:
@@ -1864,6 +1914,7 @@ def _trivy_config(root: Path) -> CheckResult | None:
     return _command_check(root, 'trivy-config', ['trivy', 'config', '--exit-code', '1', '.'], 600)
 
 
+@diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
     result = known_vulnerability_check(root)
     # The full structured evidence is authoritative. Only its text projection
@@ -1907,6 +1958,7 @@ def _unpinned_opengrep(executable: Path) -> str | None:
     return None
 
 
+@diagnostics.observed('opengrep')
 def _opengrep(root: Path) -> CheckResult:
     """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
     rules = root / OPENGREP_RULES
@@ -1932,12 +1984,19 @@ def _opengrep(root: Path) -> CheckResult:
     if result.returncode not in {0, 1}:
         return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
                            stderr=result.stderr[-4000:])
-    if (not isinstance(report, dict) or not isinstance(report.get('results'), list) or
-            not isinstance(report.get('errors'), list) or
-            not all(isinstance(item, dict) for item in report['results'])):
-        return CheckResult('opengrep', 'fail', 'opengrep returned an incomplete report', command=command)
-    findings = report['results']
-    errors = report['errors']
+    if not isinstance(report, dict):
+        return CheckResult('opengrep', 'fail', 'opengrep returned a malformed report object', command=command)
+    findings = report.get('results')
+    errors = report.get('errors')
+    if not isinstance(findings, list) or not isinstance(errors, list):
+        return CheckResult('opengrep', 'fail', 'opengrep returned incomplete result/error collections', command=command)
+    # Warning-level partial parsing and unknown diagnostics cannot prove a clean scan.
+    if errors:
+        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} incomplete analysis diagnostics',
+                           command=command)
+    if any(not isinstance(item, dict) or not isinstance(item.get('start', {}), dict)
+           or not isinstance(item.get('extra', {}), dict) for item in findings):
+        return CheckResult('opengrep', 'fail', 'opengrep returned malformed finding records', command=command)
     details = [
         {
             'rule': str(item.get('check_id', '')),
@@ -1951,9 +2010,6 @@ def _opengrep(root: Path) -> CheckResult:
     if findings:
         return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
                            command=command, details=details)
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} errors', command=command,
-                           stderr=json.dumps(errors[:20])[-4000:])
     return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
 
 
@@ -1963,6 +2019,7 @@ def _trivy_config_present(root: Path) -> bool:
     )
 
 
+@diagnostics.observed('node')
 def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None) -> list[CheckResult]:
     results: list[CheckResult] = []
     with _retain_checks(results):
@@ -2074,18 +2131,49 @@ def _node_toolchain(root: Path) -> Toolchain | Blocker:
     return ensure_toolchain('node', stack.toolchain, version)
 
 
+@diagnostics.observed('factory-unit')
 def _factory_unit(root: Path) -> list[CheckResult]:
     factory_tests = root / 'factory' / 'tests'
-    if (root / 'factory' / 'pyproject.toml').is_file() and factory_tests.is_dir():
-        return [
-            _command_check(
-                root,
-                'factory-unit',
-                [sys.executable, str(Path(__file__).with_name('factory_tests.py')), '--root', str(root)],
-                300,
-            )
-        ]
-    return []
+    if not (root / 'factory/pyproject.toml').is_file():
+        return []
+    if not factory_tests.is_dir():
+        return [CheckResult('factory-unit', 'fail', 'Factory unit source directory is missing')]
+    if sys.version_info < (3, 11):
+        return [CheckResult('factory-unit', 'fail',
+                            'Factory units require Python >=3.11; Core source checks support Python >=3.10')]
+    from . import STACK_DIR
+    from .factory_tests import MAX_REPORT_BYTES, decode_document, invocation, source_matches, validate_report
+    environment = {'PATH': tool_search_path(os.environ.get('PATH', '')),
+                   'PYTHONPATH': os.pathsep.join((str(STACK_DIR), str(root), str(root / 'factory/src')))}
+    with tempfile.TemporaryDirectory(prefix='getzilla-factory-unit-') as temporary:
+        cache = Path(temporary) / 'pycache'
+        cache.mkdir(mode=0o700)
+        # Select the private cache before child startup; -B alone still reads old bytecode.
+        environment['PYTHONPYCACHEPREFIX'] = str(cache)
+        report = Path(temporary) / 'results.json'
+        request = Path(temporary) / 'request.json'
+        try:
+            binding = invocation(root, path=environment['PATH'])
+        except (OSError, ValueError, RuntimeError, SyntaxError) as exc:
+            return [CheckResult('factory-unit', 'fail', 'Factory invocation unavailable: ' + str(exc))]
+        request.write_text(json.dumps(binding, sort_keys=True), encoding='utf-8', newline='\n')
+        result = _command_check(
+            root, 'factory-unit', [sys.executable, '-P', '-m', 'getzilla.factory_tests',
+                                  '--root', str(root), '--request', str(request), '--report', str(report)],
+            300, env=environment,
+        )
+        try:
+            if report.stat().st_size > MAX_REPORT_BYTES:
+                raise ValueError('Factory result exceeds evidence bound')
+            evidence = decode_document(report.read_text(encoding='utf-8'))
+            validate_report(evidence, binding)
+            if evidence['status'] != result.status or not source_matches(root, binding):
+                raise ValueError('Factory result does not match subprocess outcome or current source')
+            result.details.insert(0, evidence)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            result.status = 'fail'
+            result.summary += '; Factory result missing or invalid: ' + str(exc)
+        return [result]
 
 
 def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
@@ -2125,6 +2213,7 @@ def _dispatch_additional_live(root: Path, mode: str, dispatch: _CheckDispatch) -
             dispatch.batch(names, lambda cell=cell, budget=budget: _live_cell(root, cell, budget))
 
 
+@diagnostics.observed('focused-python')
 def _focused_python(
     root: Path,
     results: list[CheckResult],
@@ -2176,6 +2265,7 @@ def _focused_python(
     return results
 
 
+@diagnostics.observed('python')
 def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = None, *,
             keep_going: bool = False, blocked_by: str | None = None) -> list[CheckResult]:
     results: list[CheckResult] = []
@@ -2188,23 +2278,30 @@ def _python(root: Path, mode: str = 'fast', scope: dict[str, object] | None = No
             process = completed.tests
             exc.checks.append(CheckResult('python-unittest', 'pass' if process.returncode == 0 else 'fail',
                                           f'exit={process.returncode}', command=process.command,
-                                          stdout=process.stdout[-12000:], stderr=process.stderr[-12000:]))
+                                          stdout=process.stdout[-12000:], stderr=process.stderr[-12000:],
+                                          details=[{'stop': diagnostics.stop_details(process), 'cleanup': cleanup_details(process, origin='tests')}]))
             process = exc.result
             exc.checks.append(CheckResult('coverage', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
-                                          stderr=process.stderr[-12000:] if process else ''))
+                                          stderr=process.stderr[-12000:] if process else '',
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(process if process is not None else exc,
+                                              origin=('coverage_export' if process is not None and
+                                                      process is getattr(completed, 'coverage_export', None)
+                                                      else 'coverage_report' if process is not None else 'process'))}]))
         if not exc.checks or all(item.status in {'pass', 'skip'} for item in exc.checks):
             process = exc.result
             exc.checks.append(CheckResult('python-unittest', 'cancelled', f'cancelled exit={exc.code}',
                                           command=process.command if process else None,
                                           stdout=process.stdout[-12000:] if process else '',
-                                          stderr=process.stderr[-12000:] if process else ''))
+                                          stderr=process.stderr[-12000:] if process else '',
+                                          details=[{'stop': diagnostics.stop_details(process if process is not None else exc), 'cleanup': cleanup_details(
+                                              process if process is not None else exc, origin='tests')}]))
         raise
 
 
 def _dispatch_factory_unit(root: Path, dispatch: _CheckDispatch) -> None:
-    if (root / 'factory/pyproject.toml').is_file() and (root / 'factory/tests').is_dir():
+    if (root / 'factory/pyproject.toml').is_file():
         dispatch.batch(['factory-unit'], lambda: _factory_unit(root))
 
 
@@ -2246,6 +2343,8 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         # is Getzilla's own infrastructure test. Record the skip instead of leaving it out silently.
         dispatch.run('factory-postgres-exit', lambda: CheckResult('factory-postgres-exit', 'skip', CONSUMER_INFRA_SKIP))
     _dispatch_factory_unit(root, dispatch)
+    if uses_pytest_runner:
+        return results
     if not installed and mode in {'pr', 'release'} and factory_exit.is_file():
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
@@ -2266,103 +2365,22 @@ def python_check_selection(root: Path) -> tuple[bool, bool]:
     return uses_pytest, tests_dir.is_dir() and any(tests_dir.glob('test*.py'))
 
 
-def _trusted_pytest_metadata(root: Path, output: str) -> dict[str, tuple[int, set[str]]]:
-    """Bind at most 50 reported paths and test identifiers to committed source."""
-    candidates = []
-    for match in re.finditer(r'tests/[A-Za-z0-9_./-]+\.py', output.replace('\\', '/')):
-        path = match.group(0)
-        if '..' not in PurePosixPath(path).parts and path not in candidates:
-            candidates.append(path)
-            if len(candidates) >= 50:
-                break
-    if not candidates:
-        return {}
-    tracked = run(['git', 'ls-files', '-z', '--', *candidates], cwd=root, timeout=10)
-    if tracked.returncode:
-        return {}
-    names = set(tracked.stdout.split('\0'))
-    result: dict[str, tuple[int, set[str]]] = {}
-    for path in candidates:
-        if path not in names:
-            continue
-        size = run(['git', 'cat-file', '-s', 'HEAD:' + path], cwd=root, timeout=10)
-        if size.returncode or not size.stdout.strip().isdigit() or int(size.stdout.strip()) > 1_000_000:
-            continue
-        source = run(['git', 'show', 'HEAD:' + path], cwd=root, timeout=10)
-        if source.returncode:
-            continue
-        try:
-            module = ast.parse(source.stdout)
-        except (SyntaxError, ValueError, RecursionError):
-            continue
-        nodes: set[str] = set()
-        for item in module.body:
-            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith('test'):
-                nodes.add(item.name)
-            elif isinstance(item, ast.ClassDef):
-                nodes.update(item.name + '::' + child.name for child in item.body
-                             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                             and child.name.startswith('test'))
-        result[path] = (source.stdout.count('\n') + 1, nodes)
-    return result
 
 
-def _core_output_excerpt(output: str, *, failed: bool,
-                         trusted: dict[str, tuple[int, set[str]]] | None = None) -> str:
-    """Keep bounded structural failure locations without persisting new raw test data."""
-    normalized = re.sub(r'\x1b\[[0-9;]*m', '', output) if failed else output
-    if not failed or not re.search(r'(?m)^={3,}\s*(?:FAILURES|ERRORS)\s*={3,}\s*$', normalized):
-        return output[-12000:]
-    trusted = trusted or {}
-    locations: list[str] = []
-    summaries: list[str] = []
-    omitted = False
-    captured = False
-    summary_section = False
-    safe_errors = {'AssertionError', 'TimeoutError', 'RuntimeError', 'ValueError', 'TypeError',
-                   'KeyError', 'ImportError', 'AttributeError', 'PermissionError', 'FileNotFoundError'}
-    for line in normalized.splitlines():
-        line = line[:1024].replace('\\', '/')
-        if re.match(r'^-{3,}\s*Captured\b', line):
-            captured = True
-            continue
-        if re.match(r'^={3,}\s*short test summary info\s*={3,}', line):
-            captured = False
-            summary_section = True
-            continue
-        if captured:
-            omitted = True
-            continue
-        location = re.match(r'^(tests/[A-Za-z0-9_./-]+\.py):([0-9]+)(?::\s*([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)))?', line)
-        node = re.match(r'^(FAILED|ERROR)\s+(tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*)', line)
-        if location and not summary_section:
-            path, number, error = location.groups()
-            if path not in trusted or not 1 <= int(number) <= trusted[path][0]:
-                continue
-            if len(locations) < 100:
-                locations.append(path + ':' + number + (': ' + error if error in safe_errors else ''))
-            else:
-                omitted = True
-        elif node:
-            identity = node.group(2).split('::')
-            path, name = identity[0], '::'.join(identity[1:])
-            if path not in trusted:
-                continue
-            if name and name not in trusted[path][1]:
-                name = ''
-            if len(summaries) < 20:
-                summaries.append(node.group(1) + ' ' + path + ('::' + name if name else ''))
-            else:
-                omitted = True
-    trace = '\n'.join(locations)
-    summary = '\n'.join(summaries)
-    if len(trace) > 5500 or len(summary) > 5000:
-        omitted = True
-    parts = ['[sanitized pytest failure locations; values and captured output omitted]',
-             trace[:5500], summary[:5000]]
-    if omitted:
-        parts.append('[additional failure locations omitted]')
-    return '\n'.join(part for part in parts if part)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _core_python_checks(root: Path, mode: str, uses_pytest_runner: bool, *, keep_going: bool) -> list[CheckResult]:
@@ -2385,7 +2403,13 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
             workers = selection.workers
             core = run_core_tests(root, mode, workers) if workers is not None else None
         except RunnerError as exc:
-            results.append(CheckResult('python-unittest', 'fail', str(exc)))
+            try:
+                cleanup_attached = hasattr(exc, '_getzilla_cleanup_metadata')
+            except BaseException:
+                cleanup_attached = True
+            message = 'Core runner unavailable; private cleanup details omitted' if cleanup_attached else str(exc)
+            results.append(CheckResult('python-unittest', 'fail', message,
+                                       details=[{'stop': diagnostics.stop_details(exc), 'cleanup': cleanup_details(exc, origin='tests')}]))
             if mode in {'pr', 'release'}:
                 results.append(CheckResult('coverage', 'fail', 'required Core run unavailable'))
             core, workers = None, -1
@@ -2394,21 +2418,40 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
             for name, process in [('python-unittest', core.tests), ('coverage', core.coverage)]:
                 if process is not None:
                     backend = core.versions.get('engine', 'pytest-xdist' if workers else 'unittest')
+                    exported = getattr(core, 'coverage_export', None) if name == 'coverage' else None
+                    cleanup_failed = bool(process.cleanup_error or
+                                          isinstance(exported, ProcessResult) and exported.cleanup_error)
                     diagnostic = process.stderr
+                    # Capture cleanup can fail while preserving a successful exit.
+                    # The failed check must still cross the pytest privacy cut.
+                    pytest_failure = (name == 'python-unittest' and backend == 'pytest-xdist'
+                                      and (process.returncode != 0 or cleanup_failed))
+                    failed_output = process.returncode != 0 or pytest_failure
+                    trusted = (_trusted_pytest_metadata(root, process.stdout + '\n' + process.stderr)
+                               if name == 'python-unittest' and failed_output else None)
+                    if pytest_failure:
+                        diagnostic = _core_output_excerpt(process.stderr, failed=True, trusted=trusted, pytest_output=True)
                     if name == 'python-unittest' and process.terminal_state == 'timeout':
                         diagnostic += (
                             '\nInspect the measured CPU allocation, then run a fresh full gate with '
                             'GETZILLA_TEST_WORKERS=N python3 scripts/getzilla_verify.py --mode pr '
                             '(N must fit the available task allocation). This failed run is not reusable evidence.'
                         )
+                    reported_command = list(process.command)
+                    if name == 'python-unittest' and backend == 'pytest-xdist':
+                        for option in ('--getzilla-progress-dir', '--getzilla-progress-nonce'):
+                            if option in reported_command:
+                                index = reported_command.index(option) + 1
+                                if index < len(reported_command):
+                                    reported_command[index] = '<private-progress-value>'
                     results.append(CheckResult(
-                        name, 'pass' if process.returncode == 0 and not process.cleanup_error else 'fail',
+                        name, 'pass' if process.returncode == 0 and not cleanup_failed else 'fail',
                         f'{backend} workers={workers} exit={process.returncode} seconds={process.seconds:.3f} '
                         f'source={selection.source} requested_workers={requested_workers} test_timeout={CORE_TEST_TIMEOUT}s',
-                        command=process.command, stdout=_core_output_excerpt(
-                            process.stdout, failed=process.returncode != 0,
-                            trusted=_trusted_pytest_metadata(root, process.stdout) if name == 'python-unittest' and process.returncode else None),
-                        stderr=(diagnostic + ('\ncleanup failed: ' + process.cleanup_error if process.cleanup_error else ''))[-12000:],
+                        command=reported_command, stdout=_core_output_excerpt(
+                            process.stdout, failed=failed_output,
+                            trusted=trusted, pytest_output=pytest_failure),
+                        stderr=(diagnostic + ('\ncleanup failed: details omitted' if cleanup_failed else ''))[-12000:],
                         details=[{'severity': 'info', 'path': 'tests',
                                   'message': f'backend={backend}; fresh invocation-owned coverage',
                                   'requested_workers': str(requested_workers),
@@ -2420,6 +2463,13 @@ def _core_python_run(root: Path, mode: str, uses_pytest_runner: bool, results: l
                                   'backend': backend,
                                   'test_timeout_seconds': CORE_TEST_TIMEOUT,
                                   'terminal_state': process.terminal_state,
+                                  'stop': diagnostics.stop_details(process),
+                                  **({'coverage_export_stop': diagnostics.stop_details(exported)} if exported is not None else {}),
+                                  'cleanup': cleanup_details(process,
+                                      origin='tests' if name == 'python-unittest' else 'coverage_report',
+                                      extra=exported),
+                                  **({'progress': _core_progress_details(root, getattr(core, 'progress', None))}
+                                     if name == 'python-unittest' else {}),
                                   'versions': json.dumps(core.versions, sort_keys=True),
                                   'coverage': json.dumps(core.coverage_metadata, sort_keys=True)}],
                     ))
@@ -2671,7 +2721,8 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'python-named-smoke', 'cancelled' if cancelled else ('pass' if process.returncode == 0 and not process.cleanup_error else 'fail'),
         f'exit={process.returncode} seconds={process.seconds:.3f} budget={budget}', command=process.command,
         stdout=process.stdout[-12000:], stderr=(process.stderr + process.cleanup_error)[-12000:],
-        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt'}],
+        details=[{'severity': 'info', 'path': 'tests', 'message': 'observation only; no verification receipt',
+                  'stop': diagnostics.stop_details(process)}],
     ), CheckResult(
         'source-stability', 'pass' if head_before == head_after and fingerprint == final_fingerprint else 'fail',
         'repository fingerprint remained stable' if head_before == head_after and fingerprint == final_fingerprint
@@ -2681,6 +2732,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
         'schema_version': 1, 'created_at': now_utc(), 'mode': 'fast', 'profiles': [], 'route_id': None,
         'tree_fingerprint': final_fingerprint, 'fingerprint_before': fingerprint,
         'head_before': head_before, 'head_after': head_after, 'changed_files': [],
+        'diagnostics': getattr(process, 'diagnostics', {'status': 'unavailable'}),
         'checks': [check.to_dict() for check in checks],
         'status': 'fail' if any(check.status in {'fail', 'cancelled'} for check in checks) else 'pass',
         'terminal_state': 'cancelled' if cancelled else 'completed', 'evidence_status': 'not_recorded',
@@ -2691,6 +2743,7 @@ def verify_named_tests(root: Path, targets: list[str], *, budget: int = 180) -> 
     return report
 
 
+@diagnostics.observed('diff-risk-check')
 def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git_ranges: GitRangeSelection,
                      fingerprint: str) -> tuple[CheckResult, dict[str, object]]:
     """Rederive and persist the same source-bound plan exposed before dispatch."""
@@ -2719,6 +2772,7 @@ def _diff_risk_check(root: Path, route: dict[str, object] | None, mode: str, git
     return CheckResult('diff-risk', 'pass', summary), metadata
 
 
+@diagnostics.observed('cost-guard-check')
 def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
                       git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Paid or unbounded operations need a budget contract and a tested bound before pr/release."""
@@ -2744,6 +2798,7 @@ def _cost_guard_check(root: Path, route: dict[str, object] | None, mode: str,
     return CheckResult('cost-guard', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('eu-ai-act-check')
 def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tuple[CheckResult, dict[str, object]]:
     """Optional EU AI Act evidence gate; silent unless the compliance:eu-ai-act component is installed."""
     from . import eu_ai_act
@@ -2762,6 +2817,7 @@ def _eu_ai_act_check(root: Path, mode: str, git_ranges: GitRangeSelection) -> tu
     return CheckResult('eu-ai-act', report.status, report.summary, details=details), report.to_dict()
 
 
+@diagnostics.observed('hook-health-check')
 def _hook_health_check(root: Path, route: dict[str, object] | None, mode: str,
                        diff_metadata: dict[str, object]) -> tuple[CheckResult, dict[str, object]]:
     """Hooks that failed open during this route mean policy did not run; high risk does not pass that."""
@@ -2786,6 +2842,7 @@ CI_BASELINE_SKIP = 'CI runner: the workflow baseline belongs to the agent machin
 NOT_INSTALLED_SKIP = 'not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed'
 
 
+@diagnostics.observed('workflow-baseline-check')
 def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[str, object]]:
     """Pinned Superpowers, BMAD and Spec Kit must be installed for this user and connected to this project."""
     import os
@@ -2823,7 +2880,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
     }
     state = _RunState(report)
-    with _cancellation() as cancellation:
+    with diagnostics.session(root, 'verify', report), _cancellation() as cancellation:
         try:
             result = _verification_run(root, mode, profiles, record, state, cancellation, keep_going=keep_going)
             if record:
@@ -2867,6 +2924,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     cancellation.check()
     checked_fingerprint = tree_fingerprint(root)
     route = get_active_route(root)
+    if diagnostics.current():
+        diagnostics.current().bind_source(checked_fingerprint, session_id=(route or {}).get('session_id'))
     from .continuity import context_binding, legacy_evidence_allowed, scope_gaps
     state.context_route_id = (route or {}).get('route_id')
     if route and not legacy_evidence_allowed(route):
@@ -2926,7 +2985,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
                      'allowed_agents': unique_ordered([*(route.get('allowed_agents') or []), *full['review_agents']])}
         update_route(root, **{key: route[key] for key in ('delivery_lane', 'light_diff', 'light_lane_candidate', 'review_agents', 'required_evidence', 'allowed_agents')})
         report['light_diff'] = light
-    spec_check, spec_metadata = _change_specs(root, files, route, mode)
+    spec_check, spec_metadata = _change_specs(root, files, route, mode, ranges=git_ranges)
     report['spec'] = spec_metadata
     cancellation.check()
     if mode in _RANGE_MODES - {FOCUSED_STATIC_SEO_LANDING_MODE}:
@@ -3008,6 +3067,10 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         )
         dispatch.add(workflow_check)
     report.update(governance=governance_metadata, workflow_artifacts=workflow_metadata)
+    cancellation.check()
+    if not dispatch.blocked_by:
+        for check in _agent_eval_checks(root, mode):
+            dispatch.add(check)
     cancellation.check()
 
     results = state.results

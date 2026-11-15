@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -45,8 +46,8 @@ class InstallExtrasTests(unittest.TestCase):
         self.assertFalse([p for p in chosen if '/skills/bitrix-development/' in p or '/skills/seo-landing/' in p])
         self.assertFalse(chosen & MODULE.ROOT_HOOK_SHIMS)
         self.assertIn('.agents/skills/getzilla-delivery/SKILL.md', chosen)
-        self.assertIn('.grok/hooks/pre_tool_use.py', chosen)
-        self.assertFalse([p for p in chosen if p.startswith('.grok/cursor-rules/')])
+        self.assertIn('.getzilla/hooks/pre_tool_use.py', chosen)
+        self.assertFalse([p for p in chosen if p.startswith('.getzilla/cursor-rules/')])
 
     def test_bitrix_folders_bring_the_bitrix_skill_for_the_chosen_agent_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -69,7 +70,7 @@ class InstallExtrasTests(unittest.TestCase):
         self.assertEqual(chosen & MODULE.ROOT_HOOK_SHIMS, MODULE.ROOT_HOOK_SHIMS)
 
     def test_cursor_rules_belong_to_the_cursor_agent_and_full_layout_keeps_everything(self) -> None:
-        self.assertEqual(MODULE.component_of('.grok/cursor-rules/10-rule.toml'), 'agent:cursor')
+        self.assertEqual(MODULE.component_of('.getzilla/cursor-rules/10-rule.toml'), 'agent:cursor')
         self.assertEqual(MODULE.component_of('.qwen/skills/seo-landing/SKILL.md'), 'extra:seo-landing')
         full = paths(MODULE.PayloadSelection.full_layout())
         self.assertTrue(full >= MODULE.ROOT_HOOK_SHIMS)
@@ -107,7 +108,7 @@ class InstallExtrasTests(unittest.TestCase):
         plain = paths(MODULE.PayloadSelection(('qwen',)))
         self.assertFalse([p for p in plain if '/agents/bitrix_' in p])
         bitrix = paths(MODULE.PayloadSelection(('qwen',), extras=('bitrix',)))
-        self.assertIn('.grok/agents/bitrix_implementer.toml', bitrix)
+        self.assertIn('.getzilla/agents/bitrix_implementer.toml', bitrix)
         self.assertIn('.qwen/agents/bitrix_implementer.md', bitrix)
         self.assertFalse([p for p in bitrix if p.startswith('.claude/agents/bitrix_')])
 
@@ -138,7 +139,7 @@ class InstallExtrasTests(unittest.TestCase):
             result = subprocess.run([sys.executable, '-B', '-c', probe], cwd=project, capture_output=True, text=True, check=True)
             module_file, stack_dir = result.stdout.splitlines()
             self.assertIn('getzilla.zip', module_file)
-            self.assertTrue(module_file.endswith('.pyc'), module_file)
+            self.assertTrue(module_file.endswith('.py'), module_file)
             self.assertEqual(Path(stack_dir), (project / '.getzilla').resolve())
             from getzilla.doctor import run_doctor
             items = {item.name: item for item in run_doctor(project)}
@@ -157,6 +158,79 @@ class InstallExtrasTests(unittest.TestCase):
             self.assertIn('exact tool invocation was denied again', data.get('reason', ''), error)
             self.assertNotIn('Denial recording unavailable', data.get('reason', ''))
 
+    def test_archive_doctor_distinguishes_source_and_legacy_bytecode(self) -> None:
+        import importlib.util
+        from importlib import _bootstrap_external
+        import zipfile
+        from getzilla.doctor import _engine_archive_item
+        pyc = bytes(_bootstrap_external._code_to_hash_pyc(
+            compile(b'value = 42\n', 'getzilla/policy.py', 'exec'), importlib.util.source_hash(b'value = 42\n'), False))
+        cases = [({'getzilla/policy.py': b'value = 42\n'}, 'pass'),
+                 ({'getzilla/policy.py': b'def broken('}, 'fail'),
+                 ({'getzilla/policy.py': b''}, 'fail'),
+                 ({'getzilla/other.py': b'value = 1\n'}, 'fail'),
+                 ({'getzilla/policy.pyc': pyc}, 'warn'),
+                 ({'getzilla/policy.pyc': pyc[:4]}, 'fail'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:], 'getzilla/policy.py': b'value = 42\n'}, 'warn'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:]}, 'fail'),
+                 ({'getzilla/policy.pyc': b'\0' * 4 + pyc[4:], 'getzilla/policy.py': b'def broken('}, 'fail'),
+                 ({'getzilla/policy.py': b'value = 42\n', 'getzilla/other.pyc': pyc}, 'fail')]
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / 'engine.zip'
+            for members, status in cases:
+                with self.subTest(members=list(members), status=status):
+                    with zipfile.ZipFile(archive, 'w') as bundle:
+                        for name, body in members.items():
+                            bundle.writestr(name, body)
+                    self.assertEqual(status, _engine_archive_item(archive).status)
+
+    def test_archived_engine_runs_real_nonempty_and_empty_counted_collections(self) -> None:
+        selection = MODULE.PayloadSelection(('qwen',), engine_archive=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            for entry in MODULE.build_payload(ROOT, selection=selection):
+                target = project / entry.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(entry.content)
+            foreign = project / 'foreign.txt'
+            foreign.write_text('preserve foreign bytes')
+            probe = project / 'counted-collection-probe.py'
+            probe.write_text('''import json, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, '.getzilla')
+from getzilla import python_test_runner as runner
+root = Path.cwd()
+(root / 'tests').mkdir()
+(root / 'tests/__init__.py').write_text('')
+(root / 'subject.py').write_text('value = 42\\n')
+(root / '.coveragerc').write_text('[run]\\nbranch = True\\n[report]\\nfail_under = 100\\n')
+rows = []
+with patch.object(runner, 'parallel_engine_ready', return_value=False):
+    for count, source in ((1, 'import unittest, subject\\nclass Real(unittest.TestCase):\\n def test_real(self): self.assertEqual(subject.value, 42)\\n'),
+                          (0, 'import subject\\n')):
+        (root / 'tests/test_sample.py').write_text(source)
+        for workers in (0, 2):
+            result = runner.run_core_tests(root, 'pr', workers)
+            rows.append({'count': count, 'workers': workers, 'tests': result.tests.returncode,
+                         'coverage': result.coverage.returncode, 'command': result.tests.command,
+                         'facts': result.coverage_metadata})
+print(json.dumps({'module': runner.__file__, 'rows': rows}))
+''')
+            result = subprocess.run([sys.executable, '-B', str(probe)], cwd=project,
+                                    capture_output=True, text=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            self.assertIn('getzilla.zip', report['module'])
+            self.assertEqual([(row['count'], row['workers'], row['tests'], row['coverage'])
+                              for row in report['rows']], [(1, 0, 0, 0), (1, 2, 0, 0), (0, 0, 5, 1), (0, 2, 5, 1)])
+            for row in report['rows']:
+                self.assertIn(str(project / 'scripts/getzilla_unittest.py'), row['command'])
+                if row['count']:
+                    self.assertEqual(100, row['facts']['totals']['percent_covered'])
+                    self.assertFalse(any(path.endswith('getzilla_unittest.py') for path in row['facts']['files']))
+            self.assertEqual(foreign.read_text(), 'preserve foreign bytes')
+
     def test_an_upgrade_with_engine_files_keeps_them_and_a_checkout_uses_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
@@ -174,10 +248,10 @@ class InstallExtrasTests(unittest.TestCase):
 
     def test_grok_agent_briefs_belong_to_grok_and_toml_stay_core(self) -> None:
         self.assertEqual(MODULE.component_of('.grok/agents/code_reviewer.md'), 'agent:grok')
-        self.assertEqual(MODULE.component_of('.grok/agents/code_reviewer.toml'), 'core')
+        self.assertEqual(MODULE.component_of('.getzilla/agents/code_reviewer.toml'), 'core')
         plain = paths(MODULE.PayloadSelection(('qwen',)))
         self.assertFalse([p for p in plain if p.startswith('.grok/agents/') and p.endswith('.md')])
-        self.assertIn('.grok/agents/code_reviewer.toml', plain)
+        self.assertIn('.getzilla/agents/code_reviewer.toml', plain)
         self.assertIn('.grok/agents/code_reviewer.md', paths(MODULE.PayloadSelection(('grok',))))
 
     def test_eu_audit_and_compliance_scripts_ship_only_with_the_eu_component(self) -> None:
@@ -189,3 +263,20 @@ class InstallExtrasTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class Low336LegacyDoctorTests(unittest.TestCase):
+    def test_header_only_is_explicitly_unqualified_without_executing_bytecode(self):
+        import importlib.util
+        import zipfile
+        from getzilla.doctor import _engine_archive_item
+        with tempfile.TemporaryDirectory() as raw:
+            archive = Path(raw) / 'public-engine.zip'
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                bundle.writestr('getzilla/policy.pyc', importlib.util.MAGIC_NUMBER + bytes(12))
+            result = _engine_archive_item(archive)
+            self.assertEqual(result.status, 'warn')
+            self.assertIn('header-only', result.message)
+            self.assertIn('importability unverified', result.message)
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                bundle.writestr('getzilla/policy.py', b'value = 42\n')
+            self.assertEqual(_engine_archive_item(archive).status, 'pass')

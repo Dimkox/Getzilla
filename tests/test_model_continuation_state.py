@@ -5,11 +5,14 @@ import os
 import multiprocessing
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from queue import Empty
 from dataclasses import replace
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,19 +21,139 @@ from getzilla import model_continuation_state as journal
 from tests.test_model_continuation import enabled_policy
 
 
+def _reservation_outcome(operation):
+    """Keep successful results separate from closed worker-fault metadata."""
+    try:
+        return operation(), 'ok'
+    except journal.JournalError as error:
+        arguments = BaseException.args.__get__(error, type(error))
+        code = arguments[0] if len(arguments) == 1 and type(arguments[0]) is str else None
+        fault = {'lock_busy': 'lock-busy', 'storage_unavailable': 'storage-unavailable'}.get(
+            code, 'journal-unknown')
+    except Exception:
+        fault = 'exception-unknown'
+    return None, fault
+
+
+def _assert_reservation_faults(case, faults):
+    for fault in faults:
+        if fault == 'ok':
+            continue
+        if fault == 'lock-busy':
+            case.fail('reservation fault=lock-busy')
+        if fault == 'storage-unavailable':
+            case.fail('reservation fault=storage-unavailable')
+        if fault == 'journal-unknown':
+            case.fail('reservation fault=journal-unknown')
+        case.fail('reservation fault=exception-unknown')
+
+
 def _race(root, binding, results):
     with patch.object(journal.time, 'time', return_value=1000), patch.object(journal, '_qualified_boundary', return_value=True):
         results.put(journal.reserve_next(Path(root), binding, 2, 'process-race', journal.Usage(1, '0.2')))
 
 
 def _controlled_race(root, binding, results):
-    with patch.object(journal.time, 'time', return_value=1000):
-        results.put(journal.consume_controlled_send(Path(root), binding, 1, 1))
+    try:
+        with patch.object(journal.time, 'time', return_value=1000):
+            result = journal.consume_controlled_send(Path(root), binding, 1, 1)
+    except Exception as error:
+        code = 'worker_exception'
+        if isinstance(error, journal.JournalError):
+            code = {'lock_busy': 'journal_lock_busy', 'storage_unavailable': 'journal_storage_unavailable'}.get(
+                str(error), 'journal_error')
+        results.put({'status': 'error', 'pid': os.getpid(), 'error': code})
+    else:
+        results.put({'status': 'success', 'pid': os.getpid(), 'result': result})
+
+
+def _controlled_claim_results(children, results):
+    deadline = time.monotonic() + 15
+    pending = {child.pid for child in children}
+    claims = []
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError('controlled worker result timed out')
+        try:
+            envelope = results.get(timeout=min(0.05, remaining))
+        except Empty:
+            for child in children:
+                if child.exitcode not in (None, 0):
+                    print('controlled-worker ' + json.dumps({'pid': child.pid, 'exitcode': child.exitcode}), flush=True)
+                    raise AssertionError(f'controlled worker exit: {child.exitcode}') from None
+            # Producers can flush/exit after the timed empty read. Recheck only
+            # observation data under the original deadline, never claim again.
+            continue
+        if (type(envelope) is not dict or type(envelope.get('pid')) is not int
+                or envelope['pid'] not in pending):
+            raise AssertionError('invalid controlled worker result')
+        if envelope.get('status') == 'error' and set(envelope) == {'status', 'pid', 'error'}:
+            if (type(envelope['error']) is not str or envelope['error'] not in {
+                    'journal_lock_busy', 'journal_storage_unavailable', 'journal_error', 'worker_exception'}):
+                raise AssertionError('invalid controlled worker result')
+            print('controlled-worker ' + json.dumps(envelope, sort_keys=True), flush=True)
+            raise AssertionError('controlled worker error: ' + envelope['error'])
+        if (envelope.get('status') != 'success' or set(envelope) != {'status', 'pid', 'result'}
+                or type(envelope['result']) is not dict
+                or type(envelope['result'].get('claimed')) is not bool
+                or envelope['result'].get('dispatch_permitted') is not False):
+            raise AssertionError('invalid controlled worker result')
+        pending.remove(envelope['pid'])
+        claims.append(envelope['result'])
+    return claims
+
+
+_ordinary_controlled_race = _controlled_race
+
+
+def _controlled_journal_fault(root, binding, results):
+    with patch.object(journal, 'consume_controlled_send', side_effect=journal.JournalError('lock_busy')):
+        _ordinary_controlled_race(root, binding, results)
+
+
+def _controlled_abrupt_exit(root, binding, results):
+    os._exit(7)
+
+
+def _controlled_malformed_envelope(root, binding, results):
+    results.put({'status': 'error', 'pid': os.getpid(), 'error': ['public-marker']})
 
 
 def _request_race(root, binding, results):
     with patch.object(journal.time, 'time', return_value=1000):
         results.put(journal.consume_controlled_request(Path(root), binding, 1, 2))
+
+
+class ContinuationBindingValidationTest(unittest.TestCase):
+    def test_malformed_binding_is_refused_before_copying_or_creating_journal(self):
+        copied = []
+
+        class CopyTrap:
+            def __deepcopy__(self, memo):
+                copied.append('copy')
+                raise AssertionError('binding data must not be copied')
+
+        class StringCopyTrap(str, CopyTrap):
+            pass
+
+        cycle = []
+        cycle.append(cycle)
+        valid_values = ('chain1', 'task1', 'owner1', 'route1', 'session1',
+                        'a' * 64, 'b' * 64, 'c' * 64)
+        binding = journal.Binding(*valid_values)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for field, valid_value in zip(binding.__dataclass_fields__, valid_values, strict=True):
+                for case, value in (('cycle', cycle), ('copy', CopyTrap()),
+                                    ('string_subclass', StringCopyTrap(valid_value))):
+                    with self.subTest(field=field, case=case):
+                        copied.clear()
+                        with self.assertRaisesRegex(journal.JournalError, '^invalid_binding$'):
+                            journal.create_chain(root, replace(binding, **{field: value}),
+                                                 journal.Usage(1, '0.1'), journal.TaskBudget(2, 4, '1.5', 2000))
+                        self.assertEqual(copied, [])
+                        self.assertFalse((root / '.getzilla').exists())
 
 
 @unittest.skipIf(os.name == 'nt', 'directory fsync admission is unsupported on Windows')
@@ -205,17 +328,85 @@ class ContinuationJournalTest(unittest.TestCase):
         try:
             for child in children:
                 child.start()
-            results = [queue.get(timeout=15) for _ in children]
+            results = _controlled_claim_results(children, queue)
             for child in children:
                 child.join(timeout=15)
                 self.assertEqual(child.exitcode, 0)
             self.assertEqual(sum(result['claimed'] for result in results), 1)
+            self.assertEqual(sorted(result['claimed'] for result in results), [False, True])
         finally:
             for child in children:
+                if child.pid is None:
+                    continue
                 if child.is_alive():
                     child.terminate()
+                child.join(timeout=5)
+                if child.is_alive():
+                    child.kill()
                     child.join(timeout=5)
+                self.assertFalse(child.is_alive(), 'controlled worker was not reaped')
+                child.close()
             queue.close()
+            queue.join_thread()
+
+    def test_controlled_claim_worker_error_is_reported_before_queue_timeout(self):
+        with patch(__name__ + '._controlled_race', _controlled_journal_fault):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^controlled worker error: journal_lock_busy$'):
+                    self.test_controlled_claim_race_between_processes()
+            except Empty:
+                self.fail('child journal error was masked by queue.Empty')
+
+    def test_controlled_claim_abrupt_worker_exit_is_reported_before_queue_timeout(self):
+        with patch(__name__ + '._controlled_race', _controlled_abrupt_exit):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^controlled worker exit: 7$'):
+                    self.test_controlled_claim_race_between_processes()
+            except Empty:
+                self.fail('child exit was masked by queue.Empty')
+
+    def test_controlled_claim_rejects_malformed_worker_error_without_echoing_it(self):
+        with patch(__name__ + '._controlled_race', _controlled_malformed_envelope):
+            try:
+                with self.assertRaisesRegex(AssertionError, '^invalid controlled worker result$'):
+                    self.test_controlled_claim_race_between_processes()
+            except TypeError:
+                self.fail('malformed worker error escaped the closed result decoder')
+
+    def test_controlled_claim_rechecks_late_results_after_successful_child_exits(self):
+        children = [SimpleNamespace(pid=101, exitcode=0), SimpleNamespace(pid=102, exitcode=0)]
+        reads = []
+        envelopes = iter([
+            {'status': 'success', 'pid': 101, 'result': {'claimed': True, 'dispatch_permitted': False}},
+            {'status': 'success', 'pid': 102, 'result': {'claimed': False, 'dispatch_permitted': False}}])
+
+        def get(**kwargs):
+            reads.append(kwargs['timeout'])
+            if len(reads) == 1:
+                raise Empty()
+            return next(envelopes)
+
+        results = SimpleNamespace(get=get)
+        with patch.object(time, 'monotonic', return_value=0):
+            claims = _controlled_claim_results(children, results)
+        self.assertEqual([c['claimed'] for c in claims], [True, False])
+        self.assertEqual(len(reads), 3)
+        self.assertTrue(all(c['dispatch_permitted'] is False for c in claims))
+
+    def test_controlled_claim_missing_results_keep_original_deadline(self):
+        children = [SimpleNamespace(pid=101, exitcode=0), SimpleNamespace(pid=102, exitcode=0)]
+        reads = []
+
+        def get(**kwargs):
+            reads.append(kwargs['timeout'])
+            raise Empty()
+
+        results = SimpleNamespace(get=get)
+        with patch.object(time, 'monotonic', side_effect=[0, 0, 14.99, 15]), \
+                self.assertRaisesRegex(AssertionError, '^controlled worker result timed out$'):
+            _controlled_claim_results(children, results)
+        self.assertEqual(len(reads), 2)
+        self.assertAlmostEqual(reads[-1], 0.01)
 
     def test_controlled_claim_publish_failure_does_not_reissue(self):
         journal.create_controlled_chain(self.root, self.binding, journal.Usage(1, '0.1'), self.budget)
@@ -394,7 +585,9 @@ class ContinuationJournalTest(unittest.TestCase):
         self.create()
         self.terminal()
         with patch.object(journal, '_qualified_boundary', return_value=True), ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(lambda _: self.reserve(), range(2)))
+            outcomes = list(pool.map(lambda _: _reservation_outcome(self.reserve), range(2)))
+        _assert_reservation_faults(self, tuple(fault for _, fault in outcomes))
+        results = [result for result, _ in outcomes]
         self.assertEqual(results[0], results[1])
         self.assertEqual(len(journal.inspect_chain(self.root, self.binding)['attempts']), 2)
 
@@ -540,6 +733,54 @@ class ContinuationJournalTest(unittest.TestCase):
             with self.assertRaises(journal.JournalError):
                 journal.reserve_next(self.root, self.binding, 1, 'event', usage)
         self.assertNotIn(b'SECRET_SENTINEL', (self.root / '.getzilla/runtime/model-continuation/journal.json').read_bytes())
+
+
+class ReservationDiagnosticTests(unittest.TestCase):
+    def test_reservation_faults_are_closed_failures_not_private_errors(self):
+        class PrivateError(Exception):
+            def __str__(self):
+                raise AssertionError('PRIVATE_EXCEPTION_RENDER')
+
+        for error, label in (
+                (journal.JournalError('lock_busy'), 'lock-busy'),
+                (journal.JournalError('storage_unavailable'), 'storage-unavailable'),
+                (journal.JournalError('PRIVATE_JOURNAL_CANARY'), 'journal-unknown'),
+                (PrivateError('PRIVATE_EXCEPTION_CANARY'), 'exception-unknown')):
+            case = ContinuationJournalTest('test_concurrent_identical_events_reserve_once')
+            result = unittest.TestResult()
+            with patch.object(journal, 'reserve_next', side_effect=error):
+                case.run(result)
+            self.assertFalse(result.errors)
+            self.assertEqual(len(result.failures), 1)
+            rendered = ''.join(detail for _, detail in result.failures)
+            self.assertIn('reservation fault=' + label, rendered)
+            self.assertIn('case.fail(', rendered)
+            self.assertNotIn('PRIVATE_', rendered)
+
+    def test_reservation_interrupts_propagate_without_rendering(self):
+        class Stop(BaseException):
+            def __str__(self):
+                raise AssertionError('PRIVATE_INTERRUPT_RENDER')
+
+        def interrupt():
+            raise Stop('PRIVATE_INTERRUPT_CANARY')
+
+        with self.assertRaises(Stop):
+            _reservation_outcome(interrupt)
+        class PrivateJournalError(journal.JournalError):
+            def __str__(self):
+                raise AssertionError('PRIVATE_JOURNAL_RENDER')
+
+        def journal_fault():
+            raise PrivateJournalError('PRIVATE_JOURNAL_CANARY')
+
+        self.assertEqual(_reservation_outcome(journal_fault), (None, 'journal-unknown'))
+
+    def test_identical_reservation_replay_preserves_two_attempts(self):
+        case = ContinuationJournalTest('test_concurrent_identical_events_reserve_once')
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertTrue(result.wasSuccessful())
 
 
 if __name__ == '__main__':

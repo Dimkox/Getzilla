@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import errno
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -76,8 +78,17 @@ class PackageStatusTests(unittest.TestCase):
 
     @staticmethod
     def git(root: Path, *args: str) -> str:
-        proc = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True, check=True)
-        return proc.stdout.strip()
+        from getzilla.architecture import ArchitectureError
+        from getzilla.architecture_diff import _GIT_EXECUTABLE, _git_environment, _run_capped
+        try:
+            code,output,error = _run_capped([_GIT_EXECUTABLE,*args],cwd=root,env=_git_environment(),
+                stdout_limit=65536,stderr_limit=65536,timeout=15)
+        except (ArchitectureError,OSError) as error:
+            raise AssertionError(f'Git fixture {args[:1]!r} failed within bounded execution: {error}') from error
+        if code:
+            raise AssertionError(f'Git fixture {args[:1]!r} exit={code}; '
+                f'stdout[{len(output)}]={output[:2048]!r}; stderr[{len(error)}]={error[:2048]!r}')
+        return output.decode('utf-8','surrogateescape').strip()
 
     @staticmethod
     def install_cli(root: Path):
@@ -665,6 +676,89 @@ class PackageStatusTests(unittest.TestCase):
             self.assertIsNone(result['head'])
             self.assertIsNone(result['commits_ahead'])
 
+    def test_ignored_nested_selection_cannot_borrow_parent_git_identity(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
+            selected = Path(directory) / 'selected'
+            selected.mkdir()
+            (selected / 'requirements.txt').write_text('public-example==1.0\n', encoding='utf-8', newline='\n')
+            self.assertEqual(Path(self.git(selected, 'rev-parse', '--show-toplevel')).resolve(), ROOT.resolve())
+            result = self.module().collect_worktree(selected, {'base_commit': self.git(ROOT, 'rev-parse', 'HEAD')})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['branch'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_non_git_selection_has_structured_root_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.module().collect_worktree(Path(directory), {})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIn('git_root_unknown', self.codes(result))
+
+    def test_standalone_unicode_and_object_free_roots_keep_real_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('standalone', 'проект-雪'):
+                with self.subTest(name=name):
+                    root = Path(directory) / name
+                    root.mkdir()
+                    self.git(root, 'init', '-q')
+                    self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                             '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+                    head = self.git(root, 'rev-parse', 'HEAD')
+                    result = self.module().collect_worktree(root, {'base_commit': head})
+                    self.assertTrue(result['git_available'])
+                    self.assertEqual(result['head'], head)
+                    self.assertEqual(result['dirty_product_state'], 'clean')
+                    self.assertEqual(result['dirty_product_paths'], [])
+                    self.assertEqual(result['commits_ahead'], 0)
+                    self.assertFalse(result['uncommitted_product_zero_ahead'])
+                    self.assertNotIn('git_root_unknown', self.codes(result))
+
+    def test_linked_worktree_root_keeps_its_own_head_and_dirty_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, linked = Path(directory) / 'main', Path(directory) / 'linked-проект'
+            root.mkdir()
+            self.git(root, 'init', '-q')
+            self.git(root, '-c', 'user.name=Public Fixture', '-c', 'user.email=fixture@example.invalid',
+                     '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'public empty tree')
+            self.git(root, 'worktree', 'add', '--detach', str(linked), 'HEAD')
+            try:
+                (linked / 'public.py').write_text('public = True\n', encoding='utf-8', newline='\n')
+                head = self.git(linked, 'rev-parse', 'HEAD')
+                result = self.module().collect_worktree(linked, {'base_commit': head})
+                self.assertTrue(result['git_available'])
+                self.assertEqual(result['head'], head)
+                self.assertTrue(result['detached'])
+                self.assertEqual(result['dirty_product_paths'], ['public.py'])
+                self.assertEqual(result['dirty_product_state'], 'dirty')
+                self.assertTrue(result['uncommitted_product_zero_ahead'])
+            finally:
+                self.git(root, 'worktree', 'remove', '--force', str(linked))
+
+    def test_incomplete_or_nonroot_git_location_never_qualifies_metadata(self):
+        module = self.module()
+        original = module._git_read
+        cases = ((0, b'true\n'), (0, b'\ntrue'), (0, b'\nfalse\n'),
+                 (0, b'child/\ntrue\n'), (0, b'\ntrue\nextra\n'), (1, b'\ntrue\n'))
+        for code, output in cases:
+            with self.subTest(code=code, output=output):
+                def location(repository, arguments):
+                    if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree']:
+                        return code, output
+                    return original(repository, arguments)
+
+                with patch.object(module, '_git_read', side_effect=location):
+                    result = module.collect_worktree(ROOT, {})
+                self.assertFalse(result['git_available'])
+                self.assertIsNone(result['head'])
+                self.assertEqual(result['dirty_product_state'], 'unknown')
+                self.assertIn('git_root_unknown', self.codes(result))
+
     def test_one_commit_ahead_is_dirty_without_zero_ahead_warning(self):
         with project_copy(git=True) as root:
             route, _, _, _ = self.prepare(root)
@@ -756,6 +850,159 @@ class PackageStatusTests(unittest.TestCase):
             failed = self.cli(root, 'getzilla_review.py', *args, '--status', 'fail')
             self.assertEqual(failed.returncode, 0, failed.stderr)
             self.assertEqual(json.loads(receipt.read_text())['status'], 'fail')
+
+
+    def test_nested_non_git_selection_never_borrows_parent_metadata(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            selected = root/'selected non-git folder'
+            selected.mkdir()
+            module = self.module()
+            with patch.object(module, '_git_read', wraps=module._git_read) as reads:
+                result = module.collect_worktree(selected, {})
+            self.assertFalse(result['git_available'])
+            self.assertIsNone(result['head'])
+            self.assertIsNone(result['branch'])
+            self.assertIsNone(result['detached'])
+            self.assertIsNone(result['diagnostic_base'])
+            self.assertIsNone(result['commits_ahead'])
+            self.assertEqual(result['dirty_product_state'], 'unknown')
+            self.assertIsNone(result['uncommitted_product_zero_ahead'])
+            self.assertEqual(reads.call_count, 1)
+            self.assertIn('git_root_unknown', self.codes(result))
+            real = module.collect_worktree(root, route)
+            self.assertTrue(real['git_available'])
+            self.assertEqual(real['head'], route['base_commit'])
+            self.assertEqual(real['branch'], self.git(root, 'branch', '--show-current'))
+
+    def test_actual_detached_and_linked_worktree_roots_remain_observable(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            self.git(root, 'checkout', '--detach', '-q')
+            result = self.module().collect_worktree(root, route)
+            self.assertTrue(result['detached'])
+            self.assertEqual(result['head'], route['base_commit'])
+            self.assertEqual(result['commits_ahead'], 0)
+            linked = root.parent/'linked root'
+            self.git(root, 'worktree', 'add', '--quiet', '--detach', str(linked), 'HEAD')
+            try:
+                result = self.module().collect_worktree(linked, route)
+                self.assertTrue(result['git_available'])
+                self.assertTrue(result['detached'])
+                self.assertEqual(result['head'], route['base_commit'])
+                self.assertEqual(result['commits_ahead'], 0)
+            finally:
+                self.git(root, 'worktree', 'remove', '--force', str(linked))
+
+    def check_linked_root(self, root, route, linked):
+        self.git(root,'worktree','add','--quiet','--detach',str(linked),'HEAD')
+        try:
+            result = self.module().collect_worktree(linked,route)
+            self.assertTrue(result['git_available'],result['findings'])
+            self.assertEqual(result['head'],route['base_commit'])
+            self.assertEqual(result['commits_ahead'],0)
+        finally:
+            self.git(root,'worktree','remove','--force',str(linked))
+
+    def test_root_identity_check_preserves_unicode_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            self.check_linked_root(root,route,root.parent/'linked-é-имя-root')
+
+    @unittest.skipUnless(os.name == 'posix', 'newline/tab filename characters require POSIX')
+    def test_root_identity_check_preserves_newline_and_tab_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            self.check_linked_root(root,route,root.parent/'linked-\n\t-root')
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filenames require POSIX')
+    def test_root_identity_check_preserves_non_utf8_root_paths(self):
+        with project_copy(git=True) as root:
+            route, _, _, _ = self.prepare(root)
+            control = root.parent/'path-capability-é'
+            control.mkdir()
+            try:
+                probe = root.parent/os.fsdecode(b'path-capability-\xff')
+                try:
+                    probe.mkdir()
+                except OSError as error:
+                    if error.errno not in (errno.EILSEQ,errno.EINVAL):
+                        raise
+                    self.skipTest(f'filesystem rejects raw filename byte0xff; errno={error.errno}; '
+                                  f'platform={sys.platform}; fsencoding={sys.getfilesystemencoding()}')
+                else:
+                    probe.rmdir()
+            finally:
+                control.rmdir()
+            # Deliberately exercise Git's transparent byte-path mode in this
+            # owned fixture only. Unicode/newline tests keep native defaults.
+            self.git(root,'config','--local','core.precomposeunicode','false')
+            self.check_linked_root(root,route,root.parent/os.fsdecode(b'linked-\xff-root'))
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_raw_filename_encoding_refusal_is_a_specific_skip(self):
+        original = Path.mkdir
+        for code in (errno.EILSEQ,errno.EINVAL):
+            def mkdir(path,*args,**kwargs):
+                if '\udcff' in path.name:
+                    raise OSError(code,'synthetic filesystem encoding refusal')
+                return original(path,*args,**kwargs)
+
+            with self.subTest(errno=code), patch.object(Path,'mkdir',mkdir):
+                with self.assertRaisesRegex(unittest.SkipTest,'raw filename.*errno='+str(code)):
+                    self.test_root_identity_check_preserves_non_utf8_root_paths()
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_raw_filename_permission_failure_is_not_a_skip(self):
+        original = Path.mkdir
+
+        def mkdir(path,*args,**kwargs):
+            if '\udcff' in path.name:
+                raise PermissionError(errno.EACCES,'synthetic permission refusal')
+            return original(path,*args,**kwargs)
+
+        with patch.object(Path,'mkdir',mkdir):
+            try:
+                self.test_root_identity_check_preserves_non_utf8_root_paths()
+            except PermissionError:
+                pass
+            except unittest.SkipTest as error:
+                self.fail('permission failure became an unsupported-path skip: '+str(error))
+            else:
+                self.fail('raw filename capability was not checked')
+
+    @unittest.skipUnless(os.name == 'posix', 'raw-byte filesystem capability is POSIX only')
+    def test_simulated_valid_name_failure_is_not_a_raw_filename_skip(self):
+        original = Path.mkdir
+
+        def mkdir(path,*args,**kwargs):
+            if path.name == 'path-capability-é':
+                raise PermissionError(errno.EACCES,'synthetic valid-name refusal')
+            if '\udcff' in path.name:
+                raise OSError(errno.EINVAL,'synthetic raw-name refusal')
+            return original(path,*args,**kwargs)
+
+        with patch.object(Path,'mkdir',mkdir):
+            try:
+                self.test_root_identity_check_preserves_non_utf8_root_paths()
+            except PermissionError:
+                pass
+            except unittest.SkipTest as error:
+                self.fail('missing valid-name control became a skip: '+str(error))
+            else:
+                self.fail('paired valid-name capability was not checked')
+
+    def test_git_fixture_failure_retains_bounded_stderr_diagnostics(self):
+        with project_copy(git=True) as root:
+            try:
+                self.git(root,'rev-parse','--verify','refs/heads/nonexistent-fixture-ref')
+            except (subprocess.CalledProcessError,AssertionError) as error:
+                diagnostic = str(error)
+            else:
+                self.fail('invalid fixture revision unexpectedly succeeded')
+            self.assertIn('exit=128',diagnostic)
+            self.assertIn('fatal:',diagnostic)
+            self.assertLess(len(diagnostic),20000)
 
 
 if __name__ == '__main__':

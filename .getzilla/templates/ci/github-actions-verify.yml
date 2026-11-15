@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out the exact commit with full history
+        id: source_checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -60,7 +61,7 @@ jobs:
         run: python scripts/getzilla_verify.py --mode pr
       - name: Export CI evidence
         id: export_evidence
-        if: always()
+        if: always() && steps.source_checkout.outcome == 'success'
         run: python scripts/getzilla_ci_evidence.py --output "${{ runner.temp }}/getzilla-evidence" --job getzilla-verify --status "${{ job.status }}"
       - name: Retain CI evidence for 30 days
         if: always() && steps.export_evidence.outcome == 'success'

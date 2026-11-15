@@ -19,9 +19,10 @@ PATH = '.getzilla/runtime/metrics.jsonl'
 
 
 class Observations(list):
-    def __init__(self, values=(), *, gaps=()):
+    def __init__(self, values=(), *, gaps=(), available=True):
         super().__init__(values)
         self.gaps = list(gaps)
+        self.available = available
 
 
 def when(item):
@@ -44,6 +45,12 @@ def clean(value):
 
 @contextlib.contextmanager
 def regular(root, relative, *, create=False):
+    if not create and relative in {PATH, '.getzilla/runtime/path-hints.json', '.getzilla/runtime/parallel-guard.json'}:
+        from .trace_storage import LocalRead
+        with LocalRead(root) as reader:
+            yield reader.open_regular(relative, MAX_BYTES)
+            reader.check()
+        return
     parts = relative.split('/')
     if any(part in ('', '.', '..') for part in parts):
         raise ValueError('unsafe observation path')
@@ -149,14 +156,16 @@ def deduplicate(events, gaps=()):
     return Observations(result, gaps=sorted(set(problems)))
 
 
-def load(root, since=None):
+def load(root, since=None, *, reader=None):
     try:
-        with regular(root, PATH) as descriptor:
-            raw = os.read(descriptor, MAX_BYTES + 1)
-    except FileNotFoundError:
-        return Observations(gaps=['no observations'])
+        if reader is None:
+            from .trace_storage import LocalRead
+            with LocalRead(root) as owned:
+                return load(root, since, reader=owned)
+        reader.check_root(root)
+        raw = reader.read(PATH, MAX_BYTES)
     except (OSError, ValueError):
-        return Observations(gaps=['unsafe or oversized observation file'])
+        return Observations(gaps=['local observations unavailable'], available=False)
     rows, gaps = [], []
     for number, row in enumerate(raw.splitlines(keepends=True)):
         if number >= MAX_RECORDS:
@@ -196,13 +205,26 @@ def import_observations(root, relative):
     return {'imported': count, 'requested': len(rows), 'authority': 'offline observations only'}
 
 
-def inventory(root, base, head):
+def inventory(root, base, head, *, reader=None):
     from .project_ingestion import _git
-    _git(root, 'merge-base', '--is-ancestor', base, head)
-    commits = _git(root, 'rev-list', '--max-count=4097', f'{base}..{head}').stdout.splitlines()
+    if reader is None:
+        from .trace_storage import LocalRead
+        with LocalRead(root) as owned:
+            return inventory(root, base, head, reader=owned)
+    location, descriptors = reader.git_location()
+    reader.check_root(root)
+
+    def git(*args):
+        reader.check()
+        result = _git(location, *args, _pass_fds=descriptors)
+        reader.check()
+        return result
+
+    git('merge-base', '--is-ancestor', base, head)
+    commits = git('rev-list', '--max-count=4097', f'{base}..{head}').stdout.splitlines()
     if len(commits) > 4096 or any(not re.fullmatch(rb'[0-9a-f]{40}|[0-9a-f]{64}', value) for value in commits):
         raise ValueError('commit inventory incomplete')
-    raw = _git(root, 'diff', '--numstat', '-z', '--no-renames', '--no-textconv', '--no-ext-diff', base, head, '--').stdout
+    raw = git('diff', '--numstat', '-z', '--no-renames', '--no-textconv', '--no-ext-diff', base, head, '--').stdout
     if len(raw) > 1_048_576:
         raise ValueError('line inventory exceeds bound')
     lines = 0
@@ -212,12 +234,12 @@ def inventory(root, base, head):
             if not added.isdigit() or not removed.isdigit():
                 raise ValueError('binary or incomplete line inventory')
             lines += int(added) + int(removed)
-    paths = _git(root, 'diff', '--name-only', '-z', '--diff-filter=A', '--no-renames', base, head, '--').stdout.split(b'\0')
+    paths = git('diff', '--name-only', '-z', '--diff-filter=A', '--no-renames', base, head, '--').stdout.split(b'\0')
     introduced = sum(path.startswith((b'engineering/changes/', b'engineering/reviews/', b'.getzilla/runtime/')) for path in paths if path)
     return {'commits': len(commits), 'changed_lines': lines, 'introduced_workflow_evidence_files': introduced}
 
 
-def source_summary(events, route_id, root=None):
+def source_summary(events, route_id, root=None, *, reader=None):
     facts = [row for row in events if row.get('route_id') == route_id and row.get('schema_version') == 2]
     verifies = [row for row in facts if row['event'] == 'verify']
     merges = [row for row in facts if row['event'] == 'merge' and row.get('head') and row.get('base')]
@@ -231,7 +253,7 @@ def source_summary(events, route_id, root=None):
     measured = None
     if root and source:
         try:
-            measured = inventory(root, source['base'], source['head'])
+            measured = inventory(root, source['base'], source['head'], reader=reader)
             if measured['commits']:
                 result['approval_count_per_commit'] = result['grant_materializations'] / measured['commits']
         except Exception as exc:

@@ -1,0 +1,641 @@
+{
+  "files": [
+    {
+      "mode": "100644",
+      "owner": "baseline-bmad",
+      "path": ".getzilla/templates/baseline/blobs/a659166845b1a4ed3f9aef942c5935537a97382b10303684fbb78ed86265870e.txt",
+      "sha256": "a659166845b1a4ed3f9aef942c5935537a97382b10303684fbb78ed86265870e",
+      "target_path": ".agents/skills/bmad-ux/assets/design-example-editorial.md",
+      "upstream_blob": "e72dc7d1ba1037592e9c45d455fe77e953b47dbc",
+      "upstream_path": "src/bmm-skills/plan/bmad-ux/assets/design-example-editorial.md"
+    },
+    {
+      "mode": "100644",
+      "owner": "baseline-bmad",
+      "path": ".getzilla/templates/baseline/blobs/b6fe8fc1390b8e46961d5eb5e6f2fe6c65dca2f30623d492677672e02868f7ab.txt",
+      "sha256": "b6fe8fc1390b8e46961d5eb5e6f2fe6c65dca2f30623d492677672e02868f7ab",
+      "target_path": ".agents/skills/bmad-prd/assets/prd-template.md",
+      "upstream_blob": "6f340e5d97215521d26706bf22b18fdc8fed9ec6",
+      "upstream_path": "src/bmm-skills/plan/bmad-prd/assets/prd-template.md"
+    },
+    {
+      "mode": "100644",
+      "owner": "baseline-bmad",
+      "path": ".getzilla/templates/baseline/blobs/e44d0008db0c0b30f3fa533e987efe66b2c852530b70fed03f0d4d9cbabe2b4b.txt",
+      "sha256": "e44d0008db0c0b30f3fa533e987efe66b2c852530b70fed03f0d4d9cbabe2b4b",
+      "target_path": ".agents/skills/bmad-forge-idea/SKILL.md",
+      "upstream_blob": "0b50ce72c3c4b25a23cfb61394601a19705588b1",
+      "upstream_path": "src/core-skills/bmad-forge-idea/SKILL.md"
+    },
+    {
+      "mode": "100644",
+      "owner": "baseline-bmad",
+      "path": ".getzilla/templates/baseline/blobs/fff112eabca1a9cb8b190f8314bc47678becc5782a2372e11c83daa0e33b6dfd.txt",
+      "sha256": "fff112eabca1a9cb8b190f8314bc47678becc5782a2372e11c83daa0e33b6dfd",
+      "target_path": ".agents/skills/bmad-brainstorming/assets/brain-methods.csv",
+      "upstream_blob": "8f1841291339d9e7db95f6467eea05e794796769",
+      "upstream_path": "src/core-skills/bmad-brainstorming/assets/brain-methods.csv"
+    }
+  ],
+  "owners": [
+    {
+      "commit": "tree 73527d35a02033687a1ddf57e9d700cfd1d08634\nparent 9b841a01b6cb4ea1f24dffc35be99ab3314831c3\nauthor github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1792012723 +0000\ncommitter github-actions[bot] <github-actions[bot]@users.noreply.github.com> 1792012723 +0000\n\nchore(release): v6.12.4 [skip ci]\n",
+      "id": "baseline-bmad",
+      "inventory": {
+        "path": ".getzilla/templates/baseline/bmad-codex-sh.json",
+        "sha256": "1920cbf071c5c56d30116212ff75c931ae7ceb9a67652f2fdbfb42d99a11a6b8"
+      },
+      "repository": "https://github.com/bmad-code-org/BMAD-METHOD",
+      "revision": "bab9082c3e884e0d72c759bcd1a6d90bcc01be84",
+      "root": ".getzilla/templates/baseline/blobs",
+      "trees": [
+        {
+          "entries": [
+            {
+              "mode": "40000",
+              "name": ".claude-plugin",
+              "oid": "d8e47e5c30a58a0835466410d7c7d8cf71def2fb"
+            },
+            {
+              "mode": "100644",
+              "name": ".coderabbit.yaml",
+              "oid": "97be3c7c928c1bc176be1aa8a682fe9d163f2cfd"
+            },
+            {
+              "mode": "40000",
+              "name": ".github",
+              "oid": "eb5f520b091f3984d5404ad741ae3a12e8ce3607"
+            },
+            {
+              "mode": "100644",
+              "name": ".gitignore",
+              "oid": "c396d16f2ff03b52fcbdb337f8a391885c2b7ceb"
+            },
+            {
+              "mode": "40000",
+              "name": ".husky",
+              "oid": "0ee91ce21587908d5ceae0cc7539bc40516af144"
+            },
+            {
+              "mode": "100644",
+              "name": ".markdownlint-cli2.yaml",
+              "oid": "c22ff4c5c7249ba0d63cede1e9f30b00328f9197"
+            },
+            {
+              "mode": "100644",
+              "name": ".npmignore",
+              "oid": "c7fad9e9231c8eb5e5241e07f266d4c5a245a815"
+            },
+            {
+              "mode": "100644",
+              "name": ".npmrc",
+              "oid": "052d467927a34dfec668febbf8d95d89155e0d9f"
+            },
+            {
+              "mode": "100644",
+              "name": ".nvmrc",
+              "oid": "8fdd954df9831dfd29ceec0d74829b02f3f5d8c3"
+            },
+            {
+              "mode": "100644",
+              "name": ".prettierignore",
+              "oid": "604b5865fb1cf01a295a0deb3945322f3aaf7878"
+            },
+            {
+              "mode": "40000",
+              "name": ".vscode",
+              "oid": "06b5fd924b367f1accf54b31a978d5d250dca224"
+            },
+            {
+              "mode": "100644",
+              "name": "AGENTS.md",
+              "oid": "e15d503fe40df1cace14012b7d9995535975c865"
+            },
+            {
+              "mode": "100644",
+              "name": "CHANGELOG.md",
+              "oid": "ca57ad6f603c3a82bb38cc88635cbe18e86a898f"
+            },
+            {
+              "mode": "100644",
+              "name": "CLAUDE.md",
+              "oid": "43c994c2d3617f947bcb5adf1933e21dabe46bb5"
+            },
+            {
+              "mode": "100644",
+              "name": "CNAME",
+              "oid": "99cd1ce5f2d0ddcd62a65caa8c4515d7f7c89621"
+            },
+            {
+              "mode": "100644",
+              "name": "CONTRIBUTING.md",
+              "oid": "5f2b59b3dd28e8d71b2b99ca064fcf931c90e204"
+            },
+            {
+              "mode": "100644",
+              "name": "CONTRIBUTORS.md",
+              "oid": "f36cc81fb2b54e554282b850c800898aa21ee7b7"
+            },
+            {
+              "mode": "100644",
+              "name": "LICENSE",
+              "oid": "557212d307dbed13aa72e8f158c9e4a626a3243a"
+            },
+            {
+              "mode": "100644",
+              "name": "README.md",
+              "oid": "6aa6604bc8dd014091a655ab80d746e228d68b50"
+            },
+            {
+              "mode": "100644",
+              "name": "README_CN.md",
+              "oid": "41a4e8597e202850d3f3be78d2dcadcfe0e7ca6a"
+            },
+            {
+              "mode": "100644",
+              "name": "README_KR.md",
+              "oid": "f3533b7ef289c3da018c6b602a03599f99717b43"
+            },
+            {
+              "mode": "100644",
+              "name": "README_VN.md",
+              "oid": "7d474621f19fd2e8cf3b9d2597e4817eb0f1c466"
+            },
+            {
+              "mode": "100644",
+              "name": "SECURITY.md",
+              "oid": "821c295472aa8d6dbf9c1bbe18bab573e634f266"
+            },
+            {
+              "mode": "100644",
+              "name": "TRADEMARK.md",
+              "oid": "e6ae5784827ee30a0c728e438efa9fbacdac23f2"
+            },
+            {
+              "mode": "100644",
+              "name": "Wordmark.png",
+              "oid": "b596d0bce6473ece4833526801e136971d0c667a"
+            },
+            {
+              "mode": "100644",
+              "name": "banner-bmad-method.png",
+              "oid": "c0c3fc3415c086c5d758181a4cb604a3b911ea22"
+            },
+            {
+              "mode": "100644",
+              "name": "bmad-modules.yaml",
+              "oid": "5bbabbf74f83a898e812c3c4f35c3d1e883a3098"
+            },
+            {
+              "mode": "100644",
+              "name": "body.md",
+              "oid": "334a3d51ffba2c3a61b5973fc812f579272d48f0"
+            },
+            {
+              "mode": "40000",
+              "name": "docs",
+              "oid": "4646c1fc19501b6b3eb7c57580cf394bd6a876a2"
+            },
+            {
+              "mode": "100644",
+              "name": "eslint.config.mjs",
+              "oid": "1bf3e270e56b0f7a790bc82dbe332388286baf33"
+            },
+            {
+              "mode": "100644",
+              "name": "greptile.json",
+              "oid": "a9b3c69e8f356bd9d35c877e85d673fc0ef85654"
+            },
+            {
+              "mode": "100644",
+              "name": "package-lock.json",
+              "oid": "3475e70568bdcf1c688cd9afbae5037f282a38ff"
+            },
+            {
+              "mode": "100644",
+              "name": "package.json",
+              "oid": "ea177e715a2e5e74eb3b223c70fed1ab25ca603b"
+            },
+            {
+              "mode": "100644",
+              "name": "pr2.md",
+              "oid": "7959fa4df5b23a9153b8d5bad1181831a99df8ef"
+            },
+            {
+              "mode": "100644",
+              "name": "prettier.config.mjs",
+              "oid": "6d6956dc7318adf5a5470b9772836c8332150a6a"
+            },
+            {
+              "mode": "100644",
+              "name": "removals.txt",
+              "oid": "34a006daf94c2705717adb872622ae52303bfdd4"
+            },
+            {
+              "mode": "40000",
+              "name": "src",
+              "oid": "847f0f4546c15fcd74ac6e59f6fec35d101cb06e"
+            },
+            {
+              "mode": "40000",
+              "name": "test",
+              "oid": "4de25b9fec08c3522a53df86351d234a83443c9d"
+            },
+            {
+              "mode": "40000",
+              "name": "tools",
+              "oid": "00cd3a0a6f43a760bf3c85636bb3df7936e9abf0"
+            },
+            {
+              "mode": "40000",
+              "name": "web-bundles",
+              "oid": "1e4a89b1e6986f2d555671098decc7a6c54aaf8c"
+            },
+            {
+              "mode": "40000",
+              "name": "website",
+              "oid": "02f72eecd05bb93bb722cc0bc378cb9573041a1b"
+            }
+          ],
+          "oid": "73527d35a02033687a1ddf57e9d700cfd1d08634"
+        },
+        {
+          "entries": [
+            {
+              "mode": "40000",
+              "name": "bmm-skills",
+              "oid": "816e1bdd8ef87d496390554d7fc9301c5e0da0e4"
+            },
+            {
+              "mode": "40000",
+              "name": "core-skills",
+              "oid": "bceb87e94c06fb4f1b5a63de356871fe37b39bdc"
+            },
+            {
+              "mode": "40000",
+              "name": "scripts",
+              "oid": "8266c72d3cdfc44f01ead8e2540a2239b9f8e13a"
+            }
+          ],
+          "oid": "847f0f4546c15fcd74ac6e59f6fec35d101cb06e"
+        },
+        {
+          "entries": [
+            {
+              "mode": "40000",
+              "name": "agents",
+              "oid": "eec4b4e4ee0024821f58ab250c7576ba5f3ae7cb"
+            },
+            {
+              "mode": "100644",
+              "name": "module-help.csv",
+              "oid": "e031b73e841613a0fe4bb621024e991845ea3773"
+            },
+            {
+              "mode": "100644",
+              "name": "module.yaml",
+              "oid": "2d1d9d3826e845161497541d9db442ef34d650f7"
+            },
+            {
+              "mode": "40000",
+              "name": "plan",
+              "oid": "6507c19368b98bffe8e2c9926567d1193d5a8bb9"
+            },
+            {
+              "mode": "40000",
+              "name": "ship",
+              "oid": "2a63cbe0293742a05a8dd6d05b9ae251d3d11e06"
+            },
+            {
+              "mode": "40000",
+              "name": "v6-shims",
+              "oid": "19a8e70043bf1829f98b01e7d55d66111ccba135"
+            }
+          ],
+          "oid": "816e1bdd8ef87d496390554d7fc9301c5e0da0e4"
+        },
+        {
+          "entries": [
+            {
+              "mode": "40000",
+              "name": "bmad-architecture",
+              "oid": "82413aa665685fa3484b7ce36f3c6835bd8661d8"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-create-epics-and-stories",
+              "oid": "ab179f1994e13777dc387c49407ea6fb6428ab1e"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-generate-project-context",
+              "oid": "b11e16d261c3bcefdf0e295a512a0fae4668e4e1"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-prd",
+              "oid": "304ee6c0b90fb73381f26fac4cbd5ec3c70d8282"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-prfaq",
+              "oid": "eb55fabff80fb80f24ab1b80d6b9f42a0ca39ca9"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-product-brief",
+              "oid": "695fe650105ace9a18696cc762b441e14655911a"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-project-context",
+              "oid": "dde74408e3af900406b178f74fc6615110488c32"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-spec",
+              "oid": "385f63cb1d0e33ea670ca1f6c5bff8e7c80d4166"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-sprint-planning",
+              "oid": "a3c2108e78476b3993b73387ea0ddbd5401bc53c"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-ux",
+              "oid": "efcd2121635660da21feb0e027dc6cc025839a07"
+            }
+          ],
+          "oid": "6507c19368b98bffe8e2c9926567d1193d5a8bb9"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "SKILL.md",
+              "oid": "babb7b0320f13820a9e82666fc290aa2105cb4b8"
+            },
+            {
+              "mode": "40000",
+              "name": "assets",
+              "oid": "a5b5dd1edeeecea94e6a99993ba467643d0b0e69"
+            },
+            {
+              "mode": "100644",
+              "name": "customize.toml",
+              "oid": "72dc4b9e4b768d0bd62afee4c5935f1de2150af9"
+            },
+            {
+              "mode": "40000",
+              "name": "references",
+              "oid": "0bb8d6e4a02cae5f037a6cd951b1e17d36be949e"
+            }
+          ],
+          "oid": "efcd2121635660da21feb0e027dc6cc025839a07"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "color-themes.md",
+              "oid": "2b23b466d9bee7e024c364018da0325263146b90"
+            },
+            {
+              "mode": "100644",
+              "name": "design-directions.md",
+              "oid": "289b270a6e7c06912811652b0275a442d880a149"
+            },
+            {
+              "mode": "100644",
+              "name": "design-example-editorial.md",
+              "oid": "e72dc7d1ba1037592e9c45d455fe77e953b47dbc"
+            },
+            {
+              "mode": "100644",
+              "name": "design-example-mobile.md",
+              "oid": "1c301c822103d8a6f6a87e229bc429d7649ec2e1"
+            },
+            {
+              "mode": "100644",
+              "name": "design-example-shadcn.md",
+              "oid": "a7147f8e3ca6687ed1325e2f576b8a953fd081c1"
+            },
+            {
+              "mode": "100644",
+              "name": "excalidraw-wireframe.md",
+              "oid": "7f04c95e4c877e063f67e34b263d8265cb78085c"
+            },
+            {
+              "mode": "100644",
+              "name": "experience-example-mobile.md",
+              "oid": "5bd05ee963377a614c22ab9bd01a0d60c81fae2b"
+            },
+            {
+              "mode": "100644",
+              "name": "experience-example-shadcn.md",
+              "oid": "d46083c8adfb42b4a0f88297522d87526e44dcd3"
+            },
+            {
+              "mode": "100644",
+              "name": "headless-schemas.md",
+              "oid": "1211393cbbb9cf5c8e16cafe666b2643c46821e7"
+            },
+            {
+              "mode": "100644",
+              "name": "key-screens.md",
+              "oid": "62f057c95783a7c5479de55624d2ed97f43892e7"
+            },
+            {
+              "mode": "100644",
+              "name": "validation-report-template.html",
+              "oid": "a5d39be8c7582f56bd5755c91f95d888ccd12176"
+            }
+          ],
+          "oid": "a5b5dd1edeeecea94e6a99993ba467643d0b0e69"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "SKILL.md",
+              "oid": "6262c1ab6e0b61ea3866f4d24fe29adc7f19e0c3"
+            },
+            {
+              "mode": "40000",
+              "name": "assets",
+              "oid": "4bcb75dcb0821705ac0eb13cad1b051e836120ea"
+            },
+            {
+              "mode": "100644",
+              "name": "customize.toml",
+              "oid": "c5982f523b2229dec68ea62f6c288b860a138132"
+            },
+            {
+              "mode": "40000",
+              "name": "references",
+              "oid": "6533ca5295ceaf2da69fdb5178bebb8bec162cb4"
+            }
+          ],
+          "oid": "304ee6c0b90fb73381f26fac4cbd5ec3c70d8282"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "headless-schemas.md",
+              "oid": "89d5b6c1550bd556d30e3b82798b9df9b0dff28d"
+            },
+            {
+              "mode": "100644",
+              "name": "prd-template.md",
+              "oid": "6f340e5d97215521d26706bf22b18fdc8fed9ec6"
+            },
+            {
+              "mode": "100644",
+              "name": "prd-validation-checklist.md",
+              "oid": "f52c43b350d886f5c0e8c44e55265c3bb7e52841"
+            },
+            {
+              "mode": "100644",
+              "name": "validation-report-template.html",
+              "oid": "72e7271628574fa34d8c54ddd10967377c24a27d"
+            }
+          ],
+          "oid": "4bcb75dcb0821705ac0eb13cad1b051e836120ea"
+        },
+        {
+          "entries": [
+            {
+              "mode": "40000",
+              "name": "bmad-advanced-elicitation",
+              "oid": "84ffb37ac6272549edd2bf0c8323e0e5cb75e05d"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-brainstorming",
+              "oid": "57285a37b2f1abfb0e1786f19ca97666b586060f"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-customize",
+              "oid": "d76f843c674775da7c620bbbc866c605d9a5504c"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-deep-recon",
+              "oid": "8b4af7ff02d18100e909cab85de8539fdb1458f3"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-forge-idea",
+              "oid": "2a6b0f93998c3887146bc0fb221306a084d5e220"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-help",
+              "oid": "e13d7012898ba5eb8e6f4a0091f58b656cacce62"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-party-mode",
+              "oid": "9a39695f87f5d04b594c6e3c4cbd45f3d9b9229d"
+            },
+            {
+              "mode": "40000",
+              "name": "bmad-review",
+              "oid": "0b4c021f825b277e8a36732a22dd8c85a4245601"
+            },
+            {
+              "mode": "100644",
+              "name": "module-help.csv",
+              "oid": "a422f0997521932b4b24c83975805dc96f45bd02"
+            },
+            {
+              "mode": "100644",
+              "name": "module.yaml",
+              "oid": "814cbc23c63b9bb29ef84deaa50d51bfa2fb2ccf"
+            },
+            {
+              "mode": "40000",
+              "name": "v6-shims",
+              "oid": "12716e90dedf97c7434fcc1b8344cd3db5a7a368"
+            }
+          ],
+          "oid": "bceb87e94c06fb4f1b5a63de356871fe37b39bdc"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "SKILL.md",
+              "oid": "0b50ce72c3c4b25a23cfb61394601a19705588b1"
+            },
+            {
+              "mode": "100644",
+              "name": "customize.toml",
+              "oid": "91ce9b4ce554fb096cbcc4279bae657033b6b21b"
+            },
+            {
+              "mode": "40000",
+              "name": "scripts",
+              "oid": "6cc80f0d36a069f191641fc867efdf2a08f83810"
+            }
+          ],
+          "oid": "2a6b0f93998c3887146bc0fb221306a084d5e220"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "SKILL.md",
+              "oid": "a4141454a3b29bf40c89fda4394f1ef80cf9cab5"
+            },
+            {
+              "mode": "40000",
+              "name": "assets",
+              "oid": "ed2cb9c130610392ce01e54aa873363e75cbda1f"
+            },
+            {
+              "mode": "100644",
+              "name": "customize.toml",
+              "oid": "e0e0ccbf1d57233143e964cc00dddf51d959d5d2"
+            },
+            {
+              "mode": "40000",
+              "name": "references",
+              "oid": "76de93d5eef14030df06c25d0b3a5e7dcd6d67b4"
+            },
+            {
+              "mode": "40000",
+              "name": "scripts",
+              "oid": "059e2ca791625ca44f4f4933ce7105b1fb87a815"
+            }
+          ],
+          "oid": "57285a37b2f1abfb0e1786f19ca97666b586060f"
+        },
+        {
+          "entries": [
+            {
+              "mode": "100644",
+              "name": "brain-icons.json",
+              "oid": "9a979d8d9affc33916c46b77643f534814b0b30a"
+            },
+            {
+              "mode": "100644",
+              "name": "brain-methods.csv",
+              "oid": "8f1841291339d9e7db95f6467eea05e794796769"
+            },
+            {
+              "mode": "100644",
+              "name": "brain-selector.html",
+              "oid": "ac649b24fffa6b29a7c032cea2502207c8f39a92"
+            }
+          ],
+          "oid": "ed2cb9c130610392ce01e54aa873363e75cbda1f"
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}

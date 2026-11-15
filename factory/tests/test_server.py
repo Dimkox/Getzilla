@@ -594,7 +594,7 @@ class ServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
-            path = root / "control.sock"
+            path = root / "s"
             listener = prepare_unix_socket(path)
             server = uvicorn.Server(
                 uvicorn.Config(create_app(Service(), Authenticator({token: actor})), access_log=False, log_config=None)
@@ -631,7 +631,7 @@ class ServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
-            path = root / "control.sock"
+            path = root / "s"
             listener = prepare_unix_socket(path)
             try:
                 metadata = path.lstat()

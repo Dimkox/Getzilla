@@ -41,8 +41,8 @@ def dependency(name='example', version='1.0.0', **extra) -> dict:
 
 
 def wheel(*, name='example', version='1.0.0', expression='MIT', requires=(), license_text=LICENSE_TEXT,
-          headers='', extra_files=None, declared_license=True) -> bytes:
-    metadata = f'Metadata-Version: 2.4\nName: {name}\nVersion: {version}\n'
+          headers='', extra_files=None, declared_license=True, metadata_version='2.4') -> bytes:
+    metadata = f'Metadata-Version: {metadata_version}\nName: {name}\nVersion: {version}\n'
     if expression is not None:
         metadata += f'License-Expression: {expression}\n'
     if declared_license:
@@ -403,8 +403,63 @@ class ArtifactLicenseTests(unittest.TestCase):
                         if status == 'fail':
                             self.assertIn('license-transitive-coverage', {item['code'] for item in result['gaps']})
         for operator, status in (('==', 'pass'), ('!=', 'fail')):
-            payload = wheel(requires=[f'missing-child>=1; extra {operator} "speed-up"'])
+            payload = wheel(headers='Provides-Extra: genuinely-different\n',
+                            requires=[f'missing-child>=1; extra {operator} "speed-up"'])
             self.assertEqual(self.evaluate(dep=dependency(extras=['genuinely-different']), payload=payload)['status'], status)
+
+    def test_selected_extras_must_be_declared_before_policy(self) -> None:
+        headers = 'Provides-Extra: public-known\nProvides-Extra: public-other\n'
+        payload = wheel(headers=headers, requires=['missing-child==1; extra == "public-known"'])
+        for extras, expected in ((['public-known'], 'fail'), (['PUBLIC__OTHER'], 'pass'),
+                                 (['public-unknown'], 'fail'), ([], 'pass')):
+            with self.subTest(extras=extras):
+                result = self.evaluate(dep=dependency(extras=extras), payload=payload)
+                self.assertEqual(result['status'], expected, result)
+                if extras == ['public-unknown']:
+                    self.assertIn('license-transitive-coverage', {g['code'] for g in result['gaps']})
+                    self.assertEqual(result['details'], [])
+        for headers in ('', 'Provides-Extra: public-other\n'):
+            with self.subTest(headers=headers), mock.patch.object(licenses, '_select_expression', wraps=licenses._select_expression) as policy:
+                result = self.evaluate(dep=dependency(extras=['public-unknown']), payload=wheel(headers=headers))
+                self.assertEqual(result['status'], 'fail', result)
+                policy.assert_not_called()
+        self.assertEqual(self.evaluate(payload=wheel())['status'], 'pass')
+
+    def test_declared_extras_follow_metadata_version_and_reject_collisions(self) -> None:
+        for version in ('2.1', '2.2', '2.3', '2.4', '2.5', '2.6'):
+            for declared in ('speed-up', 'SPEED_UP', 'speed.up', 'speed--up'):
+                with self.subTest(version=version, declared=declared):
+                    payload = wheel(metadata_version=version, headers=f'Provides-Extra: {declared}\n')
+                    result = self.evaluate(dep=dependency(extras=['SPEED__UP']), payload=payload)
+                    expected = 'pass' if version in {'2.1', '2.2'} or declared == 'speed-up' else 'fail'
+                    self.assertEqual(result['status'], expected, result)
+        for version, headers in (
+            ('2.2', 'Provides-Extra: speed-up\nProvides-Extra: SPEED_UP\n'),
+            ('2.4', 'Provides-Extra: speed-up\nProvides-Extra: speed-up\n'),
+            ('1.2', 'Provides-Extra: speed-up\n'),
+            ('2.4', 'Provides-Extra: \n'),
+            ('2.2', 'Provides-Extra: speed/up\n'),
+            ('2.4', 'Provides-Extra: speed-up\n continuation\n'),
+        ):
+            with self.subTest(version=version, headers=headers):
+                result = self.evaluate(dep=dependency(extras=['speed-up']),
+                                       payload=wheel(metadata_version=version, headers=headers))
+                self.assertEqual(result['status'], 'fail', result)
+
+    def test_metadata_retains_and_bounds_raw_extra_declarations(self) -> None:
+        from getzilla.security_artifacts import ArtifactError, archive_files, package_metadata
+        filename = 'example-1.0.0-py3-none-any.whl'
+        headers = 'Provides-Extra: Speed_Up\nProvides-Extra: public-other\n'
+        metadata = package_metadata(archive_files(wheel(metadata_version='2.2', headers=headers), filename), 'PyPI', filename)
+        self.assertEqual(metadata['provides_extra'], ['Speed_Up', 'public-other'])
+        self.assertEqual(metadata['metadata_version'], '2.2')
+        for headers, count in ((''.join(f'Provides-Extra: x{i}\n' for i in range(256)), 256),
+                               ('Provides-Extra: ' + 'x' * 512 + '\n', 1)):
+            bounded = package_metadata(archive_files(wheel(headers=headers), filename), 'PyPI', filename)
+            self.assertEqual(len(bounded['provides_extra']), count)
+        for headers in ('Provides-Extra: x\n' * 257, 'Provides-Extra: ' + 'x' * 513 + '\n'):
+            with self.subTest(length=len(headers)), self.assertRaises(ArtifactError):
+                package_metadata(archive_files(wheel(headers=headers), filename), 'PyPI', filename)
 
     def test_pep685_transitive_extras_are_normalized_and_still_require_child_artifacts(self) -> None:
         for required, observed in (('speed_up', 'SPEED-UP'), ('SPEED.UP', 'speed-up'), ('Speed__..--UP', 'speed.up')):

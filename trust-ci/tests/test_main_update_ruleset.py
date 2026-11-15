@@ -1,9 +1,11 @@
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify_main_update_ruleset.py"
@@ -20,9 +22,18 @@ def snapshot():
     }
 
 
+def fixture_root():
+    common = subprocess.check_output(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=SCRIPT.parents[2], text=True).strip()
+    root = Path(common).parent / ".getzilla/runtime/scratch"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return root
+
+
 class MainUpdateRulesetTests(unittest.TestCase):
     def check(self, document, *, matches=False, merge=41, publisher=42, ruleset=73, raw=False):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir=fixture_root()) as temp:
             path = Path(temp) / "snapshot.json"
             path.write_text(document if raw else json.dumps(document), encoding="utf-8")
             result = subprocess.run(
@@ -97,6 +108,41 @@ class MainUpdateRulesetTests(unittest.TestCase):
             with self.subTest(document=document):
                 self.check(document)
         self.check('{"enforcement":"disabled",' + json.dumps(snapshot())[1:], raw=True)
+
+
+class RulesetInputTests(unittest.TestCase):
+    def test_invalid_cli_arguments_have_fixed_json_errors(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), 'PRIVATE-PATH', '--ruleset-id',
+            'PRIVATE-INVALID', '--merge-app-id', '41', '--publisher-app-id', '42'],
+            capture_output=True, text=True, timeout=2)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('PRIVATE-', result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)['reason'], 'snapshot-invalid')
+
+    def load(self):
+        with patch.object(sys, 'path', [str(SCRIPT.parent), *sys.path]):
+            spec = importlib.util.spec_from_file_location('owned_ruleset', SCRIPT)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        return module
+
+    def test_direct_ruleset_metadata_cannot_hide_non_json_or_oversized_values(self):
+        module = self.load()
+        for value in [object(), {'k' * 65537: 0}, ['x' * 65536] * 17, list(range(65536))]:
+            document = snapshot()
+            document['metadata'] = value
+            with self.subTest(kind=type(value).__name__), self.assertRaises(ValueError):
+                module.verify_ruleset(document, 73, 41, 42)
+
+    def test_cli_failure_does_not_echo_missing_path_or_invalid_json(self):
+        with tempfile.TemporaryDirectory(dir=fixture_root()) as directory:
+            path = Path(directory) / 'PRIVATE-MISSING'
+            command = [sys.executable, str(SCRIPT), str(path), '--ruleset-id', '73',
+                       '--merge-app-id', '41', '--publisher-app-id', '42']
+            result = subprocess.run(command, capture_output=True, text=True, timeout=2)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn(str(path), result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout)['reason'], 'snapshot-invalid')
 
 
 if __name__ == "__main__":

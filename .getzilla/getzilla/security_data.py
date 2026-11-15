@@ -113,6 +113,8 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     if not isinstance(record, dict):
         raise SecurityDataError('OSV aliases require a record object')
     aliases = record.get('aliases', [])
+    if aliases is None:
+        return []
     if (not isinstance(aliases, list) or not all(
             isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases)):
         raise SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers')
@@ -209,6 +211,8 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('OSV withdrawn must be a timezone-aware RFC 3339 timestamp')
                     _timestamp(withdrawn)
                 affected = record.get('affected', [])
+                if affected is None and 'withdrawn' in record:
+                    affected = []
                 if not isinstance(affected, list) or (not affected and not record.get('withdrawn')):
                     raise ValueError('OSV record lacks affected package coverage')
                 matches = default_match = named_evidence = supplement = False
@@ -616,8 +620,12 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
             return payload, evidence
     except (OSError, ValueError, KeyError, TypeError, SecurityDataError) as exc:
         legacy = f' (legacy {source_id.removeprefix("osv:")}/all.zip is insufficient)' if source_id.startswith('osv:') else ''
-        refresh = (f'refresh with scripts/getzilla_vulns.py --download-db DIR --ecosystem {source_id.removeprefix("osv:")} '
-                   'on a network-enabled host, then copy the complete snapshot directory') if source_id.startswith('osv:') else (
+        command = ('python3 scripts/getzilla_security.py --root ROOT --database DIR '
+                   '--artifacts ARTIFACTS --tools TOOLS')
+        refresh = (f'declare current profile with {command} --write-input-profile PROFILE --json-out PROFILE_REPORT; '
+                   f'refresh with {command} --input-profile PROFILE --prepare-inputs --refresh --json-out REPORT '
+                   'on a network-enabled host, then copy the complete snapshot directory; '
+                   'preparation remains UNVERIFIED and may refuse incomplete inputs') if source_id.startswith('osv:') else (
                        f'refresh {source_id} through its configured updater, then copy manifest and content objects')
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc
 

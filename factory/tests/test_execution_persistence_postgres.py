@@ -6153,10 +6153,10 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
         import psycopg
 
         migrations = discover_migrations()
-        if (len(migrations) < 15 or
-                [item.version for item in migrations] != list(range(1, len(migrations) + 1)) or
+        if (len(migrations) != 25 or
+                [item.version for item in migrations] != list(range(1, 26)) or
                 migrations[14].name != "015_execution_canonical_persistence.sql"):
-            raise AssertionError("fresh-cluster test requires the complete contiguous history through migration 015")
+            raise AssertionError("fresh-cluster test requires the complete current migration history 001..025")
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT to_regnamespace('factory'),to_regrole('factory_artifact_attestor')")

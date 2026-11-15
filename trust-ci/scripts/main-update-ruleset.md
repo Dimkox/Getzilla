@@ -27,6 +27,8 @@ python trust-ci/scripts/verify_main_update_ruleset.py ruleset.json \
 
 Exit 0 means the supplied operator snapshot matches. Its provenance, capture time and the identity of the running service require independent verification. Capture fresh readbacks after each authorized policy change. [GitHub single-ruleset GET](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset)
 
+Both checkout scripts are offline comparison tools. They do not fetch snapshots, change protection, install an App or authorize a merge. Supply explicit regular files; symlinks, special files, changing file identities and platforms without safe no-follow/nonblocking opens are refused. Each file is limited to 1 MiB. JSON and direct API inputs have depth32, at most65536 nodes, at most65536 characters/items per string/container, and at most1 MiB aggregate UTF-8 text including keys. Duplicate keys, non-finite numbers and non-JSON values are refused. CLI failures return exit1 with the fixed reason `snapshot-invalid`, without snapshot values or paths. Unknown bounded ruleset GET metadata does not add policy authority; protection comparison preserves all other policy fields and existing publisher bindings, including legacy null/-1 publishers. Success does not prove baseline policy strength, authenticity or freshness.
+
 ## Additive rollout
 
 1. Capture complete administrator GETs of existing classic branch protection and all active rulesets affecting main. Record the existing `linux` and `windows` publisher bindings (observed GitHub Actions App ID `15368`), all other required checks, and review, push and administrator rules. Keep those settings intact.

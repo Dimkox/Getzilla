@@ -105,7 +105,9 @@ def load_checks(root: Path, mode: str) -> list[dict]:
 
 
 def _execution(proc) -> dict:
-    return {key: getattr(proc, key) for key in ('command', 'returncode', 'terminal_state', 'seconds', 'cleanup_error')}
+    from .verification_journal import stop_details
+    return {**{key: getattr(proc, key) for key in ('command', 'returncode', 'terminal_state', 'seconds', 'cleanup_error')},
+            'stop': stop_details(proc)}
 
 
 def _run(root: Path, check: dict, result: dict, detail: dict, directory: Path) -> None:

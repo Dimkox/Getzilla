@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Check an operator-supplied GitHub single-ruleset GET snapshot offline."""
-import argparse
 import json
 import sys
 
-from verify_public_check_protection import GITHUB_ACTIONS_APP_ID, read_snapshot
+from verify_public_check_protection import GITHUB_ACTIONS_APP_ID, SnapshotParser, _bounded, read_snapshot
 
 
 REPOSITORY = "Dimkox/Getzilla"
@@ -12,6 +11,7 @@ SCOPE = "operator snapshot of main update ruleset only"
 
 
 def verify_ruleset(snapshot, ruleset_id, merge_app_id, publisher_app_id):
+    _bounded(snapshot)
     if any(type(number) is not int or number < 1
            for number in (ruleset_id, merge_app_id, publisher_app_id)):
         raise ValueError("positive numeric ruleset and GitHub App IDs required")
@@ -44,17 +44,17 @@ def verify_ruleset(snapshot, ruleset_id, merge_app_id, publisher_app_id):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SnapshotParser(description=__doc__)
     parser.add_argument("snapshot", help="operator snapshot from the authenticated single-ruleset GET")
     parser.add_argument("--ruleset-id", type=int, required=True)
     parser.add_argument("--merge-app-id", type=int, required=True)
     parser.add_argument("--publisher-app-id", type=int, required=True)
-    args = parser.parse_args()
     try:
+        args = parser.parse_args()
         verify_ruleset(read_snapshot(args.snapshot), args.ruleset_id,
                        args.merge_app_id, args.publisher_app_id)
-    except (OSError, ValueError, RecursionError) as exc:
-        print(json.dumps({"matches": False, "scope": SCOPE, "reason": str(exc)}))
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(json.dumps({"matches": False, "scope": SCOPE, "reason": "snapshot-invalid"}))
         return 1
     print(json.dumps({"matches": True, "scope": SCOPE, "ruleset_id": args.ruleset_id,
                       "merge_app_id": args.merge_app_id}))

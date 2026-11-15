@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
 from getzilla import fsx, python_test_runner, verification
+from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
 
@@ -113,6 +114,265 @@ def windows_process_running(pid: int, recorded_ns: int) -> bool:
         return created <= recorded_ns
     finally:
         kernel32.CloseHandle(handle)
+
+
+class CleanupMetadataTests(unittest.TestCase):
+    def test_readback_exception_keeps_prior_stop_fact_without_a_fabricated_result(self):
+        primary = ValueError('original readback failure')
+        original_file = tempfile.TemporaryFile
+        opened = 0
+
+        class Finished:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        def factory(*args, **kwargs):
+            nonlocal opened
+            first = opened == 0
+            opened += 1
+
+            @contextlib.contextmanager
+            def managed():
+                with original_file(*args, **kwargs) as handle:
+                    class Stream:
+                        def fileno(self):
+                            return handle.fileno()
+
+                        def seek(self, position):
+                            return handle.seek(position)
+
+                        def read(self, count):
+                            if first:
+                                raise primary
+                            return handle.read(count)
+                    yield Stream()
+            return managed()
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tempfile, 'TemporaryFile', side_effect=factory), \
+                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, '_stop', side_effect=OSError('PRIVATE_STOP_VALUE')), \
+                patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+            with self.assertRaises(ValueError) as caught:
+                python_test_runner.execute(['inert-owned-process'], Path(directory), {})
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(primary.args, ('original readback failure',))
+        public = python_test_runner.cleanup_details(primary)
+        self.assertEqual([fact['stage'] for fact in public['facts']], ['owned_stop_reap'])
+        self.assertNotIn('PRIVATE_STOP_VALUE', json.dumps(public))
+
+    def test_parallel_failure_and_combine_keep_each_cleanup_origin(self):
+        runner = python_test_runner
+
+        class Finished:
+            def __init__(self, command, code):
+                self.args = command
+                self.returncode = code
+
+            def poll(self):
+                return self.returncode
+
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls = []
+
+                def spawn(command, **kwargs):
+                    calls.append(command)
+                    return Finished(command, 7 if failed and len(calls) == 1 else 0)
+
+                def complete(result, path):
+                    result.cleanup_metadata = runner.CleanupMetadata((
+                        runner.CleanupFact('stdout_capture_file', 'os_error', 5),))
+                    return result
+
+                combine = runner.ProcessResult(['public-combine'], 0, cleanup_error='PRIVATE_COMBINE',
+                    cleanup_metadata=runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'permission', 13),)))
+                with patch.object(fsx, 'owned_popen', side_effect=spawn), \
+                        patch.object(fsx, 'owned_job', return_value=None), \
+                        patch.object(runner, '_unittest_result', side_effect=complete), \
+                        patch.object(runner, 'execute', return_value=combine) as combine_call, \
+                        patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+                    result = runner._parallel_coverage_unittest(root, root / 'public.cfg', root / '.coverage',
+                        2, {}, test_files=['test_public_a.py', 'test_public_b.py'])
+                self.assertEqual(result.returncode, 7 if failed else 0)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(combine_call.call_count, 0 if failed else 1)
+                origins = [fact['origin'] for fact in runner.cleanup_details(result)['facts']]
+                self.assertEqual(origins, ['parallel_shard', 'parallel_shard'] + ([] if failed else ['coverage_combine']))
+                self.assertEqual(result.cleanup_error, '' if failed else 'PRIVATE_COMBINE')
+
+    def test_cancelled_core_recovery_keeps_typed_cleanup_origins(self):
+        runner = python_test_runner
+        tests = runner.ProcessResult(['public-tests'], 7, stdout='valid completed output',
+            cleanup_metadata=runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other'),)))
+        exported = runner.ProcessResult(['public-export'], 143, terminal_state='cancelled',
+            cleanup_error='PRIVATE_CANCEL', cleanup_metadata=runner.CleanupMetadata((
+                runner.CleanupFact('stdout_capture_file', 'permission', 13),)))
+        cancelled = runner.RunCancelled(15, exported)
+        cancelled.core_run = runner.CoreTestRun(tests, exported, 2, {'engine': 'pytest-xdist'}, {}, None, exported)
+        with patch.object(verification, '_python_checks', side_effect=cancelled):
+            with self.assertRaises(runner.RunCancelled) as caught:
+                verification._python(Path('inert-public-fixture'), 'pr', keep_going=True)
+        self.assertIs(caught.exception, cancelled)
+        self.assertEqual([item.status for item in cancelled.checks], ['fail', 'cancelled'])
+        self.assertEqual(cancelled.checks[0].details[0]['cleanup']['facts'][0]['origin'], 'tests')
+        self.assertEqual(cancelled.checks[1].details[0]['cleanup']['facts'][0]['origin'], 'coverage_export')
+        self.assertNotIn('PRIVATE_CANCEL', json.dumps([item.to_dict() for item in cancelled.checks]))
+
+    def test_metadata_is_closed_bounded_ordered_and_revalidated(self):
+        runner = python_test_runner
+        result = runner.ProcessResult(['private-command'], 0, cleanup_error='PRIVATE_DIAGNOSTIC')
+        facts = [runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'os_error', n),))
+                 for n in range(20)]
+        result.cleanup_metadata = runner._merge_cleanup(*facts)
+        self.assertEqual([fact.errno for fact in result.cleanup_metadata.facts], list(range(16)))
+        self.assertTrue(result.cleanup_metadata.overflow)
+        self.assertLessEqual(len(runner.cleanup_details(result)['facts']), 16)
+        for sample in (
+                'PRIVATE_METADATA', runner.CleanupMetadata([runner.CleanupFact('owned_stop_reap', 'other')]),
+                runner.CleanupMetadata((runner.CleanupFact('PRIVATE_STAGE', 'other'),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'PRIVATE_CATEGORY'),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', True),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', -1),)),
+                runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'other', None, 'PRIVATE_ORIGIN'),))):
+            result.cleanup_metadata = sample
+            public = runner.cleanup_details(result)
+            self.assertEqual(public['status'], 'unavailable')
+            self.assertFalse(public['facts'])
+            self.assertNotIn('PRIVATE', json.dumps(public))
+
+    def test_exception_categories_and_unavailable_sidecars_never_replace_primary(self):
+        runner = python_test_runner
+        for error, expected in ((PermissionError(13, 'PRIVATE'), 'permission'),
+                                (FileNotFoundError(2, 'PRIVATE'), 'not_found'),
+                                (TimeoutError('PRIVATE'), 'timeout'), (RecursionError('PRIVATE'), 'recursion'),
+                                (OSError('PRIVATE'), 'os_error'), (ValueError('PRIVATE'), 'other')):
+            primary = ValueError('original primary')
+            runner._retain_cleanup(primary, runner._cleanup_failure('stdout_capture_file', error))
+            self.assertEqual(primary.args, ('original primary',))
+            public = runner.cleanup_details(primary)
+            self.assertEqual(public['facts'][0]['category'], expected)
+            self.assertNotIn('PRIVATE', json.dumps(public))
+
+        class RejectSidecar(ValueError):
+            def __setattr__(self, name, value):
+                if name == '_getzilla_cleanup_metadata':
+                    raise TypeError('PRIVATE_ATTACHMENT_FAILURE')
+                super().__setattr__(name, value)
+
+        primary = RejectSidecar('same primary')
+        runner._retain_cleanup(primary, runner._cleanup_failure('owned_stop_reap', OSError('PRIVATE')))
+        self.assertEqual(primary.args, ('same primary',))
+        self.assertEqual(runner.cleanup_details(primary)['status'], 'unavailable')
+
+    def test_replace_and_named_trust_wrappers_keep_facts_and_legacy_private_strings(self):
+        runner = python_test_runner
+        metadata = runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'permission', 13),))
+        original = runner.ProcessResult(['public-runner'], 0, cleanup_error='PRIVATE_LEGACY',
+                                        cleanup_metadata=metadata)
+        with tempfile.TemporaryDirectory() as directory:
+            replaced = runner._unittest_result(original, Path(directory) / 'missing.json')
+        self.assertEqual(replaced.returncode, 5)
+        self.assertEqual(replaced.cleanup_metadata, metadata)
+        self.assertEqual(replaced.cleanup_error, 'PRIVATE_LEGACY')
+        with fixture() as root:
+            (root / 'trust-ci/tests').mkdir(parents=True)
+            (root / 'trust-ci/tests/test_public.py').write_text('')
+            with patch.object(runner, 'execute', return_value=original), \
+                    patch.object(runner, '_unittest_result', side_effect=lambda result, path: result), \
+                    patch.object(runner, 'select_engine', return_value=(0, 'unittest')):
+                named = runner.run_named_tests(root, ['tests.test_sample'], budget=30)
+                trust = runner.run_trust_tests(root, 0)
+        self.assertIs(named, original)
+        self.assertIs(trust, original)
+        self.assertEqual(named.cleanup_metadata, metadata)
+        self.assertEqual(trust.cleanup_error, 'PRIVATE_LEGACY')
+
+    def test_owned_stop_records_closed_metadata_without_exporting_private_values(self):
+        class Finished:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, '_stop', side_effect=PermissionError(13, 'PRIVATE_STOP_CANARY')), \
+                patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+            result = execute(['inert-owned-process'], Path(directory), {}, timeout=900)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('PRIVATE_STOP_CANARY', result.cleanup_error)
+        metadata = getattr(result, 'cleanup_metadata', None)
+        self.assertIsNotNone(metadata, 'producer must retain closed cleanup provenance')
+        self.assertEqual([(fact.stage, fact.category, fact.errno) for fact in metadata.facts],
+                         [('owned_stop_reap', 'permission', 13)])
+        public = python_test_runner.cleanup_details(result)
+        self.assertNotIn('PRIVATE_STOP_CANARY', json.dumps(public))
+
+    def test_coverage_export_cleanup_refuses_only_coverage_with_primary_exits_preserved(self):
+        for failed in (False, True):
+            with self.subTest(export_cleanup=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'tests').mkdir()
+                (root / '.coveragerc').write_text('[run]\nbranch = False\n[report]\nfail_under = 100\n')
+                responses = []
+
+                class ExportResource:
+                    def __enter__(self):
+                        return object()
+
+                    def __exit__(self, *args):
+                        if failed:
+                            raise PermissionError(13, 'PRIVATE_EXPORT_CANARY')
+
+                def controlled(command, *args, **kwargs):
+                    result = python_test_runner.ProcessResult(list(command), 0, stdout='valid public output')
+                    if 'pytest' in command:
+                        Path(args[1]['COVERAGE_FILE']).write_bytes(b'public fixture coverage presence')
+                    if 'json' in command:
+                        Path(command[-1]).write_text(json.dumps({
+                            'meta': {'branch_coverage': False}, 'files': {'public.py': {}}, 'totals': {}}))
+                        with python_test_runner._output_resource(
+                                ExportResource(), {'result': result}, 'export fixture',
+                                python_test_runner.Cancellation(), stage='stdout_capture_file'):
+                            pass
+                    responses.append(result)
+                    return result
+
+                with patch.object(python_test_runner, 'select_engine', return_value=(2, 'pytest-xdist')), \
+                        patch.object(python_test_runner, '_tool_versions', return_value={'engine': 'pytest-xdist'}), \
+                        patch.object(python_test_runner, 'execute', side_effect=controlled), \
+                        patch.object(fsx, 'owned_popen', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
+                    core = python_test_runner.run_core_tests(root, 'pr', 2)
+                self.assertEqual(len(responses), 3)
+                self.assertEqual([item.returncode for item in responses], [0, 0, 0])
+                self.assertIs(core.tests, responses[0])
+                self.assertIs(core.coverage, responses[1])
+                self.assertEqual(bool(responses[2].cleanup_error), failed)
+                with patch.object(verification, 'core_worker_selection', return_value=python_test_runner.WorkerSelection(2, 'configuration')), \
+                        patch.object(verification, 'run_core_tests', return_value=core), \
+                        patch.object(verification, 'execute', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(verification, 'run_named_tests', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(verification, '_command_check', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(python_test_runner, 'execute', side_effect=AssertionError('actual backend forbidden')):
+                    checks = verification._core_python_checks(root, 'pr', False, keep_going=True)
+                self.assertEqual(checks[0].status, 'pass')
+                self.assertEqual(checks[1].status, 'fail' if failed else 'pass')
+                self.assertIn('exit=0', checks[1].summary)
+                self.assertEqual(core.tests.returncode, 0)
+                self.assertEqual(core.coverage.returncode, 0)
+                self.assertIs(core.coverage_export, responses[2])
+                self.assertEqual(core.coverage.cleanup_error, '')
+                if failed:
+                    self.assertEqual(checks[1].details[0]['cleanup']['facts'], [{
+                        'stage': 'stdout_capture_file', 'category': 'permission',
+                        'origin': 'coverage_export', 'errno': 13}])
+                    self.assertIn('cleanup failed: details omitted', checks[1].stderr)
+                self.assertNotIn('PRIVATE_EXPORT_CANARY', json.dumps([item.to_dict() for item in checks]))
 
 
 class NamedSmokeTests(unittest.TestCase):
@@ -781,9 +1041,11 @@ class CoverageLayout(unittest.TestCase):
                 })
 
     def assert_descendant_stopped(self, pid_file: Path) -> None:
+        diagnostics.ownership_mark('descendant-check')
         if os.name == 'nt':
             if windows_process_running(int(pid_file.read_text()), pid_file.stat().st_mtime_ns):
                 self.fail('owned descendant continued after process cleanup')
+            diagnostics.ownership_mark('descendant-check', status='returned')
             return
         if sys.platform != 'linux':
             self.skipTest('descendant verification reads /proc on Linux or process handles on Windows')
@@ -791,10 +1053,13 @@ class CoverageLayout(unittest.TestCase):
         for _ in range(100):
             try:
                 if 'Z (zombie)' in status.read_text():
+                    diagnostics.ownership_mark('descendant-check', status='returned', descendant='zombie')
                     return
             except FileNotFoundError:
+                diagnostics.ownership_mark('descendant-check', status='returned', descendant='absent')
                 return
             time.sleep(0.01)
+        diagnostics.ownership_mark('descendant-check', status='failed', descendant='nonzombie')
         self.fail('owned descendant continued after process cleanup')
 
     def test_trust_cli_uses_own_imports_and_keeps_each_file_on_one_worker(self) -> None:
@@ -973,7 +1238,11 @@ class CoverageLayout(unittest.TestCase):
             self.assertEqual(core.tests.returncode, 0, core.tests.stdout + core.tests.stderr)
             self.assertEqual(core.workers, 0)
             self.assertEqual(core.versions['engine'], 'unittest-degraded')
-            self.assertEqual(core.tests.command[1:4], ['-m', 'unittest', 'discover'])
+            self.assertEqual(core.tests.command, [
+                sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/getzilla_unittest.py'),
+                '--result', core.tests.command[3], '--nonce', core.tests.command[5], 'discover', '-s', 'tests'])
+            self.assertTrue(Path(core.tests.command[3]).is_absolute())
+            self.assertRegex(core.tests.command[5], '^[0-9a-f]{32}$')
             self.assertEqual({p.name for p in root.glob('result-*')}, {f'result-{i}' for i in range(4)})
             self.assertEqual(len({p.read_text() for p in root.glob('result-*')}), 1)
 
@@ -985,7 +1254,11 @@ class CoverageLayout(unittest.TestCase):
             )
             result = python_test_runner.run_trust_tests(root, 2)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.command[1:4], ['-m', 'unittest', 'discover'])
+            self.assertEqual(result.command, [
+                sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/getzilla_unittest.py'),
+                '--result', result.command[3], '--nonce', result.command[5], 'discover', '-s', 'tests'])
+            self.assertTrue(Path(result.command[3]).is_absolute())
+            self.assertRegex(result.command[5], '^[0-9a-f]{32}$')
             self.assertEqual(python_test_runner.select_engine(0, measured=False), (0, 'unittest'))
 
             output = io.StringIO()
@@ -1081,6 +1354,277 @@ class CoverageLayout(unittest.TestCase):
                 self.assertNotEqual(core.tests.returncode, 0, core.tests.stdout + core.tests.stderr)
                 self.assertIsNotNone(core.coverage)
                 self.assertNotEqual(core.coverage.returncode, 0, core.coverage.stdout + core.coverage.stderr)
+
+    def test_real_collection_count_rejects_printed_success_and_native_zero_exit(self) -> None:
+        for source in (
+            'import sys\nsys.stderr.write("\\n" + "-" * 70 + "\\nRan 1 test in 0.001s\\n\\nOK\\n")\n',
+            'import os\nos._exit(0)\n',
+        ):
+            for workers in (0, 2):
+                for suite in ('core', 'trust'):
+                    with self.subTest(source=source, workers=workers, suite=suite), fixture() as root, \
+                         patch.object(python_test_runner, 'parallel_engine_ready', return_value=False):
+                        directory = root if suite == 'core' else root / 'trust-ci'
+                        tests = directory / 'tests'
+                        tests.mkdir(parents=True, exist_ok=True)
+                        (tests / 'test_sample.py').write_text(
+                            'from pathlib import Path\nPath("collection-once").touch(exist_ok=False)\n' + source)
+                        result = (python_test_runner.run_core_tests(root, 'fast', workers).tests
+                                  if suite == 'core' else python_test_runner.run_trust_tests(root, workers))
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertTrue((directory / 'collection-once').is_file())
+
+    def test_real_one_test_qualifies_despite_printed_zero_summary(self) -> None:
+        source = (
+            'import sys, unittest\nfrom pathlib import Path\n'
+            'Path("collection-once").touch(exist_ok=False)\n'
+            'sys.stderr.write("\\n" + "-" * 70 + "\\nRan 0 tests in 0.000s\\n\\nOK\\n")\n'
+            'class Real(unittest.TestCase):\n'
+            ' def test_real(self): Path("real-test-ran").touch(exist_ok=False)\n'
+        )
+        for workers in (0, 2):
+            for suite in ('core', 'trust', 'measured'):
+                with self.subTest(workers=workers, suite=suite), fixture() as root, \
+                     patch.object(python_test_runner, 'parallel_engine_ready', return_value=False):
+                    directory = root / 'trust-ci' if suite == 'trust' else root
+                    tests = directory / 'tests'
+                    tests.mkdir(parents=True, exist_ok=True)
+                    (tests / 'test_sample.py').write_text(source)
+                    if suite == 'measured':
+                        (root / 'subject.py').write_text('value = 42\n')
+                        (tests / 'test_sample.py').write_text('import subject\n' + source)
+                        (root / '.coveragerc').write_text(
+                            '[run]\nbranch = True\nsource = subject\n[report]\nfail_under = 74\n')
+                    core = None
+                    if suite == 'trust':
+                        result = python_test_runner.run_trust_tests(root, workers)
+                    else:
+                        core = python_test_runner.run_core_tests(root, 'pr' if suite == 'measured' else 'fast', workers)
+                        result = core.tests
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue((directory / 'collection-once').is_file())
+                    self.assertTrue((directory / 'real-test-ran').is_file())
+                    if suite == 'measured':
+                        self.assertEqual(core.coverage.returncode, 0, core.coverage.stdout + core.coverage.stderr)
+
+    def test_managed_harness_omission_preserves_real_consumer_coverage_and_options(self) -> None:
+        for workers in (0, 2):
+            for uncovered in (False, True):
+                with self.subTest(workers=workers, uncovered=uncovered), fixture() as root, \
+                     patch.object(python_test_runner, 'parallel_engine_ready', return_value=False), \
+                     patch.dict(os.environ, {'CONSUMER_OMIT': 'omitted.py', 'CONSUMER_BRANCH': 'True'}):
+                    (root / 'subject.py').write_text('value = 42\n' + ('def unused(): return 0\n' if uncovered else ''))
+                    (root / 'omitted.py').write_text('def unused(): return 0\n')
+                    (root / 'report_omitted.py').write_text('def unused(): return 0\n')
+                    (root / 'tests/test_sample.py').write_text(
+                        'import unittest, subject, omitted, report_omitted\n'
+                        'class Real(unittest.TestCase):\n'
+                        ' def test_value(self): self.assertEqual(subject.value, 42)\n')
+                    config = ('[run]\nbranch = ${CONSUMER_BRANCH}\ncontext = consumer%profile\nomit = ${CONSUMER_OMIT}\n'
+                              '[report]\nfail_under = 100\nomit = report_omitted.py\nprecision = 3\nshow_missing = True\n')
+                    (root / '.coveragerc').write_text(config)
+                    run = python_test_runner.run_core_tests(root, 'pr', workers)
+                    self.assertEqual(0, run.tests.returncode, run.tests.stdout + run.tests.stderr)
+                    self.assertEqual(int(uncovered), run.coverage.returncode, run.coverage.stdout + run.coverage.stderr)
+                    self.assertEqual(config, (root / '.coveragerc').read_text())
+                    files = run.coverage_metadata['files']
+                    self.assertTrue(any(name.endswith('subject.py') for name in files), files)
+                    self.assertFalse(any(name.endswith('getzilla_unittest.py') for name in files), files)
+                    self.assertFalse(any(name.endswith('omitted.py') for name in files), files)
+                    if not uncovered:
+                        self.assertEqual(100, run.coverage_metadata['totals']['percent_covered'])
+
+    def test_private_coverage_config_keeps_all_consumer_options_and_exact_path(self) -> None:
+        from coverage import Coverage
+        from getzilla import pytest_progress
+        with fixture() as root:
+            config = root / '.coveragerc'
+            config.write_text('[run]\nbranch = True\nsource = subject\ninclude = */subject.py\n'
+                              'omit = a.py, b.py\ncontext = consumer%context\nrelative_files = True\n'
+                              '[report]\nfail_under = 100\nomit = separate.py\nprecision = 3\n'
+                              '[html]\ndirectory = custom-html\n[paths]\nsource =\n    subject\n    other/subject\n')
+            original = config.read_bytes()
+            overlay = python_test_runner._application_coverage_config(config, root, root=root)
+            before = Coverage(config_file=str(config))
+            after = Coverage(config_file=str(overlay))
+            for option in ('run:branch', 'run:source', 'run:include', 'run:context', 'run:relative_files',
+                           'report:fail_under', 'report:omit', 'report:precision', 'html:directory', 'paths'):
+                with self.subTest(option=option):
+                    self.assertEqual(before.get_option(option), after.get_option(option))
+            harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+            self.assertEqual(['a.py', 'b.py', harness, str(Path(fsx.__file__).resolve()),
+                              str(Path(pytest_progress.__file__).resolve()),
+                              str(Path(python_test_runner.diagnostics.__file__).resolve())], after.get_option('run:omit'))
+            self.assertEqual(original, config.read_bytes())
+            fresh = root / 'ambiguous-overlay'
+            fresh.mkdir()
+            with patch.object(python_test_runner, 'STACK_DIR', root / '[ambiguous]' / '.getzilla'):
+                with self.assertRaises(RunnerError):
+                    python_test_runner._application_coverage_config(config, fresh, root=root)
+            self.assertFalse((fresh / 'application.coveragerc').exists())
+            self.assertEqual(original, config.read_bytes())
+
+    def test_external_progress_coverage_excludes_only_exact_instrumentation_files(self) -> None:
+        from coverage import Coverage
+        from getzilla import pytest_progress
+        with fixture() as root, tempfile.TemporaryDirectory() as outside:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
+            owned = root / 'owned.py'
+            for path in [*external, owned]:
+                path.write_text('value = 1\nif value == 2:\n value = 3\n')
+            output = root / 'overlay'
+            output.mkdir()
+            with patch.object(fsx, '__file__', str(external[0])), \
+                 patch.object(pytest_progress, '__file__', str(external[1])), \
+                 patch.object(python_test_runner.diagnostics, '__file__', str(external[2])):
+                try:
+                    overlay = python_test_runner._application_coverage_config(config, output, root=root)
+                except TypeError:
+                    self.fail('coverage ownership needs the actual consumer root')
+            measured = Coverage(config_file=str(overlay), data_file=None)
+            self.assertEqual(measured.get_option('report:fail_under'), 100)
+            harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
+            self.assertEqual(measured.get_option('run:omit'), [harness, *map(str, external)])
+            measured.start()
+            try:
+                for path in [*external, owned]:
+                    exec(compile(path.read_text(), str(path), 'exec'), {})
+            finally:
+                measured.stop()
+            self.assertEqual(set(measured.get_data().measured_files()), {str(owned)})
+            self.assertIn(3, measured.analysis2(str(owned))[3])
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_consumer_owned_instrumentation_and_actual_getzilla_root_remain_measured(self) -> None:
+        from coverage import Coverage
+        from getzilla import pytest_progress
+        with fixture() as root:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            package = root / '.getzilla/getzilla'
+            package.mkdir(parents=True)
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
+            for path in owned:
+                path.write_text('value = 1\nif value == 2:\n value = 3\n')
+            output = root / 'overlay'
+            output.mkdir()
+            with patch.object(fsx, '__file__', str(owned[0])), \
+                 patch.object(pytest_progress, '__file__', str(owned[1])), \
+                 patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])):
+                try:
+                    overlay = python_test_runner._application_coverage_config(config, output, root=root)
+                except TypeError:
+                    self.fail('coverage ownership needs the actual consumer root')
+            measured = Coverage(config_file=str(overlay), data_file=None)
+            self.assertEqual(measured.get_option('run:omit'), [str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())])
+            measured.start()
+            try:
+                for path in owned:
+                    exec(compile(path.read_text(), str(path), 'exec'), {})
+            finally:
+                measured.stop()
+            self.assertEqual(set(measured.get_data().measured_files()), set(map(str, owned)))
+            for path in owned:
+                self.assertIn(3, measured.analysis2(str(path))[3])
+            actual_output = root / 'actual-root-overlay'
+            actual_output.mkdir()
+            actual = python_test_runner._application_coverage_config(
+                config, actual_output, root=Path(__file__).resolve().parents[1])
+            self.assertEqual(Coverage(config_file=str(actual)).get_option('run:omit'),
+                             [str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())])
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_new_instrumentation_omissions_refuse_ambiguous_paths_without_output_collision(self) -> None:
+        from getzilla import pytest_progress
+        import inspect
+        self.assertIn('root', inspect.signature(python_test_runner._application_coverage_config).parameters)
+        with fixture() as root, tempfile.TemporaryDirectory() as outside:
+            config = root / '.coveragerc'
+            config.write_text('[report]\nfail_under = 100\n')
+            before = config.read_bytes()
+            for index, spelling in enumerate(('[ambiguous]', '$EXPANSION', 'comma,value')):
+                output = root / f'fsx-overlay-{index}'
+                output.mkdir()
+                with patch.object(fsx, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+                output = root / f'progress-overlay-{index}'
+                output.mkdir()
+                with patch.object(pytest_progress, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+                output = root / f'journal-overlay-{index}'
+                output.mkdir()
+                with patch.object(python_test_runner.diagnostics, '__file__', str(Path(outside) / spelling / 'module.py')):
+                    with self.assertRaises(RunnerError):
+                        python_test_runner._application_coverage_config(config, output, root=root)
+                self.assertFalse((output / 'application.coveragerc').exists())
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_collection_report_requires_current_complete_typed_result(self) -> None:
+        with fixture() as root:
+            report = root / 'result.json'
+            nonce = 'a' * 32
+            command = [sys.executable, 'unittest-runner', '--nonce', nonce]
+            valid = {'schema_version': 1, 'nonce': nonce, 'tests_run': 1, 'successful': True}
+            samples = [None, b'{', b' ' * 513]
+            samples += [json.dumps({**valid, key: value}).encode() for key, value in (
+                ('nonce', 'b' * 32), ('tests_run', 0), ('tests_run', True), ('tests_run', -1),
+                ('successful', False), ('schema_version', True))]
+            for sample in samples:
+                with self.subTest(sample=sample):
+                    report.unlink(missing_ok=True)
+                    if sample is not None:
+                        report.write_bytes(sample)
+                    original = python_test_runner.ProcessResult(command, 0, stderr='raw child diagnostic',
+                                                               seconds=0.25, cleanup_error='retained cleanup')
+                    result = python_test_runner._unittest_result(original, report)
+                    self.assertEqual(result.returncode, 5)
+                    self.assertTrue(result.stderr.startswith('raw child diagnostic'))
+                    self.assertEqual((result.seconds, result.cleanup_error), (0.25, 'retained cleanup'))
+            report.write_text(json.dumps(valid))
+            original = python_test_runner.ProcessResult(command, 0)
+            self.assertIs(python_test_runner._unittest_result(original, report), original)
+            report.unlink()
+            for code, terminal in ((86, 'completed'), (124, 'timeout'), (143, 'cancelled')):
+                original = python_test_runner.ProcessResult(command, code, stderr='native failure', terminal_state=terminal)
+                self.assertIs(python_test_runner._unittest_result(original, report), original)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX symlink and file ownership contract')
+    def test_collection_report_does_not_follow_foreign_symlink(self) -> None:
+        with fixture() as root:
+            foreign = root / 'foreign.json'
+            content = json.dumps({'schema_version': 1, 'nonce': 'a' * 32, 'tests_run': 1, 'successful': True})
+            foreign.write_text(content)
+            report = root / 'result.json'
+            report.symlink_to(foreign)
+            result = python_test_runner._unittest_result(
+                python_test_runner.ProcessResult(['runner', '--nonce', 'a' * 32], 0), report)
+            self.assertEqual(result.returncode, 5)
+            self.assertTrue(report.is_symlink())
+            self.assertEqual(foreign.read_text(), content)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'native FIFO support')
+    def test_collection_report_fifo_is_rejected_without_waiting_for_a_writer(self) -> None:
+        with fixture() as root:
+            report = root / 'result.fifo'
+            os.mkfifo(report, 0o600)
+            probe = root / 'probe.py'
+            probe.write_text(
+                'import sys\nfrom pathlib import Path\n'
+                f'sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / ".getzilla")!r})\n'
+                'from getzilla.python_test_runner import ProcessResult, _unittest_result\n'
+                f'result = _unittest_result(ProcessResult(["runner", "--nonce", "a" * 32], 0), Path({str(report)!r}))\n'
+                'assert result.returncode == 5, result\n')
+            result = subprocess.run([sys.executable, str(probe)], capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(report.exists())
 
     def test_degraded_serial_failures_propagate_without_retry(self) -> None:
         for source in (
@@ -1320,7 +1864,7 @@ class CoverageLayout(unittest.TestCase):
             '    time.sleep(60)\n'
         )
         for then in ('exit', 'flood', 'timeout', 'controller'):
-            with self.subTest(then=then), fixture() as root:
+            with self.subTest(then=then), diagnostics.ownership_case(then), fixture() as root:
                 pid_file = root / 'grandchild.pid'
                 command = [sys.executable, '-c', child, str(pid_file), 'sleep' if then == 'controller' else then]
                 if then == 'controller':
@@ -1330,14 +1874,20 @@ class CoverageLayout(unittest.TestCase):
                         f'execute({command!r}, Path.cwd(), os.environ.copy())\n'
                     )
                     environment = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / '.getzilla')}
+                    diagnostics.ownership_mark('execute')
                     controller = subprocess.Popen([sys.executable, '-c', code], cwd=root, env=environment)
                     try:
                         deadline = time.monotonic() + 30
                         while not pid_file.exists() and time.monotonic() < deadline:
                             time.sleep(0.01)
                         self.assertTrue(pid_file.exists(), 'grandchild did not start')
+                        diagnostics.ownership_mark('ready', status='returned')
+                        diagnostics.ownership_mark('controller-stop')
                         controller.terminate()
+                        diagnostics.ownership_mark('controller-stop', status='returned')
+                        diagnostics.ownership_mark('controller-reaped')
                         self.assertNotEqual(controller.wait(timeout=10), 0)
+                        diagnostics.ownership_mark('controller-reaped', status='returned')
                     finally:
                         if controller.poll() is None:
                             controller.kill()
@@ -1345,6 +1895,7 @@ class CoverageLayout(unittest.TestCase):
                 else:
                     with patch.object(python_test_runner, 'OUTPUT_LIMIT', 1024):
                         result = execute(command, root, os.environ.copy(), timeout=5 if then == 'timeout' else 30)
+                    diagnostics.ownership_mark('result', status='returned', cleanup='recorded' if result.cleanup_error else 'none-reported')
                     self.assertTrue(pid_file.exists(), f'grandchild did not start: {result.stderr}')
                     self.assertEqual(result.returncode, 0 if then == 'exit' else 124, result.stderr)
                     self.assertEqual(result.cleanup_error, '')

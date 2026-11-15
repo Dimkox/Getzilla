@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import test_public_admission as producer
-from test_public_merge import LocalBackend, MERGE
+from test_public_merge import LocalBackend
 from adaptive_trust_ci.public_merge import BoundPublicVerifier, Snapshot, SignedReview, execute, review_bytes, review_payload
 
 

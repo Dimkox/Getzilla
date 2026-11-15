@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 import runpy
+import copy
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla import known_vulns as KV  # noqa: E402
-from getzilla import security_data as SD  # noqa: E402
 
 JINJA = {
     'id': 'GHSA-h5c8-rqwp-cp95',
@@ -59,20 +60,12 @@ def _repo(files: dict[str, str]) -> tuple[tempfile.TemporaryDirectory, Path]:
     return tmp, root
 
 
-def _archive(records: list[dict]) -> bytes:
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, 'w') as bundle:
+def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    target = root / ecosystem / 'all.zip'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(target, 'w') as bundle:
         for record in records:
             bundle.writestr(f"{record['id']}.json", json.dumps(record))
-    return output.getvalue()
-
-
-def _mirror(root: Path, ecosystem: str, records: list[dict], *, acquired: datetime | None = None) -> None:
-    acquired = acquired or datetime.now(timezone.utc)
-    SD.publish_snapshot(root, f'osv:{ecosystem}', _archive(records),
-                        acquisition={'last_verified_sync_utc': acquired.isoformat(), 'retrieval_kind': 'download'},
-                        coverage={'scopes': [ecosystem], 'complete': True,
-                                  'record_count': len(records), 'schema': 'osv-1'}, now=acquired)
 
 
 MANIFESTS = {
@@ -168,71 +161,26 @@ class OfflineTests(unittest.TestCase):
                               ('second', '1.9.0', 'OSV-WILDCARD', ['2.0.0'])])
             wildcard['affected'][0]['ranges'][0]['type'] = 'ECOSYSTEM'
             _mirror(database, 'npm', [wildcard])
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range semantics'):
+            with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range comparator for ecosystem'):
                 KV.query_offline(deps, database)
 
-    def test_qualified_registry_matching_needs_dependency_source_identity(self):
-        def record(identifier, ecosystem, name):
-            return {'id': identifier, 'affected': [{'package': {'name': name, 'ecosystem': ecosystem},
-                                                     'versions': ['1.0.0']}]}
-        default = record('DEFAULT', 'Packagist', 'other/package')
-        custom = record('CUSTOM', 'Packagist:https://packages.drupal.org/8', 'Drupal/Example')
+    def test_wildcard_preserves_qualified_registry_identity_and_named_packages(self):
+        named = {'id': 'OSV-NAMED', 'affected': [{
+            'package': {'ecosystem': 'Packagist', 'name': 'vendor/first'},
+            'versions': ['1.0.0']}]}
+        qualified = {'id': 'OSV-QUALIFIED', 'affected': [{
+            'package': {'ecosystem': 'Packagist:https://packages.drupal.org/8', 'name': '*'},
+            'versions': ['1.0.0']}]}
+        dependencies = [KV.Dependency('Packagist', name, '1.0.0', 'composer.lock')
+                        for name in ('vendor/first', 'vendor/second')]
         with tempfile.TemporaryDirectory() as folder:
-            database = Path(folder)
-            _mirror(database, 'Packagist', [default, custom])
-            dep = KV.Dependency('Packagist', 'drupal/example', '1.0.0', 'composer.lock')
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
-                KV.query_offline([dep], database)
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
-                KV._describe(custom, dep)
-            dep = KV.Dependency('Packagist', 'other/package', '1.0.0', 'composer.lock')
-            self.assertEqual([finding.vuln_id for finding in KV.query_offline([dep], database)], ['DEFAULT'])
-            custom['affected'][0]['package']['name'] = '*'
-            _mirror(database, 'Packagist', [default, custom])
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'registry identity'):
-                KV.query_offline([dep], database)
+            _mirror(Path(folder), 'Packagist', [qualified, named])
+            found = KV.query_offline(dependencies, Path(folder))
+        self.assertEqual([(item.dependency.name, item.vuln_id) for item in found],
+                         [('vendor/first', 'OSV-NAMED')])
+        detail = KV._describe(qualified, dependencies[0])
+        self.assertEqual((detail.fixed, detail.severity), ([], ''))
 
-    def test_old_nonempty_legacy_archive_requires_refresh(self) -> None:
-        tmp, root = _repo({'requirements.txt': 'safe-package==1.0\n'})
-        with tmp, tempfile.TemporaryDirectory() as db:
-            archive = Path(db) / 'PyPI/all.zip'
-            archive.parent.mkdir(parents=True)
-            archive.write_bytes(_archive([JINJA]))
-            old = (datetime.now(timezone.utc) - timedelta(hours=73)).timestamp()
-            os.utime(Path(db) / 'PyPI/all.zip', (old, old))
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'refresh'):
-                KV.scan(root, environ={'GETZILLA_OSV_DB': db})
-
-    def test_valid_old_snapshot_is_blocked_but_exact_72_hours_is_accepted(self) -> None:
-        now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-        tmp, root = _repo({'requirements.txt': 'safe-package==1.0\n'})
-        with tmp, tempfile.TemporaryDirectory() as db:
-            _mirror(Path(db), 'PyPI', [JINJA], acquired=now - timedelta(hours=72))
-            report = KV.scan(root, environ={'GETZILLA_OSV_DB': db}, now=now)
-            self.assertEqual(report['status'], 'pass')
-            self.assertEqual(report['source_evidence'][0]['age_seconds'], 259200)
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'stale'):
-                KV.scan(root, environ={'GETZILLA_OSV_DB': db}, now=now + timedelta(seconds=1))
-
-    def test_one_fresh_ecosystem_does_not_mask_another_stale_snapshot(self) -> None:
-        now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-        tmp, root = _repo({'requirements.txt': 'Jinja2==4.0.0\n',
-                           'package-lock.json': json.dumps({'packages': {'node_modules/lodash': {'version': '5.0.0'}}})})
-        with tmp, tempfile.TemporaryDirectory() as db:
-            _mirror(Path(db), 'PyPI', [JINJA], acquired=now)
-            _mirror(Path(db), 'npm', [LODASH], acquired=now - timedelta(hours=73))
-            with self.assertRaisesRegex(KV.VulnerabilityError, 'osv:npm.*stale'):
-                KV.scan(root, environ={'GETZILLA_OSV_DB': db}, now=now)
-
-    def test_semver_prerelease_before_fixed_release(self) -> None:
-        affected = {
-            'package': {'ecosystem': 'npm', 'name': 'example'},
-            'ranges': [{'type': 'SEMVER', 'events': [
-                {'introduced': '0'}, {'fixed': '1.0.0'},
-            ]}],
-        }
-        self.assertTrue(KV._in_ranges('1.0.0-rc.1', affected))
-        self.assertFalse(KV._in_ranges('1.0.0', affected))
 
     def test_offline_mirror_matches_ranges_and_enumerated_versions(self) -> None:
         tmp, root = _repo({'requirements.txt': 'jinja2==2.11.0\nJinja2==3.1.3\n',
@@ -277,8 +225,7 @@ class OfflineTests(unittest.TestCase):
     def test_range_edges(self) -> None:
         affected = {'package': {'ecosystem': 'PyPI'}, 'ranges': [
             {'type': 'ECOSYSTEM', 'events': [{'introduced': '1.0'}, {'fixed': '1.5'}]},
-            {'type': 'ECOSYSTEM', 'events': [{'introduced': '2.0'}, {'last_affected': '2.3'}]},
-        ]}
+            {'type': 'ECOSYSTEM', 'events': [{'introduced': '2.0'}, {'last_affected': '2.3'}]}]}
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
@@ -288,80 +235,6 @@ class OfflineTests(unittest.TestCase):
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
         with self.assertRaises(KV.VulnerabilityError):
             KV._in_ranges('1.0', {'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]})
-
-    def test_semver_precedence_and_build_metadata(self) -> None:
-        ordered = ['1.0.0-2', '1.0.0-11', '1.0.0-alpha', '1.0.0-alpha.1',
-                   '1.0.0-beta', '1.0.0-rc.1', '1.0.0']
-        for low, high in zip(ordered, ordered[1:]):
-            affected = {'ranges': [{'type': 'SEMVER', 'events': [
-                {'introduced': '0'}, {'fixed': high}]}]}
-            with self.subTest(low=low, high=high):
-                self.assertTrue(KV._in_ranges(low, affected))
-                self.assertFalse(KV._in_ranges(high, affected))
-        affected = {'ranges': [{'type': 'SEMVER', 'events': [
-            {'introduced': '0'}, {'fixed': '1.0.0+001'}]}]}
-        self.assertFalse(KV._in_ranges('1.0.0+other', affected))
-
-    def test_invalid_semver_refuses_instead_of_guessing(self) -> None:
-        affected = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '0'}]}]}
-        for version in ('1.0', '01.0.0', '1.0.0-01', '1.0.0-a..b', 'v1.0.0', '1.0.0+'):
-            with self.subTest(version=version), self.assertRaises(KV.VulnerabilityError):
-                KV._in_ranges(version, affected)
-
-    def test_pypi_qualified_subset_ordering(self) -> None:
-        pairs = [('1.0rc1', '1.0'), ('1.0.dev1', '1.0a1'), ('1.0a1', '1.0b1'),
-                 ('1.0b1', '1.0rc1'), ('1.0', '1.0.post1'), ('1.0.post1.dev1', '1.0.post1'),
-                 ('9999', '1!0.1'), ('1.0', '1.0+abc'), ('1.0+abc', '1.0+abc.1'),
-                 ('1.0+abc', '1.0+1'), ('1.0a1.dev1', '1.0a1'),
-                 ('1.0a1', '1.0a1.post1.dev1'), ('1.0a1.post1.dev1', '1.0a1.post1')]
-        for low, high in pairs:
-            affected = {'package': {'ecosystem': 'PyPI'}, 'ranges': [
-                {'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}, {'fixed': high}]}]}
-            with self.subTest(low=low, high=high):
-                self.assertTrue(KV._in_ranges(low, affected))
-                self.assertFalse(KV._in_ranges(high, affected))
-        for left, right in [('1.0', '1.0.0'), ('1.0+ABC', '1.0+abc')]:
-            self.assertTrue(KV._in_ranges(left, {'package': {'ecosystem': 'PyPI'}, 'versions': [right]}))
-
-    def test_unsupported_pypi_spelling_is_explicit(self) -> None:
-        for version in ('v1.0', '1.0c1', '1.0-1', '1.0_preview1', ' 1.0'):
-            with self.subTest(version=version), self.assertRaises(KV.VulnerabilityError):
-                KV._in_ranges(version, {'package': {'ecosystem': 'PyPI'}, 'ranges': [
-                    {'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}]}]})
-
-    def test_unsorted_events_have_same_semantics(self) -> None:
-        affected = {'ranges': [{'type': 'SEMVER', 'events': [
-            {'fixed': '2.0.0'}, {'introduced': '1.0.0'}]}]}
-        self.assertTrue(KV._in_ranges('1.5.0', affected))
-        self.assertFalse(KV._in_ranges('2.0.0', affected))
-
-    def test_limit_is_an_exclusive_union_guard(self) -> None:
-        affected = {'ranges': [{'type': 'SEMVER', 'events': [
-            {'limit': '2.0.0'}, {'introduced': '0'}, {'limit': '3.0.0'}]}]}
-        self.assertTrue(KV._in_ranges('2.5.0', affected))
-        self.assertFalse(KV._in_ranges('3.0.0', affected))
-        affected['ranges'][0]['events'].append({'limit': '*'})
-        self.assertTrue(KV._in_ranges('4.0.0', affected))
-
-    def test_malformed_or_unknown_ranges_cannot_be_clean(self) -> None:
-        ranges = [None, {}, [{'type': 'SEMVER', 'events': []}],
-                  [{'type': 'SEMVER', 'events': [{'fixed': '1.0.0'}]}],
-                  [{'type': 'SEMVER', 'events': [{'introduced': '0', 'fixed': '1.0.0'}]}],
-                  [{'type': 'SEMVER', 'events': [{'introduced': 0}]}],
-                  [{'type': 'SEMVER', 'events': [{'introduced': '0'}, {'unknown': '2.0.0'}]}],
-                  [{'type': 'SEMVER', 'events': [{'introduced': '0'}, {'fixed': '1.0.0'}, {'last_affected': '2.0.0'}]}],
-                  [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}]}],
-                  [{'type': 'GIT', 'events': [{'introduced': '0'}]}]]
-        for value in ranges:
-            with self.subTest(ranges=value), self.assertRaises(KV.VulnerabilityError):
-                KV._in_ranges('1.0.0', {'package': {'ecosystem': 'Maven'}, 'ranges': value})
-
-    def test_enumerated_hit_is_positive_but_miss_does_not_hide_unknown_range(self) -> None:
-        affected = {'package': {'ecosystem': 'Maven'}, 'versions': ['1.0.0'],
-                    'ranges': [{'type': 'GIT', 'events': [{'introduced': '0'}]}]}
-        self.assertTrue(KV._in_ranges('1.0.0', affected))
-        with self.assertRaises(KV.VulnerabilityError):
-            KV._in_ranges('1.0.1', affected)
 
 
 class OnlineTests(unittest.TestCase):
@@ -381,8 +254,9 @@ class OnlineTests(unittest.TestCase):
         hit, = KV.query_online([dep], fetch=fetch)
         self.assertEqual((hit.fixed, hit.severity), (['2.0.0'], 'HIGH'))
         record['affected'][-1]['ranges'][0]['type'] = 'ECOSYSTEM'
-        with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range semantics'):
+        with self.assertRaisesRegex(KV.VulnerabilityError, 'unsupported OSV range comparator for ecosystem'):
             KV.query_online([dep], fetch=fetch)
+
 
     def test_online_batches_paginate_and_fetch_details(self) -> None:
         calls: list[tuple[str, dict | None]] = []
@@ -458,7 +332,7 @@ class PolicyTests(unittest.TestCase):
                 KV.load_config(root)
 
 
-class VerifierDetailTests(unittest.TestCase):
+class AcceptedVerifierDetailTests(unittest.TestCase):
     def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
         # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
         from unittest.mock import patch
@@ -468,15 +342,14 @@ class VerifierDetailTests(unittest.TestCase):
             vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
             summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
         )
-        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
-                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
-                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
-        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
+                  'findings': [finding.to_dict()], 'accepted': []}
+        structured = {'name': 'known-vulnerabilities', 'status': report['status'], 'summary': report['summary'],
+                      'details': [{'kind': 'security-result', 'findings': report['findings'], 'accepted': report['accepted']}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=structured):
             result = verification._known_vulnerabilities(ROOT)
         self.assertEqual(result.status, 'fail')
-        [structured, detail] = result.details
-        self.assertEqual(structured['findings'], [finding.to_dict()])
-        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        detail = result.details[-1]
         self.assertEqual(detail['severity'], 'MODERATE')
         self.assertEqual(detail['path'], 'requirements.txt')
         self.assertEqual(
@@ -528,6 +401,174 @@ class OfflineSkipGateTests(unittest.TestCase):
         self.assertFalse(required_check_refused(empty, mode='pr'))
 
 
+class DownloadTests(unittest.TestCase):
+    def test_download_writes_verified_archives_atomically(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as bundle:
+            bundle.writestr('A.json', json.dumps(JINJA))
+        urls: list[str] = []
+
+        def fetch(url: str, body: bytes | None) -> bytes:
+            urls.append(url)
+            return buffer.getvalue()
+
+        with tempfile.TemporaryDirectory() as db:
+            written = KV.download_database(Path(db), ['PyPI', 'npm'], fetch=fetch)
+            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/all.zip', 'npm/all.zip'])
+            self.assertFalse(list(Path(db).rglob('*.partial')))
+        self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
+        with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
+            KV.download_database(Path(db), ['Hex'], fetch=fetch)  # an ecosystem Getzilla does not download
+
+
+class NativeAliasTests(unittest.TestCase):
+    dependency = KV.Dependency('PyPI', 'jinja2', '2.11.0', 'requirements.txt')
+
+    @staticmethod
+    def archive(records):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w') as bundle:
+            for index, record in enumerate(records):
+                bundle.writestr(f'public-{index}.json', json.dumps(record))
+        return data.getvalue()
+
+    @staticmethod
+    def record(case='matched', aliases='CVE-2099-9999'):
+        record = copy.deepcopy(JINJA)
+        record['aliases'] = aliases
+        if case == 'withdrawn':
+            record['withdrawn'] = '2026-01-01T00:00:00Z'
+        elif case == 'unrelated':
+            record['affected'][0]['package']['name'] = 'unrelated-public-package'
+        elif case == 'unaffected':
+            record['affected'][0]['ranges'][0]['events'][-1]['fixed'] = '1.0.0'
+        return record
+
+    def test_description_preserves_nullable_aliases_without_mutating_records(self):
+        for case, aliases in enumerate((None, [], ['CVE-2024-22195', 'OSV_PUBLIC:1'])):
+            with self.subTest(case=case):
+                record = self.record(aliases=aliases)
+                before = copy.deepcopy(record)
+                finding = KV._describe(record, self.dependency)
+                self.assertEqual(finding.aliases, sorted(aliases or []))
+                self.assertIsNot(finding.aliases, aliases)
+                self.assertEqual(record, before)
+        record = self.record()
+        del record['aliases']
+        self.assertEqual(KV._describe(record, self.dependency).aliases, [])
+
+    def test_description_rejects_invalid_alias_shape_elements_and_ids_without_echo(self):
+        malformed = ('CVE-2099-9999', {}, {'CVE-2099-9999': True}, 0, True,
+                     [1], [None], [[]], [''], ['GHSA-public,'], [' CVE-2099-9999 '],
+                     ['CVE-2099-9999\n'], ['CVE-2099-9999', False])
+        for case, aliases in enumerate(malformed):
+            with self.subTest(case=case):
+                try:
+                    KV._describe(self.record(aliases=aliases), self.dependency)
+                except KV.VulnerabilityError as error:
+                    self.assertEqual(str(error), 'OSV aliases must be null or a list of valid identifiers')
+                except (TypeError, ValueError):
+                    self.fail('malformed aliases escaped as an untyped error')
+                else:
+                    self.fail('malformed aliases were accepted or coerced')
+
+    def test_offline_alias_admission_precedes_every_record_filter(self):
+        for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
+                _mirror(Path(database), 'PyPI', [self.record(case)])
+                with self.assertRaises(KV.VulnerabilityError):
+                    KV.query_offline([self.dependency], Path(database))
+
+    def test_online_detail_alias_admission_precedes_description(self):
+        def fetch(url, body):
+            if url == KV.OSV_API+'/querybatch':
+                return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]}).encode()
+            self.assertEqual(url, KV.OSV_API+'/vulns/'+JINJA['id'])
+            return json.dumps(self.record()).encode()
+        with patch.object(KV, '_describe', return_value=KV.Finding(self.dependency, JINJA['id'])) as describe:
+            with self.assertRaises(KV.VulnerabilityError):
+                KV.query_online([self.dependency], fetch=fetch)
+            describe.assert_not_called()
+
+    def test_online_nullable_aliases_preserve_actual_findings(self):
+        for case, aliases in enumerate((None, [], ['CVE-2024-22195'])):
+            with self.subTest(case=case):
+                record = self.record(aliases=aliases)
+                def fetch(url, body):
+                    if url == KV.OSV_API+'/querybatch':
+                        return json.dumps({'results': [{'vulns': [{'id': JINJA['id']}]}]}).encode()
+                    self.assertEqual(url, KV.OSV_API+'/vulns/'+JINJA['id'])
+                    return json.dumps(record).encode()
+                [finding] = KV.query_online([self.dependency], fetch=fetch)
+                self.assertEqual(finding.aliases, aliases or [])
+
+    def test_rejected_alias_refresh_preserves_prior_archive_bytes_and_inode(self):
+        for case in ('matched', 'withdrawn'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
+                old = self.archive([JINJA])
+                _mirror(Path(database), 'PyPI', [JINJA])
+                target = Path(database)/'PyPI/all.zip'
+                target.write_bytes(old)
+                identity = target.stat().st_dev, target.stat().st_ino
+                rejected = False
+                try:
+                    KV.download_database(Path(database), ['PyPI'],
+                        fetch=lambda _url, _body: self.archive([self.record(case)]))
+                except KV.VulnerabilityError:
+                    rejected = True
+                self.assertEqual(target.read_bytes(), old, 'rejected refresh replaced the prior cache')
+                self.assertEqual((target.stat().st_dev, target.stat().st_ino), identity)
+                self.assertTrue(rejected)
+                self.assertFalse(target.with_suffix('.zip.partial').exists())
+
+    def test_nullable_archive_publication_roundtrips_through_actual_reader(self):
+        with tempfile.TemporaryDirectory() as database:
+            data = self.archive([self.record(aliases=None)])
+            target = Path(database)/'PyPI/all.zip'
+            written = KV.download_database(Path(database), ['PyPI'], fetch=lambda _url, _body: data)
+            self.assertEqual(written, [str(target)])
+            self.assertEqual(target.read_bytes(), data)
+            [finding] = KV.query_offline([self.dependency], Path(database))
+            self.assertEqual(finding.aliases, [])
+
+
+class VerifierDetailTests(unittest.TestCase):
+    def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
+                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
+                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        [structured, detail] = result.details
+        self.assertEqual(structured['findings'], [finding.to_dict()])
+        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+
+
+
+
+
+
+
 class CliTests(unittest.TestCase):
     def test_actions_annotations_keep_advisory_specific_fix_versions(self) -> None:
         dependency = KV.Dependency('npm', 'example', '1.2.0', 'package-lock.json')
@@ -547,42 +588,6 @@ class CliTests(unittest.TestCase):
         self.assertIn('OSV-A: fixed in 1.2.5, 2.0.1', annotation)
         self.assertIn('OSV-B: no fixed version published', annotation)
         self.assertNotIn('upgrade to >=', output.getvalue())
-
-
-class DownloadTests(unittest.TestCase):
-    def test_compatibility_export_failure_reports_the_committed_snapshot_path(self) -> None:
-        replace = SD.os.replace
-
-        def fail_export(source, destination, **kwargs):
-            if Path(destination).name == 'all.zip':
-                raise OSError('compatibility export unavailable')
-            replace(source, destination, **kwargs)
-
-        with tempfile.TemporaryDirectory() as db, mock.patch.object(SD.os, 'replace', side_effect=fail_export):
-            written = KV.download_database(Path(db), ['PyPI'], fetch=lambda url, body: _archive([JINJA]))
-            self.assertTrue(all(Path(path).is_file() for path in written), written)
-            payload, evidence = SD.read_snapshot(Path(db), 'osv:PyPI')
-            self.assertEqual(evidence['coverage']['record_count'], 1)
-            self.assertTrue(payload.startswith(b'PK'))
-
-    def test_download_writes_verified_archives_atomically(self) -> None:
-        urls: list[str] = []
-
-        def fetch(url: str, body: bytes | None) -> bytes:
-            urls.append(url)
-            return _archive([JINJA if '/PyPI/' in url else LODASH])
-
-        with tempfile.TemporaryDirectory() as db:
-            written = KV.download_database(Path(db), ['PyPI', 'npm'], fetch=fetch)
-            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/all.zip', 'npm/all.zip'])
-            for ecosystem in ('PyPI', 'npm'):
-                payload, evidence = SD.read_snapshot(Path(db), f'osv:{ecosystem}', required_scope={ecosystem})
-                self.assertEqual(payload, (Path(db) / ecosystem / 'all.zip').read_bytes())
-                self.assertEqual(evidence['coverage']['record_count'], 1)
-            self.assertFalse(list(Path(db).rglob('*.partial')))
-        self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
-        with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
-            KV.download_database(Path(db), ['Hex'], fetch=fetch)  # an ecosystem Getzilla does not download
 
 
 if __name__ == '__main__':

@@ -13,7 +13,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / ".getzilla"), str(ROOT / ".grok/hooks")]
+sys.path[:0] = [str(ROOT / ".getzilla"), str(ROOT / ".getzilla/hooks")]
 hooks = importlib.import_module("_lib")
 pre = importlib.import_module("pre_tool_use")
 state = importlib.import_module("getzilla.state")
@@ -380,8 +380,8 @@ class InlineProgramGuardTests(unittest.TestCase):
                     self.assertFalse(self.denied(command), "Removing token provenance must expose an opaque program")
 
     def test_installed_hook_is_the_subject(self):
-        self.assertEqual(Path(hooks.__file__).resolve(), ROOT / ".grok/hooks/_lib.py")
-        self.assertEqual(Path(pre.__file__).resolve(), ROOT / ".grok/hooks/pre_tool_use.py")
+        self.assertEqual(Path(hooks.__file__).resolve(), ROOT / ".getzilla/hooks/_lib.py")
+        self.assertEqual(Path(pre.__file__).resolve(), ROOT / ".getzilla/hooks/pre_tool_use.py")
 
 
 if __name__ == "__main__":

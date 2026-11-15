@@ -28,7 +28,7 @@ def main():
     passed = accepted(result, result.executed) and not loader.errors
     path = Path(os.environ["GETZILLA_LIVE_ARTIFACTS"]) / "factory-suite.json"
     payload = {"schema_version": 1, "check_id": "factory-postgres-exit", "status": "pass" if passed else "fail",
-               "tests_run": result.testsRun, "executed": result.executed,
+               "tests_run": result.testsRun, "started": result.started, "executed": result.executed,
                "skipped": [{"id": test.id(), "reason": reason} for test, reason in result.skipped],
                "failures": len(result.failures), "errors": len(result.errors)}
     with path.open("x") as stream:

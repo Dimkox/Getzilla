@@ -171,6 +171,31 @@ class TaskIntentTests(unittest.TestCase):
                 self.answer(root, source_kind='repository')
             self.assertFalse(evaluate_pre_tool(root, {'tool_name': 'Edit', 'tool_input': {'file_path': 'src/a.py'}})[0])
 
+    def test_complete_question_identity_reaches_policy_without_parsing_diagnostics(self):
+        for identifier in ('Q-COUNT', 'Q:COUNT'):
+            with self.subTest(identifier=identifier), project_copy(git=True) as root:
+                self.task(root)
+                self.ask(root, identifier=identifier)
+                related = identifier + ':MORE'
+                self.ask(root, identifier=related, targets=['AC-002'], paths=['src/b.py'])
+                self.answer(root, identifier=related, operation_id='answer-related')
+                affected = {'tool_name': 'Edit', 'tool_input': {'file_path': str(root / 'src/a.py')}}
+                independent = {'tool_name': 'Edit', 'tool_input': {'file_path': str(root / 'src/b.py')}}
+                allowed, reason = evaluate_pre_tool(root, affected)
+                self.assertFalse(allowed)
+                self.assertIn(identifier, reason)
+                self.assertTrue(evaluate_pre_tool(root, independent)[0])
+                self.answer(root, identifier=identifier, operation_id='answer-primary')
+                self.assertTrue(evaluate_pre_tool(root, affected)[0])
+                self.assertTrue(evaluate_pre_tool(root, independent)[0])
+                directory = root / state.get_active_change(root)['path']
+                spec = load_spec(directory / 'change-spec.yaml')
+                spec['acceptance_criteria'][0]['statement'] = 'A now counts archived rows.'
+                (directory / 'change-spec.yaml').write_text(dump_canonical_spec(spec))
+                self.assertFalse(evaluate_pre_tool(root, affected)[0])
+                self.assertTrue(evaluate_pre_tool(root, independent)[0])
+                self.assertFalse(evaluate_pre_tool(root, {'tool_name': 'Edit', 'tool_input': {'file_path': str(root / '.git/config')}})[0])
+
     def test_light_without_package_keeps_question_and_has_no_legacy_evidence_escape(self):
         with project_copy(git=True) as root:
             self.task(root, light=True)
@@ -593,8 +618,9 @@ class TaskIntentTests(unittest.TestCase):
                     self._assert_intent_decision(root, event, execution_cwd=root / 'src', expected=expected)
 
     def test_native_nested_patch_checks_intent_and_pending_amendment(self):
+        import os
+        import subprocess
         from getzilla.hook_health import route_degraded_events
-        from tests._support import run_hook
         with project_copy(git=True) as root:
             self.task(root)
             self.ask(root, paths=['src/a.py', 'src/new.py'])
@@ -605,10 +631,16 @@ class TaskIntentTests(unittest.TestCase):
                 inputs = event['tool_input']
                 if event['tool_name'] == 'apply_patch':
                     inputs = {'input': inputs['patch']}
-                code, result, stderr = run_hook(root, 'pre_tool_use.py', {
+                payload = {
                     'cwd': str(root / 'src'), 'session_id': 'intent-owner',
                     'tool_name': event['tool_name'], 'tool_input': inputs,
-                }, harness='codex')
+                }
+                process = subprocess.run(
+                    [sys.executable, str(root / '.getzilla/hooks/pre_tool_use.py'), '--harness', 'codex'],
+                    cwd=root, env={**os.environ, 'PYTHONPATH': os.pathsep.join((str(root), str(root / '.getzilla')))},
+                    input=json.dumps(payload).encode('utf-8'), capture_output=True, check=False,
+                )
+                code, result, stderr = process.returncode, json.loads(process.stdout.decode('utf-8').strip() or '{}'), process.stderr.decode('utf-8')
                 self.assertEqual(code, 0, stderr)
                 self.assertEqual(stderr, '')
                 if expected is None:
@@ -650,6 +682,7 @@ class TaskIntentTests(unittest.TestCase):
         from getzilla.completion import observe_remaining
         with project_copy(git=True) as root:
             self.task(root)
+            legacy = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
             self.ask(root)
             self.answer(root)
             before = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
@@ -660,6 +693,13 @@ class TaskIntentTests(unittest.TestCase):
             self.api()(root, self.request(root, {'kind': 'answer', 'id': 'Q-001', 'answer': answer}, 'revised-answer'))
             after = observe_remaining(state.get_active_route(root), None, [], ['verification: missing receipt'])
             self.assertNotEqual(before['fingerprint'], after['fingerprint'])
+            without_intent = copy.deepcopy(state.get_active_route(root))
+            without_intent.pop('intent_state')
+            self.assertEqual(legacy['fingerprint'], observe_remaining(without_intent, None, [], ['verification: missing receipt'])['fingerprint'])
+            invalid = copy.deepcopy(state.get_active_route(root))
+            invalid['intent_state']['schema_version'] = 2
+            with self.assertRaisesRegex(ValueError, 'intent'):
+                observe_remaining(invalid, None, [], ['verification: missing receipt'])
 
 
 if __name__ == '__main__':

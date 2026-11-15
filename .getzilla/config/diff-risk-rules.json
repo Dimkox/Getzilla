@@ -136,7 +136,8 @@
         "packages/**",
         "scripts/build*",
         "scripts/release*",
-        "VERSION"
+        "VERSION",
+        ".getzilla/templates/baseline/**"
       ]
     },
     {

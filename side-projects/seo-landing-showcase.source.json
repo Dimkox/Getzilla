@@ -1,0 +1,36 @@
+{
+  "current_files": {
+    "side-projects/seo-landing-showcase/ASSETS.md": "d76f4e3b9dfff90e1abbb6c7dbd7c30b943115ca06c8b8528fef2999785c2bf9",
+    "side-projects/seo-landing-showcase/README.md": "adbced5791723c1f3292b963c997c4cd163b3194894749486a12bc40538d504a",
+    "side-projects/seo-landing-showcase/SERVER-SETUP.md": "17f9632d8b79004d53595f90be88398eea47d1478986865f793c6b80ee767d36",
+    "side-projects/seo-landing-showcase/browser-contract.mjs": "2c3b5b9680cba197e352725affd46625abd56c1ae9d74b5164a238fdf02ac9ae",
+    "side-projects/seo-landing-showcase/cleanup-owned-directory.py": "b65a2d295c495904d11bb42e25e9a20b91a33774e5a7332156284866486671d6",
+    "side-projects/seo-landing-showcase/index.html": "6581a618258caf20f065873679b9eed40ac976ca4ed3f154c7db29a2143c18cf",
+    "side-projects/seo-landing-showcase/styles.css": "8b15910433fc62294fb6b8376cf876b70bbe47d9f661be12b9f8b7ee54497065"
+  },
+  "current_tool_revision": 1,
+  "historical": {
+    "aggregate_sha256": "b59b074fa907aeb63991a23ff072a04d4fbe3fd4bab14263447898e02994162c",
+    "file_count": 6,
+    "files": {
+      "side-projects/seo-landing-showcase/ASSETS.md": "d76f4e3b9dfff90e1abbb6c7dbd7c30b943115ca06c8b8528fef2999785c2bf9",
+      "side-projects/seo-landing-showcase/README.md": "7c06a703d7779fe3c197b6383aa5b8cf9184439841345ef1c8f7b37b7b846c37",
+      "side-projects/seo-landing-showcase/SERVER-SETUP.md": "17f9632d8b79004d53595f90be88398eea47d1478986865f793c6b80ee767d36",
+      "side-projects/seo-landing-showcase/browser-contract.mjs": "63fe26920329c3f3f362b16d91c2c5d0ebd7fe07b04a2b65e8be64d320dff22d",
+      "side-projects/seo-landing-showcase/index.html": "6581a618258caf20f065873679b9eed40ac976ca4ed3f154c7db29a2143c18cf",
+      "side-projects/seo-landing-showcase/styles.css": "8b15910433fc62294fb6b8376cf876b70bbe47d9f661be12b9f8b7ee54497065"
+    },
+    "source_revision": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc"
+  },
+  "published_rendering": {
+    "aggregate_sha256": "e4586c99715bd597b00077f4f40b02740dc8c9c2c4bb36d2276a06c0c08ef4eb",
+    "file_count": 4,
+    "paths": [
+      "side-projects/seo-landing-showcase/ASSETS.md",
+      "side-projects/seo-landing-showcase/SERVER-SETUP.md",
+      "side-projects/seo-landing-showcase/index.html",
+      "side-projects/seo-landing-showcase/styles.css"
+    ]
+  },
+  "schema_version": "showcase-source-custody/v1"
+}

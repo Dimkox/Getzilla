@@ -37,9 +37,10 @@ class WorktreeError(RuntimeError):
     pass
 
 
-def _git(cwd: Path, *args: str) -> bytes:
+def _git(cwd: Path, *args: str, umask: int = -1) -> bytes:
     try:
-        done = subprocess.run(['git', '-C', str(cwd), *args], capture_output=True, timeout=TIMEOUT, check=False)
+        done = subprocess.run(['git', '-C', str(cwd), *args], capture_output=True, timeout=TIMEOUT, check=False,
+                              umask=umask)
     except (OSError, subprocess.SubprocessError) as exc:
         raise WorktreeError(f'git {args[0]}: {type(exc).__name__}') from exc
     if done.returncode != 0:
