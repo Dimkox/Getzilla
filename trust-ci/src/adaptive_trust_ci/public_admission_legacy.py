@@ -1,4 +1,4 @@
-"""Read-only public admission spike with an offline signed producer contract.
+"""Historical read-only local feedback; never current publication authority.
 
 Selectors identify candidate observations. Only host-owned Authority pins and an
 independent producer signature confer authority. No production producer, key,
@@ -94,6 +94,8 @@ class Evidence:
 class Decision:
     eligible: bool
     blockers: tuple[str, ...]
+    external_eligible: bool = False
+    provenance: str = 'legacy-local-feedback-unqualified'
 
 
 def evaluate(client: GitHubClient, authority: Authority | None, selector: Selector,

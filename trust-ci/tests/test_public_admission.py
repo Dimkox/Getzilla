@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '.getzilla'))
 
 from adaptive_trust_ci.github import GitHubClient
 from adaptive_trust_ci.models import canonical_json
-from adaptive_trust_ci.public_admission import Authority, Evidence, OperatorSecurityCore, Selector, evaluate
+from adaptive_trust_ci.public_admission_legacy import Authority, Evidence, OperatorSecurityCore, Selector, evaluate
 from adaptive_trust_ci.signing import Signer
 from getzilla import (architecture_diff, ci_admission, expanded_security, known_vulns, security_cli,
                       security_inventory, security_tools, source_paths)

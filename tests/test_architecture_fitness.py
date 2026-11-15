@@ -6199,7 +6199,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                                  "pass" if filename in approved else "fail")
 
     def test_public_admission_keeps_api_ownership_and_rejects_worker_transfer(self) -> None:
-        source = "trust-ci/src/adaptive_trust_ci/public_admission.py"
+        source = "trust-ci/src/adaptive_trust_ci/public_admission_legacy.py"
         repo, base, baseline = self._public_trust_baseline()
         self.assertEqual([node["id"] for node in baseline.system["nodes"]
                           if source in node["repository_paths"]], ["NODE-TRUST-CI-API"])

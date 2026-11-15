@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
-from contextlib import closing
+import threading
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +18,8 @@ from typing import TYPE_CHECKING, Callable, Protocol
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from . import security_bundle as bundle
 
 if TYPE_CHECKING:
     from .github import GitHubClient
@@ -298,18 +302,152 @@ class DispatchFence:
                        (ticket.key, self._encode(ticket)))
 
 
+class ObservationSessions:
+    """Explicit resource composition, not operator/factory qualification.
+
+    The host supplies pure client allocation and separately qualifies its actual
+    exchange implementation. All sessions retain the original deadline and one
+    shared raw budget. Keep this same object through UNKNOWN/recovery.
+    """
+    def __init__(self, original, factory, *, purpose):
+        from .github import GitHubClient
+        from .github_observer import BoundedGetTransport
+        if (type(original) is not GitHubClient or type(original.transport) is not BoundedGetTransport
+                or purpose not in {'merge', 'publisher'} or not callable(factory)):
+            raise ValueError('observation allocation unavailable')
+        transport = original.transport
+        self.clock, self.deadline = transport.clock, transport.deadline
+        self.purpose, self.limit = purpose, 2 if purpose == 'merge' else 4
+        self._factory, self._left = factory, max(0, 4194304 - transport.raw_bytes)
+        self._sessions, self._gets, self._publications = int(transport.calls > 0), transport.calls, 0
+        self._clients = [original] if transport.calls else []
+        self._evidence, self._active, self._lock = None, False, threading.RLock()
+        self._nonce, self._publication, self._persist = secrets.token_hex(16), None, None
+
+    def _snapshot(self):
+        # This is a continuity comparison, never a deserialized source of authority.
+        return review_bytes([self._nonce, self.deadline, self._sessions, self._gets,
+                             self._publications, self._left])
+
+    def _record(self, before):
+        if self._persist is not None:
+            self._persist(before, self._snapshot())
+
+    @property
+    def remaining_bytes(self):
+        return self._left
+
+    def reserve(self, maximum, *, publication=False):
+        if not self._lock.acquire(blocking=False):
+            raise ValueError('observation budget busy')
+        try:
+            before = self._snapshot()
+            if self.clock() >= self.deadline or self._left <= 0:
+                raise ValueError('observation budget exhausted')
+            if publication:
+                if self._publications >= 16:
+                    raise ValueError('publication requests exhausted')
+                self._publications += 1
+            else:
+                if self._gets >= self.limit * 14:
+                    raise ValueError('observation requests exhausted')
+                self._gets += 1
+            amount = min(maximum, 1048576, self._left)
+            if type(amount) is not int or amount <= 0:
+                raise ValueError('observation reservation malformed')
+            self._left -= amount
+            self._record(before)
+            return amount
+        finally:
+            self._lock.release()
+
+    def finish(self, reserved, actual):
+        with self._lock:
+            before = self._snapshot()
+            if type(actual) is not int or not 0 <= actual <= reserved:
+                raise ValueError('observation raw bound violated')
+            self._left += reserved - actual
+            self._record(before)
+
+    @contextmanager
+    def session(self, evidence_id):
+        from .github import GitHubClient
+        from .github_observer import BoundedGetTransport, ObservationError
+        if not self._lock.acquire(blocking=False):
+            raise ValueError('observation session busy')
+        entered = False
+        try:
+            if (self._active or self._sessions >= self.limit or self._left <= 0 or self.clock() >= self.deadline
+                    or not _DIGEST.fullmatch(evidence_id)
+                    or self._evidence is not None and self._evidence != evidence_id):
+                raise ValueError('observation session unavailable')
+            self._evidence, self._active, entered = evidence_id, True, True
+            before = self._snapshot()
+            self._sessions += 1
+            self._record(before)
+            if self.clock() >= self.deadline:
+                raise ValueError('observation deadline exhausted during durable reservation')
+            client = self._factory(self.deadline, self._left)
+            if (type(client) is not GitHubClient or type(client.transport) is not BoundedGetTransport
+                    or client.token_provider is not None or not isinstance(client.token, str) or not client.token
+                    or client.api_url != 'https://api.github.com'
+                    or any(old is client or old.transport is client.transport for old in self._clients)
+                    or client.transport.calls != 0 or client.transport.raw_bytes != 0
+                    or client.transport.clock is not self.clock):
+                raise ValueError('fresh bounded observation client required')
+            self._clients.append(client)
+            transport = client.transport
+            transport.deadline = min(transport.deadline, self.deadline)
+            exchange = transport._exchange
+            def bounded_exchange(url, headers, deadline, maximum):
+                try:
+                    reserved = self.reserve(maximum)
+                except ValueError as exc:
+                    raise ObservationError('shared-observation-budget') from exc
+                status, encoded, raw_bytes = exchange(url, headers, min(deadline, self.deadline), reserved)
+                try:
+                    self.finish(reserved, raw_bytes)
+                except ValueError as exc:
+                    raise ObservationError('shared-observation-raw-bound') from exc
+                return status, encoded, raw_bytes
+            transport._exchange = bounded_exchange
+            yield client
+        finally:
+            if entered:
+                self._active = False
+            self._lock.release()
+
+
 class BoundPublicVerifier:
     """Use the existing admission evaluator with a fixed, host-owned evidence bundle."""
 
     def __init__(self, client: GitHubClient, authority: Authority, evidence: Evidence,
-                 *, snapshot_root: Path | None = None, candidate_root: Path | None = None):
+                 *, snapshot_root: Path | None = None, candidate_root: Path | None = None,
+                 observations: ObservationSessions | None = None):
+        from .public_admission import Evidence
+        if type(evidence) is not Evidence:
+            raise ValueError('canonical evidence required')
         self._client = client
         self._authority = authority
         self._root = snapshot_root
         self._candidate_root = candidate_root
-        self._bundle = review_bytes({'binding': evidence.binding, 'report': evidence.report,
-                                     'integration': getattr(evidence, 'integration', None)})
+        if observations is not None and type(observations) is not ObservationSessions:
+            raise ValueError('explicit observation session allocation required')
+        self.observations = observations
+        value = bundle._bounded_value({'binding': evidence.binding, 'report': evidence.report,
+                                     'integration': evidence.integration, 'descriptors': evidence.descriptors})
+        parts, size = [], 0
+        encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        for part in encoder.iterencode(value):
+            raw = part.encode('utf-8')
+            size += len(raw)
+            if size > bundle.CONTROL_TOTAL:
+                raise ValueError('evidence aggregate limit')
+            parts.append(raw)
+        self._bundle = b''.join(parts)
         self._id = hashlib.sha256(self._bundle).hexdigest()
+        self._horizon = None
+        self._verified = False
 
     @property
     def evidence_id(self) -> str:
@@ -329,38 +467,42 @@ class BoundPublicVerifier:
                 and self._authority.policy_digest == policy_digest)
 
     def deadline(self, now: datetime) -> datetime:
-        # Read signed limits only after current admission passes. The existing
-        # calculator supplies every acquisition and source-publication deadline.
-        core = self._authority.security_core
-        if core is None:
-            raise ValueError('trusted Getzilla security core unavailable')
-        bundle = json.loads(self._bundle)
-        binding = bundle['binding']['payload']
-        report = bundle['report']
-        deadlines = [_timestamp(binding['expires_at']), _timestamp(binding['issued_at']) + _MAX_AGE]
-        reports = [report]
-        if bundle['integration'] is not None:
-            reports.append(bundle['integration']['report'])
-        for report in reports:
-            timed = core.report.finalize_report(report['source'], report['source'], report['checks'],
-                                                report['inventory_sha256'], report['policy_sha256'], now=now)
-            if timed['status'] != 'pass':
-                raise ValueError('verified report no longer eligible')
-            deadlines.extend((_timestamp(report['valid_until_utc']),
-                              _timestamp(report['created_at_utc']) + _MAX_AGE,
-                              _timestamp(timed['valid_until_utc'])))
-        return min(deadlines)
+        if not self._verified or self._horizon is None or _utc(now) > self._horizon:
+            raise ValueError('validated evidence lifetime unavailable')
+        return self._horizon
 
     def __call__(self, selector: Selector, now: datetime) -> Decision:
-        from .public_admission import Evidence, evaluate
+        from .public_admission import Decision, Evidence, evaluate
         bundle = json.loads(self._bundle)
-        return evaluate(self._client, self._authority, selector, Evidence(**bundle),
-                        now=now, snapshot_root=self._root, candidate_root=self._candidate_root)
+        self._verified = False
+        def invoke(client):
+            return evaluate(client, self._authority, selector, Evidence(**bundle),
+                            now=now, snapshot_root=self._root, candidate_root=self._candidate_root)
+        try:
+            if self.observations is None:
+                result = invoke(self._client)
+            else:
+                with self.observations.session(self.evidence_id) as client:
+                    result = invoke(client)
+        except (OSError, ValueError):
+            return Decision(False, ('observation-allocation-unavailable',))
+        horizon = getattr(result, 'valid_until', None)
+        self._verified = False
+        if result.eligible is True and result.blockers == () and type(horizon) is datetime:
+            horizon = _utc(horizon)
+            if horizon >= _utc(now):
+                self._horizon = min(self._horizon, horizon) if self._horizon is not None else horizon
+                self._verified = True
+        if result.eligible is True and not self._verified:
+            return Decision(False, ('validated-lifetime-unavailable',))
+        return result
 
 
-def execute(backend: AtomicBackend, verifier: Verifier, *, owner_id: int, owner_key: bytes,
+def execute(backend: AtomicBackend, verifier: BoundPublicVerifier, *, owner_id: int, owner_key: bytes,
             selector: Selector, clock: Callable[[], datetime], window: timedelta = _MAX_WINDOW) -> Result:
     try:
+        if type(verifier) is not BoundPublicVerifier:
+            return Result('blocked', 'canonical-bound-verifier-required')
         start = _utc(clock())
         if not timedelta(0) <= window <= _MAX_WINDOW:
             return Result('blocked', 'invalid-dispatch-window')
@@ -382,16 +524,21 @@ def execute(backend: AtomicBackend, verifier: Verifier, *, owner_id: int, owner_
             return Result('blocked', 'producer-and-owner-share-key')
         if isinstance(verifier, BoundPublicVerifier) and not verifier.authorizes_merge(snapshot.merge_oid):
             return Result('blocked', 'tested-integration-missing-or-mismatched')
+        if (isinstance(verifier, BoundPublicVerifier) and verifier.observations is not None
+                and verifier.observations.purpose != 'merge'):
+            return Result('blocked', 'merge-observation-allocation-mismatch')
         key, approval_expires = _owner_review(snapshot, start, owner_id, pinned_owner_key)
         initial = verifier(selector, start)
         if initial.eligible is not True or initial.blockers != ():
             return Result('blocked', 'independent-admission-denied')
         # A verified, frozen bundle has an absolute lifetime independent of the
         # cost of validation. Generic readers can certify only the short window.
-        horizon = (verifier.deadline(start) if isinstance(verifier, BoundPublicVerifier) else start + window)
-        verified_until = min(horizon, approval_expires)
-        if verified_until < start:
+        horizon = verifier.deadline(start)
+        sampled = _utc(clock())
+        horizon = min(horizon, approval_expires)
+        if not start <= sampled <= horizon:
             return Result('blocked', 'evidence-expired')
+        verified_until = min(horizon, sampled + window)
         final = verifier(selector, verified_until)
         if final.eligible is not True or final.blockers != ():
             return Result('blocked', 'independent-admission-denied-at-deadline')

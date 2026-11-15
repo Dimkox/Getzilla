@@ -169,13 +169,6 @@ flowchart LR
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-WORKSPACE | data_flow | filesystem"| node_2e8a7072de3f3743
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-MIRROR-DOWNLOAD | dependency | https"| node_7b13ed12e8efab1c
   node_e02bf35f8229b0f7 -->|"EDGE-SCANNER-OSV-QUERY | dependency | https"| node_8acae282d21dd9c2
-  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-ARTIFACTS | dependency | https"| node_ff513e24cb7ef2d8
-  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-INTELLIGENCE | dependency | https"| node_ce3cdb090a7e25d9
-  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-OSV | dependency | https"| node_7b13ed12e8efab1c
-  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-DB-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
-  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-IMAGE-READ | dependency | docker_api"| node_29363a281e26c870
-  node_b546ff724489580d -->|"EDGE-SECURITY-SCANNER-DISPATCH | dependency | filesystem"| node_e0e0b3eab2228878
-  node_b546ff724489580d -->|"EDGE-SECURITY-SNAPSHOT-READ | dependency | filesystem"| node_e5ccf49808562648
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-BRAVE | secret_flow | https"| node_78f2d5f6399441fd
   node_78f2d5f6399441fd -->|"EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-FIRECRAWL | secret_flow | https"| node_f40e05000fb3838a
@@ -191,6 +184,13 @@ flowchart LR
   node_b0214d69d31a7432 -->|"EDGE-SEARCH-SERPER-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-TAVILY | secret_flow | https"| node_86424fd6464e012a
   node_86424fd6464e012a -->|"EDGE-SEARCH-TAVILY-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-ARTIFACTS | dependency | https"| node_ff513e24cb7ef2d8
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-INTELLIGENCE | dependency | https"| node_ce3cdb090a7e25d9
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-OSV | dependency | https"| node_7b13ed12e8efab1c
+  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-DB-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
+  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-IMAGE-READ | dependency | docker_api"| node_29363a281e26c870
+  node_b546ff724489580d -->|"EDGE-SECURITY-SCANNER-DISPATCH | dependency | filesystem"| node_e0e0b3eab2228878
+  node_b546ff724489580d -->|"EDGE-SECURITY-SNAPSHOT-READ | dependency | filesystem"| node_e5ccf49808562648
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8

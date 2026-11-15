@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import re
@@ -28,6 +28,34 @@ class BundleError(ValueError):
 
 def digest(value):
     return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def _bounded_value(value):
+    stack, count = [(value, 0)], 0
+    while stack:
+        item, level = stack.pop()
+        count += 1
+        if count > 32768 or level > 24:
+            raise BundleError('input-complexity')
+        if type(item) in (dict, list):
+            if len(item) > 4096:
+                raise BundleError('input-members')
+            if type(item) is dict:
+                if any(type(key) is not str for key in item):
+                    raise BundleError('input-key')
+                stack.extend((key, level + 1) for key in item)
+                stack.extend((entry, level + 1) for entry in item.values())
+            else:
+                stack.extend((entry, level + 1) for entry in item)
+        elif type(item) is str:
+            if len(item) > 4096:
+                raise BundleError('input-string')
+            item.encode('utf-8', 'strict')
+        elif type(item) is float or type(item) is int and abs(item) > 9223372036854775807:
+            raise BundleError('input-number')
+        elif item is not None and type(item) not in (bool, int):
+            raise BundleError('input-type')
+    return value
 
 
 def bounded_json(raw, *, maximum=CONTROL_BYTES):
@@ -63,27 +91,7 @@ def bounded_json(raw, *, maximum=CONTROL_BYTES):
         def constant(_):
             raise BundleError('nonfinite-number')
         value = json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
-        stack, count = [(value, 0)], 0
-        while stack:
-            item, level = stack.pop()
-            count += 1
-            if count > 32768 or level > 24:
-                raise BundleError('input-complexity')
-            if isinstance(item, (dict, list)):
-                if len(item) > 4096:
-                    raise BundleError('input-members')
-                if isinstance(item, dict):
-                    stack.extend((key, level + 1) for key in item)
-                    stack.extend((entry, level + 1) for entry in item.values())
-                else:
-                    stack.extend((entry, level + 1) for entry in item)
-            elif isinstance(item, str):
-                if len(item) > 4096:
-                    raise BundleError('input-string')
-                item.encode('utf-8', 'strict')
-            elif type(item) is float or type(item) is int and abs(item) > 9223372036854775807:
-                raise BundleError('input-number')
-        return value
+        return _bounded_value(value)
     except (UnicodeError, json.JSONDecodeError, RecursionError, OverflowError) as exc:
         raise BundleError('invalid-json') from exc
 
@@ -199,6 +207,8 @@ class ValidationFacts:
     integration_validated: bool = False
     content_digest: str | None = None
     snapshot_digest: str | None = None
+    valid_until: str | None = None
+    checker_source: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +247,7 @@ class BundleDecision:
     reasons: tuple
     provenance: str = 'local-feedback'
     external_eligible: bool = False
+    valid_until: datetime | None = None
 
 
 def parse_bundle(raw):
@@ -372,6 +383,19 @@ def evaluate_bundle(policy, source, evidence, observed, facts, *, now):
                     len(observed.jobs) != len(set(observed.jobs)) or value['integration'] is None or
                     value['integration']['parents'] != [source.base_sha, source.head_sha] or not _binding(policy, source, value, now)):
                 return BundleDecision(False, ('provider-binding-or-integration-unverified',))
-        return BundleDecision(True, ())
+        horizon = None
+        if facts.valid_until is not None:
+            limits = [parse_datetime(facts.valid_until), expires,
+                      created + timedelta(seconds=AGE_SECONDS)]
+            limits.extend(parse_datetime(row.acquired_at) + timedelta(seconds=AGE_SECONDS)
+                          for row in facts.sources)
+            if source.mode == 'github':
+                payload = value['binding']['payload']
+                limits.extend((parse_datetime(payload['expires_at']),
+                    parse_datetime(payload['issued_at']) + timedelta(seconds=AGE_SECONDS)))
+            horizon = min(limits)
+            if horizon < now:
+                return BundleDecision(False, ('validated-lifetime-expired',))
+        return BundleDecision(True, (), valid_until=horizon)
     except (BundleError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
         return BundleDecision(False, ('invalid-input',))

@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -14,10 +15,11 @@ from types import SimpleNamespace
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from adaptive_trust_ci.public_admission import Decision, Selector, _integration_blockers
+from adaptive_trust_ci.public_admission import Decision, Selector, _integration
 from adaptive_trust_ci.public_merge import (
     DispatchFence, Receipt, SignedReview, Snapshot, execute, reconcile, review_bytes, review_payload,
 )
+from test_public_merge import controlled_canonical, model_evidence_id
 
 
 class GitTransactionTests(unittest.TestCase):
@@ -25,12 +27,17 @@ class GitTransactionTests(unittest.TestCase):
 
     def git(self, *args, stdin=None, check=True):
         return subprocess.run(
-            ['git', '-c', 'user.name=Test', '-c', 'user.email=fixture@example.invalid', *args],
+            ['git', '--no-optional-locks', '-c', 'core.hooksPath=' + os.devnull,
+             '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false',
+             '-c', 'user.name=Test', '-c', 'user.email=fixture@example.invalid', *args],
             cwd=self.repo, input=stdin, capture_output=True, text=True, check=check, timeout=10,
+            env={'PATH': os.defpath, 'HOME': str(self.repo / '.closed-home'),
+                 'XDG_CONFIG_HOME': str(self.repo / '.closed-home'), 'GIT_CONFIG_NOSYSTEM': '1',
+                 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_TERMINAL_PROMPT': '0', 'LC_ALL': 'C'},
         )
 
     def setUp(self):
-        temp = TemporaryDirectory(prefix='getzilla-local-merge-')
+        temp = TemporaryDirectory(prefix='getzilla-local-merge-', dir=Path(__file__).resolve().parents[2] / '.getzilla/runtime')
         self.addCleanup(temp.cleanup)
         self.repo = Path(temp.name)
         self.git('init', '--bare', '-q', '--initial-branch=main')
@@ -50,7 +57,7 @@ class GitTransactionTests(unittest.TestCase):
         key = Ed25519PrivateKey.generate()
         self.private = key
         self.pubkey = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        self.proof = 'd' * 64
+        self.proof = model_evidence_id(self.merged)
         payload = review_payload(self.selector, self.owner, 1, 'approve', self.start, evidence_id=self.proof, target_generation=1, merge_oid=self.merged)
         self.review = SignedReview(payload, base64.b64encode(key.sign(review_bytes(payload))).decode('ascii'))
         self.before_write = lambda: None
@@ -91,10 +98,13 @@ class GitTransactionTests(unittest.TestCase):
         tree = self.ref(ticket.merge_oid + '^{tree}')
         def bounded_git(root, args, **kwargs):
             result = self.git(*args, check=False)
-            return result.stdout.encode() if result.returncode == 0 else None
+            if result.returncode and not kwargs.get('allow_failure'):
+                raise ValueError('owned Git model read failed')
+            return result.stdout.encode()
         core = SimpleNamespace(git=SimpleNamespace(run_git_bounded=bounded_git))
-        if _integration_blockers(core, self.repo, ticket.selector,
-                {'merge_sha': ticket.merge_oid, 'tree_sha': tree, 'report': {}}):
+        if not _integration(core, ticket.selector,
+                {'merge_sha': ticket.merge_oid, 'tree_sha': tree,
+                 'parents': [ticket.selector.base_sha, ticket.selector.head_sha], 'strategy': 'merge'}, self.repo)[1]:
             return receipt('stale')
         confirmed = receipt('merged')
         blob = self.git('hash-object', '-w', '--stdin', stdin=json.dumps(asdict(confirmed), sort_keys=True)).stdout.strip()
@@ -116,7 +126,8 @@ class GitTransactionTests(unittest.TestCase):
         def verifier(selector, observed):
             return Decision(selector == self.selector and observed <= self.start + timedelta(hours=1), ())
         verifier.evidence_id = self.proof
-        return execute(self, verifier, selector=self.selector, owner_id=self.owner, owner_key=self.pubkey, clock=lambda: self.now)
+        with controlled_canonical(verifier, self.merged, self.start + timedelta(hours=1)) as bound:
+            return execute(self, bound, selector=self.selector, owner_id=self.owner, owner_key=self.pubkey, clock=lambda: self.now)
 
     def test_approved_change_updates_only_local_main_and_records_one_receipt(self):
         self.assertEqual(self.run_once().state, 'merged')
@@ -181,6 +192,7 @@ class GitTransactionTests(unittest.TestCase):
         self.selector = replace(self.selector, base_sha=self.base, head_sha=self.head, tree_sha=head_tree)
         self.git('update-ref', 'refs/heads/main', self.base)
         self.git('update-ref', 'refs/heads/candidate', self.head)
+        self.proof = model_evidence_id(self.merged)
         payload = review_payload(self.selector, self.owner, 1, 'approve', self.start,
                                  evidence_id=self.proof, target_generation=1, merge_oid=self.merged)
         self.review = SignedReview(payload, base64.b64encode(self.private.sign(review_bytes(payload))).decode())
