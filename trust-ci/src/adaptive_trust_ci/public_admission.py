@@ -1,27 +1,26 @@
-"""Read-only public admission spike with an offline signed producer contract.
+"""Entry points validate their own explicit bytes; pure evaluation has no I/O.
 
-Selectors identify candidate observations. Only host-owned Authority pins and an
-independent producer signature confer authority. No production producer, key,
-publisher, private scheduler, or branch-protection integration is configured.
+The prototype's function shape is retained, not its old signed wire version.
+No publisher, merger, operator identity or actual deployment is implemented.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
-import base64
+from dataclasses import dataclass
+from datetime import timedelta
 import hashlib
-from urllib.parse import quote
+import importlib
+import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from types import ModuleType
-from typing import Any
+import stat
+import sys
+import time
+from types import SimpleNamespace
+import zipfile
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
-from .github import GitHubClient, GitHubError
-from .models import canonical_json, parse_datetime, require_digest, require_repository, require_sha
+from . import security_bundle as bundle
+from .github import GitHubError
+from .github_observer import ObservationError, observe
+from .models import canonical_json, require_repository
 
 
 @dataclass(frozen=True)
@@ -35,29 +34,8 @@ class Selector:
     run_id: int
     run_attempt: int
 
-
-@dataclass(frozen=True, kw_only=True)
-class OperatorSecurityCore:
-    """Modules supplied by the operator's pinned Getzilla installation."""
-    git: ModuleType
-    security: ModuleType
-    known_vulns: ModuleType
-    inventory: ModuleType
-    paths: ModuleType
-    admission: ModuleType
-    report: ModuleType
-    tools: ModuleType
-
-    def source_families(self, files: list[str]) -> dict[str, bool]:
-        # Match the pinned scan_source file selection without executing candidate tools.
-        selected = [Path(name) for name in files if not name.startswith('.getzilla/sast/')
-                    and not self.tools._SAST_EXCLUDED.intersection(Path(name).parts)]
-        return {
-            'opengrep': any(path.suffix in self.tools._SAST_SUFFIXES for path in selected),
-            'bandit': any(path.suffix == '.py' for path in selected),
-            'trivy-config': any(path.name.lower().startswith('dockerfile') or
-                                path.name.endswith('.Dockerfile') or path.suffix == '.tf' for path in selected),
-        }
+    def source(self):
+        return bundle.source_from({'mode': 'github', 'target_ref': 'refs/heads/main', **self.__dict__})
 
 
 @dataclass(frozen=True)
@@ -79,336 +57,303 @@ class Authority:
     public_key_pem: bytes
     policy_digest: str
     target_branch: str = 'main'
-    required_jobs: tuple[str, ...] = ()
-    security_core: OperatorSecurityCore | None = None
+    required_jobs: tuple = ()
+    security_core: object | None = None
+
+    def as_policy(self):
+        for name in ('repository', 'runner_repository'):
+            if require_repository(getattr(self, name)) != getattr(self, name):
+                raise bundle.BundleError('authority-unconfigured')
+        for name in ('repository_id', 'runner_repository_id', 'workflow_id', 'producer_app_id'):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise bundle.BundleError('authority-unconfigured')
+        if self.event not in ('workflow_dispatch', 'repository_dispatch'):
+            raise bundle.BundleError('authority-unconfigured')
+        values = {key: value for key, value in self.__dict__.items() if key not in ('security_core', 'public_key_pem')}
+        values['public_key_sha256'] = hashlib.sha256(self.public_key_pem).hexdigest()
+        return bundle.BundlePolicy(self.policy_digest, self.public_key_pem, bundle.digest(values), self.required_jobs)
 
 
 @dataclass(frozen=True)
 class Evidence:
-    binding: dict[str, Any]
-    report: dict[str, Any]
-    integration: dict[str, Any] | None = None
+    binding: dict
+    report: dict
+    integration: dict | None = None
+    descriptors: dict | None = None
 
 
 @dataclass(frozen=True)
 class Decision:
     eligible: bool
-    blockers: tuple[str, ...]
+    blockers: tuple
+    provenance: str = 'protected-host-evaluation-unactivated'
 
 
-def evaluate(client: GitHubClient, authority: Authority | None, selector: Selector,
-             evidence: Evidence | None, *, now: datetime, snapshot_root: Path | None = None,
-             candidate_root: Path | None = None) -> Decision:
-    """Verify protected producer evidence without executing candidate code.
+def _identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
-    The host must obtain Authority outside the candidate checkout and invoke this
-    module and the Getzilla verifier from its own pinned deployment. Evidence may
-    be transported through untrusted storage because its complete report digest
-    and execution identity are independently signed. Eligibility is an offline
-    decision only. The operator supplies a local object store for the requested
-    commit. Only immutable Git objects are inspected, never candidate worktree bytes.
-    """
-    if authority is None:
-        return Decision(False, ('authority-unconfigured',))
-    if evidence is None:
-        return Decision(False, ('independent-evidence-unavailable',))
-    core = authority.security_core
-    if core is None:
-        return Decision(False, ('trusted-getzilla-security-verifier-unavailable',))
-    if client.api_url != 'https://api.github.com':
-        return Decision(False, ('provider-origin-untrusted',))
+
+def read_file(path, maximum):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        _validate_inputs(authority, selector, now)
-        blockers = _provider_blockers(client, authority, selector)
-        blockers.extend(_binding_blockers(authority, selector, evidence, now))
-        blockers.extend(_candidate_obligations(core, candidate_root, selector, evidence.report, now))
-        blockers.extend(_security_blockers(core, authority, selector, evidence.report, now, snapshot_root))
-        integration = getattr(evidence, 'integration', None)
-        if integration is not None:
-            blockers.extend(_integration_blockers(core, candidate_root, selector, integration))
-            integrated = replace(selector, head_sha=integration['merge_sha'], tree_sha=integration['tree_sha'])
-            blockers.extend(_candidate_obligations(core, candidate_root, integrated, integration['report'], now))
-            blockers.extend(_security_blockers(core, authority, integrated, integration['report'], now, snapshot_root))
-        return Decision(not blockers, tuple(blockers))
-    except (ImportError, KeyError, TypeError, ValueError, AttributeError, GitHubError) as exc:
-        return Decision(False, (f'provider-metadata-or-evidence-invalid:{type(exc).__name__}',))
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_nlink != 1
+                or before.st_size > maximum):
+            raise bundle.BundleError('input-file-shape-or-size')
+        blocks, size = [], 0
+        while block := os.read(fd, min(65536, maximum - size + 1)):
+            size += len(block)
+            if size > maximum:
+                raise bundle.BundleError('input-file-size')
+            blocks.append(block)
+        if _identity(before) != _identity(os.fstat(fd)) or _identity(before) != _identity(Path(path).lstat()):
+            raise bundle.BundleError('input-file-changed')
+        return b''.join(blocks)
+    finally:
+        os.close(fd)
 
 
-def _validate_inputs(authority: Authority, selector: Selector, now: datetime) -> None:
-    if now.tzinfo is None:
-        raise ValueError('admission time requires a timezone')
-    for value in (authority.repository, authority.runner_repository, selector.repository):
-        if require_repository(value) != value:
-            raise ValueError('repository identity must be exact')
-    for value in (selector.base_sha, selector.head_sha, selector.tree_sha,
-                  authority.runner_sha, authority.runner_tree_sha, authority.checker_sha,
-                  authority.checker_tree_sha, authority.workflow_blob_sha):
-        if require_sha(value, 'pin') != value:
-            raise ValueError('source pins must be exact')
-    if require_digest(authority.policy_digest, 'policy') != authority.policy_digest:
-        raise ValueError('policy digest must be exact')
-    for value in (authority.repository_id, authority.runner_repository_id,
-                  authority.workflow_id, authority.producer_app_id, selector.repository_id,
-                  selector.pr_number, selector.run_id, selector.run_attempt):
-        if type(value) is not int or value <= 0:
-            raise ValueError('provider IDs must be positive integers')
-    if (authority.event not in {'workflow_dispatch', 'repository_dispatch'}
-            or not authority.branch or not authority.workflow_path.startswith('.github/workflows/')
-            or '..' in authority.workflow_path.split('/') or authority.target_branch != 'main'):
-        raise ValueError('protected independent producer configuration required')
-    if (not authority.required_jobs or len(authority.required_jobs) > 100
-            or len(set(authority.required_jobs)) != len(authority.required_jobs)
-            or any(not isinstance(name, str) or not name.strip() for name in authority.required_jobs)):
-        raise ValueError('complete operator-owned producer job graph required')
+def content_manifest(root, maximum=bundle.SOURCE_BYTES):
+    root = Path(root).absolute()
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise bundle.BundleError('source-root-shape')
+    rows, total = [], 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort()
+        files.sort()
+        for name in dirs:
+            if name == '.git' and Path(directory) == root:
+                continue
+            item = (Path(directory) / name).lstat()
+            if not stat.S_ISDIR(item.st_mode) or item.st_uid != os.getuid():
+                raise bundle.BundleError('source-directory-shape')
+        if Path(directory) == root and '.git' in dirs:
+            dirs.remove('.git')
+        for name in files:
+            if Path(directory) == root and name == '.git':
+                continue
+            path = Path(directory) / name
+            data = read_file(path, maximum - total)
+            total += len(data)
+            if total > maximum or len(rows) >= 4096:
+                raise bundle.BundleError('source-limit')
+            item = path.lstat()
+            rows.append({'path': path.relative_to(root).as_posix(), 'bytes': len(data),
+                         'mode': 0o755 if item.st_mode & 0o111 else 0o644,
+                         'sha256': hashlib.sha256(data).hexdigest()})
+    if _identity(info) != _identity(root.lstat()):
+        raise bundle.BundleError('source-root-changed')
+    return rows
 
 
-def _provider_blockers(client: GitHubClient, authority: Authority, selector: Selector) -> list[str]:
-    # Reuse the authenticated canonical client, with only fixed GET operations.
-    def get(path):
-        value = client._request('GET', path)
-        if not isinstance(value, dict):
-            raise ValueError('provider response must be an object')
-        return value
-
-    problems = []
-    source_root = f'/repos/{authority.repository}'
-    repo = get(source_root)
-    if (selector.repository != authority.repository or selector.repository_id != authority.repository_id
-            or repo['id'] != authority.repository_id or repo['full_name'] != authority.repository):
-        problems.append('source-repository-identity-mismatch')
-    pr = get(f'{source_root}/pulls/{selector.pr_number}')
-    if (pr['number'] != selector.pr_number or pr['state'] != 'open'
-            or pr['head']['sha'] != selector.head_sha or pr['base']['sha'] != selector.base_sha
-            or pr['base']['ref'] != authority.target_branch
-            or not isinstance(pr['head']['ref'], str) or not pr['head']['ref']
-            or pr['head']['ref'] == authority.target_branch
-            or pr['base']['repo']['id'] != authority.repository_id
-            or pr['head']['repo']['id'] != authority.repository_id):
-        problems.append('source-pr-identity-mismatch')
-    for repository, sha, tree, label in (
-            (authority.repository, selector.head_sha, selector.tree_sha, 'source-tree'),
-            (authority.repository, authority.checker_sha, authority.checker_tree_sha, 'checker-tree'),
-            (authority.runner_repository, authority.runner_sha, authority.runner_tree_sha, 'runner-tree')):
-        commit = get(f'/repos/{repository}/git/commits/{sha}')
-        if commit['sha'] != sha or commit['tree']['sha'] != tree:
-            problems.append(f'{label}-mismatch')
-    root = f'/repos/{authority.runner_repository}'
-    # This initial contract serializes the protected producer across PRs. An
-    # older dispatch is never reusable, even if a newer run targets another PR.
-    current = get(f'{root}/actions/workflows/{authority.workflow_id}/runs?branch={quote(authority.branch, safe="")}&per_page=1')
-    runs = current.get('workflow_runs')
-    if (type(current.get('total_count')) is not int or current['total_count'] < 1
-            or not isinstance(runs, list) or len(runs) != 1
-            or runs[0].get('id') != selector.run_id
-            or runs[0].get('run_attempt') != selector.run_attempt):
-        problems.append('current-producer-run-mismatch')
-    latest = get(f'{root}/actions/runs/{selector.run_id}')
-    attempt = get(f'{root}/actions/runs/{selector.run_id}/attempts/{selector.run_attempt}')
-    expected = {'id': selector.run_id, 'run_attempt': selector.run_attempt,
-                'workflow_id': authority.workflow_id, 'event': authority.event,
-                'head_sha': authority.runner_sha, 'head_branch': authority.branch,
-                'path': authority.workflow_path, 'status': 'completed', 'conclusion': 'success'}
-    for run in (latest, attempt):
-        if (any(run[key] != value for key, value in expected.items())
-                or any(run[key]['id'] != authority.runner_repository_id
-                       or run[key]['full_name'] != authority.runner_repository
-                       for key in ('repository', 'head_repository'))):
-            problems.append('producer-run-identity-mismatch')
-    if latest['check_suite_id'] != attempt['check_suite_id']:
-        problems.append('producer-run-suite-mismatch')
-    jobs = get(f'{root}/actions/runs/{selector.run_id}/attempts/{selector.run_attempt}/jobs?per_page=100')
-    values = jobs.get('jobs')
-    if (type(jobs.get('total_count')) is not int or not isinstance(values, list)
-            or jobs['total_count'] != len(authority.required_jobs) or len(values) != jobs['total_count']
-            or sorted(value.get('name', '') for value in values) != sorted(authority.required_jobs)
-            or any(type(job.get('id')) is not int or job['id'] <= 0 or job.get('run_id') != selector.run_id
-                   or job.get('head_sha') != authority.runner_sha or job.get('status') != 'completed'
-                   or job.get('conclusion') != 'success' for job in values)):
-        problems.append('producer-required-jobs-incomplete-or-failed')
-    workflow = get(f'{root}/actions/workflows/{authority.workflow_id}')
-    if (workflow['id'] != authority.workflow_id or workflow['path'] != authority.workflow_path
-            or workflow['state'] != 'active'):
-        problems.append('producer-workflow-identity-mismatch')
-    suite = get(f"{root}/check-suites/{attempt['check_suite_id']}")
-    if suite['app']['id'] != authority.producer_app_id:
-        problems.append('producer-app-identity-mismatch')
-    if (suite['id'] != attempt['check_suite_id'] or suite['head_sha'] != authority.runner_sha
-            or suite['repository']['id'] != authority.runner_repository_id
-            or suite['status'] != 'completed' or suite['conclusion'] != 'success'):
-        problems.append('producer-suite-identity-mismatch')
-    blob = get(f'{root}/contents/{authority.workflow_path}?ref={authority.runner_sha}')
-    if (blob['type'] != 'file' or blob['path'] != authority.workflow_path
-            or blob['sha'] != authority.workflow_blob_sha):
-        problems.append('producer-workflow-blob-mismatch')
-    return problems
+def _core():
+    # This code's installation selects its validators, never the candidate root.
+    policy_root = Path(__file__).resolve().parents[3]
+    library = policy_root / '.getzilla'
+    if not (library / 'getzilla').is_dir():
+        raise bundle.BundleError('accepted-validator-unavailable')
+    if str(library) not in sys.path:
+        sys.path.insert(0, str(library))
+    modules = {name: importlib.import_module('getzilla.' + module) for name, module in
+               (('inventory', 'security_inventory'), ('security', 'expanded_security'),
+                ('report', 'security_cli'), ('tools', 'security_tools'), ('git', 'architecture_diff'))}
+    return SimpleNamespace(**modules, policy_root=policy_root)
 
 
-def _binding_blockers(authority: Authority, selector: Selector,
-                      evidence: Evidence, now: datetime) -> list[str]:
-    """Draft public producer contract, separate from private Trust CI job envelopes."""
+def _snapshot_preflight(root):
+    rows = content_manifest(root, bundle.SNAPSHOT_BYTES)
+    expanded = members = 0
+    for row in rows:
+        data = read_file(Path(root) / row['path'], bundle.SNAPSHOT_BYTES)
+        import io
+        # Authoritative objects are hash-named; compatibility suffixes confer no role.
+        if zipfile.is_zipfile(io.BytesIO(data)):
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                entries = archive.infolist()
+                members += len(entries)
+                if members > 10000:
+                    raise bundle.BundleError('snapshot-member-limit')
+                for member in entries:
+                    expanded += member.file_size
+                    if member.file_size > bundle.MEMBER_BYTES or expanded > bundle.SNAPSHOT_BYTES:
+                        raise bundle.BundleError('snapshot-expanded-limit')
+        else:
+            expanded += len(data)
+            if expanded > bundle.SNAPSHOT_BYTES:
+                raise bundle.BundleError('snapshot-expanded-limit')
+    return rows
+
+
+def _source_binding(core, source, root):
+    if source.mode == 'local' and source.git_head is None:
+        return
+    raw = core.git.run_git_bounded(root, ['rev-parse', 'HEAD', 'HEAD^{tree}'], limit=1024)
+    expected = [source.head_sha, source.tree_sha] if source.mode == 'github' else [source.git_head, source.git_tree]
+    if raw.decode().splitlines() != expected:
+        raise bundle.BundleError('source-git-identity')
+    if core.git.run_git_bounded(root, ['status', '--porcelain=v1', '--untracked-files=all'], limit=65536).strip():
+        raise bundle.BundleError('source-git-dirty')
+
+
+def _integration(core, source, value, root):
+    if value is None:
+        return None, False
+    commit = core.git.run_git_bounded(root, ['cat-file', 'commit', value['merge_sha']], limit=131072)
+    headers = commit.split(b'\n\n', 1)[0].splitlines()
+    parents = [row[7:].decode('ascii') for row in headers if row.startswith(b'parent ')]
+    merged = core.git.run_git_bounded(root, ['merge-tree', '--write-tree', source.base_sha, source.head_sha],
+                                      allow_failure=True, limit=131072)
+    valid = (parents == [source.base_sha, source.head_sha] and headers[0] == b'tree ' + value['tree_sha'].encode() and
+             merged.strip() == value['tree_sha'].encode())
+    return bundle.digest(value), valid
+
+
+def _scanner_targets(inventory, tools):
+    # Keep exact parity with security_tools.scan_source and its normalized markers.
+    selected = [value for value in inventory['files'] if not value.startswith('.getzilla/sast/')
+                and not tools._SAST_EXCLUDED.intersection(Path(value).parts)]
+    paths = {'opengrep': [value for value in selected if Path(value).suffix in tools._SAST_SUFFIXES],
+             'bandit': [value for value in selected if Path(value).suffix == '.py'],
+             'trivy-config': [value for value in selected if Path(value).name.lower().startswith('dockerfile')
+                              or Path(value).name.endswith('.Dockerfile') or Path(value).suffix == '.tf']}
+    return {name: {value.replace('\\', '/').removeprefix('./') for value in values}
+            for name, values in paths.items()}
+
+
+def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descriptors, now, core=None):
+    """Real boundary validation outside pure evaluation; JSON claims never set facts."""
+    value = evidence.document()
+    source = evidence.source
+    def refused():
+        return bundle.ValidationFacts(bundle.digest(value['source']), policy.policy_digest, bundle.digest(value['report']),
+                                      value['report']['inventory_sha256'], (), (), ('input-validation-unavailable',), False)
     try:
-        binding = evidence.binding['payload']
-        key = serialization.load_pem_public_key(authority.public_key_pem)
-        if not isinstance(key, Ed25519PublicKey):
-            raise ValueError('independent producer key must be Ed25519')
-        key.verify(base64.b64decode(evidence.binding['signature'], validate=True), canonical_json(binding))
-        issued, expires = parse_datetime(binding['issued_at']), parse_datetime(binding['expires_at'])
-    except (InvalidSignature, KeyError, TypeError, ValueError):
-        return ['independent-binding-signature-invalid-or-unavailable']
-    problems = []
-    if not (timedelta(0) <= now - issued <= timedelta(hours=72)
-            and now <= expires <= issued + timedelta(hours=72)):
-        problems.append('independent-binding-freshness-invalid')
-    expected = {
-        'schema_version': 1, 'kind': 'getzilla-public-ci-binding',
-        'repository': authority.repository, 'repository_id': authority.repository_id,
-        'pr_number': selector.pr_number, 'base_sha': selector.base_sha,
-        'head_sha': selector.head_sha, 'tree_sha': selector.tree_sha,
-        'runner_repository': authority.runner_repository, 'runner_repository_id': authority.runner_repository_id,
-        'runner_sha': authority.runner_sha, 'runner_tree_sha': authority.runner_tree_sha,
-        'workflow_id': authority.workflow_id, 'workflow_path': authority.workflow_path,
-        'checker_sha': authority.checker_sha, 'checker_tree_sha': authority.checker_tree_sha,
-        'workflow_blob_sha': authority.workflow_blob_sha, 'producer_app_id': authority.producer_app_id,
-        'run_id': selector.run_id, 'run_attempt': selector.run_attempt, 'event': authority.event,
-        'policy_digest': authority.policy_digest,
-        'security_report_sha256': hashlib.sha256(canonical_json(evidence.report)).hexdigest(),
-        'issued_at': binding['issued_at'], 'expires_at': binding['expires_at'],
-    }
-    integration = getattr(evidence, 'integration', None)
-    if integration is not None:
-        expected.update(schema_version=2, integration={
-            'merge_sha': integration['merge_sha'], 'tree_sha': integration['tree_sha'],
-            'report_sha256': hashlib.sha256(canonical_json(integration['report'])).hexdigest()})
-    if binding != expected:
-        problems.append('independent-binding-identity-or-report-digest-mismatch')
-    return problems
+        core = core or _core()
+        before = content_manifest(source_root)
+        inventory = core.inventory.collect_inventory(source_root)
+        actual_policy = core.security._policy_digest(core.policy_root)
+        if actual_policy != policy.policy_digest or inventory['complete'] is not True:
+            return refused()
+        if source.mode == 'local' and bundle.digest(before) != source.candidate_digest:
+            return refused()
+        _source_binding(core, source, source_root)
+        if snapshot_root is not None:
+            snapshots = _snapshot_preflight(snapshot_root)
+            roots = {'GETZILLA_OSV_DB': str(Path(snapshot_root) / 'database'),
+                     'GETZILLA_SECURITY_DB': str(Path(snapshot_root) / 'database'),
+                     'GETZILLA_SECURITY_ARTIFACTS': str(Path(snapshot_root) / 'artifacts'),
+                     'GETZILLA_SECURITY_TOOLS': str(Path(snapshot_root) / 'tools')}
+        else:
+            snapshots, roots = None, {}
+        if descriptors is None:
+            return refused()
+        bundle.fields(descriptors, ('checks', 'source_descriptors'))
+        if value['report'].get('evidence_sha256') != bundle.digest(descriptors):
+            return refused()
+        if snapshot_root is None:
+            # Never fall back to a candidate/default runtime database/catalogue.
+            return refused()
+        obligations = core.security.security_obligations(source_root, inventory, environ=roots,
+                                                        now=now, policy_root=core.policy_root)
+        required, validated, actual_descriptors = [], {}, {}
+        for obligation in obligations:
+            applies = obligation['applicability']
+            if applies not in ('required', 'not_applicable'):
+                return refused()
+            if applies == 'required' and obligation['check_id'] not in ('security-inventory', 'known-vulnerabilities'):
+                return refused()  # No invented non-OSV qualification.
+            ids = []
+            for descriptor in obligation['data_sources']:
+                identifier = descriptor['source_id']
+                core.security.validate_data_source(descriptor, root=source_root, now=now,
+                                                  environ=roots, policy_root=core.policy_root)
+                validated[identifier] = bundle.ValidatedSource(identifier, descriptor['content_sha256'],
+                    descriptor['acquisition']['last_verified_sync_utc'], True)
+                actual_descriptors[identifier] = descriptor
+                ids.append(identifier)
+            required.append(bundle.Requirement(obligation['check_id'], applies == 'required', tuple(ids), inventory['digest']))
+        targets = _scanner_targets(inventory, core.tools)
+        for name, applies in [('secret-scan', True), *[(name, bool(paths)) for name, paths in targets.items()]]:
+            required.append(bundle.Requirement(name, applies, (), inventory['digest']))
+        supplied = descriptors['checks']
+        if type(supplied) is not list or len(supplied) != len(required):
+            return refused()
+        normalized = []
+        for check in supplied:
+            markers = [m for m in check.get('details', []) if isinstance(m, dict) and m.get('kind') == 'security-result']
+            if len(markers) != 1:
+                return refused()
+            marker = markers[0]
+            if check['name'] in targets:
+                coverage = marker.get('coverage', {'expected': [], 'observed': []})
+                if (type(coverage) is not dict or set(coverage) != {'expected', 'observed'}
+                        or any(type(paths) is not list or any(type(path) is not str or not path for path in paths)
+                               or len(paths) != len(set(paths)) or set(paths) != targets[check['name']]
+                               for paths in coverage.values())):
+                    return refused()
+            if not core.report._detail_consistent(check['name'], marker, inventory['digest'], actual_policy, now):
+                return refused()
+            if any(item != actual_descriptors.get(item.get('source_id')) for item in marker['data_sources']):
+                return refused()
+            normalized.append({'name': check['name'], 'status': check['status'], 'outcome': marker['outcome'],
+                'finding_count': len(marker['findings']), 'gap_count': len(marker['gaps']),
+                'source_ids': [row['source_id'] for row in marker['data_sources']], 'coverage_sha256': inventory['digest']})
+        if sorted(normalized, key=lambda row: row['name']) != sorted(value['report']['checks'], key=lambda row: row['name']):
+            return refused()
+        if descriptors['source_descriptors'] != sorted(validated):
+            return refused()
+        integration_digest, integrated = (None, False) if source.mode == 'local' else _integration(core, source, value['integration'], source_root)
+        if content_manifest(source_root) != before or _snapshot_preflight(snapshot_root) != snapshots:
+            return refused()
+        _source_binding(core, source, source_root)
+        return bundle.ValidationFacts(bundle.digest(value['source']), actual_policy, bundle.digest(value['report']),
+            inventory['digest'], tuple(required), tuple(validated.values()), (), True, integration_digest, integrated,
+            bundle.digest(before), bundle.digest(snapshots))
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError, zipfile.BadZipFile):
+        return refused()
 
 
-def _integration_blockers(core: OperatorSecurityCore, root: Path | None,
-                          selector: Selector, integration: dict) -> list[str]:
-    """Recompute the permitted two-parent Git integration in an operator object store."""
+def _evaluate_bundle(client, authority, selector, evidence, *, now, snapshot_root=None, candidate_root=None):
+    """Protected host owns observation and facts. No local-result argument exists."""
+    if authority is None or authority.security_core is None or candidate_root is None or evidence is None:
+        return Decision(False, ('authority-or-inputs-unconfigured',))
     try:
-        if root is None or set(integration) != {'merge_sha', 'tree_sha', 'report'}:
-            return ['integration-source-unavailable']
-        for name in ('merge_sha', 'tree_sha'):
-            if require_sha(integration[name], name) != integration[name]:
-                return ['integration-identity-invalid']
-        commit = core.git.run_git_bounded(root, ['cat-file', 'commit', integration['merge_sha']], limit=128 * 1024)
-        headers = commit.split(b'\n\n', 1)[0].splitlines() if commit else []
-        parents = [line.removeprefix(b'parent ').decode('ascii') for line in headers if line.startswith(b'parent ')]
-        if (parents != [selector.base_sha, selector.head_sha]
-                or not headers or headers[0] != f"tree {integration['tree_sha']}".encode('ascii')):
-            return ['integration-parents-or-tree-mismatch']
-        # A conflict is a refusal. No candidate conflict resolver or script runs.
-        merged = core.git.run_git_bounded(root, ['merge-tree', '--write-tree', selector.base_sha,
-                                                selector.head_sha], allow_failure=True, limit=128 * 1024)
-        if not merged or merged.strip() != integration['tree_sha'].encode('ascii'):
-            return ['integration-strategy-tree-mismatch-or-conflict']
-        return []
-    except (OSError, RuntimeError, ValueError, UnicodeError):
-        return ['integration-source-unavailable']
+        started = time.monotonic()
+        source = selector.source()
+        if not isinstance(source, bundle.GithubSource):
+            return Decision(False, ('github-source-required',))
+        policy = authority.as_policy()
+        parsed = bundle.parse_bundle(canonical_json({'version': 1, 'source': source.as_dict(), 'policy_sha256': policy.policy_digest,
+            'report': evidence.report, 'binding': evidence.binding, 'integration': evidence.integration}))
+        facts = validate_local_inputs(policy, parsed, source_root=candidate_root, snapshot_root=snapshot_root,
+                                      descriptors=evidence.descriptors, now=now, core=authority.security_core)
+        if facts.source_validated is not True or facts.blockers:
+            return Decision(False, ('source-unvalidated',))
+        observed = observe(client, authority, source)
+        if facts.source_validated is not True or facts.content_digest != bundle.digest(content_manifest(candidate_root)):
+            return Decision(False, ('source-changed-or-unvalidated',))
+        if (snapshot_root is None or facts.snapshot_digest != bundle.digest(_snapshot_preflight(snapshot_root)) or
+                authority.security_core.security._policy_digest(authority.security_core.policy_root) != policy.policy_digest):
+            return Decision(False, ('snapshot-or-policy-changed',))
+        _source_binding(authority.security_core, source, candidate_root)
+        current = now + timedelta(seconds=max(0, time.monotonic() - started))
+        decision = bundle.evaluate_bundle(policy, source, parsed, observed, facts, now=current)
+        return Decision(decision.consistent, decision.reasons)
+    except (bundle.BundleError, OSError, ValueError, TypeError, AttributeError, GitHubError, ObservationError, zipfile.BadZipFile, NotImplementedError):
+        return Decision(False, ('protected-observation-or-validation-refused',))
 
 
-def _candidate_obligations(core: OperatorSecurityCore, root: Path | None, selector: Selector,
-                           report: dict, now: datetime) -> list[str]:
-    """Derive mandatory families from a bounded private copy of the exact commit."""
-    if root is None:
-        return ['security-candidate-source-unavailable']
-    try:
-        commit = core.git.run_git_bounded(root, ['cat-file', 'commit', selector.head_sha], limit=128 * 1024)
-        if not commit or commit.split(b'\n', 1)[0] != f'tree {selector.tree_sha}'.encode('ascii'):
-            return ['security-candidate-source-tree-mismatch']
-        paths = core.git.git_tree_paths(root, selector.head_sha, ('',))
-        if not core.paths.validate_paths(paths).ok or any('.git' in (part.casefold() for part in Path(p).parts) for p in paths):
-            return ['security-candidate-source-path-unsupported']
-        with TemporaryDirectory(prefix='public-security-inventory-') as directory:
-            # Keep data and policy inputs separate. No filters, hooks or assets
-            # from the candidate are executed by the immutable blob reader.
-            source = Path(directory) / 'source'
-            evaluator = Path(directory) / 'evaluator'
-            source.mkdir()
-            evaluator.mkdir()
-            size = 0
-            for start in range(0, len(paths), 32):
-                group = paths[start:start + 32]
-                blobs = core.git._git_blobs(root, selector.head_sha, group)
-                for name in group:
-                    payload = blobs[name]
-                    if payload is None:
-                        return ['security-candidate-source-incomplete']
-                    size += len(payload)
-                    if size > 32 * 1024 * 1024:
-                        return ['security-candidate-source-limit']
-                    target = source / name
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(payload)
-            if set(core.known_vulns._tracked_files(source)) != set(paths):
-                return ['security-candidate-source-incomplete']
-            inventory = core.inventory.collect_inventory(source)
-            obligations = core.security.security_obligations(evaluator, inventory, environ={}, now=now)
-    except (OSError, RuntimeError, ValueError):
-        return ['security-candidate-source-unavailable']
-
-    problems = []
-    if inventory['complete'] is not True or inventory['digest'] != report.get('inventory_sha256'):
-        problems.append('security-inventory-digest-mismatch-or-incomplete')
-    results = {value['name']: value['status'] for value in report['checks']}
-    required = {item['check_id']: item['applicability'] == 'required' for item in obligations}
-    for name, applies in required.items():
-        if applies and name not in {'security-inventory', 'known-vulnerabilities'}:
-            problems.append(f'security-required-family-unqualified:{name}')
-    required['secret-scan'] = True
-    required.update(core.source_families(inventory['files']))
-    for name, applies in required.items():
-        if results.get(name) != ('pass' if applies else 'skip'):
-            problems.append(f'security-family-applicability-mismatch:{name}')
-    return problems
+# Keep the earlier signed-wire contract behind its explicit operator-core type.
+# Canonical bundle consumers never enter the legacy verifier by wire shape alone.
+from .public_admission_legacy import OperatorSecurityCore
+from . import public_admission_legacy as _legacy_admission
 
 
-def _security_blockers(core: OperatorSecurityCore, authority: Authority, selector: Selector,
-                       report: dict[str, Any], now: datetime, snapshot_root: Path | None) -> list[str]:
-    # Keep the existing eleven-check inventory, freshness and NA proof semantics.
-    record = {'report': report, 'checker': {
-        'head': authority.checker_sha, 'tree': authority.checker_tree_sha,
-        'selected_ref': authority.checker_sha, 'selection': 'operator-variable',
-        'boundary': 'separate-checkout',
-    }}
-    problems = [f'security:{problem}' for problem in core.admission._security(record, selector.head_sha, selector.tree_sha, now)]
-    if report.get('policy_sha256') != authority.policy_digest:
-        problems.append('security-policy-digest-mismatch')
-    if report.get('qualification_gaps'):
-        problems.append('security-qualification-gaps-present')
-    recalculated = core.report.finalize_report(report['source'], report['source'], report['checks'],
-                                  report['inventory_sha256'], report['policy_sha256'], now=now)
-    if recalculated['status'] != 'pass':
-        problems.append('security-report-or-feed-freshness-invalid')
-    for check in report['checks']:
-        markers = [item for item in check.get('details', []) if isinstance(item, dict)
-                   and item.get('kind') == 'security-result']
-        for marker in markers:
-            # This bounded spike admits no finding dispositions, including waivers.
-            if marker.get('gaps') or marker.get('findings'):
-                problems.append('security-findings-or-coverage-gaps-present')
-            if (marker.get('inventory_sha256') != report['inventory_sha256']
-                    or marker.get('policy_sha256') != authority.policy_digest):
-                problems.append('security-marker-input-digest-mismatch')
-            sources = marker.get('data_sources', [])
-            if core.security.CHECK_FAMILIES.get(check['name']) == 'inventory':
-                if check.get('status') != 'pass' or marker.get('outcome') != 'pass':
-                    problems.append('security-inventory-required')
-            elif check['name'] in core.security.CHECK_FAMILIES and marker.get('outcome') == 'pass':
-                # The MVP qualifies applicable OSV consumption only. Other feed
-                # families need their full producer/input contracts integrated.
-                if check['name'] != 'known-vulnerabilities':
-                    problems.append('security-applicable-family-unqualified')
-                elif not sources or any(not source.get('source_id', '').startswith('osv:') for source in sources):
-                    problems.append('security-applicable-osv-inputs-unavailable')
-            for source in sources:
-                if snapshot_root is None:
-                    problems.append('security-trusted-snapshot-mirror-unavailable')
-                    continue
-                try:
-                    core.security.validate_data_source(source, root=snapshot_root, now=now, environ={})
-                except (OSError, ValueError, RuntimeError):
-                    problems.append('security-frozen-source-bytes-coverage-or-age-invalid')
-    return problems
+def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, candidate_root=None):
+    if authority is not None and isinstance(authority.security_core, OperatorSecurityCore):
+        return _legacy_admission.evaluate(client, authority, selector, evidence, now=now,
+                                          snapshot_root=snapshot_root, candidate_root=candidate_root)
+    return _evaluate_bundle(client, authority, selector, evidence, now=now,
+                            snapshot_root=snapshot_root, candidate_root=candidate_root)
