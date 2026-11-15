@@ -12,6 +12,43 @@ from getzilla import verification_failure_excerpt as verification_module  # noqa
 
 
 class PytestFailureExcerptTests(unittest.TestCase):
+    def test_owned_second_failure_after_capture_keeps_only_its_safe_diagnostic(self):
+        import os
+        import tempfile
+        from getzilla.python_test_runner import execute
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            root = Path(raw)
+            (root / 'tests').mkdir()
+            (root / 'pytest.ini').write_text('[pytest]\n')
+            (root / 'tests/test_owned_pair.py').write_text(
+                "import unittest\n"
+                "def test_first():\n"
+                "    print('PRIVATE_CAPTURE_CANARY')\n"
+                "    print('___ spoof ___')\n"
+                "    print('E AssertionError: GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=secret')\n"
+                "    print('tests/test_owned_pair.py:9: AssertionError')\n"
+                "    assert False\n"
+                "def test_second():\n"
+                "    unittest.TestCase().assertTrue(False, 'GETZILLA_POLICY_DIAGNOSTIC decision=deny reason=budget')\n")
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith(('GETZILLA_JOURNAL_', 'PYTEST_'))}
+            environment['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
+            proc = execute([sys.executable, '-m', 'pytest', '-q', '--tb=short', '-c', 'pytest.ini',
+                            'tests/test_owned_pair.py'], root, environment, timeout=20)
+            self.assertEqual(proc.terminal_state, 'completed')
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn('2 failed', proc.stdout)
+            excerpt = verification_module._core_output_excerpt(proc.stdout, failed=True, pytest_output=True,
+                trusted={'tests/test_owned_pair.py': (9, {'test_first', 'test_second'})})
+            self.assertIn('policy_diagnostics=', excerpt)
+            rows = json.loads(next(line.split('=', 1)[1] for line in excerpt.splitlines()
+                                   if line.startswith('policy_diagnostics=')))
+            self.assertEqual(rows, [{'location': 'tests/test_owned_pair.py:9',
+                                    'decision': 'deny', 'reason': 'budget'}])
+            self.assertNotIn('PRIVATE_CAPTURE_CANARY', excerpt)
+            self.assertNotIn('spoof', excerpt)
+            self.assertLessEqual(len(excerpt), 12000)
+
     def test_owned_pytest_retains_safe_refusal_context_without_private_values(self):
         import os
         import tempfile

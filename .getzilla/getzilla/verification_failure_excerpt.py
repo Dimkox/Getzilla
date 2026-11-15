@@ -128,6 +128,10 @@ def _core_output_excerpt(output: str, *, failed: bool,
         if len(line) > 1024 or any(ord(character) < 32 for character in line):
             omitted = True
             continue
+        failure_header = re.fullmatch(r'_{3,}\s+([A-Za-z_][A-Za-z0-9_.]*)\s+_{3,}', line)
+        if failure_header and any(failure_header.group(1).replace('.', '::') in names
+                                  for _, names in trusted.values()):
+            captured = False  # An unknown heading inside captured data is not a boundary.
         if re.match(r'^_{3,}.*_{3,}$', line) or re.match(r'^={3,}\s*short test summary info', line):
             if len(diagnostic_blocks) < 20:
                 diagnostic_blocks.append((block_locations, block_codes))
