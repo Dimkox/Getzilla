@@ -544,6 +544,14 @@
       "path": ".getzilla/optional-modules/search-gateway/0.1.0/result.schema.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-TRUST-CI-PUBLIC-OPENAPI",
+      "kind": "openapi",
+      "path": "engineering/contracts/openapi/trust-ci.public.v1.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -3014,6 +3022,101 @@
       "sync_or_async": "synchronous",
       "to": "NODE-ISOLATED-ACCEPTANCE",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-JOB-STATE",
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-DURABLE-STATE-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-TRUST-CI-API",
+      "id": "EDGE-PUBLIC-API-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-TRUST-CI-PUBLIC-JOURNAL",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-JOB-STATE",
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-DURABLE-STATE-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-PUBLIC-WORKER-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-TRUST-CI-PUBLIC-JOURNAL",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PUBLICATION-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 20000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-PUBLIC-WORKER-RUNTIME",
+      "network_policy": "no_network",
+      "protocol": "python",
+      "sync_or_async": "synchronous",
+      "to": "NODE-TRUST-CI-API",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-ATTESTATION",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PUBLICATION-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 20000
+      },
+      "from": "NODE-TRUST-CI-API",
+      "id": "EDGE-PUBLIC-RUNTIME-BUNDLE",
+      "network_policy": "no_network",
+      "protocol": "python",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-SECURITY-BUNDLE",
+      "type": "dependency"
     }
   ],
   "nodes": [
@@ -4529,7 +4632,8 @@
       "public_contracts": [
         "CONTRACT-APPROVAL-ENVELOPE",
         "CONTRACT-GITHUB-PR-PROJECTION",
-        "CONTRACT-TRUST-CI-OPENAPI"
+        "CONTRACT-TRUST-CI-OPENAPI",
+        "CONTRACT-TRUST-CI-PUBLIC-OPENAPI"
       ],
       "repository_paths": [
         "trust-ci/src/adaptive_trust_ci/api.py",
@@ -4537,7 +4641,8 @@
         "trust-ci/src/adaptive_trust_ci/public_admission_legacy.py",
         "trust-ci/src/adaptive_trust_ci/public_merge.py",
         "trust-ci/src/adaptive_trust_ci/public_publisher.py",
-        "trust-ci/src/adaptive_trust_ci/webhooks.py"
+        "trust-ci/src/adaptive_trust_ci/webhooks.py",
+        "trust-ci/src/adaptive_trust_ci/public_runtime.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4601,7 +4706,8 @@
         "trust-ci/src/adaptive_trust_ci/runner.py",
         "trust-ci/src/adaptive_trust_ci/settings.py",
         "trust-ci/src/adaptive_trust_ci/signing.py",
-        "trust-ci/src/adaptive_trust_ci/worker.py"
+        "trust-ci/src/adaptive_trust_ci/worker.py",
+        "trust-ci/src/adaptive_trust_ci/public_http.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -4662,6 +4768,22 @@
       "secrets": [],
       "trust_domain": "TD-REPOSITORY",
       "type": "repository"
+    },
+    {
+      "data_classification": "DATA-JOB-STATE",
+      "id": "NODE-TRUST-CI-PUBLIC-JOURNAL",
+      "owner": "Trust CI operators; optional embedded SQLite journal, no independent process",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-TRUST-CI-CONTROL",
+      "type": "datastore"
     }
   ],
   "schema_version": 1,
