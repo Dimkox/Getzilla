@@ -6,6 +6,7 @@ No publisher, merger, operator identity or actual deployment is implemented.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from datetime import timedelta
 import hashlib
 import importlib
@@ -87,6 +88,7 @@ class Decision:
     eligible: bool
     blockers: tuple
     provenance: str = 'protected-host-evaluation-unactivated'
+    valid_until: datetime | None = None
 
 
 def _identity(info):
@@ -255,6 +257,10 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
         if snapshot_root is None:
             # Never fall back to a candidate/default runtime database/catalogue.
             return refused()
+        paired = (source.mode == 'github' and callable(getattr(core.report, 'source_binding', None))
+                  and callable(getattr(core.report, 'finalize_report', None)))
+        source_before = (core.report.source_binding(source_root, core.policy_root, snapshot_root)
+                         if paired else None)
         obligations = core.security.security_obligations(source_root, inventory, environ=roots,
                                                         now=now, policy_root=core.policy_root)
         required, validated, actual_descriptors = [], {}, {}
@@ -308,9 +314,24 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
         if content_manifest(source_root) != before or _snapshot_preflight(snapshot_root) != snapshots:
             return refused()
         _source_binding(core, source, source_root)
+        valid_until, checker_source = None, None
+        if paired:
+            source_after = core.report.source_binding(source_root, core.policy_root, snapshot_root)
+            if (type(source_before) is not dict or source_before != source_after
+                    or source_after.get('head_sha') != source.head_sha
+                    or source_after.get('tree_sha') != source.tree_sha):
+                return refused()
+            timed = core.report.finalize_report(source_before, source_after, supplied,
+                                                inventory['digest'], actual_policy, now=now)
+            if timed.get('status') != 'pass' or timed.get('valid_until_utc') is None:
+                return refused()
+            valid_until = timed['valid_until_utc']
+            if bundle.parse_datetime(valid_until) < now:
+                return refused()
+            checker_source = (source_after['checker_sha'], source_after['checker_tree_sha'])
         return bundle.ValidationFacts(bundle.digest(value['source']), actual_policy, bundle.digest(value['report']),
             inventory['digest'], tuple(required), tuple(validated.values()), (), True, integration_digest, integrated,
-            bundle.digest(before), bundle.digest(snapshots))
+            bundle.digest(before), bundle.digest(snapshots), valid_until, checker_source)
     except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError, zipfile.BadZipFile):
         return refused()
 
@@ -340,6 +361,8 @@ def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, 
         _source_binding(authority.security_core, source, candidate_root)
         current = now + timedelta(seconds=max(0, time.monotonic() - started))
         decision = bundle.evaluate_bundle(policy, source, parsed, observed, facts, now=current)
-        return Decision(decision.consistent, decision.reasons)
+        if facts.valid_until is not None and facts.checker_source != (authority.checker_sha, authority.checker_tree_sha):
+            return Decision(False, ('checker-source-mismatch',))
+        return Decision(decision.consistent, decision.reasons, valid_until=decision.valid_until)
     except (bundle.BundleError, OSError, ValueError, TypeError, AttributeError, GitHubError, ObservationError, zipfile.BadZipFile, NotImplementedError):
         return Decision(False, ('protected-observation-or-validation-refused',))
