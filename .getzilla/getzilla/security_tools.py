@@ -294,6 +294,12 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None) -> l
 
 
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
+    if any(item.get('selection_assurance') == 'declaration-only-unverified'
+           for item in inventory.get('images', []) if isinstance(item, dict)):
+        return {'outcome': 'blocked', 'summary': 'selected image declarations lack qualified artifact/platform provenance',
+                'findings': [], 'gaps': [{'code': 'unqualified-image-selection',
+                                        'message': 'explicit choices are not measured image or platform evidence'}],
+                'images': [], 'data_sources': []}
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
     results, gaps, findings = [], [], []

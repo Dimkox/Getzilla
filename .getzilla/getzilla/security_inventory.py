@@ -247,9 +247,65 @@ def workflow_downloads(command: str, manifest: str, line: int, source: bytes, re
     return tools, gaps
 
 
-def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = None) -> dict[str, Any]:
+def selected_image_use(uses: list[dict], *, path: str, line: int, source_sha256: str,
+                       expression: str, platform: str | None = None) -> dict:
+    """Select declared local inputs for one exact source use; not scan evidence."""
+    if not isinstance(uses, list) or not 1 <= len(uses) <= 512:
+        raise ValueError('image selection requires a bounded nonempty source-use list')
+    keys = set()
+    found = None
+    for row in uses:
+        if (not isinstance(row, dict) or set(row) != {'path', 'line', 'source_sha256', 'expression', 'reference', 'platform'}
+                or not isinstance(row['path'], str) or not 0 < len(row['path']) <= 256
+                or re.fullmatch(r'[A-Za-z0-9_./-]+', row['path']) is None
+                or PurePosixPath(row['path']).is_absolute() or any(p in {'', '.', '..'} for p in row['path'].split('/'))
+                or type(row['line']) is not int or row['line'] <= 0
+                or not isinstance(row['source_sha256'], str) or re.fullmatch('[0-9a-f]{64}', row['source_sha256']) is None
+                or not isinstance(row['expression'], str) or not 0 < len(row['expression']) <= 8192
+                or not isinstance(row['reference'], str) or len(row['reference']) > 2048
+                or _IMAGE_DIGEST.fullmatch(row['reference']) is None
+                or row['platform'] not in {'linux/amd64', 'linux/arm64'}):
+            raise ValueError('image selection has an invalid closed source-use schema')
+        key = (row['path'], row['line'], row['source_sha256'], row['expression'])
+        if key in keys:
+            raise ValueError('duplicate image source-use selection')
+        keys.add(key)
+        if key == (path, line, source_sha256, expression):
+            found = row
+    if found is None:
+        raise ValueError('current source image use has no exact selection')
+    original = expression.removeprefix('docker://')
+    if (_IMAGE_DIGEST.fullmatch(original) and original != found['reference']) or (platform and platform != found['platform']):
+        raise ValueError('image selection conflicts with immutable source identity or literal platform')
+    return dict(found)
+
+
+def read_image_selection(path: Path | None) -> dict | None:
+    """Read at most64KiB of explicit declarations, never image evidence.
+
+    The closed document has schema_version1, exact source/run objects matching
+    input_profile, a timezone-aware created_at, and1..512 uses. Each use names
+    path/line/source_sha256/expression/reference/platform. All uses must still
+    exist in current bytes. The caller must obtain genuine immutable image and
+    platform provenance separately; no transport or scanner authority is added.
+    """
+    if path is None:
+        return None
+    from .security_artifacts import read_file
+    from .security_data import _json
+    path = Path(path).absolute()
+    document = _json(read_file(path.parent, path.name, 65536))
+    if (set(document) != {'schema_version', 'source', 'run', 'created_at', 'uses'}
+            or type(document['schema_version']) is not int or document['schema_version'] != 1
+            or not isinstance(document['uses'], list) or not 1 <= len(document['uses']) <= 512):
+        raise ValueError('image selection document is malformed')
+    return document
+
+
+def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
-    bindings = image_bindings or {}
+    bindings = {} if image_bindings is None else image_bindings
+    used_selections = set()
     result: dict[str, Any] = {'schema_version': 1, 'files': [], 'manifests': [], 'dependencies': [],
                               'images': [], 'tools': [], 'gaps': [], 'excluded_fixture_paths': []}
     dependencies = {}
@@ -275,8 +331,20 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
         else:
             add('PyPI', match[1], match[3], path, usage, match[2] or '')
 
-    def image(reference: str, path: str, line: int, *, require_digest=False, source_reference=None):
+    def image(reference: str, path: str, line: int, *, require_digest=False, source_reference=None, platform=None):
         original = reference
+        selected = None
+        if isinstance(bindings, list):
+            try:
+                selected = selected_image_use(bindings, path=path, line=line,
+                    source_sha256=hashlib.sha256(texts[path].encode()).hexdigest(),
+                    expression=original if source_reference is None else source_reference, platform=platform)
+                if _IMAGE_DIGEST.fullmatch(original) and original != selected['reference']:
+                    raise ValueError('immutable source image cannot be replaced by selection')
+                used_selections.add(canonical_digest(selected))
+                reference, platform = selected['reference'], selected['platform']
+            except ValueError:
+                gap('image-selection-refused', path, 'selected image use differs from current source or platform')
         variable = re.fullmatch(r'\$\{([A-Z][A-Z0-9_]*)(?::[?+-][^}]*)?\}', reference)
         if variable:
             observed = bindings.get(variable[1], '') if isinstance(bindings, dict) else ''
@@ -289,15 +357,18 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
             gap('unresolved-image', path, 'image requires an immutable sha256 reference')
         result['images'].append({'reference': reference or original,
                                  'source_reference': original if source_reference is None else source_reference,
-                                 'manifest': path, 'line': line, 'kind': 'oci-image', 'platform': 'unknown',
+                                 'manifest': path, 'line': line, 'kind': 'oci-image', 'platform': platform or 'unknown',
                                  'usage': 'build-ci' if path.startswith('.github/') else 'runtime-and-development',
                                  'source_sha256': hashlib.sha256(texts[path].encode()).hexdigest()})
+        if selected is not None:
+            result['images'][-1].update(selection_sha256=canonical_digest(selected),
+                                        selection_assurance='declaration-only-unverified')
 
-    def yaml_image(value: _YamlNode | None, path: str, label: str, *, container=False):
+    def yaml_image(value: _YamlNode | None, path: str, label: str, *, container=False, platform=None):
         if container and value is not None and value.kind == 'mapping':
             value = value.value.get('image')
         reference = _yaml_text(value, label)
-        image(reference, path, value.line, require_digest=True)
+        image(reference, path, value.line, require_digest=True, platform=platform)
 
     def action(value: _YamlNode, path: str, *, reusable=False):
         reference = _yaml_text(value, 'Actions uses')
@@ -327,9 +398,23 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                     if indirect in fields:
                         gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
                 if 'image' in fields:
-                    yaml_image(fields['image'], relative, 'Compose image')
+                    platform = _yaml_text(fields['platform'], 'Compose platform') if 'platform' in fields else None
+                    if platform is not None and platform not in {'linux/amd64', 'linux/arm64'}:
+                        gap('unresolved-image-platform', relative, 'Compose image platform is unsupported or unresolved')
+                        platform = None
+                    yaml_image(fields['image'], relative, 'Compose image', platform=platform)
                 elif not set(fields) & {'build', 'extends', 'provider'}:
                     gap('unresolved-image', relative, 'Compose service has no resolved image; override/composition needs evidence')
+                if 'environment' in fields:
+                    environment = fields['environment']
+                    if environment.kind == 'mapping' and 'TRUST_CI_RUNNER_IMAGE' in environment.value:
+                        yaml_image(environment.value['TRUST_CI_RUNNER_IMAGE'], relative, 'Trust runner image')
+                    elif environment.kind == 'sequence':
+                        for value in environment.value:
+                            text = _yaml_text(value, 'Compose environment')
+                            if text == 'TRUST_CI_RUNNER_IMAGE' or text.startswith('TRUST_CI_RUNNER_IMAGE='):
+                                image(text.partition('=')[2], relative, value.line, require_digest=True,
+                                      source_reference=text)
             return
         known = {'name', 'run-name', 'on', 'permissions', 'env', 'defaults', 'concurrency', 'cache-mode', 'jobs'}
         if set(document) - known:
@@ -506,8 +591,15 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
         for line_number, raw in enumerate(text.splitlines(), 1):
             line = raw.strip()
             reference = None
+            platform = None
             if is_docker and re.match(r'FROM\s', line, re.IGNORECASE):
                 parts = line.split()
+                platforms = [part.partition('=')[2] for part in parts if part.startswith('--platform=')]
+                if platforms:
+                    if len(platforms) != 1 or platforms[0] not in {'linux/amd64', 'linux/arm64'}:
+                        gap('unresolved-image-platform', relative, 'Dockerfile FROM requires one supported literal platform')
+                        continue
+                    platform = platforms[0]
                 parts = [part for part in parts[1:] if not part.startswith('--platform=')]
                 reference = parts[0] if parts else ''
                 internal_stage = reference.lower() == 'scratch' or reference.lower() in stages
@@ -516,8 +608,10 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | None = Non
                 if internal_stage:
                     continue
             if reference is not None:
-                image(reference, relative, line_number)
+                image(reference, relative, line_number, platform=platform)
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
+    if isinstance(bindings, list) and used_selections != {canonical_digest(row) for row in bindings}:
+        gap('unused-image-selection', '<selection>', 'selected uses do not match the complete current source inventory')
     result['complete'] = not result['gaps']
     result['artifact_coverage'] = 'not_evaluated'
     result['digest'] = canonical_digest(result)

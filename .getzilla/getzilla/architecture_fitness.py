@@ -297,6 +297,33 @@ class _QueueBudget:
         self.summary_work = 0
         self.root_steps = 0
 
+    def refusal(self, message: str, category: str, limit: int | None, observed: int | None,
+                *, site: str = 'budget', cached: tuple[str, ...] = ()) -> ArchitectureError:
+        error = ArchitectureError(message, code='limit')
+        active = [frame['module'] if frame.get('module') else
+                  'sha256:' + hashlib.sha256(frame['key'].encode('utf-8', 'surrogatepass')).hexdigest()
+                  for frame in self.frames]
+        witness = [value if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]{0,255}', value) else
+                   'sha256:' + hashlib.sha256(value.encode('utf-8', 'surrogatepass')).hexdigest() for value in cached]
+        detail = dict(version=1, kind='queue-analysis-refusal', side=self.side if self.side in {'head', 'base'} else 'unknown',
+                      category=category, limit=limit, observed=observed, site=site,
+                      witness_scope='ordered-module-request-frames', active=active, cached=witness,
+                      active_omitted=0, cached_omitted=0,
+                      cached_witness_unavailable=site == 'cached' and not cached)
+        while len((message + '; ' + json.dumps(detail, separators=(',', ':'))).encode()) > 2048:
+            selected = 'cached' if detail['cached'] else 'active'
+            if not detail[selected]:
+                break
+            detail[selected].pop()
+            detail[selected + '_omitted'] += 1
+        error.queue_refusal = detail
+        return error
+
+    def check_depth(self, depth: int, *, site: str, cached: tuple[str, ...] = ()) -> None:
+        if depth > MAX_QUEUE_ADAPTER_DEPTH:
+            raise self.refusal('queue adapter depth limit exceeded', 'depth', MAX_QUEUE_ADAPTER_DEPTH,
+                               depth, site=site, cached=cached)
+
     def source(self, path: str, value: bytes, nodes: int = 0) -> None:
         self._source(_QueueSourceFootprint(path, hashlib.sha256(value).hexdigest(), len(value), nodes))
 
@@ -306,13 +333,14 @@ class _QueueBudget:
         # Every inspected source counts, including the importer, declarations
         # and transitive cache hits. Cache warmth cannot change admission.
         if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
-            raise ArchitectureError('queue adapter module limit exceeded', code='limit')
+            raise self.refusal('queue adapter module limit exceeded', 'modules', MAX_QUEUE_ADAPTER_MODULES,
+                               len({source.path for source in self.sources.values()} | {item.path}))
         byte_total = self.source_bytes + (0 if previous else item.size)
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
         if byte_total > MAX_QUEUE_ANALYSIS_BYTES:
-            raise ArchitectureError('queue aggregate source byte limit exceeded', code='limit')
+            raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', MAX_QUEUE_ANALYSIS_BYTES, byte_total)
         if node_total > MAX_QUEUE_ANALYSIS_AST_NODES:
-            raise ArchitectureError('queue aggregate AST node limit exceeded', code='limit')
+            raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', MAX_QUEUE_ANALYSIS_AST_NODES, node_total)
         self.source_bytes, self.ast_nodes = byte_total, node_total
         self.sources[key] = item._replace(nodes=max(item.nodes, previous.nodes if previous else 0))
         for frame in self.frames:
@@ -322,7 +350,7 @@ class _QueueBudget:
     def _work(self, key: str, cost: int) -> None:
         total = self.logical_work + max(0, cost - self.work.get(key, 0))
         if total > MAX_QUEUE_ANALYSIS_WORK:
-            raise ArchitectureError('queue aggregate work limit exceeded', code='limit')
+            raise self.refusal('queue aggregate work limit exceeded', 'work', MAX_QUEUE_ANALYSIS_WORK, total)
         self.logical_work = total
         self.work[key] = max(cost, self.work.get(key, 0))
         for frame in self.frames:
@@ -333,7 +361,7 @@ class _QueueBudget:
         if not request:
             self.summary_work += cost
             if self.summary_work > MAX_QUEUE_ANALYSIS_WORK:
-                raise ArchitectureError('queue aggregate work limit exceeded', code='limit')
+                raise self.refusal('queue aggregate work limit exceeded', 'work', MAX_QUEUE_ANALYSIS_WORK, self.summary_work)
         if self.frames:
             frame = self.frames[-1]
             frame['own'] += cost
@@ -342,8 +370,9 @@ class _QueueBudget:
             self.root_steps += cost
             self._work('importer', self.root_steps)
 
-    def enter(self, key: str) -> dict[str, Any]:
-        frame: dict[str, Any] = {'key': key, 'own': 0, 'sources': {}, 'work': {}}
+    def enter(self, key: str, *, module: str | None = None) -> dict[str, Any]:
+        safe = module if isinstance(module, str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]{0,255}', module) else None
+        frame: dict[str, Any] = {'key': key, 'module': safe, 'own': 0, 'sources': {}, 'work': {}}
         self.frames.append(frame)
         return frame
 
@@ -374,6 +403,7 @@ class _QueueAdapterResolution(NamedTuple):
     modules: frozenset[str] = frozenset()
     height: int = 1
     footprint: _QueueFootprint | None = None
+    witness: tuple[str, ...] = ()
 
 
 class _QueueResolutionCache(NamedTuple):
@@ -389,6 +419,13 @@ class _QueueAdapterNamesResult(NamedTuple):
     modules: frozenset[str] = frozenset()
     height: int = 0
     unproved_queue_callback: bool = False
+    witness: tuple[str, ...] = ()
+
+
+def _queue_limit_text(error: ArchitectureError) -> str:
+    """Serialize the captured refusal before ordered frames are unwound."""
+    detail = getattr(error, 'queue_refusal', None)
+    return str(error) if detail is None else str(error) + '; ' + json.dumps(detail, separators=(',', ':'))
 
 
 class _OperationDependencies(NamedTuple):
@@ -3420,7 +3457,7 @@ def _local_queue_resolution(
                             for path, value, _package in prefetched.sources) if prefetched else ()
     work_key = repr((side, module, tuple(sorted(requested)) if requested is not None else None,
                      callable_only, source_identity))
-    frame = budget.enter(work_key)
+    frame = budget.enter(work_key, module=module)
     try:
         budget.step(request=True)
         cached = cache.demands.get(original_key)
@@ -3438,11 +3475,14 @@ def _local_queue_resolution(
             # independent of whether this request has a parent.
             if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
                 raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-            if len(resolving) + 1 > MAX_QUEUE_ADAPTER_DEPTH:
-                raise ArchitectureError('queue adapter depth limit exceeded', code='limit')
+            budget.check_depth(len(resolving) + 1, site='declaration')
             visited.add(module)
-            result = result._replace(modules=frozenset({module}), height=1)
-    except BaseException:
+            result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
+    except BaseException as error:
+        if isinstance(error, ArchitectureError) and error.code == 'limit' and not hasattr(error, 'queue_refusal'):
+            # Capture actual active request frames before unwinding. An inner
+            # interpreter refusal with no measured counter stays explicitly unknown.
+            error.queue_refusal = budget.refusal(str(error), 'other', None, None, site='resolver').queue_refusal
         budget.leave(frame)
         raise
     footprint = budget.leave(frame)
@@ -3497,14 +3537,12 @@ def _local_queue_resolution_impl(
         return prefetched
     if module in resolving:
         return _QueueAdapterResolution("unsupported", "cyclic_local_queue_adapter")
-    if len(resolving) >= MAX_QUEUE_ADAPTER_DEPTH:
-        raise ArchitectureError("queue adapter depth limit exceeded", code="limit")
+    budget.check_depth(len(resolving) + 1, site='active')
     cached = cache.demands.get(demand_key)
     if cached is not None and not (cached.modules & resolving):
         if len(visited | cached.modules) > MAX_QUEUE_ADAPTER_MODULES:
             raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-        if len(resolving) + cached.height > MAX_QUEUE_ADAPTER_DEPTH:
-            raise ArchitectureError('queue adapter depth limit exceeded', code='limit')
+        budget.check_depth(len(resolving) + cached.height, site='cached', cached=cached.witness)
         visited.update(cached.modules)
         return cached
     resolving.add(module)
@@ -3579,6 +3617,7 @@ def _local_queue_resolution_impl(
         result = _QueueAdapterResolution(
             state, reason, exports, analysis.signals, declared,
             modules=imported.modules | {module}, height=imported.height + 1,
+            witness=(module, *imported.witness),
         )
         # Side/source bytes belong to this snapshot cache; a completed summary
         # additionally binds the export demand, transitive module cost and depth.
@@ -3609,6 +3648,7 @@ def _queue_adapter_names(
     unsupported = False
     modules: set[str] = set()
     height = 0
+    witness: tuple[str, ...] = ()
     unproved_queue_callback = False
     active = resolving if resolving is not None else set()
     seen = visited if visited is not None else set()
@@ -3702,7 +3742,8 @@ def _queue_adapter_names(
             tuple(sorted({signal for item in results for signal in item.signals})),
             tuple(sorted({name for item in results for name in item.declared_exports})),
             modules=frozenset(name for item in results for name in item.modules),
-            height=max(item.height for item in results))
+            height=max(item.height for item in results),
+            witness=max(results, key=lambda item: (item.height, bool(item.modules))).witness)
 
     for _target, _member, replacement, factory in patches.values():
         names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
@@ -3763,12 +3804,16 @@ def _queue_adapter_names(
                  frozenset(reachable) if wildcard else demanded_members(access_name)),
                 split=whole_module and not wildcard)
             modules.update(resolution.modules)
+            if resolution.modules and resolution.height > height:
+                witness = resolution.witness
             height = max(height, resolution.height if resolution.modules else 0)
             if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
                 _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
                 resolution = resolve_import(target_module, demanded_members(access_name), split=True)
                 modules.update(resolution.modules)
+                if resolution.modules and resolution.height > height:
+                    witness = resolution.witness
                 height = max(height, resolution.height if resolution.modules else 0)
                 queue_adjacent = _queue_adjacent_module(target_module)
             export_resolved = (
@@ -3855,7 +3900,7 @@ def _queue_adapter_names(
                 target_name and target_name in resolution.exports
             ) or (not target_name and resolution.exports):
                 proven.add(local_name)
-    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height, unproved_queue_callback)
+    return _QueueAdapterNamesResult(frozenset(proven), unsupported, frozenset(modules), height, unproved_queue_callback, witness)
 
 
 def _queue_signals(
@@ -3986,7 +4031,7 @@ def _new_queue_sources(
                     applicable.append(path)
         except ArchitectureError as exc:
             if exc.code == "limit":
-                limits.append((path, side, str(exc)))
+                limits.append((path, side, _queue_limit_text(exc)))
             else:
                 unsupported.append(path)
                 code = _queue_diagnostic_code(exc.code)

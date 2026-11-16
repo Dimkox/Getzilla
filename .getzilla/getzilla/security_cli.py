@@ -21,7 +21,7 @@ from .python_test_runner import execute
 from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
-from .security_inventory import collect_inventory
+from .security_inventory import collect_inventory, read_image_selection, canonical_digest
 from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file
@@ -35,7 +35,13 @@ _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
                     'from getzilla.security_cli import main;raise SystemExit(main())')
 
 
-def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None) -> dict:
+def _image_refusal(code: str, message: str) -> SecurityDataError:
+    error = SecurityDataError(message)
+    error.image_input_refusal = code
+    return error
+
+
+def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_selection=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     keys = {'head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha', 'candidate_clean', 'checker_clean', 'same_project'}
     if (not isinstance(source, dict) or set(source) != keys or source['candidate_clean'] is not True
@@ -80,6 +86,9 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         'security-container-images': images}
     body['image_profile'] = None
     if counts['images']:
+        if any(not isinstance(item.get('reference'), str)
+               or re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', item['reference']) is None for item in inventory['images']):
+            raise SecurityDataError('image input requires explicit immutable identities')
         platforms = {item.get('platform') for item in inventory['images']}
         if len(platforms) != 1 or not platforms <= {'linux/amd64', 'linux/arm64'}:
             raise SecurityDataError('image input platform remains unproved')
@@ -87,17 +96,31 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
             'platform': next(iter(platforms)), 'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
             'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
             'max_manifest_bytes': MAX_INDEX_BYTES, 'max_layers': 10000, 'deadline_seconds': 900}
+    if image_selection is not None:
+        from .security_data import _timestamp
+        if image_selection.get('source') != source or image_selection.get('run') != run:
+            raise _image_refusal('image-selection-source-mismatch',
+                                 'image selection differs from independently observed source/checker/run/attempt')
+        age = (_clock(now) - _timestamp(image_selection.get('created_at'))).total_seconds()
+        if not 0 <= age <= MAX_AGE_SECONDS:
+            raise _image_refusal('image-selection-stale', 'image selection is future or stale')
+        body['image_selection_sha256'] = canonical_digest(image_selection)
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
 
 
-def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None) -> dict:
+def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_selection=None) -> dict:
     if not isinstance(profile, dict) or not isinstance(profile.get('created_at'), str):
         raise SecurityDataError('explicit public input profile is missing')
     from .security_data import _timestamp
     created = _timestamp(profile['created_at'])
     age = (_clock(now) - created).total_seconds()
-    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created):
+    if image_selection is not None:
+        selection_age = (_clock(now) - _timestamp(image_selection.get('created_at'))).total_seconds()
+        if not 0 <= selection_age <= MAX_AGE_SECONDS:
+            raise _image_refusal('image-selection-stale', 'image selection is future or stale at consumption')
+    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy,
+                                                               now=created, image_selection=image_selection):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -156,7 +179,8 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
 
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
-                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None) -> dict:
+                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None,
+                   image_selection: Path | None = None) -> dict:
     """Reuse existing producers for explicit inputs; never run vulnerability/scanner callbacks."""
     if not write_profile and not isinstance(profile, dict):
         raise SecurityDataError('explicit current public input profile required before preparation')
@@ -170,13 +194,21 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     tools.mkdir(parents=True, exist_ok=True, mode=0o700)
     env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
            'GETZILLA_SECURITY_TOOLS': roots['tools']}
-    inventory = collect_inventory(root)
+    selection = read_image_selection(image_selection)
+    if image_selection is not None:
+        env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(image_selection.absolute())
+    inventory = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
     policy = _policy_digest(root)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
-            return input_profile(before, inventory, roots, run, policy, now=now)
-        validate_input_profile(profile, before, inventory, roots, run, policy, now=now)
+            return input_profile(before, inventory, roots, run, policy, now=now, image_selection=selection)
+        validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_selection=selection)
+        if refresh and inventory['images']:
+            # The accepted transport cannot enforce its declared image-byte
+            # ceilings. Refuse before any feed/tool/package acquisition.
+            raise _image_refusal('bounded-image-transport-unavailable',
+                                 'bounded immutable image acquisition unavailable; explicit choices are not qualified artifacts')
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
                     or type(families['schema_version']) is not int or families['schema_version'] != 1
@@ -199,9 +231,10 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             raise SecurityDataError('family publication requires explicit refresh selection')
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
         licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
-        after_inventory = collect_inventory(root)
+        after_selection = read_image_selection(image_selection)
+        after_inventory = collect_inventory(root, image_bindings=after_selection['uses'] if after_selection else None)
         after = source_binding(root, TRUSTED_ROOT, Path(temporary))
-        if after_inventory != inventory:
+        if after_inventory != inventory or after_selection != selection:
             raise SecurityDataError('source inventory changed during public input preparation')
         return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
 
@@ -227,6 +260,8 @@ def _supervised_preparation(args, profile):
                 command.append('--' + name.replace('_', '-'))
         if args.family_records is not None:
             command.extend(['--family-records', str(args.family_records)])
+        if getattr(args, 'image_selection', None) is not None:
+            command.extend(['--image-selection', str(args.image_selection)])
         process = execute(command, args.root, environment, timeout=600)
         if process.returncode == 0 and process.terminal_state == 'completed' and not process.cleanup_error:
             report = _json(read_file(args.json_out.parent, args.json_out.name, MAX_INDEX_BYTES))
@@ -510,14 +545,19 @@ def finalize_report(before: dict, after: dict, checks: list[dict], inventory_dig
 
 
 def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refresh=False,
-             provision=False, now=None, profile=None, run=None) -> dict:
+             provision=False, now=None, profile=None, run=None, image_selection: Path | None = None) -> dict:
     if (refresh or provision) and not isinstance(profile, dict):
         raise SecurityDataError('acquisition requires an explicit current public input profile')
     root, artifacts, tools = (path.resolve() for path in (root, artifacts, tools))
     database = database.absolute()  # Keep named links visible to descriptor snapshot I/O.
     env = {'GETZILLA_SECURITY_DB': str(database), 'GETZILLA_SECURITY_ARTIFACTS': str(artifacts),
            'GETZILLA_SECURITY_TOOLS': str(tools)}
-    inventory = collect_inventory(root)
+    selection = read_image_selection(image_selection)
+    if image_selection is not None:
+        if profile is None:
+            raise SecurityDataError('explicit image selection requires a current source/run input profile')
+        env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(image_selection.absolute())
+    inventory = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
     checks = []
@@ -529,7 +569,10 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
             before = source_binding(root, TRUSTED_ROOT, scratch)
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
-                                       'tools': str(tools)}, run, policy, now=now)
+                                       'tools': str(tools)}, run, policy, now=now, image_selection=selection)
+            if refresh and inventory['images']:
+                raise _image_refusal('bounded-image-transport-unavailable',
+                                     'bounded immutable image acquisition unavailable; declared choices remain unqualified')
             def acquire(label, operation):
                 try:
                     acquisitions.extend(operation())
@@ -560,9 +603,10 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 checks.append(_check(value['name'], outcome, value['summary'], inventory, policy,
                                      findings=value.get('findings', []), gaps=value.get('gaps', []),
                                      extra={key: value[key] for key in ('coverage', 'binary_inputs', 'factory_offline_use') if key in value}))
-            final_inventory = collect_inventory(root)
+            final_selection = read_image_selection(image_selection)
+            final_inventory = collect_inventory(root, image_bindings=final_selection['uses'] if final_selection else None)
             final_plan = security_obligations(root, final_inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
-            if final_plan != initial_plan or final_inventory['digest'] != inventory['digest']:
+            if final_plan != initial_plan or final_inventory['digest'] != inventory['digest'] or final_selection != selection:
                 raise SecurityDataError('required inputs, source age or inventory changed during security execution')
             expected_sources = {item['check_id']: item['data_sources'] for item in final_plan}
             for check in checks:
@@ -586,6 +630,8 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
 
 def _evaluation_kwargs(args, profile, run) -> dict:
     options = {'refresh': args.refresh, 'provision': args.provision_tools}
+    if getattr(args, 'image_selection', None) is not None:
+        options['image_selection'] = args.image_selection
     if args.input_profile is not None:
         options.update(profile=profile, run=run)
     return options
@@ -604,9 +650,12 @@ def main(argv=None) -> int:
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
+    parser.add_argument('--image-selection', type=Path, help='bounded current source-use immutable image/platform declarations; not acquisition evidence')
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.image_selection is not None:
+        args.image_selection = args.image_selection.absolute()
     if args.family_records is not None and not (args.prepare_inputs and args.refresh):
         parser.error('--family-records requires explicit input preparation and refresh')
     if args.write_input_profile is not None and args.input_profile is not None:
@@ -625,15 +674,18 @@ def main(argv=None) -> int:
         elif args.prepare_inputs or args.write_input_profile is not None:
             report = prepare_inputs(args.root, args.database, args.artifacts, args.tools,
                 profile=profile, run=run, write_profile=args.write_input_profile is not None,
-                refresh=args.refresh, provision=args.provision_tools, families=families)
+                refresh=args.refresh, provision=args.provision_tools, families=families, image_selection=args.image_selection)
             if args.write_input_profile is not None:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:
             report = evaluate(args.root, args.database, args.artifacts, args.tools,
                               **_evaluation_kwargs(args, profile, run))
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as error:
+        code = getattr(error, 'image_input_refusal', None)
+        allowed = {'image-selection-source-mismatch', 'image-selection-stale', 'bounded-image-transport-unavailable'}
         report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
-                  'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused'}
+                  'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused',
+                  'refusal_code': code if code in allowed else 'input-validation-unavailable'}
     body = (json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n').encode()
     if len(body) > MAX_INDEX_BYTES:
         raise SecurityDataError('public input report exceeds the existing metadata byte bound')
