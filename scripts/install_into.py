@@ -49,6 +49,8 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_search_gateway.py",
+    "docs/search-gateway.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
@@ -148,6 +150,12 @@ DESIGN_REFERENCE_ARTIFACTS = tuple(
     for name in names
 )
 
+SEARCH_GATEWAY_ARTIFACTS = tuple(
+    '.getzilla/optional-modules/search-gateway/0.1.0/' + name
+    for name in ('module.json', 'providers.py', 'gateway.py', 'interfaces.py',
+                 'request.schema.json', 'result.schema.json', 'policy.example.json', 'NOTICE', 'LICENSE')
+)
+
 TARGET_OWNED_ARCHITECTURE = frozenset(
     {
         "architecture/adoption.json",
@@ -236,7 +244,10 @@ class PayloadSelection:
     def __init__(self, agents: tuple[str, ...], *, factory: bool = False, full: bool = False,
                  compliance: tuple[str, ...] = (), extras: tuple[str, ...] = (),
                  root_shims: bool = False, engine_archive: bool = False,
-                 design_reference: bool = False) -> None:
+                 design_reference: bool = False, search_gateway: bool = False) -> None:
+        if type(search_gateway) is not bool:
+            raise UnsafeInstallTarget('search-gateway selection must be boolean')
+        self.search_gateway = search_gateway
         if type(design_reference) is not bool:
             raise UnsafeInstallTarget('design-reference selection must be boolean')
         try:
@@ -262,6 +273,8 @@ class PayloadSelection:
         return cls(KNOWN_AGENTS, factory=True, full=True)
 
     def includes(self, path: str) -> bool:
+        if path in SEARCH_GATEWAY_ARTIFACTS:
+            return self.search_gateway
         if path in DESIGN_REFERENCE_ARTIFACTS:
             return self.design_reference
         if self.full:
@@ -293,6 +306,8 @@ class PayloadSelection:
             shape["compliance"] = list(self.compliance)
         if self.extras:
             shape["extras"] = list(self.extras)
+        if self.search_gateway:
+            shape['search_gateway'] = True
         if self.design_reference:
             shape['design_reference'] = True
         return shape
@@ -906,6 +921,9 @@ def build_payload(
     # a complete source for the same payload).
     payload = tuple(entry for entry in _build_full_payload(source, profile_kind=profile_kind)
                     if entry.path not in {STACK_SYNC_RECORD, LEGACY_STACK_SYNC_RECORD, COMPONENT_MANIFEST})
+    if selection is not None and selection.search_gateway:
+        with _SourceTree(source) as tree:
+            payload += tuple(_source_entry(path, tree) for path in SEARCH_GATEWAY_ARTIFACTS)
     if selection is not None and selection.design_reference:
         with _SourceTree(source) as tree:
             payload += tuple(_source_entry(path, tree) for path in DESIGN_REFERENCE_ARTIFACTS)
@@ -1931,6 +1949,8 @@ def main() -> None:
              "manifest; a fresh target defaults to GETZILLA_AGENT or qwen.",
     )
     parser.add_argument("--full-layout", action="store_true", help=argparse.SUPPRESS)  # compatibility tests only
+    parser.add_argument('--search-gateway-artifacts', action='store_true',
+                        help='Copy passive search artifacts; never installs, enables or calls a provider.')
     parser.add_argument('--design-reference-artifacts', action='store_true',
                         help='Copy the passive local design-reference artifact bundle; does not install or enable it.')
     parser.add_argument(
@@ -1971,6 +1991,7 @@ def main() -> None:
     target = Path(args.target)
     if args.full_layout:
         selection = PayloadSelection.full_layout()
+        selection.search_gateway = args.search_gateway_artifacts
         selection.design_reference = args.design_reference_artifacts
     else:
         compliance = tuple(item.strip().lower() for item in (args.compliance or "").split(",") if item.strip())
@@ -1981,7 +2002,7 @@ def main() -> None:
                                          extras=extras or detect_extras(target),
                                          root_shims=has_root_shims(target),
                                          engine_archive=wants_engine_archive(target),
-                                         design_reference=args.design_reference_artifacts)
+                                         design_reference=args.design_reference_artifacts, search_gateway=args.search_gateway_artifacts)
         except (UnsafeInstallTarget, ComponentStateError) as exc:
             parser.error(str(exc))
     if args.materialize_new:

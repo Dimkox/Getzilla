@@ -472,8 +472,10 @@ class BatchTests(unittest.TestCase):
     def test_main_thread_interrupt_stops_owned_group_before_returning(self) -> None:
         pidfile = self.root / 'owned-group.json'
         queued_marker = self.root / 'queued-command-ran'
-        producer = ("import os,json,time; "
-                    f"open({str(pidfile)!r},'w').write(json.dumps([os.getpid(),os.getpgrp()])); "
+        producer = ("import os,sys,time; "
+                    f"sys.path.insert(0,{str(ROOT)!r}); "
+                    "from tests.test_parallel_fixture_publication import publish_owned_group; "
+                    f"publish_owned_group({str(pidfile)!r},os.getpid(),os.getpgrp()); "
                     "time.sleep(20)")
         command = shlex.join([sys.executable, '-c', producer])
         queued = shlex.join(['touch', str(queued_marker)])

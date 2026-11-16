@@ -6,6 +6,7 @@ import json
 import hashlib
 import hmac
 import inspect
+import importlib.util
 import os
 import runpy
 import shutil
@@ -305,6 +306,12 @@ def _materialize_architecture(root: Path) -> None:
         "workflow-convergence-report-v1.schema.json",
     ):
         shutil.copy2(ROOT / "schemas" / schema_name, root / "schemas" / schema_name)
+    # A copied model needs each declared contract, including data-only optional schemas.
+    system = json.loads((root / "architecture" / "system.yaml").read_bytes())
+    for contract in system["contracts"]:
+        target = root / contract["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / contract["path"], target)
 
 
 def _architecture_evidence(
@@ -2592,9 +2599,12 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         root = _make_fixture(self)
         (root / "decisions.md").write_bytes(b"# decisions\n")
         (root / "mistakes.md").write_bytes(b"# mistakes\n")
-        cli = runpy.run_path(str(ROOT / "scripts/getzilla_governance.py"))
-        globals_ = cli["main"].__globals__
-        real_merge = cli["_merge_projection"]
+        module_spec = importlib.util.spec_from_file_location(
+            "projection_cli_fixture", ROOT / "scripts/getzilla_governance.py"
+        )
+        cli = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(cli)
+        real_merge = cli._merge_projection
         emitted: list[object] = []
 
         def mutate(existing: str, projection: str, *, name: str) -> str:
@@ -2603,9 +2613,10 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                 (root / "decisions.md").write_bytes(b"changed after observation\n")
             return merged
 
-        with mock.patch.dict(globals_, {"_merge_projection": mutate, "_emit": emitted.append}):
-            with mock.patch.object(sys, "argv", ["getzilla_governance.py", "--root", str(root), "project"]):
-                self.assertEqual(cli["main"](), 2)
+        with mock.patch.object(cli, "_merge_projection", mutate):
+            with mock.patch.object(cli, "_emit", emitted.append):
+                with mock.patch.object(sys, "argv", ["getzilla_governance.py", "--root", str(root), "project"]):
+                    self.assertEqual(cli.main(), 2)
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["code"], "io")
         self.assertNotIn("projections", emitted[0])
