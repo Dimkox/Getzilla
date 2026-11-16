@@ -7,7 +7,9 @@
     "klingai.com", "api-singapore.klingai.com", "fal.run", "queue.fal.run", "api.together.xyz",
     "generativelanguage.googleapis.com", "api.deepseek.com", "api.mistral.ai", "api.groq.com",
     "api.lumalabs.ai", "api.ideogram.ai", "api.heygen.com", "api.suno.ai", "cloud.leonardo.ai",
-    "api.midjourney.com", "aiplatform.googleapis.com", "api.x.ai"
+    "api.midjourney.com", "aiplatform.googleapis.com", "api.x.ai",
+    "google.serper.dev", "serpapi.com", "api.search.brave.com", "api.tavily.com",
+    "api.firecrawl.dev", "api.scrapingdog.com"
   ],
   "python_modules": [
     "openai", "anthropic", "replicate", "elevenlabs", "stability_sdk", "fal_client", "together", "groq",
