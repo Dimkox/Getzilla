@@ -219,3 +219,5 @@ Getzilla grew out of an [earlier project](https://github.com/Dimkox/adaptive-gro
 Current version: [VERSION](VERSION). License: [MIT](LICENSE).
 
 Shared hook code lives in `.getzilla/hooks/`. Harness sources live in `.getzilla/config/hooks.json`, `.getzilla/config/codex-hooks.json`, `.getzilla/agents/`, and `.getzilla/cursor-rules/`. `.grok/` contains only the Grok Build adapter. See [the migration contract](engineering/runbooks/getzilla-neutral-hooks.md).
+
+Optional [universal web search](docs/search-gateway.md): `getzilla search` provides guarded CLI, loopback HTTP and MCP 2025-11-25 stdio. Core excludes provider artifacts; module admission and a separate explicit operator live policy are required. Provider fixtures and local transports are tested; real-account qualification is separate. Socket deadlines are bounded; system DNS resolution can overrun before the pre-send deadline check.
