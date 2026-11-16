@@ -7,15 +7,18 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Iterator
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.policy import WRITE_ROLES, evaluate_pre_tool, production_action, write_roles
 from getzilla.router import build_route
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from getzilla.state import add_approval, approvals_path, has_valid_approval, record_agent_start
 from tests._support import activate_owned_route
 from tests._support import project_copy
+from tests.test_policy_shell_state import _functional_policy_clock
 
 
 @contextlib.contextmanager
@@ -32,6 +35,9 @@ def github_project() -> Iterator[Path]:
 
 
 class PolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(_functional_policy_clock())
+
     def test_new_grant_uses_neutral_binding_digest_key(self) -> None:
         with github_project() as root:
             approval = add_approval(
@@ -312,6 +318,7 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(allowed)
 
     def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
+        self.enterContext(mock.patch.object(self, 'longMessage', False))
         # These names carry the write verb inside the name and used to pass with no grant (#193).
         from getzilla.policy import mcp_side_effect, sensitive_action
         writes = ('issue_write', 'sub_issue_write', 'pull_request_review_write', 'add_issue_comment',
@@ -336,7 +343,7 @@ class PolicyTests(unittest.TestCase):
                                          'external-write')
                         allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
                         self.assertFalse(allowed)
-                        self.assertIn('external-write grant', reason or '')
+                        self.assertIn('external-write grant', reason or '', msg=policy_diagnostic(allowed, reason))
                 for name in reads:
                     with self.subTest(tool=f'mcp__{server}__{name}'):
                         self.assertFalse(mcp_side_effect(f'mcp__{server}__{name}'))
