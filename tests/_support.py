@@ -201,7 +201,7 @@ def public_source_copy(source: Path | None = None) -> Iterator[Path]:
 
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False,
-                 verification_fixture: bool = False) -> Iterator[Path]:
+                 verification_fixture: bool = False, source_only_runtime: bool = False) -> Iterator[Path]:
     """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
         # Tests can explicitly substitute a Gitless synthetic PROJECT. Keep its
@@ -237,11 +237,15 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
                     omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
-                if minimal_runtime and not verification_fixture and Path(directory) == PROJECT / '.getzilla/getzilla':
+                if (minimal_runtime and not verification_fixture and not source_only_runtime
+                        and Path(directory) == PROJECT / '.getzilla/getzilla'):
                     omitted.update(name for name in names if name != '__init__.py')
-                if (minimal_runtime or verification_fixture) and Path(directory) == PROJECT / '.getzilla/sast':
+                if (minimal_runtime or verification_fixture or source_only_runtime) and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    # Original parent source-only declaration; no evidence grant.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'

@@ -260,6 +260,10 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
             if not record_ids or not covered:
                 raise ValueError(f'empty OSV archive or missing {ecosystem} coverage')
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, zlib.error, EOFError, RuntimeError) as exc:
+        from .security_osv_diagnostics import snapshot_alias_message
+        alias_message = snapshot_alias_message(ecosystem, exc, current_member, current_id)
+        if alias_message is not None:
+            raise SecurityDataError(alias_message) from exc
         location = ''.join(f' {label}_sha256={hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()}'
                            for label, value in (('member', current_member), ('id', current_id)) if value is not None)
         raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}{location}') from exc

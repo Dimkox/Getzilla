@@ -160,7 +160,8 @@ class StackPlanTests(unittest.TestCase):
         self.assertNotIn('pester', by_name)
         full = self.planner()(self.root, 'pr', ['pom.xml', 'tools/Build.ps1'])
         self.assertEqual({item['check_id'] for item in full},
-                         {'maven-dependencies', 'maven-build', 'psscriptanalyzer', 'pester'})
+                         {'toolchain:java', 'maven-dependencies', 'maven-build',
+                          'toolchain:powershell', 'psscriptanalyzer', 'pester'})
 
 
     def test_native_consumer_node_composer_and_pilot_obligations_cannot_disappear(self):

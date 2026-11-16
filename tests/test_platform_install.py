@@ -504,8 +504,8 @@ class LinuxProfileTests(unittest.TestCase):
             self.assertEqual(constants[offset+1],'linux')
             self.assertIn('--job-result', constants)
             self.assertEqual(step['env']['GETZILLA_PLATFORM_JOB_RESULT'], '${{ needs.platform-install.result }}')
-            self.assertEqual(jobs['linux']['needs'], 'platform-install-results')
-            gate = next(step for step in jobs['linux']['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env',{}))
+            self.assertEqual(jobs['linux-core']['needs'], 'platform-install-results')
+            gate = next(step for step in jobs['linux-core']['steps'] if 'GETZILLA_PLATFORM_RESULT' in step.get('env',{}))
             self.assertEqual(gate['env']['GETZILLA_PLATFORM_RESULT'], '${{ needs.platform-install-results.result }}')
             return argv
         # Frozen pre-refinement workflow is a concrete negative consumer contrast.

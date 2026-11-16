@@ -38,8 +38,25 @@ def project_copy(*, git: bool = False, verification_fixture: bool = False):
 
 
 @contextlib.contextmanager
-def routed_fixture(*, legacy=False, verification_fixture=False):
+def routed_fixture(*, legacy=False, verification_fixture=False, test_result=None):
+    if test_result is not None and test_result not in {'pass', 'fail'}:
+        raise ValueError('owned recovery test result must be pass or fail')
     with project_copy(git=True, verification_fixture=verification_fixture) as root:
+        if test_result is not None:
+            # Original parent semantics: execute a real owned suite; never
+            # replace the verifier result or an evidence validator.
+            tests = root / 'tests'
+            tests.mkdir(exist_ok=True)
+            (tests / '__init__.py').write_text('', encoding='utf-8')
+            (tests / 'test_recovery_result.py').write_text(
+                'import unittest\n\nclass Result(unittest.TestCase):\n'
+                '    def test_result(self):\n        print("retained", end="")\n'
+                f'        self.assertTrue({test_result == "pass"!r})\n', encoding='utf-8')
+            (root / '.coveragerc').write_text(
+                '[run]\nbranch = True\nsource = tests\n\n[report]\nfail_under = 100\n', encoding='utf-8')
+            (root / '.gitignore').write_text('.getzilla/runtime/\n__pycache__/\n.coverage\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'tests', '.coveragerc', '.gitignore'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'actual recovery test suite'], cwd=root, check=True)
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
         route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
         if legacy:

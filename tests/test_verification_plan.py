@@ -464,6 +464,7 @@ class VerificationPlanTests(unittest.TestCase):
             for item in plan['obligations']]
 
     def gaps(self, plan, results, **kwargs):
+        kwargs.setdefault('data_source_validator', lambda source, **options: True)
         return self.module().plan_gaps(plan, results, current_binding=plan['binding'],
             now_utc=datetime(2026, 11, 3, tzinfo=timezone.utc), **kwargs)
 

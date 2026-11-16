@@ -407,7 +407,7 @@ def validate_wheelhouse(path, lock):
     path, lock = Path(path), Path(lock)
     if path.is_symlink() or not path.is_dir():
         raise ValueError('GETZILLA_LIVE_WHEELHOUSE must name a pre-acquired owned offline directory')
-    allowed = set(re.findall(r'--hash=sha256:([0-9a-f]{64})', lock.read_text()))
+    allowed = set(re.findall(r'--hash=sha256:([0-9a-f]{64})', lock.read_text(encoding='utf-8')))
     files = list(path.iterdir())
     if not allowed or not 1 <= len(files) <= 256:
         raise ValueError('Hash-locked offline wheelhouse is absent or excessive')

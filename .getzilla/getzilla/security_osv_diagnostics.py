@@ -1,6 +1,7 @@
 """Closed alias rejection diagnostics. Raw advisory identifiers never leave this helper."""
 import hashlib
 import json
+import re
 
 
 def _shape(value):
@@ -59,3 +60,29 @@ def bounded_alias_message(error):
                     return encoded
         error = error.__cause__
     return None
+
+
+def snapshot_alias_message(ecosystem, error, member, identifier):
+    """One valid compact refusal, including every full original identity hash.
+
+    Keep the original400-character snapshot bound. The separate200-character
+    log projection still explicitly omits hashes; neither projection admits data.
+    """
+    detail = getattr(error, 'osv_alias_detail', None)
+    if (not isinstance(detail, dict) or ecosystem not in {'PyPI', 'npm', 'Packagist', 'Go', 'crates.io', 'RubyGems', 'Maven'}
+            or not isinstance(detail.get('value_sha256'), str)
+            or re.fullmatch('[0-9a-f]{64}', detail['value_sha256']) is None):
+        return None
+    compact = bounded_alias_message(error)
+    if compact is None:
+        return None
+    body = json.loads(compact)
+    body.pop('omitted')
+    body.update(value_sha256=detail['value_sha256'], member_sha256=_hash(member), id_sha256=_hash(identifier))
+    message = 'aliases: ' + json.dumps(body, separators=(',', ':'), sort_keys=True)
+    if len(message) >= 400:
+        # Fixed enums plus arbitrarily large counters cannot consume the hash
+        # budget. Explicitly omit counters, never hashes or rejection reason.
+        body.update(count=None, index=None, omitted=['count/index'])
+        message = 'aliases: ' + json.dumps(body, separators=(',', ':'), sort_keys=True)
+    return message if len(message) < 400 else None

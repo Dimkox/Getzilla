@@ -501,7 +501,10 @@ class NativeAliasTests(unittest.TestCase):
                 try:
                     KV._describe(self.record(aliases=aliases), self.dependency)
                 except KV.VulnerabilityError as error:
-                    self.assertEqual(str(error), 'OSV aliases must be null or a list of valid identifiers')
+                    prefix, detail = str(error).split('; ', 1)
+                    self.assertEqual(prefix, 'OSV aliases must be null or a list of valid identifiers')
+                    self.assertEqual(json.loads(detail), error.osv_alias_detail)
+                    self.assertEqual(error.osv_alias_detail['kind'], 'osv-alias-rejection')
                 except (TypeError, ValueError):
                     self.fail('malformed aliases escaped as an untyped error')
                 else:
