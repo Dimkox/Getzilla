@@ -21,15 +21,15 @@ EXPECTED = {'general_implementer', 'php_implementer', 'bitrix_implementer', 'fro
 
 
 class WriterRoleBoundaryTests(unittest.TestCase):
-    def setUp(self):
-        guard = ExitStack()
-        self.addCleanup(guard.close)
+    def _callTestMethod(self, method):
         def deny(*args, **kwargs):
             raise AssertionError('owned role control denies undeclared I/O/process/network')
-        for module, name in ((builtins, 'open'), (io, 'open'), (os, 'open'),
-                             (os, 'stat'), (os, 'lstat'), (os, 'scandir'), (os, 'listdir'),
-                             (subprocess, 'Popen'), (os, 'system'), (socket, 'socket')):
-            guard.enter_context(patch.object(module, name, side_effect=deny))
+        with ExitStack() as guard:
+            for module, name in ((builtins, 'open'), (io, 'open'), (os, 'open'),
+                                 (os, 'stat'), (os, 'lstat'), (os, 'scandir'), (os, 'listdir'),
+                                 (subprocess, 'Popen'), (os, 'system'), (socket, 'socket')):
+                guard.enter_context(patch.object(module, name, side_effect=deny))
+            super()._callTestMethod(method)
 
     def module(self):
         self.assertIsNotNone(SOURCE, 'writer-role parsing still lives in the full policy engine')
