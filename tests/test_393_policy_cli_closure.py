@@ -43,7 +43,8 @@ class PolicyCliClosure(unittest.TestCase):
                       and isinstance(node.targets[0].value, ast.Name) and node.targets[0].value.id == 'implementation']
             self.assertEqual(len(stores), 1)
             store = stores[0]
-            self.assertEqual(ast.dump(store.targets[0].slice), ast.dump(loop.target))
+            self.assertIsInstance(store.targets[0].slice, ast.Name)
+            self.assertEqual(store.targets[0].slice.id, target)
             source_calls = [node for node in ast.walk(store.value) if isinstance(node, ast.Call)
                             and isinstance(node.func, ast.Name) and node.func.id == '_module_source']
             self.assertEqual(len(source_calls), 1)
