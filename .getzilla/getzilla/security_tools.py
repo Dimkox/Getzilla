@@ -292,6 +292,11 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, imag
         # The daemon writes outside this process's byte budget. Descriptor
         # estimates do not enforce compressed/unpacked/storage ceilings.
         raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
+    return refresh_image_database(tools, now=now)
+
+
+def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
+    """Explicit DB-only refresh; separate from local OCI import and image pulls."""
     trivy = pinned_tool('trivy', tools)
     results = []
     tools.mkdir(parents=True, exist_ok=True)

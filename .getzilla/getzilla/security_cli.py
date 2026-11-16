@@ -26,7 +26,8 @@ from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
-from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, scan_source
+from .security_oci import source_bindings
+from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
                    'security-malicious-packages', 'security-licenses', 'security-container-images',
@@ -175,12 +176,18 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
            'GETZILLA_SECURITY_TOOLS': roots['tools']}
     catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
-    inventory = collect_inventory(root)
+    inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
     policy = _policy_digest(root)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
-            return input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog)
+            declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog)
+            if source_bindings(catalog):
+                refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
+                if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
+                        or source_binding(root, TRUSTED_ROOT, Path(temporary)) != before):
+                    raise SecurityDataError('Source or OCI selection changed during declaration')
+            return declared
         validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog)
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
@@ -203,13 +210,15 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
                 acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
+                if image_artifacts is not None:
+                    acquisitions.extend(refresh_image_database(tools, now=now))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
         licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
         if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
             raise SecurityDataError('Selected OCI catalog changed during preparation')
-        after_inventory = collect_inventory(root)
+        after_inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
         after = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if after_inventory != inventory:
             raise SecurityDataError('source inventory changed during public input preparation')
@@ -535,7 +544,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     if image_artifacts is not None:
         env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'] = str(image_artifacts.absolute())
         env['GETZILLA_SECURITY_IMAGE_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
-    inventory = collect_inventory(root)
+    inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
     checks = []
@@ -566,7 +575,13 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)
                 if inventory['images']:
-                    acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now, profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts))
+                    def image_inputs():
+                        observations = refresh_images(inventory, tools, now=now,
+                            profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts)
+                        if image_artifacts is not None:
+                            observations.extend(refresh_image_database(tools, now=now))
+                        return observations
+                    acquire('image-acquisition', image_inputs)
             initial_plan = security_obligations(root, inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             checks.extend(run_checks(root, environ=env, now=now, inventory=inventory, policy_root=TRUSTED_ROOT))
             checks.append(known_vulnerability_check(root, environ=env, now=now, inventory=inventory,
@@ -580,7 +595,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                      extra={key: value[key] for key in ('coverage', 'binary_inputs', 'factory_offline_use') if key in value}))
             if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
                 raise SecurityDataError('Selected OCI catalog changed during evaluation')
-            final_inventory = collect_inventory(root)
+            final_inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
             final_plan = security_obligations(root, final_inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             if final_plan != initial_plan or final_inventory['digest'] != inventory['digest']:
                 raise SecurityDataError('required inputs, source age or inventory changed during security execution')

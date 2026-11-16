@@ -363,12 +363,32 @@ def _import_one(record, profile, stage, budget):
         source.close()
 
 
+def source_bindings(catalog):
+    """Explicit source-use selections; no assertion about registry/deployment state."""
+    if catalog is None or 'source_bindings' not in catalog:
+        return None
+    rows = catalog['source_bindings']
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 512:
+        raise OCIError('Image source-use selection count is unavailable or excessive')
+    records = catalog.get('records')
+    if not isinstance(records, list):
+        raise OCIError('Selected OCI artifacts are unavailable')
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {'manifest', 'line', 'source_sha256',
+                'source_reference', 'reference', 'platform'}
+                or not any(isinstance(record, dict) and record.get('reference') == row['reference']
+                           and record.get('platform') == row['platform'] for record in records)):
+            raise OCIError('Source use has no corresponding selected OCI artifact')
+    return rows
+
+
 def _selection(catalog, inventory, profile):
     """Bind an explicit catalog to every current immutable source image use."""
     _profile(profile)
     references = profile['images']
     if (not isinstance(inventory, dict) or not isinstance(catalog, dict)
-            or set(catalog) != {'schema_version', 'inventory_sha256', 'records'}
+            or set(catalog) not in ({'schema_version', 'inventory_sha256', 'records'},
+                                   {'schema_version', 'inventory_sha256', 'records', 'source_bindings'})
             or type(catalog['schema_version']) is not int or catalog['schema_version'] != 1
             or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not isinstance(inventory.get('digest'), str)
@@ -388,6 +408,12 @@ def _selection(catalog, inventory, profile):
             or Path(r['layout']).anchor != '/' or '..' in Path(r['layout']).parts for r in records)
             or {r['reference'] for r in records} != set(references)):
         raise OCIError('OCI selected artifact records differ')
+    for binding in source_bindings(catalog) or []:
+        if not any(all(item.get(key) == binding[key] for key in ('manifest', 'line', 'source_sha256',
+                'source_reference', 'reference', 'platform'))
+                and item.get('source_selection_sha256') == hashlib.sha256(canonical(binding)).hexdigest()
+                for item in inventory['images']):
+            raise OCIError('Selected source use differs from current inventory')
     return records
 
 
