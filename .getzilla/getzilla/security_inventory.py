@@ -304,6 +304,20 @@ def read_image_selection(path: Path | None) -> dict | None:
     return document
 
 
+def declared_inventory(root: Path, selection: dict | None) -> dict[str, Any]:
+    """Bind the complete declaration identity, without granting currentness.
+
+    Callers must separately validate it against independent current authority.
+    Image rows remain declaration-only-unverified and cannot start a scanner.
+    """
+    result = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
+    if selection is not None:
+        result.pop('digest')
+        result['image_selection_sha256'] = canonical_digest(selection)
+        result['digest'] = canonical_digest(result)
+    return result
+
+
 def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
     bindings = {} if image_bindings is None else image_bindings

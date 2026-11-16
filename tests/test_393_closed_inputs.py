@@ -199,6 +199,11 @@ class Closed393InputTests(unittest.TestCase):
         uses = [dict(path='compose.yaml',line=1,source_sha256='a'*64,expression='${OWNED_IMAGE}',
                      reference='example.invalid/owned@sha256:'+'b'*64,platform='linux/amd64')]
         env = dict(GETZILLA_SECURITY_IMAGE_SELECTION='/owned/selection.json')
+        source = dict(head_sha='a'*40, tree_sha='b'*40, checker_sha='c'*40, checker_tree_sha='d'*40,
+                      candidate_clean=True, checker_clean=True, same_project=True)
+        run = dict(provider='github-actions', repository='owned/fixture', run_id='17', run_attempt='1', head_sha='a'*40)
+        selection = dict(schema_version=1, uses=uses, source=source, run=run,
+                         created_at=datetime.now(timezone.utc).isoformat())
         calls = []
 
         class BeforeProducer(Exception):
@@ -210,8 +215,9 @@ class Closed393InputTests(unittest.TestCase):
 
         binding = dict(database='owned',source_id='artifact-license-catalog',source_url='owned',
                        content_sha256='c'*64,payload_size=1,acquisition={},coverage={})
-        with patch.object(expanded,'read_image_selection',return_value=dict(uses=uses)), \
-                patch.object(expanded,'collect_inventory',side_effect=collect):
+        with patch.object(expanded,'read_image_selection',return_value=selection), \
+                patch.object(expanded,'_selection_authority',return_value=(source,run)), \
+                patch.object(inventory,'collect_inventory',side_effect=collect):
             for function in (expanded.security_obligations,expanded.known_vulnerability_report,
                              expanded.known_vulnerability_check,expanded.run_checks):
                 with self.subTest(consumer=function.__name__), self.assertRaises(BeforeProducer):

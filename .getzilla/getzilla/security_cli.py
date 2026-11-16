@@ -21,7 +21,7 @@ from .python_test_runner import execute
 from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
-from .security_inventory import collect_inventory, read_image_selection, canonical_digest
+from .security_inventory import declared_inventory, read_image_selection, canonical_digest
 from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file
@@ -41,8 +41,8 @@ def _image_refusal(code: str, message: str) -> SecurityDataError:
     return error
 
 
-def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_selection=None) -> dict:
-    """A finite declaration for one source/run; never scan or attestation credit."""
+def validate_selection_authority(source: dict, run: dict, selection=None, *, now=None) -> None:
+    """Shared CLI/native independently observed source/checker/run contract."""
     keys = {'head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha', 'candidate_clean', 'checker_clean', 'same_project'}
     if (not isinstance(source, dict) or set(source) != keys or source['candidate_clean'] is not True
             or source['checker_clean'] is not True or type(source['same_project']) is not bool
@@ -54,6 +54,23 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
             or not isinstance(run['repository'], str) or not re.fullmatch('[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', run['repository'])
             or any(not isinstance(run[key], str) or not re.fullmatch('[1-9][0-9]{0,19}', run[key]) for key in ('run_id', 'run_attempt'))):
         raise SecurityDataError('input profile needs the actual exact CI run and attempt')
+    if selection is not None:
+        from .security_data import _timestamp
+        if (type(selection) is not dict or set(selection) != {'schema_version', 'source', 'run', 'created_at', 'uses'}
+                or type(selection['schema_version']) is not int or selection['schema_version'] != 1
+                or not isinstance(selection['uses'], list) or not 1 <= len(selection['uses']) <= 512):
+            raise SecurityDataError('image selection document is malformed')
+        if selection['source'] != source or selection['run'] != run:
+            raise _image_refusal('image-selection-source-mismatch',
+                                 'image selection differs from independently observed source/checker/run/attempt')
+        age = (_clock(now) - _timestamp(selection.get('created_at'))).total_seconds()
+        if not 0 <= age <= MAX_AGE_SECONDS:
+            raise _image_refusal('image-selection-stale', 'image selection is future or stale at consumption')
+
+
+def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_selection=None) -> dict:
+    """A finite declaration for one source/run; never scan or attestation credit."""
+    validate_selection_authority(source, run, image_selection, now=now)
     if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not _digest(inventory.get('digest')) or not _digest(policy)):
         raise SecurityDataError('input profile needs complete source declarations and policy identity')
@@ -97,13 +114,6 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
             'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
             'max_manifest_bytes': MAX_INDEX_BYTES, 'max_layers': 10000, 'deadline_seconds': 900}
     if image_selection is not None:
-        from .security_data import _timestamp
-        if image_selection.get('source') != source or image_selection.get('run') != run:
-            raise _image_refusal('image-selection-source-mismatch',
-                                 'image selection differs from independently observed source/checker/run/attempt')
-        age = (_clock(now) - _timestamp(image_selection.get('created_at'))).total_seconds()
-        if not 0 <= age <= MAX_AGE_SECONDS:
-            raise _image_refusal('image-selection-stale', 'image selection is future or stale')
         body['image_selection_sha256'] = canonical_digest(image_selection)
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
@@ -115,10 +125,7 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     from .security_data import _timestamp
     created = _timestamp(profile['created_at'])
     age = (_clock(now) - created).total_seconds()
-    if image_selection is not None:
-        selection_age = (_clock(now) - _timestamp(image_selection.get('created_at'))).total_seconds()
-        if not 0 <= selection_age <= MAX_AGE_SECONDS:
-            raise _image_refusal('image-selection-stale', 'image selection is future or stale at consumption')
+    validate_selection_authority(source, run, image_selection, now=now)
     if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy,
                                                                now=created, image_selection=image_selection):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
@@ -197,7 +204,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     selection = read_image_selection(image_selection)
     if image_selection is not None:
         env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(image_selection.absolute())
-    inventory = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
+    inventory = declared_inventory(root, selection)
     policy = _policy_digest(root)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         before = source_binding(root, TRUSTED_ROOT, Path(temporary))
@@ -232,7 +239,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
         licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
         after_selection = read_image_selection(image_selection)
-        after_inventory = collect_inventory(root, image_bindings=after_selection['uses'] if after_selection else None)
+        after_inventory = declared_inventory(root, after_selection)
         after = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if after_inventory != inventory or after_selection != selection:
             raise SecurityDataError('source inventory changed during public input preparation')
@@ -557,7 +564,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
         if profile is None:
             raise SecurityDataError('explicit image selection requires a current source/run input profile')
         env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(image_selection.absolute())
-    inventory = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
+    inventory = declared_inventory(root, selection)
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
     checks = []
@@ -604,7 +611,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                      findings=value.get('findings', []), gaps=value.get('gaps', []),
                                      extra={key: value[key] for key in ('coverage', 'binary_inputs', 'factory_offline_use') if key in value}))
             final_selection = read_image_selection(image_selection)
-            final_inventory = collect_inventory(root, image_bindings=final_selection['uses'] if final_selection else None)
+            final_inventory = declared_inventory(root, final_selection)
             final_plan = security_obligations(root, final_inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             if final_plan != initial_plan or final_inventory['digest'] != inventory['digest'] or final_selection != selection:
                 raise SecurityDataError('required inputs, source age or inventory changed during security execution')

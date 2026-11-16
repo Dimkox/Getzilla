@@ -285,6 +285,12 @@ class _QueueFootprint(NamedTuple):
     work: tuple[tuple[str, int], ...] = ()
 
 
+class _QueueRefusalCapture(NamedTuple):
+    owner: ArchitectureError
+    message: str
+    payload: str
+
+
 class _QueueBudget:
     """One importer/side ledger; cache reuse cannot remove logical charges."""
 
@@ -317,6 +323,10 @@ class _QueueBudget:
             detail[selected].pop()
             detail[selected + '_omitted'] += 1
         error.queue_refusal = detail
+        # Freeze the internally captured bytes separately from the public
+        # compatibility sidecar. Its subsequent mutation is not provenance.
+        error._queue_refusal_capture = _QueueRefusalCapture(
+            error, message, json.dumps(detail, separators=(',', ':')))
         return error
 
     def check_depth(self, depth: int, *, site: str, cached: tuple[str, ...] = ()) -> None:
@@ -423,9 +433,42 @@ class _QueueAdapterNamesResult(NamedTuple):
 
 
 def _queue_limit_text(error: ArchitectureError) -> str:
-    """Serialize the captured refusal before ordered frames are unwound."""
-    detail = getattr(error, 'queue_refusal', None)
-    return str(error) if detail is None else str(error) + '; ' + json.dumps(detail, separators=(',', ':'))
+    """Retain only the bound internal capture, never a mutable public sidecar.
+
+    This protects optional diagnostic serialization, not arbitrary same-process
+    execution. Invalid optional metadata must not mask the original refusal.
+    """
+    original = str(error)
+    capture = getattr(error, '_queue_refusal_capture', None)
+    if (error.code != 'limit' or type(capture) is not _QueueRefusalCapture or capture.owner is not error
+            or type(capture.message) is not str or capture.message != original or type(capture.payload) is not str):
+        return original
+    text = original + '; ' + capture.payload
+    try:
+        if len(text.encode('utf-8')) > 2048:
+            return original
+        detail = json.loads(capture.payload)
+        fields = {'version', 'kind', 'side', 'category', 'limit', 'observed', 'site', 'witness_scope',
+                  'active', 'cached', 'active_omitted', 'cached_omitted', 'cached_witness_unavailable'}
+        if (type(detail) is not dict or set(detail) != fields or type(detail['version']) is not int
+                or detail['version'] != 1 or detail['kind'] != 'queue-analysis-refusal'
+                or detail['side'] not in ('head', 'base', 'unknown')
+                or detail['category'] not in ('depth', 'work', 'bytes', 'nodes', 'modules', 'other')
+                or detail['site'] not in ('budget', 'cached', 'active', 'declaration', 'resolver')
+                or detail['witness_scope'] != 'ordered-module-request-frames'
+                or type(detail['cached_witness_unavailable']) is not bool):
+            return original
+        for key in ('limit', 'observed', 'active_omitted', 'cached_omitted'):
+            if not (detail[key] is None and key in ('limit', 'observed')) and (
+                    type(detail[key]) is not int or detail[key] < 0):
+                return original
+        for key in ('active', 'cached'):
+            if type(detail[key]) is not list or any(type(value) is not str or not re.fullmatch(
+                    r'(?:[A-Za-z_][A-Za-z0-9_.]{0,255}|sha256:[0-9a-f]{64})', value) for value in detail[key]):
+                return original
+    except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+        return original
+    return text
 
 
 class _OperationDependencies(NamedTuple):
@@ -3479,10 +3522,13 @@ def _local_queue_resolution(
             visited.add(module)
             result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
     except BaseException as error:
-        if isinstance(error, ArchitectureError) and error.code == 'limit' and not hasattr(error, 'queue_refusal'):
+        if (isinstance(error, ArchitectureError) and error.code == 'limit'
+                and type(getattr(error, '_queue_refusal_capture', None)) is not _QueueRefusalCapture):
             # Capture actual active request frames before unwinding. An inner
             # interpreter refusal with no measured counter stays explicitly unknown.
-            error.queue_refusal = budget.refusal(str(error), 'other', None, None, site='resolver').queue_refusal
+            captured = budget.refusal(str(error), 'other', None, None, site='resolver')
+            error.queue_refusal = captured.queue_refusal
+            error._queue_refusal_capture = captured._queue_refusal_capture._replace(owner=error)
         budget.leave(frame)
         raise
     footprint = budget.leave(frame)
