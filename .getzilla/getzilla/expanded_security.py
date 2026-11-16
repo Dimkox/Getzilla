@@ -91,6 +91,31 @@ def _source_descriptor(root: Path, database: Path, source_id: str, now: datetime
         return {'database': named, 'source_id': source_id, 'unavailable': True}
 
 
+def selected_inventory(root: Path, *, environ: dict[str, str] | None = None) -> dict[str, Any]:
+    """Reread explicit local choices and current source; never execution credit.
+
+    The native plan, receipt revalidation and checks must derive the same image
+    uses as the isolated CLI. A retained catalog cannot replace current source.
+    Graph bytes and scanner provenance remain separately required at scanning.
+    """
+    from .security_artifacts import MAX_INDEX_BYTES, read_file
+    from .security_data import _json
+    from .security_oci import source_bindings, validate_selection
+    env = os.environ if environ is None else environ
+    selected = env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS')
+    if not selected:
+        return collect_inventory(root)
+    path = Path(selected).absolute()
+    catalog = _json(read_file(path.parent, path.name, MAX_INDEX_BYTES))
+    inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
+    raw_profile = env.get('GETZILLA_SECURITY_IMAGE_PROFILE', '')
+    if not isinstance(raw_profile, str) or len(raw_profile.encode()) > MAX_INDEX_BYTES:
+        raise SecurityDataError('selected image profile is absent or exceeds its bound')
+    profile = _json(raw_profile.encode())
+    validate_selection(catalog, inventory, profile)
+    return inventory
+
+
 def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime | None = None,
                           environ: dict[str, str] | None = None, policy_root: Path | None = None) -> bool:
     """Revalidate the exact frozen source and its current age at consumption."""
@@ -106,7 +131,8 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
         from .security_licenses import artifact_catalog_source, load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
-        proof = artifact_catalog_source(collect_inventory(root), artifacts, load_policy(policy_root or root), now=now)
+        inventory = selected_inventory(root, environ=env)
+        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now)
         if proof != binding:
             raise SecurityDataError('license catalog differs from the frozen required source')
         return True
@@ -127,7 +153,7 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
                          policy_root: Path | None = None) -> list[dict[str, Any]]:
     root = Path(root).resolve()
     current = _clock(now)
-    inventory = collect_inventory(root) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
     database = _database(root, environ)
     dependencies, images, tools = inventory['dependencies'], inventory['images'], inventory['tools']
     unknown = not inventory['complete']
@@ -189,7 +215,7 @@ def known_vulnerability_report(root: Path, *, environ: dict[str, str] | None = N
     """Qualifying offline scan of the complete derived inventory, including build inputs."""
     root = Path(root).resolve()
     current = _clock(now)
-    inventory = collect_inventory(root) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
     report: dict[str, Any] = {'status': 'fail', 'findings': [], 'accepted': [], 'source_evidence': [],
                               'dependencies': len(inventory['dependencies']), 'inventory_sha256': inventory['digest'],
                               'policy_sha256': _policy_digest(policy_root or root), 'assurance': 'local-input-integrity-only'}
@@ -240,7 +266,7 @@ def known_vulnerability_check(root: Path, *, environ: dict[str, str] | None = No
                               now: datetime | None = None, inventory: dict[str, Any] | None = None,
                               policy_root: Path | None = None) -> dict[str, Any]:
     """Keep the native verifier and isolated scanner on one complete evidence contract."""
-    inventory = collect_inventory(root) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
     report = known_vulnerability_report(root, environ=environ, now=now, inventory=inventory,
                                         policy_root=policy_root)
     outcome = ('not_applicable' if report['status'] == 'skip' else 'pass' if report['status'] == 'pass'
@@ -257,7 +283,7 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
     root = Path(root).resolve()
     current = _clock(now)
     env = os.environ if environ is None else environ
-    inventory = collect_inventory(root) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=env) if inventory is None else inventory
     policy = _policy_digest(policy_root or root)
     obligations = {item['check_id']: item for item in security_obligations(root, inventory, environ=env, now=current,
                                                                         policy_root=policy_root)}

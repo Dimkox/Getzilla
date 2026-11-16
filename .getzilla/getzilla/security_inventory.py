@@ -575,8 +575,16 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
         for line_number, raw in enumerate(text.splitlines(), 1):
             line = raw.strip()
             reference = None
+            platform = None
             if is_docker and re.match(r'FROM\s', line, re.IGNORECASE):
                 parts = line.split()
+                flags = [part for part in parts[1:] if part.startswith('--platform=')]
+                if flags:
+                    if len(flags) != 1 or flags[0] not in {'--platform=linux/amd64', '--platform=linux/arm64'}:
+                        gap('unresolved-image-platform', relative,
+                            'Dockerfile FROM requires one supported literal platform')
+                        continue
+                    platform = flags[0].split('=', 1)[1]
                 parts = [part for part in parts[1:] if not part.startswith('--platform=')]
                 reference = parts[0] if parts else ''
                 internal_stage = reference.lower() == 'scratch' or reference.lower() in stages
@@ -585,7 +593,7 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                 if internal_stage:
                     continue
             if reference is not None:
-                image(reference, relative, line_number)
+                image(reference, relative, line_number, platform=platform)
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     if isinstance(bindings, list) and used_image_bindings != {canonical_digest(row) for row in bindings}:
         gap('unused-image-source-selection', '<image-selection>', 'selected image use is absent or differs from current source')
