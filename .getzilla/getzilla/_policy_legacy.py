@@ -20,11 +20,8 @@ from typing import Any, Callable
 from . import fsx
 from .state import active_write_agents, get_active_route, has_valid_approval
 from .util import git_output, load_json, safe_relative_path
+from .writer_roles import WRITE_ROLES, write_roles as _configured_write_roles
 
-WRITE_ROLES = {
-    'general_implementer', 'php_implementer', 'bitrix_implementer', 'frontend_implementer',
-    'integration_implementer', 'data_implementer', 'ai_implementer',
-}
 
 DEFAULT_CONTROL_PLANE = [
     '.agents/**', '.grok/**', '.qwen/**', '.claude/**', '.codex/**', '.gemini/**', '.cursor/**', '.getzilla/**', '.github/**',
@@ -947,14 +944,7 @@ def _recursive_remove_of_root(command: str) -> bool:
 
 
 def write_roles(root: Path) -> set[str]:
-    data = load_json(root / '.getzilla/config/routing.json', None)
-    if isinstance(data, dict):
-        roles = data.get('write_roles')
-        if isinstance(roles, list):
-            names = {str(item).strip() for item in roles if isinstance(item, str) and item.strip()}
-            if names:
-                return names
-    return set(WRITE_ROLES)
+    return _configured_write_roles(root, read_json=load_json, defaults=WRITE_ROLES)
 
 
 def _configured_patterns(config: dict[str, Any], key: str, defaults: list[str]) -> list[str]:
