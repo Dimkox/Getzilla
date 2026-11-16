@@ -4427,7 +4427,8 @@
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        ".getzilla/getzilla/security_tools.py"
+        ".getzilla/getzilla/security_tools.py",
+        ".getzilla/getzilla/security_oci.py"
       ],
       "runtime": {
         "evidence": "source_described",

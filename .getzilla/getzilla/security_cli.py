@@ -35,7 +35,7 @@ _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
                     'from getzilla.security_cli import main;raise SystemExit(main())')
 
 
-def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None) -> dict:
+def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     keys = {'head_sha', 'tree_sha', 'checker_sha', 'checker_tree_sha', 'candidate_clean', 'checker_clean', 'same_project'}
     if (not isinstance(source, dict) or set(source) != keys or source['candidate_clean'] is not True
@@ -87,17 +87,21 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
             'platform': next(iter(platforms)), 'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
             'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
             'max_manifest_bytes': MAX_INDEX_BYTES, 'max_layers': 10000, 'deadline_seconds': 900}
+    if image_artifacts is not None:
+        from .security_oci import validate_selection
+        validate_selection(image_artifacts, inventory, body['image_profile'])
+        body['image_artifacts_sha256'] = hashlib.sha256(json.dumps(image_artifacts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
 
 
-def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None) -> dict:
+def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None) -> dict:
     if not isinstance(profile, dict) or not isinstance(profile.get('created_at'), str):
         raise SecurityDataError('explicit public input profile is missing')
     from .security_data import _timestamp
     created = _timestamp(profile['created_at'])
     age = (_clock(now) - created).total_seconds()
-    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created):
+    if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -156,7 +160,7 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
 
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
-                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None) -> dict:
+                   run=None, write_profile=False, refresh=False, provision=False, families=None, now=None, image_artifacts=None) -> dict:
     """Reuse existing producers for explicit inputs; never run vulnerability/scanner callbacks."""
     if not write_profile and not isinstance(profile, dict):
         raise SecurityDataError('explicit current public input profile required before preparation')
@@ -170,19 +174,23 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     tools.mkdir(parents=True, exist_ok=True, mode=0o700)
     env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
            'GETZILLA_SECURITY_TOOLS': roots['tools']}
+    catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
     inventory = collect_inventory(root)
     policy = _policy_digest(root)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
-            return input_profile(before, inventory, roots, run, policy, now=now)
-        validate_input_profile(profile, before, inventory, roots, run, policy, now=now)
+            return input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog)
+        validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog)
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
                     or type(families['schema_version']) is not int or families['schema_version'] != 1
                     or families['inventory_sha256'] != inventory['digest']):
                 raise SecurityDataError('selected family descriptor file differs from current source inventory')
             families = families['records']
+        if image_artifacts is not None:
+            env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'] = str(image_artifacts.absolute())
+            env['GETZILLA_SECURITY_IMAGE_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
         acquisitions = []
         if provision:
             acquisitions.extend(provision_tools(tools))
@@ -194,11 +202,13 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                 acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
-                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile']))
+                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
         obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
         licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
+        if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
+            raise SecurityDataError('Selected OCI catalog changed during preparation')
         after_inventory = collect_inventory(root)
         after = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if after_inventory != inventory:
@@ -225,6 +235,8 @@ def _supervised_preparation(args, profile):
         for name in ('refresh', 'provision_tools'):
             if getattr(args, name):
                 command.append('--' + name.replace('_', '-'))
+        if getattr(args, 'image_artifacts', None) is not None:
+            command.extend(['--image-artifacts', str(args.image_artifacts)])
         if args.family_records is not None:
             command.extend(['--family-records', str(args.family_records)])
         process = execute(command, args.root, environment, timeout=600)
@@ -510,13 +522,19 @@ def finalize_report(before: dict, after: dict, checks: list[dict], inventory_dig
 
 
 def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refresh=False,
-             provision=False, now=None, profile=None, run=None) -> dict:
+             provision=False, now=None, profile=None, run=None, image_artifacts=None) -> dict:
     if (refresh or provision) and not isinstance(profile, dict):
         raise SecurityDataError('acquisition requires an explicit current public input profile')
     root, artifacts, tools = (path.resolve() for path in (root, artifacts, tools))
     database = database.absolute()  # Keep named links visible to descriptor snapshot I/O.
     env = {'GETZILLA_SECURITY_DB': str(database), 'GETZILLA_SECURITY_ARTIFACTS': str(artifacts),
            'GETZILLA_SECURITY_TOOLS': str(tools)}
+    catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
+    if image_artifacts is not None and not isinstance(profile, dict):
+        raise SecurityDataError('Offline OCI input requires an exact current profile')
+    if image_artifacts is not None:
+        env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'] = str(image_artifacts.absolute())
+        env['GETZILLA_SECURITY_IMAGE_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
     inventory = collect_inventory(root)
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
@@ -529,7 +547,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
             before = source_binding(root, TRUSTED_ROOT, scratch)
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
-                                       'tools': str(tools)}, run, policy, now=now)
+                                       'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog)
             def acquire(label, operation):
                 try:
                     acquisitions.extend(operation())
@@ -548,7 +566,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)
                 if inventory['images']:
-                    acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now))
+                    acquire('image-acquisition', lambda: refresh_images(inventory, tools, now=now, profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts))
             initial_plan = security_obligations(root, inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             checks.extend(run_checks(root, environ=env, now=now, inventory=inventory, policy_root=TRUSTED_ROOT))
             checks.append(known_vulnerability_check(root, environ=env, now=now, inventory=inventory,
@@ -560,6 +578,8 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 checks.append(_check(value['name'], outcome, value['summary'], inventory, policy,
                                      findings=value.get('findings', []), gaps=value.get('gaps', []),
                                      extra={key: value[key] for key in ('coverage', 'binary_inputs', 'factory_offline_use') if key in value}))
+            if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
+                raise SecurityDataError('Selected OCI catalog changed during evaluation')
             final_inventory = collect_inventory(root)
             final_plan = security_obligations(root, final_inventory, environ=env, now=now, policy_root=TRUSTED_ROOT)
             if final_plan != initial_plan or final_inventory['digest'] != inventory['digest']:
@@ -588,6 +608,8 @@ def _evaluation_kwargs(args, profile, run) -> dict:
     options = {'refresh': args.refresh, 'provision': args.provision_tools}
     if args.input_profile is not None:
         options.update(profile=profile, run=run)
+    if getattr(args, 'image_artifacts', None) is not None:
+        options['image_artifacts'] = args.image_artifacts
     return options
 
 
@@ -604,9 +626,12 @@ def main(argv=None) -> int:
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
+    parser.add_argument('--image-artifacts', type=Path, help='explicit local OCI layout catalog bound to complete inventory/profile; no daemon or registry acquisition')
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.image_artifacts is not None:
+        args.image_artifacts = args.image_artifacts.absolute()
     if args.family_records is not None and not (args.prepare_inputs and args.refresh):
         parser.error('--family-records requires explicit input preparation and refresh')
     if args.write_input_profile is not None and args.input_profile is not None:
@@ -625,7 +650,7 @@ def main(argv=None) -> int:
         elif args.prepare_inputs or args.write_input_profile is not None:
             report = prepare_inputs(args.root, args.database, args.artifacts, args.tools,
                 profile=profile, run=run, write_profile=args.write_input_profile is not None,
-                refresh=args.refresh, provision=args.provision_tools, families=families)
+                refresh=args.refresh, provision=args.provision_tools, families=families, image_artifacts=args.image_artifacts)
             if args.write_input_profile is not None:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:
