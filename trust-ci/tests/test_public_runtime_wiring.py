@@ -83,6 +83,9 @@ class PublicRuntimeWiring(unittest.TestCase):
             result = ingress.accept(raw, signature, 'pull_request', 'owned-delivery')
         self.assertEqual(result['job_ids'], ['owned-job'])
         self.assertEqual(calls, [('owned-delivery', (5,))])
+        with guarded(), self.assertRaises(ValueError):
+            ingress.accept(raw, 'sha256=' + '0' * 64, 'pull_request', 'owned-bad-auth')
+        self.assertEqual(len(calls), 1)
         value['repository']['id'] = 8
         raw = json.dumps(value).encode()
         signature = 'sha256=' + hmac.new(ingress.secret, raw, hashlib.sha256).hexdigest()
