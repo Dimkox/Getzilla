@@ -11,6 +11,7 @@ import unittest
 import zipfile
 import warnings
 from unittest import mock
+from tests._support import public_source_copy
 
 from tests.test_install_on_demand import INSTALL, ROOT
 from getzilla import baseline_assets as assets
@@ -245,6 +246,10 @@ class ArchiveUpgradeTests(unittest.TestCase):
     commit = _Fixture.commit
     select = _Fixture.select
 
+    @classmethod
+    def setUpClass(cls):
+        cls.source_home = cls.enterClassContext(public_source_copy(ROOT))
+
     def legacy_resource(self):
         from getzilla.component_state import MANIFEST, encode_manifest, record_owned
         manifest = self.select(())
@@ -265,12 +270,12 @@ class ArchiveUpgradeTests(unittest.TestCase):
         # This name is not an incoming archive member, even though it is Python.
         foreign.write_bytes(b'# custom inert file\n')
         self.commit('owned legacy resource and unrelated file')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertFalse((self.project/path).exists())
         self.assertEqual(foreign.read_bytes(), b'# custom inert file\n')
         self.assertTrue((self.project/INSTALL.ENGINE_ARCHIVE).is_file())
         before = git(self.project, 'rev-parse', 'HEAD')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
 
     def test_identical_unowned_legacy_member_cannot_retire(self):
@@ -283,7 +288,7 @@ class ArchiveUpgradeTests(unittest.TestCase):
         self.commit('identical but unowned resource')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaises(upgrade.UpdateError):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertTrue((self.project/path).is_file())
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
 
@@ -296,7 +301,7 @@ class ArchiveUpgradeTests(unittest.TestCase):
         self.commit('local changed resource')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaises((upgrade.UpdateError, INSTALL.UnsafeInstallTarget)):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual((self.project/path).read_bytes(), b'local changed bytes')
         (self.project/path).write_bytes(original)
@@ -306,7 +311,7 @@ class ArchiveUpgradeTests(unittest.TestCase):
         self.commit('consumer policy')
         before = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaises(upgrade.UpdateError):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
         self.assertEqual(policy.read_bytes(), b'{"schema_version":1,"dispositions":[]}\n')
 
