@@ -197,6 +197,7 @@ def _failure_progress_details(rows, identities, workers):
     if not rows:
         return output
     diagnostic_omissions = any(event.get('diagnostic_omitted') is True
+                              or 'diagnostic' in event and (event['path'], event['key']) not in identities
                               for row in rows for event in row['events'])
     if diagnostic_omissions:
         output['diagnostics_omitted'] = True
@@ -216,7 +217,8 @@ def _failure_progress_details(rows, identities, workers):
                 candidate['source'] = {'path': event['path'], 'key': event['key']}
             if identity is not None and 'diagnostic' in event:
                 candidate['diagnostic'] = dict(event['diagnostic'])
-            if identity is not None and event.get('diagnostic_omitted') is True:
+            if (event.get('diagnostic_omitted') is True
+                    or identity is None and 'diagnostic' in event):
                 candidate['diagnostic_omitted'] = True
             proposed = {**output, 'events': output['events'] + [candidate]}
             # Reserve the longest final flag spelling without publishing a
