@@ -264,7 +264,7 @@ def selected_image_use(uses: list[dict], *, path: str, line: int, source_sha256:
                 or not isinstance(row['expression'], str) or not 0 < len(row['expression']) <= 8192
                 or not isinstance(row['reference'], str) or len(row['reference']) > 2048
                 or _IMAGE_DIGEST.fullmatch(row['reference']) is None
-                or row['platform'] not in {'linux/amd64', 'linux/arm64'}):
+                or not isinstance(row['platform'], str) or row['platform'] not in {'linux/amd64', 'linux/arm64'}):
             raise ValueError('image selection has an invalid closed source-use schema')
         key = (row['path'], row['line'], row['source_sha256'], row['expression'])
         if key in keys:
@@ -297,6 +297,8 @@ def read_image_selection(path: Path | None) -> dict | None:
     document = _json(read_file(path.parent, path.name, 65536))
     if (set(document) != {'schema_version', 'source', 'run', 'created_at', 'uses'}
             or type(document['schema_version']) is not int or document['schema_version'] != 1
+            or not isinstance(document['source'], dict) or not isinstance(document['run'], dict)
+            or not isinstance(document['created_at'], str) or not 0 < len(document['created_at']) <= 128
             or not isinstance(document['uses'], list) or not 1 <= len(document['uses']) <= 512):
         raise ValueError('image selection document is malformed')
     return document

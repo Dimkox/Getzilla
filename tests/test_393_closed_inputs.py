@@ -216,6 +216,22 @@ class Closed393InputTests(unittest.TestCase):
                 self.owned(lambda: expanded.validate_data_source(binding,root=Path('/owned'),environ=env))
             self.assertEqual(calls[-1],uses)
 
+    def test_invalid_selection_field_types_have_closed_refusal(self):
+        row = dict(path='compose.yaml',line=1,source_sha256='a'*64,expression='${OWNED_IMAGE}',
+                   reference='example.invalid/owned@sha256:'+'b'*64,platform=[])
+        def observed_kind():
+            try:
+                inventory.selected_image_use([row],path=row['path'],line=1,source_sha256=row['source_sha256'],
+                                             expression=row['expression'])
+            except Exception as error:
+                return type(error).__name__
+            return 'accepted'
+        self.assertEqual(self.owned(observed_kind),'ValueError')
+        document = dict(schema_version=1,source={},run={},created_at=[],uses=[row])
+        with patch('getzilla.security_artifacts.read_file',return_value=json.dumps(document).encode()):
+            with self.assertRaises(ValueError):
+                self.owned(lambda: inventory.read_image_selection(Path('/owned/selection.json')))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
