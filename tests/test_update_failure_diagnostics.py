@@ -82,6 +82,17 @@ class UpdateFailureDiagnosticTests(unittest.TestCase):
         copied_module.__dict__.update(producer.__dict__)
         with patch.dict(sys.modules, {'getzilla.adapter_removal': copied_module}):
             self.assertIsNone(excerpt.update_exception_diagnostic(real))
+        forged_kind = type('UpdateError', (RuntimeError,), {
+            '__module__': producer.__name__, '__slots__': ('_update_diagnostic',),
+            '__init__': producer.UpdateError.__init__})
+        forged = RuntimeError.__new__(forged_kind)
+        RuntimeError.__init__(forged, CANARY)
+        vars(forged_kind)['_update_diagnostic'].__set__(forged, ('dirty-target', 'preflight'))
+        try:
+            raise forged
+        except RuntimeError as raised:
+            with patch.object(producer, 'UpdateError', forged_kind):
+                self.assertIsNone(excerpt.update_exception_diagnostic(raised))
         invalid = dict(excerpt.update_exception_diagnostic(real), stdout=CANARY)
         self.assertFalse(excerpt.valid_update_diagnostic(invalid))
         self.assertFalse(excerpt.valid_update_diagnostic(dict(invalid, reason=CANARY)))

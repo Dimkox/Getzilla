@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sys
-from types import FunctionType, MemberDescriptorType, ModuleType
+from types import CellType, FunctionType, MemberDescriptorType, ModuleType
 
 from .process_limits import OUTPUT_LIMIT
 
@@ -88,6 +88,10 @@ def _owned_update_type():
     slot = vars(kind).get('_update_diagnostic')
     if (type(initialize) is not FunctionType or initialize.__globals__ is not namespace
             or initialize.__code__.co_filename != origin
+            or initialize.__module__ != 'getzilla.adapter_removal' or initialize.__qualname__ != 'UpdateError.__init__'
+            or initialize.__code__.co_freevars != ('__class__',)
+            or type(initialize.__closure__) is not tuple or len(initialize.__closure__) != 1
+            or type(initialize.__closure__[0]) is not CellType or initialize.__closure__[0].cell_contents is not kind
             or type(slot) is not MemberDescriptorType or slot.__objclass__ is not kind):
         return None
     return kind, slot
