@@ -20,7 +20,9 @@ class PytestFailureExcerptTests(unittest.TestCase):
         original_import = builtins.__import__
         blocked = []
         def without_helper(name, *args, **kwargs):
-            if name.rsplit('.', 1)[-1] == 'verification_failure_excerpt':
+            if (name.rsplit('.', 1)[-1] == 'verification_failure_excerpt'
+                    or 'verification_failure_excerpt' in kwargs.get('fromlist', ())
+                    or len(args) >= 3 and 'verification_failure_excerpt' in args[2]):
                 blocked.append(name)
                 raise ImportError('owned optional helper unavailable')
             return original_import(name, *args, **kwargs)

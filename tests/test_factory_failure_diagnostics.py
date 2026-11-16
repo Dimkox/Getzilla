@@ -183,6 +183,32 @@ class FactoryFailureDiagnosticTests(unittest.TestCase):
         self.assertIsInstance(status.args[2], ast.Call)
         self.assertIn("'longMessage', False", source)
 
+    def test_optional_helper_interception_covers_real_import_shapes(self):
+        # Observe Python's import calling convention using a new closed module,
+        # without loading or executing the retained availability test body.
+        seen = []
+        def capture(name, globals=None, locals=None, fromlist=(), level=0):
+            seen.append((name, fromlist, level))
+            return SimpleNamespace(verification_failure_excerpt=object())
+        exec('from . import verification_failure_excerpt',
+             {'__builtins__': {'__import__': capture}, '__package__': 'owned_fixture'})
+        self.assertEqual(seen, [('', ('verification_failure_excerpt',), 1)])
+        tree = ast.parse((ROOT / 'tests/test_verification_failure_excerpt.py').read_bytes())
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+            and node.name == 'test_progress_import_survives_unavailable_optional_diagnostic_helper')
+        hook = next(node for node in method.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'without_helper')
+        condition = next(node.test for node in hook.body if isinstance(node, ast.If))
+        terms = {ast.unparse(node) for node in ast.walk(condition) if isinstance(node, ast.Compare)}
+        self.assertIn("name.rsplit('.', 1)[-1] == 'verification_failure_excerpt'", terms)
+        self.assertIn("'verification_failure_excerpt' in kwargs.get('fromlist', ())", terms)
+        self.assertIn("'verification_failure_excerpt' in args[2]", terms)
+        self.assertIn('len(args) >= 3', terms)
+        assertions = {ast.unparse(node) for node in ast.walk(method) if isinstance(node, ast.Call)}
+        self.assertIn('self.assertIsNone(holder._pending_diagnostic)', assertions)
+        self.assertIn("self.assertEqual(len(blocked), 1, 'helper is attempted only inside the guarded diagnostic hook')",
+                      assertions)
+
 
 if __name__ == '__main__':
     unittest.main()
