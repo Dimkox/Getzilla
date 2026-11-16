@@ -21,6 +21,15 @@
           "sha256": "60196d7468bc89c4e3152f85923e7e467e89b59abe754b7cef3cecde7c288feb"
         }
       }
+    },
+    "search-gateway": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/search-gateway/0.1.0/module.json",
+          "sha256": "0230f21451c0c26196dac38ac88c7661b0aa9de4c470e2be91ff0adcdac7351b"
+        }
+      }
     }
   }
 }

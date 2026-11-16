@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "operation": {
+      "type": "string",
+      "const": "web_search"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "provider": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "searxng",
+        "serper",
+        "serpapi",
+        "brave",
+        "tavily",
+        "firecrawl",
+        "scrapingdog"
+      ]
+    },
+    "engine": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "google",
+        "baidu",
+        "yandex"
+      ]
+    },
+    "country": {
+      "type": "string",
+      "pattern": "^[a-zA-Z]{2}$"
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    }
+  }
+}
