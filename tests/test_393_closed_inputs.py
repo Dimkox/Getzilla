@@ -141,6 +141,11 @@ class Closed393InputTests(unittest.TestCase):
                     self.assertTrue(parsed['complete'],parsed['gaps'])
                     self.assertEqual(len(parsed['images']),2,'runner input must remain required')
                     roots = [root/name for name in ('database','artifacts','tools')]
+                    if os.name != 'posix':
+                        with self.assertRaisesRegex(cli.SecurityDataError, 'qualified POSIX reader'):
+                            self.owned(lambda: cli.prepare_inputs(root,*roots,write_profile=True,run=run,
+                                                                  image_selection=path,now=now))
+                        return  # actual unsupported-platform refusal, not scan qualification
                     profile = self.owned(lambda: cli.prepare_inputs(root,*roots,write_profile=True,run=run,
                                                                   image_selection=path,now=now))
                     self.assertEqual(profile.get('image_selection_sha256'),inventory.canonical_digest(selection))
