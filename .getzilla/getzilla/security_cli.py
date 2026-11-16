@@ -21,7 +21,8 @@ from .python_test_runner import execute
 from .verification_journal import retain_stop, stop_details, updated_stop
 from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
-from .security_inventory import declared_inventory, read_image_selection, canonical_digest
+from .security_inventory import (collect_inventory as collect_inventory, declared_inventory,
+                                 read_image_selection, canonical_digest)
 from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file

@@ -229,7 +229,7 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                 if verification_fixture and Path(directory) == PROJECT / '.getzilla/config':
                     # The named closed providers below replace these fixture-only
                     # host tool installations. Default project copies retain both.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 if Path(directory) == PROJECT / '.getzilla/runtime':
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
