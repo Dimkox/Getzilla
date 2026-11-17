@@ -84,3 +84,15 @@ class CurrentWorkflowTests(unittest.TestCase):
         del source['scripts/powershell/owned.ps1']
         with self.assertRaises(ValueError):
             self.module.spec_payload(source, 'codex', '2.0.0', 'b'*40, windows=True)
+
+    def test_policy_revoked_after_preflight_refuses_publication(self):
+        acquired=self.acquire('a', b'first')
+        payload=acquired['superpowers'][0]
+        with patch.object(self.module, '_acquire', return_value=acquired), \
+             patch.object(self.module.baseline_assets,'load',return_value=payload), \
+             patch.object(self.module.state,'route_authority_present',return_value=True), \
+             patch.object(self.module.state,'require_route_owner'), \
+             patch.object(self.module,'evaluate_pre_tool',side_effect=[(True,'owned initial'),(False,'revoked')]):
+            result=self.module.apply_latest(self.project,'qwen',self.home,fetch=lambda u:self.fail(u))
+        self.assertEqual(result[0].status,'fail')
+        self.assertFalse((self.project/'.agents/skills/inert/SKILL.md').exists())

@@ -191,6 +191,13 @@ def _record_path(payload):
 def _publish(project, payload):
     if not any(payload is p for p in _SCOPE.get()):
         raise ValueError('CURRENT_WORKFLOW_OWNED_SOURCE_SCOPE_REQUIRED')
+    def authorize(name):
+        if state.route_authority_present(project):
+            state.require_route_owner(project)
+            allowed, _ = evaluate_pre_tool(project, {'tool_name': 'Write', 'tool_input': {'file_path': name}})
+            if not allowed:
+                raise ValueError('BASELINE_AUTHORITY_REQUIRED')
+
     desired = {n: (b, m) for n, b, m in baseline_assets.render_for_project(project, payload)}
     record_path = _record_path(payload)
     with component_transaction(project) as transaction:
@@ -218,11 +225,8 @@ def _publish(project, payload):
         for name in set(desired) | set(prior):
             item = transaction.read(name)
             snapshots[name] = item
-            if state.route_authority_present(project):
-                state.require_route_owner(project)
-                allowed, _ = evaluate_pre_tool(project, {'tool_name': 'Write', 'tool_input': {'file_path': name}})
-                if not allowed:
-                    raise ValueError('BASELINE_AUTHORITY_REQUIRED')
+            if name in desired or item is not None:
+                authorize(name)
             if item is None:
                 continue
             same_desired = name in desired and item.content == desired[name][0] and mode_matches(item.mode, desired[name][1])
@@ -234,10 +238,14 @@ def _publish(project, payload):
         transaction.write(record_path, canonical(record), 0o600, expected=current_record)
         pending = transaction.read(record_path, limit=baseline_assets.MAX_MANIFEST_BYTES)
         for name, (body, mode) in desired.items():
-            transaction.write(name, body, mode, expected=snapshots[name])
+            with state.task_transition(project):
+                authorize(name)
+                transaction.write(name, body, mode, expected=snapshots[name])
         for name in set(prior)-set(desired):
             if snapshots[name] is not None:
-                transaction.remove(name, expected=snapshots[name])
+                with state.task_transition(project):
+                    authorize(name)
+                    transaction.remove(name, expected=snapshots[name])
         for name, (body, mode) in desired.items():
             actual = transaction.read(name)
             if actual is None or actual.content != body or not mode_matches(actual.mode, mode):
