@@ -42,13 +42,11 @@ def completed():
     return [dict(name=name, status='pass', summary='owned synthetic completed result') for name in names]
 
 
-def owned_admission(mode, checks):
+def owned_admission(mode, checks, *, php_required):
     """Declare only this synthetic no-PHP/no-feed world, before the pure guard."""
-    php_excluded = any(check['name'] == 'php-lint' and check['summary'] == 'no changed PHP files'
-                       for check in checks)
-    changed_php_files = [] if php_excluded else ['owned-required.php']
+    changed_php_files = ['owned-required.php'] if php_required else []
     rows = [verification_plan.obligation(check['name'],
-            required=not (check['name'] == 'php-lint' and php_excluded),
+            required=check['name'] != 'php-lint' or php_required,
             evidence={'kind': 'owned-unit-applicability', 'changed_php_files': changed_php_files})
             for check in checks]
     policy = {'schema_version': 1, 'inputs': {}, 'implementation': {}}
@@ -71,12 +69,19 @@ class QGPhpNonapplicabilityTests(unittest.TestCase):
         check = dict(name='php-lint', status='skip', summary='no changed PHP files')
         for mode in ('pr', 'release'):
             checks = [*completed(), check]
-            admission = owned_admission(mode, checks)
+            admission = owned_admission(mode, checks, php_required=False)
             with pure():
                 decision = qg.evaluate_quality_gate(mode=mode, checks=checks, **admission)
                 self.assertEqual(decision.status, 'pass', decision.details)
                 self.assertEqual(decision.details, [])
                 self.assertFalse(qg.required_check_refused(check, mode=mode))
+            required_checks = [*completed(), check]
+            required_admission = owned_admission(mode, required_checks, php_required=True)
+            with pure():
+                required = qg.evaluate_quality_gate(mode=mode, checks=required_checks, **required_admission)
+                self.assertEqual(required.status, 'fail')
+                self.assertEqual([(d['code'], d['path']) for d in required.details],
+                                 [('required-check-unverified', 'php-lint')])
 
     def test_other_or_missing_reasons_still_refuse(self):
         for reason in ('', 'no changed php files', 'no changed PHP files ', 'no changed PHP file',
@@ -84,7 +89,7 @@ class QGPhpNonapplicabilityTests(unittest.TestCase):
             check = dict(name='php-lint', status='skip', summary=reason)
             for mode in ('pr', 'release'):
                 checks = [*completed(), check]
-                admission = owned_admission(mode, checks)
+                admission = owned_admission(mode, checks, php_required=True)
                 with pure():
                     decision = qg.evaluate_quality_gate(mode=mode, checks=checks, **admission)
                     self.assertEqual(decision.status, 'fail', reason)
