@@ -1,4 +1,4 @@
-"""Explicit network producer for saved PyPI artifacts; never installs or executes them.
+"""Explicit network producer for saved PyPI and Packagist artifacts; never installs or executes them.
 
 Run this adapter from the independently qualified runner. Its saved hashes and
 manifest give the pure evaluator byte-level evidence, not independent authority.
@@ -36,22 +36,28 @@ class _FixedOriginRedirect(urllib.request.HTTPRedirectHandler):
     max_repeats = 2
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not allowed_download_url(newurl):
-            raise ArtifactError('artifact-origin', 'registry redirect leaves the fixed PyPI origins')
+        from .security_packagist import allowed_url, redirect_allowed
+        if (not allowed_download_url(newurl) or allowed_url(req.full_url)
+                and not redirect_allowed(req.full_url, newurl)
+                or not allowed_url(req.full_url) and allowed_url(newurl)):
+            raise ArtifactError('artifact-origin', 'registry redirect leaves the fixed package origins')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def bounded_default(url: str, *, maximum: int) -> bytes:
     """Fetch a fixed-origin HTTPS response with byte, redirect and time budgets."""
     if not allowed_download_url(url) or type(maximum) is not int or maximum < 1 or maximum > MAX_ARTIFACT_BYTES:
-        raise ArtifactError('artifact-origin', 'fetch requires a fixed PyPI URL and bounded byte budget')
+        raise ArtifactError('artifact-origin', 'fetch requires a fixed package URL and bounded byte budget')
     started = time.monotonic()
     try:
         opener = urllib.request.build_opener(_FixedOriginRedirect())
         request = urllib.request.Request(url, headers={'User-Agent': 'Getzilla-artifact-evidence/1',
                                                        'Accept-Encoding': 'identity'})
         with opener.open(request, timeout=10) as response:
-            if response.status != 200 or not allowed_download_url(response.geturl()):
+            from .security_packagist import allowed_url, redirect_allowed
+            if (response.status != 200 or not allowed_download_url(response.geturl())
+                    or allowed_url(url) and not redirect_allowed(url, response.geturl())
+                    or not allowed_url(url) and allowed_url(response.geturl())):
                 raise ArtifactError('artifact-origin', 'artifact response did not come from a successful fixed origin')
             if response.headers.get('Content-Encoding', 'identity') != 'identity':
                 raise ArtifactError('artifact-size', 'encoded HTTP response is outside the acquisition contract')
@@ -81,7 +87,7 @@ def bounded_default(url: str, *, maximum: int) -> bytes:
 
 def _fetch(fetch, url: str, maximum: int) -> bytes:
     if not allowed_download_url(url):
-        raise ArtifactError('artifact-origin', 'artifact URL is outside the fixed PyPI registry origins')
+        raise ArtifactError('artifact-origin', 'artifact URL is outside the fixed package registry origins')
     body = fetch(url, maximum=maximum)
     if not isinstance(body, bytes) or not body or len(body) > maximum:
         raise ArtifactError('artifact-size', 'producer fetch did not return bounded nonempty bytes')
@@ -235,39 +241,52 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             seen.add(key)
             records.append(record)
         for dep in dependencies:
-            if dep.get('ecosystem') != 'PyPI':
+            if dep.get('ecosystem') not in {'PyPI', 'Packagist'}:
                 gaps.append({'code': 'artifact-acquisition-ecosystem', 'ecosystem': dep.get('ecosystem'),
                              'package': dep.get('name'), 'message': 'no qualified acquisition adapter for this ecosystem'})
                 continue
-            key = package_key('PyPI', dep.get('name'), dep.get('version'))
+            ecosystem = dep['ecosystem']
+            key = package_key(ecosystem, dep.get('name'), dep.get('version'))
             context = artifact_context(dep)
             observed = (key, dep.get('artifact_filename'), dep.get('artifact_sha256'),
                         dep.get('artifact_source'), json.dumps(context, sort_keys=True))
             if observed in seen:
                 continue
             seen.add(observed)
-            index_url = pypi_index_url(dep['name'], dep['version'])
-            index_bytes = _fetch(fetch, index_url, MAX_INDEX_BYTES)
-            selected = _select(_json(index_bytes), dep)
+            if ecosystem == 'Packagist':
+                from .security_packagist import index_url as composer_index, select_release, filename as composer_filename
+                index_url = composer_index(dep['name'], dep['version'])
+                index_bytes = _fetch(fetch, index_url, MAX_INDEX_BYTES)
+                release = select_release(_json(index_bytes), dep)
+                selected = {'url': release['dist']['url'], 'filename': composer_filename(release)}
+            else:
+                index_url = pypi_index_url(dep['name'], dep['version'])
+                index_bytes = _fetch(fetch, index_url, MAX_INDEX_BYTES)
+                selected = _select(_json(index_bytes), dep)
             payload = _fetch(fetch, selected['url'], MAX_ARTIFACT_BYTES)
             total += len(index_bytes) + len(payload)
             if total > MAX_BATCH_BYTES:
                 raise ArtifactError('artifact-size', 'acquisition batch exceeds its total byte budget')
             digest = hashlib.sha256(payload).hexdigest()
-            if digest != selected['digests']['sha256']:
+            if ecosystem == 'PyPI' and digest != selected['digests']['sha256']:
                 raise ArtifactError('artifact-hash', 'downloaded artifact differs from registry SHA-256')
             filename = selected['filename']
-            metadata = package_metadata(archive_files(payload, filename), 'PyPI', filename)
-            if package_key('PyPI', metadata['name'], metadata['version']) != key:
-                raise ArtifactError('artifact-identity', 'artifact Name/Version differs from exact inventory')
             index_digest = hashlib.sha256(index_bytes).hexdigest()
-            record = {'ecosystem': 'PyPI', 'name': dep['name'], 'version': dep['version'], 'filename': filename,
+            record = {'ecosystem': ecosystem, 'name': dep['name'], 'version': dep['version'], 'filename': filename,
                       'path': f'objects/{digest}', 'sha256': digest, 'context': context,
                       'acquired_at': (current if now is not None else _clock(None)).isoformat(),
                       'origin': {'index_url': index_url, 'index_path': f'indexes/{index_digest}.json',
                                  'index_sha256': index_digest, 'artifact_url': selected['url']}}
             _write(descriptor, record['origin']['index_path'], index_bytes, immutable=True)
-            verify_origin(destination, record, payload)
+            binding = verify_origin(destination, record, payload)
+            metadata = package_metadata(archive_files(payload, filename), ecosystem, filename,
+                                        **({'origin': binding} if ecosystem == 'Packagist' else {}))
+            if package_key(ecosystem, metadata['name'], metadata['version']) != key:
+                raise ArtifactError('artifact-identity', 'artifact Name/Version differs from exact inventory')
+            if (dep.get('artifact_source') is not None and dep['artifact_source'] != selected['url']
+                    or dep.get('artifact_filename') is not None and dep['artifact_filename'] != filename
+                    or dep.get('artifact_sha256') is not None and dep['artifact_sha256'] != digest):
+                raise ArtifactError('artifact-identity', 'artifact differs from observed target')
             _write(descriptor, record['path'], payload, immutable=True)
             if artifact_identity(record) not in {artifact_identity(old) for old in records}:
                 records.append(record)
@@ -291,7 +310,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='Acquire exact PyPI artifact evidence without installing packages')
+    parser = argparse.ArgumentParser(description='Acquire exact PyPI/Packagist artifact evidence without installing packages')
     parser.add_argument('inventory', type=Path)
     parser.add_argument('destination', type=Path)
     args = parser.parse_args(argv)

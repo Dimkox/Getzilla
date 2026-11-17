@@ -367,6 +367,9 @@ def _marker_required(marker: str, dep: dict, environment: dict) -> bool:
 
 
 def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: dict) -> None:
+    if dep['ecosystem'] == 'Packagist':
+        from .security_packagist import closure
+        return closure(metadata, dep, dependencies, environment)
     if metadata.get('peer_optional') or metadata.get('requires_external'):
         raise ArtifactError('license-transitive-coverage', 'peer, optional or external dependencies need qualified artifact coverage')
     for requirement in metadata['requires']:
@@ -494,7 +497,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     if not re.search(r'-(?:py3|py2\.py3)-none-any\.whl$', record['filename']):
                         raise ArtifactError('artifact-target-unknown', 'platform wheel or sdist requires an explicitly observed artifact target')
                 files = archive_files(payload, record['filename'])
-                metadata = package_metadata(files, dep['ecosystem'], record['filename'])
+                metadata = package_metadata(files, dep['ecosystem'], record['filename'],
+                                            **({'origin': origin} if dep['ecosystem'] == 'Packagist' else {}))
                 missing_paths = set(metadata['license_paths']) - set(files)
                 if missing_paths:
                     files.update(archive_files(payload, record['filename'], requested=missing_paths))
@@ -502,7 +506,12 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('artifact-identity', 'artifact metadata Name/Version differs from inventory')
                 _validate_extra_scope(metadata, dep)
                 chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
-                license_files, notice_files = _license_evidence(files, metadata, identifiers, chosen)
+                if dep['ecosystem'] == 'Packagist':
+                    from .security_packagist import license_members
+                    license_inputs = license_members(files, metadata)
+                else:
+                    license_inputs = files
+                license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen)
                 custody = None
                 context = dep.get('delivery_context')
                 if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:

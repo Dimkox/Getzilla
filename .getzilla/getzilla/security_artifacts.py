@@ -104,6 +104,9 @@ def package_key(ecosystem: str, name: str, version: str) -> tuple:
             return ecosystem, normalize_name(ecosystem, name), _pypi_key(version)
         if ecosystem == 'npm':
             return ecosystem, name.lower(), _semver_key(version)
+        if ecosystem == 'Packagist':
+            from .security_packagist import key
+            return key(name, version)
     except VulnerabilityError as exc:
         raise ArtifactError('artifact-identity', str(exc)) from exc
     raise ArtifactError('license-ecosystem-coverage', f'artifact license metadata is unsupported for {ecosystem}')
@@ -591,7 +594,8 @@ def allowed_download_url(url: str) -> bool:
         return False
     if any(part in {'.', '..'} for part in unquote(parsed.path).split('/')) or '\\' in unquote(parsed.path):
         return False
-    return (parsed.netloc == 'pypi.org' and re.fullmatch(r'/pypi/[^/]+/[^/]+/json', parsed.path) is not None
+    from .security_packagist import allowed_url
+    return (allowed_url(url) or parsed.netloc == 'pypi.org' and re.fullmatch(r'/pypi/[^/]+/[^/]+/json', parsed.path) is not None
             or parsed.netloc == 'files.pythonhosted.org' and parsed.path.startswith('/packages/'))
 
 
@@ -642,6 +646,11 @@ def verify_origin(root: Path, record: dict, payload: bytes, *, index_bytes: byte
         expected_type = 'bdist_wheel' if filename.endswith('.whl') else 'sdist'
         if item.get('packagetype') != expected_type:
             raise ArtifactError('artifact-origin', 'registry artifact type disagrees with filename')
+    elif ecosystem == 'Packagist':
+        from .security_packagist import verify
+        binding = verify(record, payload, index)
+        return {'index_url': origin['index_url'], 'index_sha256': index_digest,
+                'artifact_url': origin['artifact_url'], 'artifact_sha256': digest, **binding}
     else:
         expected_url = f'https://registry.npmjs.org/{quote(name, safe="")}/{quote(version, safe="")}'
         if origin.get('index_url') != expected_url or package_key('npm', index.get('name'), index.get('version')) != key:
@@ -661,7 +670,7 @@ def verify_origin(root: Path, record: dict, payload: bytes, *, index_bytes: byte
 
 def _interesting(path: str) -> bool:
     name = PurePosixPath(path).name.lower()
-    return (name in {'metadata', 'pkg-info', 'package.json'} or name.startswith(('license', 'copying', 'notice'))
+    return (name in {'metadata', 'pkg-info', 'package.json', 'composer.json'} or name.startswith(('license', 'copying', 'notice'))
             or any(part.lower() in {'licenses', 'licences'} for part in PurePosixPath(path).parts))
 
 
@@ -742,7 +751,10 @@ def archive_files(payload: bytes, filename: str, *, requested: set[str] | None =
     return selected
 
 
-def package_metadata(files: dict[str, bytes], ecosystem: str, filename: str) -> dict:
+def package_metadata(files: dict[str, bytes], ecosystem: str, filename: str, *, origin=None) -> dict:
+    if ecosystem == 'Packagist':
+        from .security_packagist import metadata
+        return metadata(files, origin)
     if ecosystem == 'npm':
         if 'package/package.json' not in files:
             raise ArtifactError('artifact-metadata', 'npm archive lacks package/package.json')
