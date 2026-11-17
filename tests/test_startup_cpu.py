@@ -81,6 +81,57 @@ class ChooseCapacityTests(unittest.TestCase):
 
 @unittest.skipUnless(hasattr(os, 'sched_getaffinity'), 'Linux affinity API required')
 class MeasureTests(unittest.TestCase):
+    def test_missing_linux_observations_record_unknown_bounds_and_one_worker(self) -> None:
+        def runner(argv: list[str]) -> dict:
+            missing = argv[0] == 'lscpu'
+            return {'argv': argv, 'code': 1 if missing else 0,
+                    'stdout': '' if missing else '9\n',
+                    'stderr': 'lscpu: missing sysfs' if missing else ''}
+
+        with mock.patch.object(startup_cpu.os, 'sched_getaffinity', return_value=set(range(9))), \
+                mock.patch.object(Path, 'read_text', side_effect=FileNotFoundError('missing sysfs')), \
+                mock.patch.object(startup_cpu._cpu_capacity, '_read_text',
+                                  side_effect=FileNotFoundError('missing cgroup')):
+            snapshot = startup_cpu.measure(runner=runner)
+        self.assertEqual(snapshot['chosen_capacity'], 1)
+        self.assertEqual(snapshot['process']['affinity'], '0-8')
+        self.assertEqual(snapshot['commands'][2]['stdout'], '9\n')
+        self.assertEqual(snapshot['commands'][0]['stderr'], 'lscpu: missing sysfs')
+        self.assertIsNone(snapshot['topology']['physical_cores'])
+        self.assertIsNone(snapshot['topology']['online_logical_cpus'])
+        self.assertIsNone(snapshot['topology']['online_cpus'])
+        self.assertIsNone(snapshot['finite_quota'])
+        self.assertIsNone(snapshot['probe'])
+        self.assertIn('FileNotFoundError', snapshot['cgroup']['error'])
+        self.assertTrue(any('missing sysfs' in item for item in snapshot['uncertainties']))
+        self.assertTrue(any('quota unknown' in item for item in snapshot['uncertainties']))
+
+    def test_sysfs_fallback_preserves_observed_online_cpus_and_quota(self) -> None:
+        def runner(argv: list[str]) -> dict:
+            return {'argv': argv, 'code': 1, 'stdout': '', 'stderr': 'lscpu unavailable'}
+
+        bounds = {'effective_cpuset': '2-5', 'levels': []}
+        with mock.patch.object(startup_cpu.os, 'sched_getaffinity', return_value={2, 3, 4, 5}), \
+                mock.patch.object(Path, 'read_text', return_value='0-7\n'), \
+                mock.patch.object(startup_cpu, 'cgroup_bounds', return_value=bounds), \
+                mock.patch.object(startup_cpu._cpu_capacity, 'linux_quota_capacity', return_value=2):
+            snapshot = startup_cpu.measure(runner=runner)
+        self.assertEqual(snapshot['topology']['online_logical_cpus'], 8)
+        self.assertEqual(snapshot['topology']['online_cpus'], '0-7')
+        self.assertEqual(snapshot['effective_cpuset'], '2-5')
+        self.assertEqual(snapshot['finite_quota'], 2)
+        self.assertEqual(snapshot['chosen_capacity'], 2)
+
+    def test_unobservable_cgroup_does_not_turn_valid_topology_into_capacity(self) -> None:
+        with mock.patch.object(startup_cpu.os, 'sched_getaffinity', return_value={0, 1, 2, 3}), \
+                mock.patch.object(startup_cpu._cpu_capacity, '_read_text',
+                                  side_effect=PermissionError('cgroup denied')):
+            snapshot = startup_cpu.measure(runner=fake_runner([]))
+        self.assertEqual(snapshot['topology']['online_logical_cpus'], 4)
+        self.assertEqual(snapshot['chosen_capacity'], 1)
+        self.assertIsNone(snapshot['finite_quota'])
+        self.assertIn('PermissionError', snapshot['cgroup']['error'])
+
     def measure(self, *, affinity: set[int], reserve: int = 0, allowed: str = '0-3'):
         calls: list[list[str]] = []
         bounds = {'cgroup_version': 2, 'membership': '/x', 'levels': [], 'effective_cpuset': '0-3'}

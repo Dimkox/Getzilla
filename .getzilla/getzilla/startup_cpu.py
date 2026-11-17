@@ -203,10 +203,18 @@ def measure(*, reserve: int = 0, probe: bool = True, runner: Runner = run_comman
         topology = topology_from_lscpu(commands[1]['stdout'])
     except ValueError as exc:
         uncertainties.append(f'topology: {exc}; using /sys/devices/system/cpu/online')
-        online_text = Path('/sys/devices/system/cpu/online').read_text(encoding='utf-8')
-        topology = {'online_cpus': parse_cpu_list(online_text), 'physical_cores': None}
-    online = topology['online_cpus']
+        try:
+            online_text = Path('/sys/devices/system/cpu/online').read_text(encoding='utf-8')
+            online_cpus = parse_cpu_list(online_text)
+            if not online_cpus:
+                raise ValueError('sysfs reported no online CPUs')
+            topology = {'online_cpus': online_cpus, 'physical_cores': None}
+        except (OSError, UnicodeError, ValueError) as fallback_exc:
+            uncertainties.append(f'topology unresolved: {type(fallback_exc).__name__}: {fallback_exc}')
+            topology = {'online_cpus': None, 'physical_cores': None}
     affinity = set(os.sched_getaffinity(0))
+    # Affinity is still observed, but it does not establish host topology.
+    online = topology['online_cpus'] if topology['online_cpus'] is not None else affinity
     try:
         bounds = cgroup_bounds()
         cpuset = parse_cpu_list(bounds['effective_cpuset']) if bounds['effective_cpuset'] else None
@@ -215,14 +223,15 @@ def measure(*, reserve: int = 0, probe: bool = True, runner: Runner = run_comman
     except (OSError, UnicodeError, ValueError) as exc:
         bounds, cpuset = {'error': f'{type(exc).__name__}: {exc}'}, None
         uncertainties.append(f'cgroup bounds unresolved: {exc}')
-    quota = _cpu_capacity.linux_quota_capacity()
-    if quota == 1 and 'error' in bounds:
+    quota = _cpu_capacity.linux_quota_capacity() if 'error' not in bounds else None
+    if 'error' in bounds:
         uncertainties.append('quota unknown; conservative capacity 1 applies')
     allowed = online & cpuset if cpuset is not None else set(online)
     candidates = set(sorted(allowed)[:max(1, len(online) - reserve)]) if reserve else allowed
     probe_record: dict[str, Any] | None = None
     probe_allowed: set[int] | None = None
-    if probe and candidates - affinity:
+    unresolved = topology['online_cpus'] is None or 'error' in bounds
+    if probe and not unresolved and candidates - affinity:
         probe_record = child_probe(candidates, runner)
         probe_allowed = probe_record.pop('allowed_set')
         if probe_allowed is None:
@@ -231,14 +240,20 @@ def measure(*, reserve: int = 0, probe: bool = True, runner: Runner = run_comman
         probe_allowed = candidates & affinity
     decision = choose_capacity(online=online, affinity=affinity, cpuset=cpuset, quota=quota,
                                probe_allowed=probe_allowed, reserve=reserve)
+    if unresolved:
+        decision['chosen_capacity'] = 1
+        if topology['online_cpus'] is None:
+            decision['reasons'] = [f'observed process affinity CPUs={len(affinity)}']
+        decision['reasons'].append('unresolved Linux bounds; conservative capacity 1')
     return {
         'schema_version': SCHEMA_VERSION,
         'kind': 'startup-cpu-step-zero',
         'observed_at': now_utc(),
         'pid': os.getpid(),
         'commands': commands,
-        'topology': {'physical_cores': topology['physical_cores'], 'online_logical_cpus': len(online),
-                     'online_cpus': format_cpu_list(online)},
+        'topology': {'physical_cores': topology['physical_cores'],
+                     'online_logical_cpus': len(online) if topology['online_cpus'] is not None else None,
+                     'online_cpus': format_cpu_list(online) if topology['online_cpus'] is not None else None},
         'process': {'nproc': len(affinity), 'affinity': format_cpu_list(affinity)},
         'cgroup': bounds,
         'effective_cpuset': format_cpu_list(cpuset) if cpuset is not None else None,
