@@ -115,6 +115,7 @@ def policy_binding(root: Path) -> dict:
                  'expanded_security.py', 'security_cli.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
                  'public_security_context.py', 'security_oci.py',
                  'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py',
+                 'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
                  'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
                  'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
                  'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py'):

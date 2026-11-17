@@ -133,6 +133,10 @@ class LightLaneVerificationTests(unittest.TestCase):
                 self.assertTrue(allowed, refusal)
                 self.assertEqual(start_agent(root, 'test-review', reviewer)['lifecycle'], 'running')
 
+    def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
+        # Retain the original 393/411 identity with the stronger security-floor contract.
+        self.test_light_diff_needs_no_package_but_missing_security_still_blocks_verification()
+
     def test_light_diff_needs_no_package_but_missing_security_still_blocks_verification(self):
         from getzilla.router import build_route
         from getzilla.state import get_active_route
