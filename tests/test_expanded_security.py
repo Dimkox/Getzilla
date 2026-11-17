@@ -177,6 +177,31 @@ class ExpandedSecurityTests(unittest.TestCase):
         self.assertEqual(known['details'][0]['outcome'], 'blocked')
 
 
+    def test_native_verifier_retains_findings_beyond_its_display_limit_and_source_proof(self):
+        from getzilla.verification import _known_vulnerabilities
+        (self.root / 'requirements.txt').write_text('sample==1.0.0\n')
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as archive:
+            for index in range(205):
+                identifier = f'GHSA-fixture-{index}'
+                archive.writestr(identifier + '.json', json.dumps({
+                    'id': identifier, 'modified': '2026-11-01T00:00:00Z',
+                    'affected': [{'package': {'ecosystem': 'PyPI', 'name': 'sample'}, 'versions': ['1.0.0']}]}))
+        payload = out.getvalue()
+        self.feed('osv:PyPI', payload, osv_coverage(payload, 'PyPI'))
+        with mock.patch('getzilla.expanded_security._clock', return_value=NOW):
+            result = _known_vulnerabilities(self.root)
+        self.assertEqual(result.status, 'fail')
+        structured = result.details[0]
+        self.assertEqual(structured['family'], 'vulnerabilities')
+        self.assertEqual(len(structured['findings']), 205)
+        self.assertEqual(len(result.details[1:]), 200)
+        planned = next(item for item in security_obligations(self.root, now=NOW)
+                       if item['check_id'] == result.name)
+        self.assertEqual(structured['data_sources'], planned['data_sources'])
+        self.assertTrue(validate_data_source(structured['data_sources'][0], root=self.root, now=NOW))
+
+
 class ExpandedSecurityEnvironmentTests(unittest.TestCase):
     def test_fixture_setup_isolates_selector_paths_and_restores_environment(self):
         from getzilla.expanded_security import _database

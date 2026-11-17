@@ -54,6 +54,16 @@ class ProviderTransport:
         return GitHubClient(token='fixture', transport=transport)
 
 
+def _finite_evaluation_port(inventory, identity, checks):
+    """NEW pure fixture seam; supplied evidence cannot mutate fresh results."""
+    frozen = copy.deepcopy({'schema_version': 1, 'kind': 'security-expanded', 'status': 'pass',
+        'qualification_gaps': [], 'inventory_sha256': inventory['digest'], 'policy_sha256': POLICY,
+        'source': identity, 'checks': checks})
+    def evaluate(*args, **kwargs):
+        return copy.deepcopy(frozen)
+    return evaluate
+
+
 class CanonicalProducerFixture(unittest.TestCase):
     """Owned Git/byte/signature model; accepted pure marker/time functions only."""
     def setUp(self):
@@ -130,6 +140,9 @@ class CanonicalProducerFixture(unittest.TestCase):
             checks.append({'name': name, 'status': status, 'details': [marker]})
             normalized.append({'name': name, 'status': status, 'outcome': marker['outcome'], 'finding_count': 0,
                 'gap_count': 0, 'source_ids': [], 'coverage_sha256': inventory['digest']})
+        # Snapshot the finite evaluator independently from mutable evidence.
+        core.report.REQUIRED_CHECKS = tuple(required)
+        core.report.evaluate = _finite_evaluation_port(inventory, identity, checks)
         self.descriptors = {'checks': checks, 'source_descriptors': []}
         self.report = {'inventory_sha256': inventory['digest'], 'created_at': NOW.isoformat(),
             'valid_until': (NOW + timedelta(hours=72)).isoformat(), 'checks': normalized,
@@ -348,6 +361,13 @@ class ValidatedHorizonBoundaryTests(unittest.TestCase):
             records.append({'name': name, 'status': status, 'details': [marker]})
             checks.append({'name': name, 'status': status, 'outcome': marker['outcome'],
                 'finding_count': 0, 'gap_count': 0, 'source_ids': [], 'coverage_sha256': inventory['digest']})
+        # The fixture explicitly supplies the new protected full-evaluation port;
+        # execution remains mocked. All paired-source/horizon assertions remain.
+        core.report.REQUIRED_CHECKS = tuple(row['name'] for row in records)
+        core.report.evaluate = lambda *args, **kwargs: {
+            'schema_version': 1, 'kind': 'security-expanded', 'status': 'pass',
+            'qualification_gaps': [], 'inventory_sha256': inventory['digest'],
+            'policy_sha256': policy.policy_digest, 'source': identity, 'checks': copy.deepcopy(records)}
         descriptors = {'checks': records, 'source_descriptors': []}
         document = {'version': 1, 'source': source.as_dict(), 'policy_sha256': policy.policy_digest,
             'binding': None, 'integration': None, 'report': {'inventory_sha256': inventory['digest'],

@@ -1,0 +1,3 @@
+Public-mode build input mount. This checked-in directory contains no qualified wheels or hashes.
+
+For an explicit public worker build, stage real preacquired a wheels/ directory and finite checker-requirements.lock in a task-owned build context, or select its context-relative directory with PUBLIC_CHECKER_INPUTS. The lock must contain exact versions and SHA256 hashes for every package, including the accepted checker's Bandit pin, PyYAML and their complete dependencies. The installer uses --no-index --only-binary=:all: --require-hashes, rejects direct URLs/options/markers and refuses missing tools. Use a platform-qualified wheelhouse matching the pinned Python base. No source/build result may invent a wheel hash or treat this README as acquisition evidence.

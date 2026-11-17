@@ -7,6 +7,7 @@ flowchart LR
     node_7b13ed12e8efab1c["NODE-OSV-ADVISORY-BUCKET | external_system | OSV public advisory service"]
     node_8acae282d21dd9c2["NODE-OSV-API | external_system | OSV public advisory service"]
     node_69f0245ef987c48b["NODE-PILOT-MODEL-PROVIDER | external_system | external model provider"]
+    node_ce3cdb090a7e25d9["NODE-PUBLIC-SECURITY-FEEDS | external_system | CISA KEV and FIRST EPSS public publishers"]
     node_ed77fd8e957c8e8c["NODE-PYPI-REGISTRY | external_system | public PyPI registry and artifact endpoints"]
     node_4646462869ac5f17["NODE-SEARCH-SEARXNG | external_system | operator configured SearXNG endpoint"]
     node_ff513e24cb7ef2d8["NODE-SUPPLY-CHAIN-REGISTRY | external_system | external artifact registries"]
@@ -34,6 +35,11 @@ flowchart LR
   end
   subgraph domain_fa5ae843eb45e375["TD-LOCAL-PREFLIGHT"]
     node_23677f8757246623["NODE-GOVERNANCE-VALIDATOR | local_component | repository engineering"]
+    node_a02e5f5306abe637["NODE-ISOLATED-ACCEPTANCE | local_component | repository engineering"]
+    node_29363a281e26c870["NODE-ISOLATED-DOCKER | local_component | ephemeral local or GitHub Actions runner; never production"]
+    node_81fcab772d947882["NODE-LIVE-COMPONENT-OBSERVER | local_component | local component test operators"]
+    node_15647433e781e546["NODE-LIVE-DISPOSABLE-POSTGRES | datastore | local component test operators"]
+    node_052b9b5f7c4415eb["NODE-LOCAL-CI-ADMISSION | local_component | repository engineering"]
     node_47745d4c55496199["NODE-LOCAL-CI-GATE | local_component | repository engineering"]
     node_3703dbb382efdb0f["NODE-LOCAL-DEMO-TEST-CLIENT | local_component | repository engineering"]
     node_9f1df3a916fb955a["NODE-LOCAL-DEMO-UI | local_component | repository engineering"]
@@ -46,6 +52,9 @@ flowchart LR
     node_11778b266a5a56fd["NODE-OPTIONAL-DESIGN-PREVIEW | local_component | repository engineering; explicit optional fixture capture only"]
     node_2b4705308adeeb3e["NODE-OPTIONAL-SEARCH-GATEWAY | local_component | repository engineering"]
     node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
+    node_b546ff724489580d["NODE-SECURITY-ACQUISITION | local_component | repository engineering"]
+    node_e0e0b3eab2228878["NODE-SECURITY-SCANNER-TOOLS | local_component | repository engineering"]
+    node_e5ccf49808562648["NODE-SECURITY-SNAPSHOT-EVALUATOR | local_component | repository engineering"]
     node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
     node_e1da543fa66b0086["NODE-STAGED-DELIVERY-SOURCE | local_component | repository engineering"]
     node_05e59b1e4a9cc0f9["NODE-WORKFLOW-ARTIFACT-COMPILER | local_component | repository engineering"]
@@ -90,6 +99,7 @@ flowchart LR
     node_99c8497c4eb3c986["NODE-OPTIONAL-GITHUB-OBSERVER | local_component | repository engineering; optional GET-only adapter, source-described not activated"]
     node_d0e570b2fbe52f98["NODE-TRUST-CI-API | service | Trust CI operators"]
     node_1a6c7efb2d08591b["NODE-TRUST-CI-POSTGRES | datastore | Trust CI operators"]
+    node_184d4805d75dbf51["NODE-TRUST-CI-PUBLIC-JOURNAL | datastore | Trust CI operators; optional embedded SQLite journal, no independent process"]
   end
   subgraph domain_65e7aeb3bb37c460["TD-TRUST-CI-EXECUTION"]
     node_4e78270f61d78ed8["NODE-DOCKER-ENGINE | service | Trust CI operators; compose-described TCP/2375 local executor"]
@@ -102,6 +112,8 @@ flowchart LR
   node_d3130d35cc27975a -->|"EDGE-BUNDLE-OPTIONAL-GITHUB-OBSERVATION | dependency | python"| node_99c8497c4eb3c986
   node_8938bd3db1932751 -->|"EDGE-CHANGE-EVIDENCE-WORKFLOW-COMPILER | data_flow | filesystem"| node_05e59b1e4a9cc0f9
   node_8938bd3db1932751 -->|"EDGE-CHANGE-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
+  node_052b9b5f7c4415eb -->|"EDGE-CI-ADMISSION-OBSERVATIONS | dependency | filesystem"| node_a02e5f5306abe637
+  node_052b9b5f7c4415eb -->|"EDGE-CI-ADMISSION-SECURITY | dependency | filesystem"| node_b546ff724489580d
   node_3703dbb382efdb0f -->|"EDGE-DEMO-TEST-CLIENT-LOOPBACK | dependency | https"| node_9f1df3a916fb955a
   node_9f1df3a916fb955a -->|"EDGE-DEMO-UI-READS-LOCAL-PREFLIGHT | dependency | python_import"| node_770cf3a1783e8525
   node_11778b266a5a56fd -->|"EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP | dependency | tcp"| node_2083f4d7618a5715
@@ -134,6 +146,11 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
+  node_a02e5f5306abe637 -->|"EDGE-ISOLATED-INPUT-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
+  node_a02e5f5306abe637 -->|"EDGE-ISOLATED-RESOURCE-CONTROL | dependency | docker_api"| node_29363a281e26c870
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api"| node_4e78270f61d78ed8
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-OWNED-RESOURCES | dependency | python_import"| node_a02e5f5306abe637
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql"| node_15647433e781e546
   node_47745d4c55496199 -->|"EDGE-LOCAL-CI-GITHUB-VISIBILITY | dependency | https"| node_8b8a8cd21b180532
   node_23bed8fcbfc79861 -->|"EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW | dependency | python_call"| node_11778b266a5a56fd
   node_99bef979b5a89963 -->|"EDGE-LOCAL-SUPPLY-CHAIN-FETCH | dependency | https"| node_ff513e24cb7ef2d8
@@ -152,6 +169,13 @@ flowchart LR
   node_fd325b0205e2e68b -->|"EDGE-PILOT-SANDBOX | control | process"| node_dd1c01e42bec9cba
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem"| node_814a7fe70af9f16d
   node_22df40caedcff532 -->|"EDGE-PILOT-SYNTHETIC-UNIX-PROBE | control | unix_http"| node_22df40caedcff532
+  node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-API-JOURNAL | data_flow | sqlite"| node_184d4805d75dbf51
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-DISPATCH | control | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-SOURCE | data_flow | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-VALIDATION | dependency | python"| node_d3130d35cc27975a
+  node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-RUNTIME-BUNDLE | dependency | python"| node_d3130d35cc27975a
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-JOURNAL | data_flow | sqlite"| node_184d4805d75dbf51
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-RUNTIME | dependency | python"| node_d0e570b2fbe52f98
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-CHANGE-EVIDENCE | control | filesystem"| node_8938bd3db1932751
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-WORKFLOW-COMPILER | control | filesystem"| node_05e59b1e4a9cc0f9
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem"| node_0a0fe2f046a648e9
@@ -173,6 +197,13 @@ flowchart LR
   node_b0214d69d31a7432 -->|"EDGE-SEARCH-SERPER-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
   node_2b4705308adeeb3e -->|"EDGE-SEARCH-TAVILY | secret_flow | https"| node_86424fd6464e012a
   node_86424fd6464e012a -->|"EDGE-SEARCH-TAVILY-UNTRUSTED-RESULT | data_flow | https"| node_2b4705308adeeb3e
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-ARTIFACTS | dependency | https"| node_ff513e24cb7ef2d8
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-INTELLIGENCE | dependency | https"| node_ce3cdb090a7e25d9
+  node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-OSV | dependency | https"| node_7b13ed12e8efab1c
+  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-DB-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
+  node_e0e0b3eab2228878 -->|"EDGE-SECURITY-IMAGE-READ | dependency | docker_api"| node_29363a281e26c870
+  node_b546ff724489580d -->|"EDGE-SECURITY-SCANNER-DISPATCH | dependency | filesystem"| node_e0e0b3eab2228878
+  node_b546ff724489580d -->|"EDGE-SECURITY-SNAPSHOT-READ | dependency | filesystem"| node_e5ccf49808562648
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_070dda93443dcc1f -->|"EDGE-WORKER-DOCKER-TCP-2375 | deployment | docker_api"| node_4e78270f61d78ed8

@@ -1,25 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-compose_file="$root/trust-ci/compose.test.yaml"
-project_name="adaptive-trust-ci-pgtest-${USER:-ci}-$$"
-
-cleanup() {
-  docker compose \
-    --project-name "$project_name" \
-    -f "$compose_file" \
-    down --volumes --remove-orphans >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-cleanup
-
-docker compose \
-  --project-name "$project_name" \
-  -f "$compose_file" \
-  up \
-  --build \
-  --abort-on-container-exit \
-  --exit-code-from postgres-integration \
-  postgres-integration
+output="${GETZILLA_LIVE_OUTPUT:-$root/.getzilla/runtime/live/trust-ci-$(date +%s)-$$}"
+exec python3 "$root/scripts/getzilla_live.py" --root "$root" --cell trust-ci --output "$output" --timeout-seconds 1200
