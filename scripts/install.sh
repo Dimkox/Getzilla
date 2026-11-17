@@ -76,14 +76,13 @@ main() {
   fetch_getzilla "$repo" "$ref" "$home"
   link_getzilla_command "$home"
   setup_python_env "$home" "$python"
+  python="$home/.venv/bin/python"
+  [ -x "$python" ] || fail "Getzilla's managed Python environment is missing."
 
+  local agent_status=0
   if [ "${GETZILLA_SKIP_AGENT:-0}" != "1" ]; then
-    configure_agent "$home" "$python" "$agent" "$provider"
+    configure_agent "$home" "$python" "$agent" "$provider" || agent_status=$?
   fi
-
-  say "Checking this machine..."
-  local doctor_status=0
-  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
 
   update_security_data "$home" "$python"
   install_workflow_baseline "$home" "$python"
@@ -102,10 +101,14 @@ main() {
     if [ -n "$compliance" ]; then say "To turn on EU AI Act checks there: cd \"$GETZILLA_PROJECT\" && getzilla components add compliance:eu-ai-act"; fi
   fi
 
-  if [ "$doctor_status" -eq 0 ]; then
+  say "Checking this machine after all updates..."
+  local doctor_status=0
+  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
+  if [ "$doctor_status" -eq 0 ] && [ "$agent_status" -eq 0 ]; then
     printf '\nGetzilla is ready in %s\n' "$home"
   else
-    printf '\nGetzilla is installed in %s, but the health check reported problems (FAIL lines above).\n' "$home"
+    printf '\nGetzilla installation is incomplete in %s: health=%s, agent/provider=%s. Follow the errors and next steps above.\n' "$home" "$doctor_status" "$agent_status"
+    return 3
   fi
   cat <<EOF
 
@@ -477,10 +480,9 @@ configure_agent() {
   fi
   say "Configuring $agent..."
   if [ -n "$key" ]; then
-    printf '%s\n' "$key" | (cd "$home" && "$python" scripts/getzilla_setup_agent.py "${args[@]}" --key-stdin) \
-      || say "Agent configuration failed (see the message above); run it again later with scripts/getzilla_setup_agent.py."
+    printf '%s\n' "$key" | (cd "$home" && "$python" scripts/getzilla_setup_agent.py "${args[@]}" --key-stdin)
   else
-    (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null) || true
+    (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null)
   fi
 }
 
@@ -529,7 +531,7 @@ setup_python_env() {
       -r "$home/.getzilla/config/python-quality-requirements.txt" </dev/null; then
     say "Python environment: $home/.venv"
   else
-    printf 'WARNING: could not create %s/.venv; verify will report missing coverage, ruff and bandit.\n' "$home" >&2
+    fail "Could not create $home/.venv with the required test and quality tools."
   fi
 }
 

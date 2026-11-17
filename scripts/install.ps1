@@ -100,13 +100,15 @@ function Install-Getzilla {
     # One `getzilla <command>` for every tool (bin\getzilla.cmd), on PATH for new windows.
     Add-UserPath (Join-Path $GetzillaHome 'bin')
     Initialize-PythonEnvironment $Python $GetzillaHome
+    $Python = @((Join-Path $GetzillaHome '.venv\Scripts\python.exe'))
+    $AgentExit = 0
 
     Push-Location $GetzillaHome
     try {
-        if ($env:GETZILLA_SKIP_AGENT -ne '1') { Set-AgentConfiguration $Python $Agent $Provider }
-        Write-Step 'Checking this machine...'
-        Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
-        $DoctorExit = $LASTEXITCODE
+        if ($env:GETZILLA_SKIP_AGENT -ne '1') {
+            Set-AgentConfiguration $Python $Agent $Provider
+            $AgentExit = $LASTEXITCODE
+        }
     } finally {
         Pop-Location
     }
@@ -139,11 +141,17 @@ function Install-Getzilla {
     }
 
     $PythonText = $Python -join ' '
+    Push-Location $GetzillaHome
+    try {
+        Write-Step 'Checking this machine after all updates...'
+        Invoke-Python $Python @('scripts/getzilla_doctor.py', '--offer-install')
+        $DoctorExit = $LASTEXITCODE
+    } finally { Pop-Location }
     Write-Host ''
-    if ($DoctorExit -eq 0) {
+    if ($DoctorExit -eq 0 -and $AgentExit -eq 0) {
         Write-Host "Getzilla is ready in $GetzillaHome" -ForegroundColor Green
     } else {
-        Write-Host "Getzilla is installed in $GetzillaHome, but the health check reported problems (FAIL lines above)." -ForegroundColor Yellow
+        throw "Getzilla installation is incomplete: health=$DoctorExit, agent/provider=$AgentExit. Follow the errors and next steps above."
     }
     Write-Host ''
     Write-Host 'Next:'
@@ -174,7 +182,7 @@ function Update-SessionPath {
     if (-not (Test-IsWindowsHost)) { return }
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';'
+    $env:Path = (@($env:Path, $user, $machine) | Where-Object { $_ }) -join ';'
 }
 
 function Add-UserPath([string]$Directory) {
@@ -447,6 +455,7 @@ function Get-Pwsh {
     if (-not $command) { return $null }
     try {
         $text = (& $command.Source -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or "$text".Trim() -notmatch '^\d+\.\d+\.\d+$') { return $null }
         $version = [version](("$text".Trim()) -replace '[^0-9.].*$', '')
     } catch {
         return $null
@@ -494,7 +503,7 @@ function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) 
     if ($LASTEXITCODE -eq 0 -and (Test-Path $venvPython)) {
         Write-Step "Python environment: $venv"
     } else {
-        Write-Host "WARNING: could not create $venv; verify will report missing coverage, ruff and bandit." -ForegroundColor Yellow
+        throw "Could not create $venv with the required test and quality tools."
     }
 }
 
@@ -660,6 +669,7 @@ function Test-Node([int]$Minimum = 20) {
         # strips the double quotes inside native arguments, and with ErrorActionPreference Stop
         # any stderr line from such a broken call would abort the whole installer.
         $text = (& node --version 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or "$text".Trim() -notmatch '^v\d+\.\d+\.\d+$') { return $false }
         return ([int](("$text".Trim()) -replace '^v(\d+).*$', '$1') -ge $Minimum)
     } catch {
         return $false
@@ -805,4 +815,5 @@ try {
     Install-Getzilla
 } catch {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
+    exit 1
 }

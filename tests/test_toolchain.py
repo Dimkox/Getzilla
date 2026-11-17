@@ -58,7 +58,7 @@ class ToolchainTests(unittest.TestCase):
     def test_old_required_tool_fails_and_offers_fallback(self) -> None:
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
-            return_value=SimpleNamespace(stdout='Python 3.9.2', stderr=''),
+            return_value=SimpleNamespace(returncode=0, stdout='Python 3.9.2', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'fail')
@@ -69,7 +69,7 @@ class ToolchainTests(unittest.TestCase):
     def test_built_or_newer_passes(self) -> None:
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
-            return_value=SimpleNamespace(stdout='Python 3.12.3', stderr=''),
+            return_value=SimpleNamespace(returncode=0, stdout='Python 3.12.3', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'pass')
@@ -78,7 +78,7 @@ class ToolchainTests(unittest.TestCase):
     def test_newer_than_built_passes(self) -> None:
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
-            return_value=SimpleNamespace(stdout='Python 3.13.1', stderr=''),
+            return_value=SimpleNamespace(returncode=0, stdout='Python 3.13.1', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'pass')
@@ -86,7 +86,7 @@ class ToolchainTests(unittest.TestCase):
     def test_minimum_but_older_than_built_passes_with_note(self) -> None:
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
-            return_value=SimpleNamespace(stdout='Python 3.10.12', stderr=''),
+            return_value=SimpleNamespace(returncode=0, stdout='Python 3.10.12', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'pass')
@@ -142,13 +142,13 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn('apt-get', install_command(PYTHON_SPEC, 'linux'))
         self.assertIn('python.org', install_command(PYTHON_SPEC, 'unknown-os'))
 
-    def test_unparseable_version_is_present_pass(self) -> None:
+    def test_unparseable_version_is_unverified_failure(self) -> None:
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
-            return_value=SimpleNamespace(stdout='no version here', stderr=''),
+            return_value=SimpleNamespace(returncode=0, stdout='no version here', stderr=''),
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
-        self.assertEqual(result.status, 'pass')
+        self.assertEqual(result.status, 'fail')
         self.assertIsNone(result.found)
 
     def test_optional_missing_does_not_fail_doctor(self) -> None:

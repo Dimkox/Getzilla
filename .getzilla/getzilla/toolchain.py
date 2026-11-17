@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,22 @@ from typing import Any
 from .util import command_exists, load_json, run
 
 VERSION_RE = re.compile(r'(\d+(?:\.\d+){0,3})')
+_NUMBER = r'(\d+(?:\.\d+){1,3})(?![\w.-])'
+_BANNERS = {
+    'python3': r'^Python\s+', 'git': r'^git version\s+', 'php': r'^PHP\s+',
+    'pwsh': r'^PowerShell\s+', 'gh': r'^gh version\s+', 'composer': r'^Composer(?: version)?\s+',
+    'docker': r'^Docker version\s+', 'syft': r'^\s*Version:\s*v?',
+    'trivy': r'^Version:\s*v?', 'cosign': r'^\s*GitVersion:\s*v?',
+    'grok': r'^(?:grok(?: version)?\s+)?v?', 'node': r'^v', 'npm': r'^', 'jscpd': r'^',
+}
+
+
+@dataclass(frozen=True)
+class CommandProbe:
+    command: str
+    returncode: int | None
+    actual: str | None
+    diagnostic: str
 
 
 @dataclass
@@ -73,15 +90,34 @@ def load_toolchain(root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def detect_command(spec: dict[str, Any]) -> tuple[str | None, str | None]:
+def probe_commands(spec: dict[str, Any]) -> list[CommandProbe]:
+    probes = []
     for name in spec.get('commands') or []:
         if not command_exists(str(name)):
             continue
-        args = [str(name), *list(spec.get('version_args') or ['--version'])]
-        proc = run(args, cwd=Path.cwd(), timeout=10)
+        executable = shutil.which(str(name)) or str(name)
+        args = [executable, *list(spec.get('version_args') or ['--version'])]
+        try:
+            proc = run(args, cwd=Path.cwd(), timeout=10)
+        except OSError as exc:
+            probes.append(CommandProbe(executable, None, None, type(exc).__name__))
+            continue
+        code = getattr(proc, 'returncode', None)
         text = (proc.stdout or '') + '\n' + (proc.stderr or '')
-        version = parse_version(text)
-        return str(name), version
+        pattern = _BANNERS.get(str(spec.get('id')))
+        match = re.search(pattern + _NUMBER, text, re.M) if pattern and len(text) <= 65536 else None
+        actual = match[1] if code == 0 and match else None
+        probes.append(CommandProbe(executable, code, actual,
+                                   'verified' if actual else 'version probe failed or returned no recognized version'))
+        if actual:
+            break
+    return probes
+
+
+def detect_command(spec: dict[str, Any]) -> tuple[str | None, str | None]:
+    for probe in probe_commands(spec):
+        if probe.actual:
+            return probe.command, probe.actual
     return None, None
 
 
@@ -102,7 +138,7 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
         f'Install fallback {name} {fallback} (or newer{built_on}): {install}'
         if install else f'Install fallback {name} {fallback} (or newer{built_on})'
     )
-    if not command:
+    if not command or not found:
         return ToolCheck(
             id=tool_id,
             name=name,
