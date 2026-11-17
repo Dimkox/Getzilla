@@ -334,8 +334,8 @@ class OperationsTests(unittest.TestCase):
 
     def test_repository_workflows_are_hardened(self) -> None:
         workflows = ROOT / '.github' / 'workflows'
-        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ['getzilla.yml', 'windows-full-suite.yml'])
-        for name in ('getzilla.yml', 'windows-full-suite.yml'):
+        self.assertEqual(sorted(path.name for path in workflows.iterdir()), ['getzilla-public-producer.yml', 'getzilla.yml', 'windows-full-suite.yml'])
+        for name in ('getzilla-public-producer.yml', 'getzilla.yml', 'windows-full-suite.yml'):
             source = (workflows / name).read_text(encoding='utf-8')
             self.assertIn('permissions:\n  contents: read', source)
             self.assertNotIn('secrets.', source)
