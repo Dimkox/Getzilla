@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import io
+import json
 import unittest
 from unittest import mock
 
@@ -12,6 +13,14 @@ from tests.test_batch_composition_joins import _Registry, pure
 
 
 class StageTwoJoinTests(unittest.TestCase):
+    def test_bounded_transport_has_the_same_unique_owner_as_both_callers(self):
+        model = json.loads((Path(__file__).resolve().parents[1] / 'architecture/system.yaml').read_bytes())
+        with pure():
+            for filename in ('cli.py', 'github.py', 'http_response.py'):
+                path = 'trust-ci/src/adaptive_trust_ci/' + filename
+                owners = [node['id'] for node in model['nodes'] if path in node['repository_paths']]
+                self.assertEqual(owners, ['NODE-TRUST-CI-WORKER'], path)
+
     def test_declared_cost_interpreter_changes_actual_plan_policy_digest(self):
         content = [b'owned declared-cost implementation']
         def imported(name, package):
