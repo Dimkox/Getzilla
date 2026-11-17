@@ -25,6 +25,7 @@ from getzilla import _policy_legacy as legacy  # noqa: E402
 from getzilla.policy import evaluate_pre_tool, production_action, sensitive_action  # noqa: E402
 from getzilla.router import build_route  # noqa: E402
 from getzilla.state import add_approval
+from getzilla.verification_failure_excerpt import policy_diagnostic
 from tests._support import activate_owned_route
 from tests._support import project_copy, windows_command_parser  # noqa: E402
 
@@ -81,9 +82,8 @@ class _Case(unittest.TestCase):
 
     def assert_allowed(self, commands: tuple[str, ...]) -> None:
         for command in commands:
-            with self.subTest(command=command):
-                allowed, reason = self.bash(command)
-                self.assertTrue(allowed, f'{command!r} was denied: {reason}')
+            allowed, reason = self.bash(command)
+            self.assertTrue(allowed, policy_diagnostic(allowed, reason))
 
 
 class GitPushSpellingTests(_Case):
@@ -312,12 +312,63 @@ class ExternalWriteTests(_Case):
             'gh label create bug',
             'gh -R a/b pr edit 1 --add-label x',
         ), 'external')
-        self.assert_allowed((
-            'gh pr view 1', 'gh pr list', 'gh pr diff 1', 'gh pr checks 1', 'gh issue list', 'gh run view 1 --log',
-            'gh run list', 'gh repo view', 'gh auth status', 'gh release view v1', 'gh search issues x',
-            'gh api repos/x/y/pulls', 'gh pr checkout 1', 'gh repo clone a/b', 'gh run watch 1', 'gh --version',
-            'gh help', 'gh -R a/b pr view 1', 'gh pr status',
-        ))
+
+    def test_gh_read_pr_view(self) -> None:
+        self.assert_allowed(('gh pr view 1',))
+
+    def test_gh_read_pr_list(self) -> None:
+        self.assert_allowed(('gh pr list',))
+
+    def test_gh_read_pr_diff(self) -> None:
+        self.assert_allowed(('gh pr diff 1',))
+
+    def test_gh_read_pr_checks(self) -> None:
+        self.assert_allowed(('gh pr checks 1',))
+
+    def test_gh_read_issue_list(self) -> None:
+        self.assert_allowed(('gh issue list',))
+
+    def test_gh_read_run_view_log(self) -> None:
+        self.assert_allowed(('gh run view 1 --log',))
+
+    def test_gh_read_run_list(self) -> None:
+        self.assert_allowed(('gh run list',))
+
+    def test_gh_read_repo_view(self) -> None:
+        self.assert_allowed(('gh repo view',))
+
+    def test_gh_read_auth_status(self) -> None:
+        self.assert_allowed(('gh auth status',))
+
+    def test_gh_read_release_view(self) -> None:
+        self.assert_allowed(('gh release view v1',))
+
+    def test_gh_read_search_issues(self) -> None:
+        self.assert_allowed(('gh search issues x',))
+
+    def test_gh_read_api_pull_list(self) -> None:
+        self.assert_allowed(('gh api repos/x/y/pulls',))
+
+    def test_gh_read_pr_checkout(self) -> None:
+        self.assert_allowed(('gh pr checkout 1',))
+
+    def test_gh_read_repo_clone(self) -> None:
+        self.assert_allowed(('gh repo clone a/b',))
+
+    def test_gh_read_run_watch(self) -> None:
+        self.assert_allowed(('gh run watch 1',))
+
+    def test_gh_read_version(self) -> None:
+        self.assert_allowed(('gh --version',))
+
+    def test_gh_read_help(self) -> None:
+        self.assert_allowed(('gh help',))
+
+    def test_gh_read_repository_pr_view(self) -> None:
+        self.assert_allowed(('gh -R a/b pr view 1',))
+
+    def test_gh_read_pr_status(self) -> None:
+        self.assert_allowed(('gh pr status',))
 
     def test_exact_grant_authorizes_one_gh_write(self) -> None:
         with github_project() as root:
