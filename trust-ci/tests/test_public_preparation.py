@@ -43,6 +43,8 @@ class OwnedPreparation(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     prep.consume(token,source,{'inventory_sha256':'8'*64},policy,now=datetime(2026,11,17,tzinfo=timezone.utc))
                 with self.assertRaises(ValueError):
+                    prep.consume(token,source,{**report,'owned_changed_result':True},policy,now=datetime(2026,11,17,tzinfo=timezone.utc))
+                with self.assertRaises(ValueError):
                     prep.consume(token,source,report,policy,now=datetime(2026,11,19,tzinfo=timezone.utc))
                 envelope=Envelope()
                 envelope.empty_confirmed=False
