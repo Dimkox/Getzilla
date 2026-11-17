@@ -125,7 +125,7 @@
         },
         ".claude/settings.json": {
           "mode": 420,
-          "sha256": "7417a597a60f89346c194096c7575269405776e470fe688e9a793b98df6883c7"
+          "sha256": "a9e0a55032c03f9dd2af6663e807ac9ae30e39a58f79a31152a1d01969b098dd"
         },
         ".claude/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
@@ -287,7 +287,7 @@
         },
         ".codex/hooks.json": {
           "mode": 420,
-          "sha256": "1a1f8d71741cc887a4ec4d5b2c87a19a3e11c7aa396272b3a00db283fba7ad92"
+          "sha256": "2ee658bf0eca095647fbe5cf1b314deb4bcc3ba8f6040c55f7d29f185f426c46"
         }
       }
     },
@@ -388,7 +388,7 @@
         },
         ".github/hooks/getzilla.json": {
           "mode": 420,
-          "sha256": "0b5749f90437a4af164c7a1f075ec74850b63b72b02b8435944f51af6043d1c2"
+          "sha256": "7093806354e1a24978d72498f07885fef131180ee3efb9148f3dbd9ee2ecd07e"
         }
       }
     },
@@ -549,7 +549,7 @@
         },
         ".gemini/settings.json": {
           "mode": 420,
-          "sha256": "999f179275cda39ee301f3364542c7bb7d024477e65ed25068204014f49e07cb"
+          "sha256": "5253caf4af661cffc8767c06ab2863af74ed959dce8c2621e6b6daef2094d417"
         },
         ".gemini/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
@@ -630,7 +630,7 @@
       "owned": {
         ".grok/hooks.json": {
           "mode": 420,
-          "sha256": "07bbcddfd9f0e6c1d7e2af6d1336d47148465def62929699f824b34c8b24594c"
+          "sha256": "bef37be62937be07ac502e56d5943ef30a4c5ec4697c0a8e018e3f528ba001f6"
         },
         ".grok/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
@@ -801,7 +801,7 @@
         },
         ".qwen/settings.json": {
           "mode": 420,
-          "sha256": "f3131f3853b9ff1db31e84c5dca4f64cea170455656a16050f32a9e8edb8ba50"
+          "sha256": "19489c21bf5a204c457e63d03e22cf1456b440e469c0b336700d9652f65543b3"
         },
         ".qwen/skills/ai-rag-change/SKILL.md": {
           "mode": 420,
