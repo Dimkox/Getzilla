@@ -49,6 +49,16 @@ def parse_version(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def parse_tool_version(tool_id: str, text: str) -> str | None:
+    if len(text) > 65536:
+        return None
+    pattern = _BANNERS.get(tool_id)
+    match = re.search(pattern + _NUMBER, text, re.M) if pattern else None
+    if tool_id == 'git':
+        match = re.search(r'^git version (\d+\.\d+\.\d+(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
+    return match[1] if match else None
+
+
 def version_tuple(value: str) -> tuple[int, ...]:
     parts: list[int] = []
     for item in value.split('.'):
@@ -104,11 +114,7 @@ def probe_commands(spec: dict[str, Any]) -> list[CommandProbe]:
             continue
         code = getattr(proc, 'returncode', None)
         text = (proc.stdout or '') + '\n' + (proc.stderr or '')
-        pattern = _BANNERS.get(str(spec.get('id')))
-        match = re.search(pattern + _NUMBER, text, re.M) if pattern and len(text) <= 65536 else None
-        if spec.get('id') == 'git' and len(text) <= 65536:
-            match = re.search(r'^git version (\d+\.\d+\.\d+(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
-        actual = match[1] if code == 0 and match else None
+        actual = parse_tool_version(str(spec.get('id')), text) if code == 0 else None
         probes.append(CommandProbe(executable, code, actual,
                                    'verified' if actual else 'version probe failed or returned no recognized version'))
         if actual:

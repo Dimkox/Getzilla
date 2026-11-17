@@ -155,3 +155,108 @@ def node_release(fetch: Fetch, system: str, architecture: str) -> Target:
         raise ValueError('Node exact artifact checksum unavailable')
     return Target('node', version, f'https://nodejs.org/dist/v{version}/{filename}', sha256=matches[0].decode(),
                   filename=filename, metadata_url=url, metadata_sha256=hashlib.sha256(raw).hexdigest())
+
+
+def python_windows(fetch: Fetch, architecture: str) -> Target:
+    first = 'https://www.python.org/ftp/python/index-windows.json'
+    url, rows, hashes, seen = first, [], [], set()
+    for _ in range(16):
+        if url in seen or not re.fullmatch(r'https://www\.python\.org/ftp/python/index-[A-Za-z0-9_.-]+\.json', url):
+            raise ValueError('Python index pagination origin/cycle refused')
+        seen.add(url)
+        raw = fetch(url)
+        page = metadata(lambda _: raw, url)
+        if type(page) is not dict or type(page.get('versions')) is not list:
+            raise ValueError('Python official runtime index is malformed')
+        rows.extend(page['versions'])
+        hashes.append(hashlib.sha256(raw).hexdigest())
+        if not page.get('next'):
+            break
+        url = urllib.parse.urljoin(url, page['next'])
+    else:
+        raise ValueError('Python index pagination exhausted; newest stable unproved')
+    final = [r for r in rows if type(r) is dict and stable(r.get('sort-version'))]
+    if not final:
+        raise ValueError('no final Python runtime')
+    version = max(final, key=lambda r: stable(r['sort-version']))['sort-version']
+    arch = {'x64': '64', 'amd64': '64', 'arm64': 'arm64', 'x86': '32'}.get(architecture)
+    candidates = [r for r in final if r['sort-version'] == version
+                  and re.fullmatch(r'pythoncore-\d+\.\d+-' + str(arch), str(r.get('id')))]
+    if len(candidates) != 1:
+        raise ValueError(f'Python {version}: no unambiguous ordinary {architecture} runtime; no old-family fallback')
+    row = candidates[0]
+    artifact = row.get('url', '')
+    digest = row.get('hash', {}).get('sha256', '')
+    if (not artifact.startswith(f'https://www.python.org/ftp/python/{version}/python-{version}-')
+            or not artifact.endswith('.zip') or not re.fullmatch('[a-f0-9]{64}', digest)
+            or row.get('executable') != '.\\python.exe'):
+        raise ValueError('Python runtime artifact identity/integrity unsupported')
+    return Target('python', version, artifact, sha256=digest, filename=artifact.rsplit('/', 1)[-1],
+                  metadata_url=first, metadata_sha256=hashlib.sha256(''.join(hashes).encode()).hexdigest())
+
+
+def git_windows(fetch: Fetch, architecture: str) -> Target:
+    url = 'https://api.github.com/repos/git-for-windows/git/releases/latest'
+    raw = fetch(url)
+    row = metadata(lambda _: raw, url)
+    match = re.fullmatch(r'v(\d+\.\d+\.\d+\.windows\.\d+)', str(row.get('tag_name', '')))
+    if not match or row.get('draft') is not False or row.get('prerelease') is not False:
+        raise ValueError('Git for Windows newest stable vendor build unavailable')
+    version = match[1]
+    base = version.split('.windows.')[0]
+    suffix = {'x64': '64-bit', 'amd64': '64-bit', 'arm64': 'arm64', 'x86': '32-bit'}.get(architecture)
+    release = {**row, 'version': version, 'repository': 'git-for-windows/git',
+               'metadata_url': url, 'metadata_sha256': hashlib.sha256(raw).hexdigest()}
+    return github_asset(release, f'MinGit-{base}-{suffix}.zip', component='git')
+
+
+def composer_release(fetch: Fetch) -> Target:
+    url = 'https://getcomposer.org/versions'
+    raw = fetch(url)
+    rows = metadata(lambda _: raw, url).get('stable', [])
+    final = [r for r in rows if type(r) is dict and stable(r.get('version'))]
+    if not final:
+        raise ValueError('Composer latest stable metadata unavailable')
+    row = max(final, key=lambda r: stable(r['version']))
+    version = row['version']
+    path = f'/download/{version}/composer.phar'
+    if row.get('path') != path or type(row.get('min-php')) is not int:
+        raise ValueError('Composer exact release artifact/runtime contract malformed')
+    artifact = 'https://getcomposer.org' + path
+    sums = fetch(artifact + '.sha256sum')
+    if len(sums) > 4096:
+        raise ValueError('Composer checksum exceeds bound')
+    match = re.fullmatch(rb'([a-f0-9]{64})(?:\s+\*?composer\.phar)?\s*', sums)
+    if not match:
+        raise ValueError('Composer versioned SHA256 unavailable')
+    return Target('composer', version, artifact, sha256=match[1].decode(), filename='composer.phar',
+                  metadata_url=url, metadata_sha256=hashlib.sha256(raw).hexdigest(), requirements={'php': row['min-php']})
+
+
+def php_windows(fetch: Fetch, architecture: str) -> Target:
+    global_url = 'https://www.php.net/releases/?json'
+    global_raw = fetch(global_url)
+    releases = metadata(lambda _: global_raw, global_url)
+    versions = [r['version'] for r in releases.values() if type(r) is dict and stable(r.get('version'))]
+    if not versions:
+        raise ValueError('PHP global stable metadata unavailable')
+    version = max(versions, key=stable)
+    url = 'https://downloads.php.net/~windows/releases/releases.json'
+    raw = fetch(url)
+    rows = metadata(lambda _: raw, url)
+    candidates = []
+    for row in rows.values():
+        if type(row) is not dict or not re.fullmatch(re.escape(version)+r'(?:-\d+)?', str(row.get('version'))):
+            continue
+        for key, value in row.items():
+            if re.fullmatch(r'nts-v[cs]\d+-'+re.escape(architecture), key) and type(value) is dict:
+                candidates.append((key, value.get('zip', {})))
+    if len(candidates) != 1:
+        raise ValueError(f'PHP {version}: newest stable NTS {architecture} Windows runtime unavailable/ambiguous')
+    _variant, package = candidates[0]
+    filename, sha = package.get('path', ''), package.get('sha256', '')
+    if not re.fullmatch(r'php-'+re.escape(version)+r'(?:-\d+)?-nts-Win32-v[cs]\d+-'+re.escape(architecture)+r'\.zip', filename) or not re.fullmatch('[a-f0-9]{64}', sha):
+        raise ValueError('PHP Windows exact archive integrity unavailable')
+    return Target('php', version, 'https://downloads.php.net/~windows/releases/'+filename, sha256=sha,
+                  filename=filename, metadata_url=url, metadata_sha256=hashlib.sha256(global_raw+raw).hexdigest(),
+                  requirements={'runtime': 'Visual C++ Redistributable 2015-2022; probe must succeed'})
