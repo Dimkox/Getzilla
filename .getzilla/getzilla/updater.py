@@ -305,7 +305,14 @@ def _sha256_file(path: Path) -> str | None:
 
 
 def update_opengrep(fetch: Fetch, root: Path, key: tuple[str, str] | None = None,
-                    assets: Assets = OPENGREP_ASSETS) -> list[Result]:
+                    assets: Assets | None = None, *, run: Runner = _default_runner) -> list[Result]:
+    if assets is None:
+        from .opengrep_releases import install
+        try:
+            return install(fetch, root, key or _platform_key(), run=run)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            return [Result('tool:opengrep', 'fail', str(exc)[:400])]
+    # Explicit pinned fixture/offline compatibility; never the online latest path.
     pinned = assets.get(key or _platform_key())
     if pinned is None:
         return [Result('tool:opengrep', 'skip', f'no OpenGrep build for {key or _platform_key()}')]
@@ -397,7 +404,7 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
     if 'osv' in wanted:
         results += update_osv(fetch, root)
     if 'opengrep' in wanted:
-        results += update_opengrep(fetch, root)
+        results += update_opengrep(fetch, root, run=run)
     if 'jscpd' in wanted:
         results += update_jscpd(run, which)
     if 'baseline' in wanted:

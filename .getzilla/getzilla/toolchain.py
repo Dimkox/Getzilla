@@ -106,6 +106,8 @@ def probe_commands(spec: dict[str, Any]) -> list[CommandProbe]:
         text = (proc.stdout or '') + '\n' + (proc.stderr or '')
         pattern = _BANNERS.get(str(spec.get('id')))
         match = re.search(pattern + _NUMBER, text, re.M) if pattern and len(text) <= 65536 else None
+        if spec.get('id') == 'git' and len(text) <= 65536:
+            match = re.search(r'^git version (\d+\.\d+\.\d+(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
         actual = match[1] if code == 0 and match else None
         probes.append(CommandProbe(executable, code, actual,
                                    'verified' if actual else 'version probe failed or returned no recognized version'))

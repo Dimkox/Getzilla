@@ -38,6 +38,11 @@ class InstallerProbeReadinessTests(unittest.TestCase):
         result = self.check([SimpleNamespace(returncode=1, stdout='Python 3.14.1', stderr='')] * 2)
         self.assertEqual(result.status, 'fail')
 
+    def test_git_windows_build_identity_is_not_discarded(self):
+        with patch.object(toolchain, 'command_exists', return_value=True), patch.object(toolchain, 'run',
+                return_value=SimpleNamespace(returncode=0, stdout='git version 2.56.1.windows.2', stderr='')):
+            self.assertEqual(toolchain.detect_command(dict(id='git', commands=['git']))[1], '2.56.1.windows.2')
+
     def test_missing_credentials_and_native_login_are_pending(self):
         # These branches must not inspect or write the supplied home.
         with patch('getzilla.agent_setup._write_private', side_effect=AssertionError('unexpected write')):
