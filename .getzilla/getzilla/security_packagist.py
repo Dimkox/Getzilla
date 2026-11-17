@@ -186,8 +186,8 @@ def satisfies(value, constraint):
             lower = version(text)
             if op in {'^', '~'}:
                 precision = len(text.removeprefix('v').split('.'))
-                position = (next((i for i in range(precision) if lower[i]), precision - 1)
-                            if op == '^' else 1 if precision >= 3 else 0)
+                position = (next((i for i in range(min(precision, 3)) if lower[i]), min(precision, 3) - 1)
+                            if op == '^' else max(0, precision - 2))
                 upper = lower[:position] + (lower[position] + 1,) + (0,) * (3 - position)
                 comparisons.append(lower <= target < upper)
             else:
