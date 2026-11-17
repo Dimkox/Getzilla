@@ -222,7 +222,25 @@ def _validate_first_failure(value):
     return _decode(_json(value))
 
 
+def _validated_active_span(value):
+    fields = {'stage', 'step', 'invocation'}
+    if (type(value) is not dict or set(value) not in (fields, fields | {'location'})
+            or type(value['stage']) is not str or value['stage'] not in _STAGES
+            or value['step'] is not None and (type(value['step']) is not str or not _ID.fullmatch(value['step']))
+            or type(value['invocation']) is not int or not 1 <= value['invocation'] <= 2**63 - 1
+            or len(_json(value)) > 512):
+        raise ValueError('journal-active-span-shape')
+    if 'location' in value:
+        _validated_location(value['location'])
+    return _decode(_json(value))
+
+
 def _retained_health(health):
+    if 'active_span' in health:
+        active = _validated_active_span(health['active_span'])
+        if (type(health.get('open_spans')) is not int or health['open_spans'] <= 0
+                or type(health.get('sequence')) is not int or active['invocation'] > health['sequence']):
+            raise ValueError('journal-active-span-binding')
     flags = health.get('observation_omissions', dict.fromkeys(_OMISSIONS, False))
     if (type(flags) is not dict or set(flags) not in (set(_OMISSIONS), {*_OMISSIONS, 'stop_omitted'})
             or any(type(v) is not bool for v in flags.values())):
@@ -508,6 +526,7 @@ class Writer:
         self.generation = self.size = 0
         self.identity = None
         self.active = {}
+        self._active_locations = {}
         self._ownership = self._ownership_form = None
         self._ownership_blocked = False
         self._ownership_counts = {}
@@ -564,6 +583,14 @@ class Writer:
             'attempt': self.attempt,
             'dropped': self.dropped, 'open_spans': sum(map(len, self.active.values())),
             'status': status, 'segment': self.name}
+        latest = max(((number, stage, step) for (stage, step, _key), numbers in self.active.items()
+                      for number in numbers), key=lambda item: item[0], default=None)
+        if latest is not None:
+            number, stage, step = latest
+            active = {'stage': stage, 'step': step, 'invocation': number}
+            if number in self._active_locations:
+                active['location'] = self._active_locations[number]
+            value['active_span'] = _validated_active_span(active)
         value['observation_omissions'] = dict(self._omissions)
         if self._core_stop is not None:
             value['core_stop'] = _health_stop({'actor': self.actor, 'core_stop': self._core_stop})
@@ -693,6 +720,9 @@ class Writer:
             elif state == 'end':
                 if self.active.get(identity):
                     row['invocation'] = self.active[identity].pop()
+                    if not self.active[identity]:
+                        self.active.pop(identity)
+                    self._active_locations.pop(row['invocation'], None)
                 else:
                     row['unmatched_end'] = True
             if outcome is not None:
@@ -719,6 +749,8 @@ class Writer:
                         or type(line) is not int or not 1 <= line <= 1000000):
                     raise ValueError('journal-location')
                 row['location'] = {'path': path, 'line': line}
+            if state == 'start' and 'location' in row:
+                self._active_locations[row['invocation']] = _validated_location(row['location'])
             raw = _json(row) + b'\n'
             if stop is not None:
                 row['stop'] = _validate_stop(stop)
@@ -1174,10 +1206,10 @@ def observed(name, stage='check'):
 
 
 @contextmanager
-def span(step, *, stage='check'):
+def span(step, *, stage='check', location=None):
     writer, node = action_sink()
     if writer:
-        _emit(writer, stage, 'start', step=step, nodeid=node)
+        _emit(writer, stage, 'start', step=step, nodeid=node, location=location)
     try:
         details = {}
         yield details
@@ -1416,7 +1448,7 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop', 'active_span'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1

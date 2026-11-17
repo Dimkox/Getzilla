@@ -42,6 +42,7 @@ from .architecture_diff import (
 from .queue_provenance import (QueueAnalysisLimit, analyze_queue_tree, literal_patch_members,
                                QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)
 from .python_source_proof import binding_events, binding_owner, literal_import_reads, namespace_is_closed
+from . import verification_journal as diagnostics
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -3492,6 +3493,33 @@ def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.
     return normalized.tree
 
 
+def _diagnostic_step(phase: str, locator=None, demand=None) -> str:
+    """Reconstructable private locators; source/demand text never enters logs."""
+    if not isinstance(phase, str) or not re.fullmatch('[a-z][a-z0-9-]{0,23}', phase):
+        return 'arch-unavailable'
+    try:
+        suffix = '' if locator is None else '-' + _digest(locator)[:16]
+        if demand is not None:
+            suffix += '-' + _digest(demand)[:16]
+        return 'arch-' + phase + suffix
+    except (ValueError, TypeError, RecursionError):
+        return 'arch-unavailable'
+
+
+def _diagnostic_location(path):
+    if (isinstance(path, str) and len(path) <= 256
+            and re.fullmatch(r'(?:tests|scripts|\.getzilla/getzilla)/[A-Za-z0-9_./-]+\.py', path)
+            and all(part not in {'', '.', '..'} for part in path.split('/'))):
+        return path, 1
+    return None
+
+
+def _source_span(path, side, stage):
+    side = side if isinstance(side, str) and side in ('head', 'base') else 'unknown'
+    return diagnostics.span(_diagnostic_step('source-' + side + '-' + stage, path), stage='action',
+                            location=_diagnostic_location(path))
+
+
 def _local_queue_resolution(
     root: Path,
     diff: ArchitectureDiff,
@@ -3512,42 +3540,47 @@ def _local_queue_resolution(
                             for path, value, _package in prefetched.sources) if prefetched else ()
     work_key = repr((side, module, tuple(sorted(requested)) if requested is not None else None,
                      callable_only, source_identity))
-    frame = budget.enter(work_key, module=module)
-    try:
-        budget.step(request=True)
-        cached = cache.demands.get(original_key)
-        if cached is not None and cached.footprint is None:
-            raise ArchitectureError('queue cached resource footprint is unavailable', code='limit')
-        result = _local_queue_resolution_impl(root, diff, module, side, cache, resolving, visited,
-            source_roots, requested, callable_only, budget)
-        budget.merge(result.footprint)
-        canonical = result
-        if (callable_only and resolving and module not in resolving and not result.modules
-                and result.reason == 'local_module_not_queue' and result.declared_exports):
-            # A dependent declaration read still traverses a reexport edge.
-            # Keep its topology/depth charge even though its stable function
-            # body is not expanded. The canonical declaration cache stays
-            # independent of whether this request has a parent.
-            if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
-                raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-            budget.check_depth(len(resolving) + 1, site='declaration')
-            visited.add(module)
-            result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
-    except BaseException as error:
-        if (isinstance(error, ArchitectureError) and error.code == 'limit'
-                and type(getattr(error, '_queue_refusal_capture', None)) is not _QueueRefusalCapture):
-            # Capture actual active request frames before unwinding. An inner
-            # interpreter refusal with no measured counter stays explicitly unknown.
-            captured = budget.refusal(str(error), 'other', None, None, site='resolver')
-            error.queue_refusal = captured.queue_refusal
-            error._queue_refusal_capture = captured._queue_refusal_capture._replace(owner=error)
-        budget.leave(frame)
-        raise
-    footprint = budget.leave(frame)
-    bounded = result._replace(footprint=footprint)
-    if cache.demands.get(original_key) is canonical:
-        cache.demands[original_key] = canonical._replace(footprint=footprint)
-    return bounded
+    diagnostic_side = side if isinstance(side, str) and side in ('head', 'base') else 'unknown'
+    step = _diagnostic_step('demand-' + diagnostic_side, ('module', module),
+                            (tuple(sorted(requested)) if requested is not None else None, callable_only))
+    source_path = prefetched.sources[0][0] if prefetched and prefetched.sources else None
+    with diagnostics.span(step, stage='action', location=_diagnostic_location(source_path)):
+        frame = budget.enter(work_key, module=module)
+        try:
+            budget.step(request=True)
+            cached = cache.demands.get(original_key)
+            if cached is not None and cached.footprint is None:
+                raise ArchitectureError('queue cached resource footprint is unavailable', code='limit')
+            result = _local_queue_resolution_impl(root, diff, module, side, cache, resolving, visited,
+                source_roots, requested, callable_only, budget)
+            budget.merge(result.footprint)
+            canonical = result
+            if (callable_only and resolving and module not in resolving and not result.modules
+                    and result.reason == 'local_module_not_queue' and result.declared_exports):
+                # A dependent declaration read still traverses a reexport edge.
+                # Keep its topology/depth charge even though its stable function
+                # body is not expanded. The canonical declaration cache stays
+                # independent of whether this request has a parent.
+                if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
+                    raise ArchitectureError('queue adapter module limit exceeded', code='limit')
+                budget.check_depth(len(resolving) + 1, site='declaration')
+                visited.add(module)
+                result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
+        except BaseException as error:
+            if (isinstance(error, ArchitectureError) and error.code == 'limit'
+                    and type(getattr(error, '_queue_refusal_capture', None)) is not _QueueRefusalCapture):
+                # Capture actual active request frames before unwinding. An inner
+                # interpreter refusal with no measured counter stays explicitly unknown.
+                captured = budget.refusal(str(error), 'other', None, None, site='resolver')
+                error.queue_refusal = captured.queue_refusal
+                error._queue_refusal_capture = captured._queue_refusal_capture._replace(owner=error)
+            budget.leave(frame)
+            raise
+        footprint = budget.leave(frame)
+        bounded = result._replace(footprint=footprint)
+        if cache.demands.get(original_key) is canonical:
+            cache.demands[original_key] = canonical._replace(footprint=footprint)
+        return bounded
 
 
 def _local_queue_resolution_impl(
@@ -3579,8 +3612,9 @@ def _local_queue_resolution_impl(
         # Declaration inspection does not expand a dependency. It is bounded by
         # the prefetched module batch and AST node cap, unlike recursive returns.
         source_path, value, _package = prefetched.sources[0]
-        _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
+        with _source_span(source_path, side, 'prepare'):
+            _budgeted_queue_tree(source_path, value, budget)
+            prepared = _queue_source_preparation(source_path, value)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
         if requested and requested <= prepared.plain_callables:
@@ -3612,30 +3646,25 @@ def _local_queue_resolution_impl(
             cache.values[module] = result
             return result
         source_path, value, current_package = sources[0]
-        tree = _budgeted_queue_tree(source_path, value, budget)
-        prepared = _queue_source_preparation(source_path, value)
+        with _source_span(source_path, side, 'prepare'):
+            tree = _budgeted_queue_tree(source_path, value, budget)
+            prepared = _queue_source_preparation(source_path, value)
         declared = _queue_normalized_source(source_path, value).declared_exports
         requested = requested if requested is not None else frozenset(declared)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
-        tree = _queue_owned_export_slice(source_path, value, requested)
-        imported = _queue_adapter_names(
-            root,
-            diff,
-            tree,
-            side,
-            cache,
-            resolving,
-            visited,
-            current_package=current_package,
-            source_roots=source_roots,
-            requested=requested or frozenset(),
-            callable_only_exports=callable_only,
-            source_preparation=prepared if tree is prepared.tree else None,
-            budget=budget,
-        )
+        with _source_span(source_path, side, 'slice'):
+            tree = _queue_owned_export_slice(source_path, value, requested)
+        with _source_span(source_path, side, 'imports'):
+            imported = _queue_adapter_names(
+                root, diff, tree, side, cache, resolving, visited, current_package=current_package,
+                source_roots=source_roots, requested=requested or frozenset(),
+                callable_only_exports=callable_only,
+                source_preparation=prepared if tree is prepared.tree else None, budget=budget,
+            )
         try:
-            analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
+            with _source_span(source_path, side, 'values'):
+                analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
         if imported.unproved_queue_callback:
@@ -3643,7 +3672,8 @@ def _local_queue_resolution_impl(
         # A projection with no queue imports, values or effects cannot create a
         # queue return. Avoid reslicing every ordinary helper in that case.
         try:
-            factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
+            with _source_span(source_path, side, 'returns'):
+                factories = _queue_return_exports_scoped(tree, imported.names, None, 0, budget) if analysis.signals or imported.names else set()
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code='limit') from exc
         if factories:
@@ -4020,59 +4050,58 @@ def _new_queue_sources(
     changed_signals: set[str] = set()
     limits: list[tuple[str, str, str]] = []
     causes: list[tuple[str, str, str, str, str]] = []
-    head_cache = _queue_module_inventory(root, diff, "head", source_roots)
-    base_cache = _queue_module_inventory(root, diff, "base", source_roots)
+    with diagnostics.span('arch-queue-inventory-head', stage='action'):
+        head_cache = _queue_module_inventory(root, diff, "head", source_roots)
+    with diagnostics.span('arch-queue-inventory-base', stage='action'):
+        base_cache = _queue_module_inventory(root, diff, "base", source_roots)
     for path in _python_paths(diff):
         side = "head"
         stage = "resolve_package"
         try:
-            current_package = _module_package(path, source_roots, head_cache.paths)
+            with _source_span(path, side, 'resolve'):
+                current_package = _module_package(path, source_roots, head_cache.paths)
             stage = 'read'
-            head_value = read_diff_file(root, diff, path, 'head')
+            with _source_span(path, side, 'read'):
+                head_value = read_diff_file(root, diff, path, 'head')
             if head_value is None:
                 raise ArchitectureError('changed Python source is unavailable', code='missing')
             head_budget = _QueueBudget('head')
             stage = 'admit'
-            head_budget.source(path, head_value)
+            with _source_span(path, side, 'admit'):
+                head_budget.source(path, head_value)
             # These two boundaries retain complete parsed source scopes.
             # Synthetic export/return consumers do not grant module provenance.
             stage = 'parse'
-            head_tree = python.tree(path)
+            with _source_span(path, side, 'parse'):
+                head_tree = python.tree(path)
             stage = 'classify'
-            head = _queue_signals(
-                root,
-                diff,
-                head_tree,
-                "head",
-                head_cache,
-                current_package,
-                source_roots,
-                source_path=path, source=head_value, budget=head_budget, complete_module=True,
-            )
+            with _source_span(path, side, 'classify'):
+                head = _queue_signals(
+                    root, diff, head_tree, "head", head_cache, current_package, source_roots,
+                    source_path=path, source=head_value, budget=head_budget, complete_module=True,
+                )
             side = "base"
             stage = "read"
-            base_value = read_diff_file(root, diff, path, "base")
+            with _source_span(path, side, 'read'):
+                base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
                 base_budget = _QueueBudget('base')
                 stage = 'admit'
-                base_budget.source(path, base_value)
+                with _source_span(path, side, 'admit'):
+                    base_budget.source(path, base_value)
                 stage = 'parse'
-                base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
-                if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
-                    raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
+                with _source_span(path, side, 'parse'):
+                    base_tree = ast.parse(base_value.decode("utf-8"), filename=path)
+                    if sum(1 for _ in ast.walk(base_tree)) > MAX_ANALYZED_AST_NODES:
+                        raise ArchitectureError(f"Python AST node limit exceeded: {path}", code="limit")
                 stage = 'classify'
                 try:
-                    base = _queue_signals(
-                        root,
-                        diff,
-                        base_tree,
-                        "base",
-                        base_cache,
-                        current_package,
-                        source_roots,
-                        source_path=path, source=base_value, budget=base_budget, complete_module=True,
-                    )
+                    with _source_span(path, side, 'classify'):
+                        base = _queue_signals(
+                            root, diff, base_tree, "base", base_cache, current_package, source_roots,
+                            source_path=path, source=base_value, budget=base_budget, complete_module=True,
+                        )
                 except _UnsupportedQueueCallbackError:
                     if not head.complete_empty:
                         raise
@@ -4529,47 +4558,55 @@ def evaluate_fitness(
     *,
     pre_risk: str,
 ) -> FitnessReport:
-    repository = Path(root).resolve(strict=True)
-    supplied_paths = tuple(sorted(set(changed_paths)))
-    if supplied_paths != diff.changed_paths:
-        raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
-    if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
-        raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
-    python = _PythonInventory(repository, diff)
-    queue_provenance = _new_queue_sources(
-        repository, diff, python, _queue_source_roots(snapshot)
-    )
-    raw_results = tuple(
-        sorted(
-            (
-                _background_jobs(
-                    repository, snapshot, diff, python, queue_provenance
-                ),
-                _change_separation(snapshot, diff, root),
-                _code_budget(snapshot, diff, python),
-                _contract_compatibility(snapshot, diff),
-                _forbidden_edges(snapshot, diff),
-                _governance_promotion(repository, diff),
-                _migration_safety(repository, snapshot, diff),
-                _module_boundaries(snapshot, diff, python),
-                _network_clients(snapshot, diff, python),
-                _production_imports(diff, python),
-                _secret_flows(snapshot, diff),
-                _tenant_authorization(snapshot, diff),
-                _workspace_trust(snapshot, diff),
-            ),
-            key=lambda item: item.category,
-        )
-    )
-    results = tuple(
-        _bind_applicability_inventory(repository, snapshot, diff, result)
-        for result in raw_results
-    )
+    with diagnostics.span('arch-fitness-inputs', stage='action'):
+        repository = Path(root).resolve(strict=True)
+        supplied_paths = tuple(sorted(set(changed_paths)))
+        if supplied_paths != diff.changed_paths:
+            raise ArchitectureError("changed_paths must exactly match the architecture diff", code="fitness")
+        if architecture_digests(snapshot)["architecture_digest"] != diff.head_architecture_digest:
+            raise ArchitectureError("fitness snapshot does not match the diff head", code="fitness")
+        python = _PythonInventory(repository, diff)
+    with diagnostics.span('arch-queue-analysis', stage='action'):
+        queue_provenance = _new_queue_sources(repository, diff, python, _queue_source_roots(snapshot))
+    measured = []
+    with diagnostics.span('arch-fitness-background-job', stage='action'):
+        measured.append(_background_jobs(repository, snapshot, diff, python, queue_provenance))
+    with diagnostics.span('arch-fitness-change-separation', stage='action'):
+        measured.append(_change_separation(snapshot, diff, root))
+    with diagnostics.span('arch-fitness-code-budget', stage='action'):
+        measured.append(_code_budget(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-contracts', stage='action'):
+        measured.append(_contract_compatibility(snapshot, diff))
+    with diagnostics.span('arch-fitness-forbidden-edges', stage='action'):
+        measured.append(_forbidden_edges(snapshot, diff))
+    with diagnostics.span('arch-fitness-governance', stage='action'):
+        measured.append(_governance_promotion(repository, diff))
+    with diagnostics.span('arch-fitness-migration', stage='action'):
+        measured.append(_migration_safety(repository, snapshot, diff))
+    with diagnostics.span('arch-fitness-module-boundary', stage='action'):
+        measured.append(_module_boundaries(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-network-client', stage='action'):
+        measured.append(_network_clients(snapshot, diff, python))
+    with diagnostics.span('arch-fitness-production-import', stage='action'):
+        measured.append(_production_imports(diff, python))
+    with diagnostics.span('arch-fitness-secret-flow', stage='action'):
+        measured.append(_secret_flows(snapshot, diff))
+    with diagnostics.span('arch-fitness-tenant-authorization', stage='action'):
+        measured.append(_tenant_authorization(snapshot, diff))
+    with diagnostics.span('arch-fitness-workspace-trust', stage='action'):
+        measured.append(_workspace_trust(snapshot, diff))
+    raw_results = tuple(sorted(measured, key=lambda item: item.category))
+    bound = []
+    for result in raw_results:
+        with diagnostics.span(_diagnostic_step('applicability', result.category), stage='action'):
+            bound.append(_bind_applicability_inventory(repository, snapshot, diff, result))
+    results = tuple(bound)
     if tuple(item.category for item in results) != FITNESS_CATEGORIES:
         raise ArchitectureError("mandatory fitness category coverage is incomplete", code="fitness")
-    escalation, post_risk, triggers = _risk(
-        repository, snapshot, diff, python, pre_risk, queue_provenance
-    )
+    with diagnostics.span('arch-risk', stage='action'):
+        escalation, post_risk, triggers = _risk(
+            repository, snapshot, diff, python, pre_risk, queue_provenance
+        )
     architecture_significant = diff.baseline_introduced or bool(diff.changes or triggers)
     docs_only = bool(diff.changed_paths) and all(
         _matches(path, ("docs",)) or path.endswith(".md") for path in diff.changed_paths
