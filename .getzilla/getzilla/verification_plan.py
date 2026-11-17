@@ -117,16 +117,20 @@ def policy_binding(root: Path) -> dict:
                  'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py',
                  'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
                  'cost_guard.py',
+                 'baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py',
+                 'current_workflows.py', 'latest_releases.py', 'managed_runtime.py', 'managed_source_build.py',
+                 'managed_environment.py', 'managed_npm.py', 'managed_software.py', 'opengrep_releases.py',
                  'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
                  'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
                  'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py'):
         module = importlib.import_module('.' + name[:-3], __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR
-    registry = STACK_DIR / 'config' / 'stacks.json'
-    if not registry.is_file() or registry.is_symlink() or registry.stat().st_size > 4 * 1024 * 1024:
-        raise ValueError('engine stack registry source is unavailable')
-    implementation['stacks.json'] = hashlib.sha256(registry.read_bytes()).hexdigest()
+    for name, label in (('stacks.json', 'stack'), ('toolchain.json', 'toolchain')):
+        registry = STACK_DIR / 'config' / name
+        if not registry.is_file() or registry.is_symlink() or registry.stat().st_size > 4 * 1024 * 1024:
+            raise ValueError('engine ' + label + ' registry source is unavailable')
+        implementation[name] = hashlib.sha256(registry.read_bytes()).hexdigest()
     content = {'inputs': values, 'implementation': implementation}
     return {'schema_version': 1, **content, 'digest': digest(content)}
 

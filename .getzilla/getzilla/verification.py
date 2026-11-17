@@ -1933,15 +1933,19 @@ OPENGREP_EXCLUDES = ('.getzilla/sast', 'tests', '**/fixtures/**', 'node_modules'
 
 def _unpinned_opengrep(executable: Path) -> str | None:
     """Why ``executable`` must not run: PATH is not trusted, only the pinned release digest is (#39)."""
-    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file
+    import zipfile
+    from .updater import OPENGREP_ASSETS, OPENGREP_VERSION, _platform_key, _sha256_file, _release_fetch
 
     pinned = OPENGREP_ASSETS.get(_platform_key())
-    if pinned is None:
-        return f'no pinned OpenGrep v{OPENGREP_VERSION} digest for {_platform_key()}; {executable} not run'
     actual = _sha256_file(executable)
-    if actual != pinned[1]:
-        return (f'{executable} sha256 {actual} does not match pinned OpenGrep v{OPENGREP_VERSION} {pinned[1]}; '
-                'not run (reinstall with `python3 scripts/getzilla_update.py --only opengrep`)')
+    if pinned is not None and actual == pinned[1]:
+        return None  # Retain the immutable reviewed CI release's original #39 proof.
+    from . import opengrep_releases
+    try:
+        opengrep_releases.verify_active(executable, fetch=_release_fetch, key=_platform_key())
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return (f'{executable} sha256 {actual} is not the reviewed OpenGrep v{OPENGREP_VERSION}; '
+                f'fresh upstream integrity verification refused: {exc}; not run')
     return None
 
 
@@ -2835,7 +2839,7 @@ def _workflow_baseline_check(root: Path, mode: str) -> tuple[CheckResult, dict[s
     metadata = {'status': 'complete' if status.complete else 'incomplete', 'agent': agent, **status.to_dict()}
     workflow_missing = [item for item in status.missing if not item.startswith('SECURITY_BASELINE_MISSING')]
     if not workflow_missing:
-        return CheckResult('workflow-baseline', 'pass', f'pinned Superpowers, BMAD and Spec Kit connected for {agent}'), metadata
+        return CheckResult('workflow-baseline', 'pass', f'bound Superpowers, BMAD and Spec Kit connected for {agent}; freshness={status.details.get("freshness", "not_checked")}'), metadata
     message = (', '.join(workflow_missing) + '. Install: scripts/getzilla_update.py --only baseline; connect: '
                f'scripts/getzilla_baseline.py apply --project . --agent {agent}')
     if mode in {'pr', 'release'}:

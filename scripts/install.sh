@@ -4,14 +4,14 @@
 #   download this script from a release tag, check its SHA-256 against the digest
 #   published in README.md / QUICKSTART.md, then run it (never pipe it into a shell)
 #
-# Installs what is missing (Git, Python 3.10+, curl, your coding agent), downloads
-# Getzilla, points the agent at its models and runs the health check. Nothing is
+# Bootstraps Git/Python/curl, then resolves current managed software, downloads
+# Getzilla, reports provider setup and runs the final health check. Nothing is
 # changed in your projects unless you ask for it with one of the variables below.
 #
 # Coding agent (asked when a terminal is attached, otherwise Qwen Code):
 #   qwen    Qwen Code    (npm @qwen-code/qwen-code, needs Node.js 20+)
 #   codex   Codex CLI    (npm @openai/codex, needs Node.js 20+)
-#   claude  Claude Code  (official installer from claude.ai)
+#   claude  Claude Code  (official versioned manifest and verified native binary)
 #   gemini  Gemini CLI   (npm @google/gemini-cli, Google account or GEMINI_API_KEY)
 #   copilot Copilot CLI  (npm @github/copilot, needs Node.js 22+, GitHub Copilot account)
 #   grok    Grok Build   (official installer from x.ai, xAI account only)
@@ -35,11 +35,11 @@
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
 # Every run (first install or re-run) installs the mandatory baseline: the vulnerability
-# data (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified
-# Superpowers, BMAD and Spec Kit for your coding agent. There is no option to skip it:
+# data (OSV CVE database, current verified OpenGrep) and current release-bound
+# Superpowers, BMAD and Spec Kit payloads for your coding agent. There is no option to skip it:
 # if any part does not install, the installer stops with an error and says what to fix.
-# Updating third-party tools to newer versions stays a separate command:
-# scripts/getzilla_update.py --only agents --only sources.
+# Selected managed software is resolved and verified each run. The updater is
+# also available as an explicit command after installation.
 #
 # Everything runs inside main(), so a partially downloaded script does nothing.
 
@@ -70,20 +70,21 @@ main() {
   if [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ]; then
     say "Skipping the coding agent (GETZILLA_SKIP_AGENT=1)."
   else
-    install_agent "$agent"
+    say "Selected $agent; exact current software is installed after source setup."
   fi
 
   fetch_getzilla "$repo" "$ref" "$home"
   link_getzilla_command "$home"
   setup_python_env "$home" "$python"
+  python="$home/.venv/bin/python"
+  export PATH="$home/.venv/bin:$PATH"
+  [ -x "$python" ] || fail "Getzilla's managed Python environment is missing."
+  install_agent "$home" "$python" "$agent"
 
+  local agent_status=0
   if [ "${GETZILLA_SKIP_AGENT:-0}" != "1" ]; then
-    configure_agent "$home" "$python" "$agent" "$provider"
+    configure_agent "$home" "$python" "$agent" "$provider" || agent_status=$?
   fi
-
-  say "Checking this machine..."
-  local doctor_status=0
-  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
 
   update_security_data "$home" "$python"
   install_workflow_baseline "$home" "$python"
@@ -102,10 +103,21 @@ main() {
     if [ -n "$compliance" ]; then say "To turn on EU AI Act checks there: cd \"$GETZILLA_PROJECT\" && getzilla components add compliance:eu-ai-act"; fi
   fi
 
-  if [ "$doctor_status" -eq 0 ]; then
+  say "Checking this machine after all updates..."
+  local final=(--verify-only --home "$home")
+  [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ] || final+=(--agent "$agent")
+  local selected=() tool
+  IFS=',' read -r -a selected <<< "${GETZILLA_TOOLS:-}"
+  for tool in "${selected[@]}"; do [ -z "$tool" ] || final+=(--tool "$tool"); done
+  "$python" "$home/scripts/getzilla_install_managed.py" "${final[@]}" </dev/null \
+    || fail "Actual managed software/PATH changed or latest metadata is unavailable."
+  local doctor_status=0
+  (cd "$home" && "$python" scripts/getzilla_doctor.py --offer-install) || doctor_status=$?
+  if [ "$doctor_status" -eq 0 ] && [ "$agent_status" -eq 0 ]; then
     printf '\nGetzilla is ready in %s\n' "$home"
   else
-    printf '\nGetzilla is installed in %s, but the health check reported problems (FAIL lines above).\n' "$home"
+    printf '\nGetzilla installation is incomplete in %s: health=%s, agent/provider=%s. Follow the errors and next steps above.\n' "$home" "$doctor_status" "$agent_status"
+    return 3
   fi
   cat <<EOF
 
@@ -186,29 +198,6 @@ ensure_git_and_python() {
   hash -r
 }
 
-ensure_grok() {
-  if have grok; then
-    say "Grok Build CLI: already installed."
-    return 0
-  fi
-  say "Installing the Grok Build CLI..."
-  local script
-  script="$(mktemp)"
-  if curl -fsSL https://x.ai/cli/install.sh -o "$script" \
-    && bash "$script" </dev/null 2>&1 | tr '\r' '\n' | { grep -Ev '^[[:space:]]*$|^[[:space:]#=>-]*[0-9]{1,3}(\.[0-9]+)?[[:space:]]*%' || true; }; then
-    rm -f "$script"
-    export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"
-    hash -r
-    if have grok; then
-      say "Grok Build CLI installed."
-    else
-      say "Grok Build CLI installed. Open a new terminal before running 'grok'."
-    fi
-  else
-    rm -f "$script"
-    say "Could not install the Grok Build CLI now. Later run: curl -fsSL https://x.ai/cli/install.sh | bash"
-  fi
-}
 
 can_ask() {
   [ "${GETZILLA_NONINTERACTIVE:-0}" != "1" ] && { true </dev/tty; } 2>/dev/null
@@ -314,145 +303,25 @@ node_ok() {
 # Pinned official Node.js archives with their published SHA-256 (nodejs.org SHASUMS256.txt).
 # Distribution packages are often too old (Ubuntu 24.04 ships Node.js 18) and pull in hundreds
 # of node-* packages; the archive installs for the current user without root.
-node_archive() {
-  case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64|Linux-amd64) echo "node-v24.20.0-linux-x64.tar.gz 855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec" ;;
-    Linux-aarch64|Linux-arm64) echo "node-v24.20.0-linux-arm64.tar.gz 3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013" ;;
-    Darwin-x86_64) echo "node-v24.20.0-darwin-x64.tar.gz 9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4" ;;
-    Darwin-arm64) echo "node-v24.20.0-darwin-arm64.tar.gz 40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8" ;;
-  esac
-}
 
-checksum_ok() {
-  if have sha256sum; then
-    echo "$2  $1" | sha256sum -c - >/dev/null 2>&1
-  else
-    echo "$2  $1" | shasum -a 256 -c - >/dev/null 2>&1
-  fi
-}
 
-install_node_archive() {
-  local spec name digest version dir tmp
-  spec="$(node_archive)"
-  [ -n "$spec" ] && have curl || return 1
-  name="${spec% *}"
-  digest="${spec#* }"
-  version="${name#node-v}"
-  version="${version%%-*}"
-  tmp="$(mktemp -d)"
-  if ! curl -fsSL "https://nodejs.org/dist/v$version/$name" -o "$tmp/$name" || ! checksum_ok "$tmp/$name" "$digest"; then
-    rm -rf "$tmp"
-    say "Node.js $version download failed or did not match its published SHA-256."
-    return 1
-  fi
-  dir="$HOME/.local/lib/nodejs"
-  mkdir -p "$dir" "$HOME/.local/bin"
-  rm -rf "$dir/${name%.tar.gz}"
-  tar -xzf "$tmp/$name" -C "$dir"
-  rm -rf "$tmp"
-  for tool in node npm npx; do
-    ln -sf "$dir/${name%.tar.gz}/bin/$tool" "$HOME/.local/bin/$tool"
-  done
-  export PATH="$HOME/.local/bin:$PATH"
-  hash -r
-  # Global npm packages (the agent CLIs) then land next to it in ~/.local/bin, without root.
-  npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true
-}
 
-ensure_node() {
-  local minimum="${1:-20}"
-  node_ok "$minimum" && return 0
-  say "Installing Node.js ($minimum or newer is needed)..."
-  if [ "$(uname -s)" = "Darwin" ] && have brew; then
-    brew install node || true
-  else
-    install_node_archive || true
-  fi
-  hash -r
-  node_ok "$minimum" && return 0
-  # Distribution packages only as a fallback.
-  if have apt-get; then
-    as_root apt-get install -y nodejs npm </dev/null || true
-  elif have dnf; then
-    as_root dnf install -y nodejs npm </dev/null || true
-  elif have pacman; then
-    as_root pacman -Sy --noconfirm nodejs npm </dev/null || true
-  elif have zypper; then
-    as_root zypper --non-interactive install nodejs npm </dev/null || true
-  elif have apk; then
-    as_root apk add --no-cache nodejs npm </dev/null || true
-  fi
-  hash -r
-  node_ok "$minimum" && return 0
-  say "Node.js $minimum or newer is still missing. Install it from https://nodejs.org and run this installer again."
-  return 1
-}
 
-npm_global() {
-  local package="$1"
-  if npm install -g "$package" </dev/null >/dev/null 2>&1; then
-    return 0
-  fi
-  mkdir -p "$HOME/.local/bin"
-  if npm install -g --prefix "$HOME/.local" "$package" </dev/null >/dev/null 2>&1; then
-    export PATH="$HOME/.local/bin:$PATH"
-    hash -r
-    say "Installed $package into ~/.local; add ~/.local/bin to PATH if '$2' is not found."
-    return 0
-  fi
-  return 1
-}
 
 install_agent() {
-  case "$1" in
-    qwen) install_npm_agent qwen @qwen-code/qwen-code@latest "Qwen Code" ;;
-    codex) install_npm_agent codex @openai/codex@latest "Codex CLI" ;;
-    gemini) install_npm_agent gemini @google/gemini-cli@latest "Gemini CLI" ;;
-    copilot) install_npm_agent copilot @github/copilot@latest "Copilot CLI" 22 ;;
-    claude) ensure_claude ;;
-    grok)
-      if [ "${GETZILLA_SKIP_GROK:-0}" = "1" ]; then
-        say "Skipping the Grok Build CLI (GETZILLA_SKIP_GROK=1)."
-      else
-        ensure_grok
-      fi
-      ;;
-  esac
+  local home="$1" python="$2" agent="$3" tool
+  local arguments=(--home "$home")
+  [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ] || arguments+=(--agent "$agent")
+  local selected=()
+  IFS=',' read -r -a selected <<< "${GETZILLA_TOOLS:-}"
+  for tool in "${selected[@]}"; do [ -z "$tool" ] || arguments+=(--tool "$tool"); done
+  "$python" "$home/scripts/getzilla_install_managed.py" "${arguments[@]}" </dev/null \
+    || fail "Current selected managed software is incomplete; see exact target/path/error above."
+  export PATH="${GETZILLA_STATE_HOME:-$HOME/.getzilla}/bin:$PATH"
+  hash -r
 }
 
-install_npm_agent() {
-  local command="$1" package="$2" label="$3" node_minimum="${4:-20}"
-  if have "$command"; then
-    say "$label: already installed."
-    return 0
-  fi
-  ensure_node "$node_minimum" || return 0
-  say "Installing $label..."
-  if npm_global "$package" "$command"; then
-    say "$label installed."
-  else
-    say "Could not install $label now. Later run: npm install -g $package"
-  fi
-}
 
-ensure_claude() {
-  if have claude; then
-    say "Claude Code: already installed."
-    return 0
-  fi
-  say "Installing Claude Code..."
-  local script
-  script="$(mktemp)"
-  if curl -fsSL https://claude.ai/install.sh -o "$script" && bash "$script" </dev/null >/dev/null 2>&1; then
-    rm -f "$script"
-    export PATH="$HOME/.local/bin:$PATH"
-    hash -r
-    say "Claude Code installed."
-  else
-    rm -f "$script"
-    say "Could not install Claude Code now. Later run: curl -fsSL https://claude.ai/install.sh | bash"
-  fi
-}
 
 configure_agent() {
   local home="$1" python="$2" agent="$3" provider="$4" key_name="" prompt="" key=""
@@ -477,10 +346,9 @@ configure_agent() {
   fi
   say "Configuring $agent..."
   if [ -n "$key" ]; then
-    printf '%s\n' "$key" | (cd "$home" && "$python" scripts/getzilla_setup_agent.py "${args[@]}" --key-stdin) \
-      || say "Agent configuration failed (see the message above); run it again later with scripts/getzilla_setup_agent.py."
+    printf '%s\n' "$key" | (cd "$home" && "$python" scripts/getzilla_setup_agent.py "${args[@]}" --key-stdin)
   else
-    (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null) || true
+    (cd "$home" && env -u OPENROUTER_API_KEY -u GEMINI_API_KEY -u COPILOT_GITHUB_TOKEN "$python" scripts/getzilla_setup_agent.py "${args[@]}" </dev/null)
   fi
 }
 
@@ -488,56 +356,42 @@ update_security_data() {
   # Not optional: without vulnerability data the gates would scan against an empty CVE
   # database, so a failure stops the install instead of warning.
   local home="$1" python="$2"
-  say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
+  say "Updating vulnerability data (OSV CVE database) and current verified OpenGrep..."
   (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
     || fail "Vulnerability data did not install (FAIL lines above). Fix the network or the error and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only osv --only opengrep)."
 }
 
 install_workflow_baseline() {
-  # Not optional: Superpowers, BMAD and Spec Kit at the pinned, commit-verified versions.
-  # BMAD runs on Node.js; Spec Kit installs through uv, which brings its own Python 3.11+.
+  # Not optional: current release-bound source and supported closed data payloads.
+  # No ambient workflow installer or vendor code runs during materialization.
   local home="$1" python="$2" venv_python
-  ensure_node 20 || true
-  node_ok 20 || fail "Node.js 20 or newer is required for the BMAD installer and could not be installed."
+  node_ok 20 || fail "Node.js 20 or newer is required by the managed profile and is unavailable."
   venv_python="$home/.venv/bin/python"
-  [ -x "$venv_python" ] || fail "Getzilla's Python environment ($home/.venv) is missing; it is needed for the Spec Kit installer."
-  if ! { have uv && uv --version 2>/dev/null | grep -q '^uv 0\.11\.12\b'; }; then
-    "$venv_python" -m pip install --disable-pip-version-check --quiet "uv==0.11.12" </dev/null \
-      || fail "Installing uv 0.11.12 (needed for the pinned Spec Kit CLI) failed."
-  fi
-  say "Installing the pinned workflow baseline (Superpowers, BMAD, Spec Kit)..."
+  [ -x "$venv_python" ] || fail "Getzilla's Python environment ($home/.venv) is missing; it is needed by the workflow source/data adapter."
+  say "Resolving the current verified workflow baseline (Superpowers, BMAD, Spec Kit)..."
   (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_update.py --only baseline) \
     || fail "The workflow baseline did not install (FAIL lines above). Fix it and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only baseline)."
-  local tool_bin
-  tool_bin="$(PATH="$home/.venv/bin:$PATH" uv tool dir --bin)" \
-    || fail "uv could not report its executable directory."
-  case "$tool_bin" in
-    *:*|*$'\n'*|*$'\r'*) fail "uv reported an invalid executable directory." ;;
-    /*) [ -d "$tool_bin" ] || fail "uv reported a missing executable directory." ;;
-    *) fail "uv did not report an absolute executable directory." ;;
-  esac
-  export PATH="$tool_bin:$PATH"
+
 }
 
 setup_python_env() {
-  # Getzilla's own environment with the pinned test and quality tools (PEP 668 safe).
   local home="$1" python="$2"
-  say "Creating Getzilla's Python environment with the pinned test and quality tools..."
-  if "$python" -m venv "$home/.venv" </dev/null \
-    && "$home/.venv/bin/python" -m pip install --disable-pip-version-check -q \
-      -r "$home/.getzilla/config/python-test-requirements.txt" \
-      -r "$home/.getzilla/config/python-quality-requirements.txt" </dev/null; then
-    say "Python environment: $home/.venv"
-  else
-    printf 'WARNING: could not create %s/.venv; verify will report missing coverage, ruff and bandit.\n' "$home" >&2
-  fi
+  say "Resolving current test/quality tools and verifying their complete wheel closure..."
+  "$python" "$home/scripts/getzilla_install_managed.py" --environment-only --home "$home" </dev/null \
+    || fail "Current managed Python environment is incomplete; no historical pins were used."
 }
 
 link_getzilla_command() {
   # One `getzilla <command>` for every tool, next to the agent CLIs in ~/.local/bin.
   local home="$1"
   mkdir -p "$HOME/.local/bin"
-  ln -sf "$home/bin/getzilla" "$HOME/.local/bin/getzilla"
+  local command="$HOME/.local/bin/getzilla"
+  if [ -e "$command" ] || [ -L "$command" ]; then
+    [ -L "$command" ] && [ "$(readlink "$command")" = "$home/bin/getzilla" ] \
+      || fail "User command conflict: $command; existing bytes preserved."
+  else
+    ln -s "$home/bin/getzilla" "$command"
+  fi
   say "getzilla command: $HOME/.local/bin/getzilla (add ~/.local/bin to PATH if it is not found)"
 }
 
