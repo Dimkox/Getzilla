@@ -352,22 +352,23 @@ class _TerminalProgress:
     def pytest_sessionfinish(self, session, exitstatus):
         self._mark('session-finish','start')
         try:
-            yield
+            outcome = yield
         except BaseException:
             self._mark('session-finish','error')
             raise
         else:
-            self._mark('session-finish','end')
+            # Old-style hookwrapper receives a Pluggy Result, including errors.
+            self._mark('session-finish','error' if outcome.excinfo is not None else 'end')
 
     def pytest_terminal_summary(self, terminalreporter, exitstatus, config):
         self._mark('terminal-summary','start')
         try:
-            yield
+            outcome = yield
         except BaseException:
             self._mark('terminal-summary','error')
             raise
         else:
-            self._mark('terminal-summary','end')
+            self._mark('terminal-summary','error' if outcome.excinfo is not None else 'end')
 
     def pytest_unconfigure(self, config):
         self._mark('unconfigure','end')
