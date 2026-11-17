@@ -51,7 +51,7 @@ def effects_denied(fixture):
         stack.enter_context(patch('io.open', guarded(original_io)))
         for target in ('subprocess.Popen', 'os.system', 'os.fork', 'os.posix_spawn',
                        'socket.socket', 'socket.create_connection', 'ctypes.CDLL', 'ctypes.PyDLL'):
-            stack.enter_context(patch(target, denied))
+            stack.enter_context(patch(target, denied, create=True))
         yield
 
 

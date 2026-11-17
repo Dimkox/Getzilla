@@ -40,7 +40,7 @@ class LateAdmissionReadTests(unittest.TestCase):
                 read('decision', SimpleNamespace(consistent=True, reasons=(), valid_until=None))))
             for target in ('builtins.open', 'io.open', 'os.open', 'subprocess.Popen', 'os.system', 'os.fork',
                            'os.posix_spawn', 'socket.socket', 'socket.create_connection', 'ctypes.CDLL', 'ctypes.PyDLL'):
-                stack.enter_context(patch(target, denied))
+                stack.enter_context(patch(target, denied, create=True))
             decision = admission.evaluate(object(), authority, selector, evidence,
                 now=datetime(2026, 11, 17, tzinfo=timezone.utc),
                 candidate_root='owned-source', snapshot_root='owned-snapshot')
