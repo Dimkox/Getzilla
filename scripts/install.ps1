@@ -3,13 +3,12 @@
 #   download this script from a release tag, check its SHA-256 against the digest
 #   published in README.md / QUICKSTART.md, then run it (never pipe it into iex)
 #
-# Installs what is missing (Git, Python 3.13, your coding agent), downloads Getzilla,
-# points the agent at its models and runs its health check. Uses winget when it is available; otherwise it downloads the
-# official installers and installs them for the current user, without administrator
-# rights. Nothing is changed in your projects unless you ask for it below.
+# Resolves current verified Git/Python/PowerShell and selected managed software,
+# downloads Getzilla, reports provider setup and runs the final health check.
+# Portable runtimes install for the current user without administrator rights. Nothing is changed in your projects unless you ask for it below.
 #
 # Minimum versions: Windows PowerShell 5.1 can run this installer; Getzilla itself needs
-# PowerShell 7.4 or newer (pwsh), which this installer adds with winget when it is missing,
+# PowerShell 7.4 or newer (pwsh), which this installer resolves and stages per user,
 # because agent hooks use the && and || operators that Windows PowerShell 5.1 lacks.
 #
 # Optional environment variables (set them before the command above):
@@ -30,10 +29,10 @@
 #   $env:GETZILLA_SKIP_WINGET = '1'             do not install winget when it is missing
 #
 # Every run (first install or re-run) installs the mandatory baseline: the vulnerability data
-# (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified Superpowers, BMAD
-# and Spec Kit for your coding agent. There is no option to skip it: if any part does not
-# install, the installer stops with an error and says what to fix. Updating third-party tools
-# to newer versions stays a separate command: scripts/getzilla_update.py --only agents --only sources.
+# (OSV CVE database, current verified OpenGrep) and current release-bound Superpowers, BMAD
+# and Spec Kit payloads for your coding agent. There is no option to skip it: if any part does not
+# install, the installer stops with an error and says what to fix. Selected managed software
+# is freshly resolved each run; the updater also remains available explicitly.
 #
 # winget is missing on many Windows 10 machines. The installer then installs it
 # (App Installer from github.com/microsoft/winget-cli); if that is not possible it
@@ -462,7 +461,7 @@ function Initialize-PythonEnvironment([string[]]$Python, [string]$GetzillaHome) 
 function Update-SecurityData([string[]]$Python, [string]$GetzillaHome) {
     # Not optional: without vulnerability data the gates would scan against an empty CVE
     # database, so a failure stops the install instead of warning.
-    Write-Step 'Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner...'
+    Write-Step 'Updating vulnerability data (OSV CVE database) and current verified OpenGrep...'
     Push-Location $GetzillaHome
     try {
         Invoke-Python $Python @('scripts/getzilla_update.py', '--only', 'osv', '--only', 'opengrep')
@@ -481,7 +480,7 @@ function Install-WorkflowBaseline([string[]]$Python, [string]$GetzillaHome) {
     if (-not (Test-Node 20)) { throw 'The verified current Node runtime is unavailable/incompatible.' }
     $venvPython = Join-Path $GetzillaHome '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $venvPython)) {
-        throw "Getzilla's Python environment ($GetzillaHome\.venv) is missing; it is needed for the Spec Kit installer."
+        throw "Getzilla's Python environment ($GetzillaHome\.venv) is missing; it is needed by the workflow source/data adapter."
     }
     Write-Step 'Resolving the current verified workflow baseline (Superpowers, BMAD, Spec Kit)...'
     $previousPath = $env:Path

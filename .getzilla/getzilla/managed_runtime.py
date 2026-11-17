@@ -38,14 +38,14 @@ def entries(target: Target, data: bytes):
     target.verify(data)
     files, links, total = {}, {}, 0
 
-    def add(name, body, mode):
+    def add(name, body, mode, *, file_limit=MAX_FILE_BYTES):
         nonlocal total
         if (not name or name.startswith('/') or '\\' in name or ':' in name
                 or any(p in ('', '.', '..') for p in name.split('/'))
                 or name.casefold() in {p.casefold() for p in [*files, *links]}):
             raise ValueError('unsafe/duplicate runtime archive path')
         total += len(body)
-        if len(body) > MAX_FILE_BYTES or total > MAX_BYTES or len(files)+len(links) >= MAX_FILES:
+        if len(body) > file_limit or total > MAX_BYTES or len(files)+len(links) >= MAX_FILES:
             raise ValueError('runtime archive exceeds finite bounds')
         files[name] = (body, mode)
 
@@ -86,6 +86,10 @@ def entries(target: Target, data: bytes):
                     raise ValueError('special runtime archive entry')
     elif target.component == 'cosign' and target.filename.startswith('cosign-'):
         add('cosign.exe' if target.filename.endswith('.exe') else 'cosign', data, 0o755)
+    elif target.component == 'claude' and target.filename in {'claude', 'claude.exe'}:
+        if len(data) != target.requirements.get('size'):
+            raise ValueError('Claude artifact size differs from official manifest')
+        add(target.filename, data, 0o755, file_limit=MAX_BYTES)
     elif target.component == 'composer' and target.filename == 'composer.phar':
         add('composer.phar', data, 0o644)
     else:

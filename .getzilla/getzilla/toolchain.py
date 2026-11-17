@@ -55,6 +55,8 @@ def parse_tool_version(tool_id: str, text: str) -> str | None:
         return None
     pattern = _BANNERS.get(tool_id)
     match = re.search(pattern + _NUMBER, text, re.M) if pattern else None
+    if tool_id == 'claude':
+        match = re.search(r'^(\d+\.\d+\.\d+) \(Claude Code\)$', text, re.M) or re.search(r'^Claude Code '+_NUMBER, text, re.M)
     if tool_id == 'git':
         match = re.search(r'^git version (\d+(?:\.\d+){1,3}(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
     return match[1] if match else None

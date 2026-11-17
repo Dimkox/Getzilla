@@ -167,7 +167,7 @@ def _default_fetch(url: str) -> bytes:
 
 _RELEASE_HOSTS = {'api.github.com', 'github.com', 'nodejs.org', 'www.python.org', 'getcomposer.org',
                   'pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org', 'www.php.net', 'downloads.php.net',
-                  'git-scm.com', 'www.kernel.org', 'release-assets.githubusercontent.com'}
+                  'git-scm.com', 'www.kernel.org', 'release-assets.githubusercontent.com', 'downloads.claude.ai'}
 
 
 def _release_origin(url):
@@ -192,8 +192,9 @@ def _release_fetch(url: str) -> bytes:
     origin = urllib.parse.urlsplit(url)
     _release_origin(url)
     catalog = origin.netloc == 'pypi.org' and re.fullmatch(r'/pypi/[A-Za-z0-9_.-]+/json', origin.path)
-    metadata_host = origin.netloc in {'api.github.com', 'pypi.org', 'www.php.net', 'git-scm.com'} or origin.netloc == 'registry.npmjs.org' and not origin.path.endswith('.tgz')
-    limit = 2*1024*1024 if metadata_host or origin.path.endswith(('.json', '.txt', '.sha256sum', '.asc')) else 512*1024*1024
+    archive = origin.path.endswith(('.tgz', '.tar.gz', '.tar.xz'))
+    metadata_host = origin.netloc in {'api.github.com', 'pypi.org', 'git-scm.com'} or origin.netloc in {'registry.npmjs.org', 'www.php.net'} and not archive
+    limit = 2*1024*1024 if metadata_host or origin.path.endswith(('.json', '.txt', '.sha256sum', '.asc', '/latest')) else 512*1024*1024
     decoded_limit = 64*1024*1024 if catalog else limit
     headers = {'User-Agent': 'Getzilla-release-resolver/1', 'Accept-Encoding': 'gzip' if catalog else 'identity'}
     request = urllib.request.Request(url, headers=headers)  # nosec B310

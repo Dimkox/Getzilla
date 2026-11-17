@@ -22,8 +22,12 @@ PROJECTS = ('pip', 'pytest', 'pytest-xdist', 'pytest-cov', 'coverage', 'jsonsche
 
 
 def execute(command, cwd=None, *, env=None):
-    return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True,
-                          encoding='utf-8', errors='replace', check=False, timeout=900)  # nosec B603
+    from .architecture_diff import _run_capped
+    code, stdout, stderr = _run_capped(command, cwd=Path(cwd or Path.cwd()),
+        env=dict(os.environ) if env is None else env, stdout_limit=2*1024*1024,
+        stderr_limit=1024*1024, timeout=900)
+    return subprocess.CompletedProcess(command, code, stdout.decode('utf-8', 'replace'), stderr.decode('utf-8', 'replace'))
+
 
 
 def _name(value):

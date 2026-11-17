@@ -68,9 +68,7 @@ def plan(fetch, *, system, arch, agent, tools):
     for tool in sorted(selected):
         if tool == 'php':
             def php():
-                if system != 'windows':
-                    raise ValueError('PHP current per-user Unix binary/source integrity adapter is not established; no distro fallback')
-                return releases.php_windows(fetch, arch)
+                return releases.php_windows(fetch, arch) if system == 'windows' else releases.php_source(fetch)
             resolvers[tool] = php
         elif tool == 'composer':
             resolvers[tool] = lambda: releases.composer_release(fetch)
@@ -82,6 +80,8 @@ def plan(fetch, *, system, arch, agent, tools):
             resolvers[tool] = lambda t=tool: _github_tool(t, fetch, system, arch)
     if agent in AGENT_PACKAGES:
         resolvers['agent:'+agent] = lambda: releases.npm_release(AGENT_PACKAGES[agent], fetch)
+    elif agent == 'claude':
+        resolvers['agent:claude'] = lambda: releases.claude_release(fetch, system, arch, musl=platform.libc_ver()[0] == 'musl')
     elif agent:
         message = ('official Grok stable pointer lacks a published artifact integrity contract' if agent == 'grok' else
                    'Claude newest stable channel/manifest signature adapter is not established')
@@ -160,6 +160,10 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                 paths[component] = path
                 publish_command(root, 'npm', [str(node), str(path)])
                 publish_command(root, 'npx', [str(node), str(path.parent/'npx-cli.js')])
+            elif component == 'agent:claude':
+                path = install_runtime(target, fetch(target.url), root, executable=target.filename, run=run)
+                paths[component] = path
+                publish_command(root, 'claude', [str(path)])
             elif component.startswith('agent:') or component == 'jscpd':
                 if component == 'jscpd' and target.version != '4.0.5':
                     raise ValueError(f'latest jscpd {target.version}: consumer schema adapter supports4.0.5; no old-version fallback')
@@ -177,7 +181,16 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                 paths[component] = path
                 publish_command(root, 'composer', [str(php), str(path)])
             else:
-                if component in {'python', 'git'} and system != 'windows':
+                if component == 'python' and system != 'windows':
+                    # The managed environment already uses the freshly installed
+                    # base Python. Avoid rebuilding that same exact target twice.
+                    base = Path(getattr(sys, '_base_executable', sys.executable))
+                    probe = run([str(base), '--version'], None)
+                    if probe.returncode == 0 and parse_tool_version('python3', probe.stdout or '') == target.version:
+                        path = base
+                    else:
+                        path = install_source(target, fetch(target.url), root, run=run)
+                elif component in {'git', 'php'} and system != 'windows':
                     path = install_source(target, fetch(target.url), root, run=run)
                 else:
                     executable = {'git': 'cmd/git.exe', 'gh': 'bin/gh.exe' if system == 'windows' else 'bin/gh',

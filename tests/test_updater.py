@@ -7,6 +7,7 @@ installers are recorded instead of run. Nothing starts updates on its own.
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import io
 import json
 import os
@@ -43,7 +44,9 @@ def _git(*args: str, cwd: Path) -> str:
 
 class UpdaterTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
+        scratch = ROOT/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        self._tmp = tempfile.TemporaryDirectory(prefix='owned-updater-fixture-', dir=scratch)
         self.root = Path(self._tmp.name) / 'state'
 
     def tearDown(self) -> None:
@@ -73,19 +76,16 @@ class UpdaterTests(unittest.TestCase):
             self.assertTrue(acquired)
 
     def test_sources_follow_the_latest_upstream_commit(self) -> None:
-        upstream = Path(self._tmp.name) / 'upstream'
-        upstream.mkdir()
-        _git('init', '-q', cwd=upstream)
-        _git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'one', cwd=upstream)
-        sources = {'superpowers': upstream.as_uri()}
-        first = updater.update_sources(updater._default_runner, self.root, sources)
-        self.assertEqual(first[0].status, 'ok')
-        self.assertEqual(first[0].detail, _git('rev-parse', '--short=12', 'HEAD', cwd=upstream))
-        _git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'two', cwd=upstream)
-        second = updater.update_sources(updater._default_runner, self.root, sources)
-        self.assertEqual(second[0].detail, _git('rev-parse', '--short=12', 'HEAD', cwd=upstream))
-        broken = updater.update_sources(updater._default_runner, self.root, {'bmad': (upstream / 'missing').as_uri()})
-        self.assertEqual(broken[0].status, 'fail')
+        """Historical ID: current now means official release commit/payload, never HEAD."""
+        from getzilla.current_workflows import Step
+        with mock.patch('getzilla.current_workflows.prepare_latest', return_value=[Step('baseline:spec-kit', 'ok', 'current exact source')]) as acquire:
+            first = updater.update_sources(mock.Mock(side_effect=AssertionError('no ambient git')), self.root, fetch=mock.sentinel.fetch)
+        self.assertEqual(first[0].detail, 'current exact source')
+        acquire.assert_called_once_with(self.root, fetch=mock.sentinel.fetch)
+        result = updater.update_sources(mock.Mock(side_effect=AssertionError('no vendor reset')), self.root,
+                                        {'superpowers': 'file:///snapshot'})
+        self.assertEqual(result[0].status, 'fail')
+        self.assertFalse((self.root/'vendor').exists())
 
     def test_osv_mirror_is_replaced_per_ecosystem(self) -> None:
         def fetch(url: str) -> bytes:
@@ -114,10 +114,16 @@ class UpdaterTests(unittest.TestCase):
         truncated = updater.update_osv(lambda url: b'PK\x03\x04' + b'x' * 32, self.root)
         self.assertTrue(all(item.status == 'fail' for item in truncated))
 
-    def _pinned(self, payload: bytes) -> mock._patch:
-        return mock.patch.dict(updater.OPENGREP_ASSETS, {
-            ('linux', 'x86_64'): ('opengrep_manylinux_x86', hashlib.sha256(payload).hexdigest()),
-        })
+    @contextlib.contextmanager
+    def _pinned(self, payload: bytes):
+        # Explicit legacy snapshot API only. Default current acquisition has its
+        # own full release/integrity/consumer controls in opengrep_latest.
+        original = updater.update_opengrep
+        assets = {('linux', 'x86_64'): ('opengrep_manylinux_x86', hashlib.sha256(payload).hexdigest())}
+        def snapshot(*args, **kwargs):
+            return original(*args, **kwargs, assets=assets)
+        with mock.patch.dict(updater.OPENGREP_ASSETS, assets), mock.patch.object(updater, 'update_opengrep', side_effect=snapshot):
+            yield
 
     def test_opengrep_pinned_release_is_verified_and_installed_executable(self) -> None:
         urls: list[str] = []
@@ -135,7 +141,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(binary.read_bytes(), b'\x7fELF')
         if os.name != 'nt':
             self.assertTrue(stat.S_IMODE(binary.stat().st_mode) & stat.S_IXUSR)
-        self.assertEqual(updater.update_opengrep(fetch, self.root, ('sunos', 'sparc'))[0].status, 'skip')
+        self.assertEqual(updater.update_opengrep(fetch, self.root, ('sunos', 'sparc'), assets=updater.OPENGREP_ASSETS)[0].status, 'skip')
 
     def test_opengrep_checksum_mismatch_is_not_installed(self) -> None:
         with self._pinned(b'\x7fELF'):
@@ -165,12 +171,13 @@ class UpdaterTests(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(quarantined.stat().st_mode) & 0o111, 0)
 
     def test_opengrep_never_follows_the_latest_release(self) -> None:
+        """Historical ID: explicit reviewed snapshot API never follows a latest pointer."""
         urls: list[str] = []
         def fetch(url: str) -> bytes:
             urls.append(url)
             raise OSError('offline')
         for key in updater.OPENGREP_ASSETS:
-            updater.update_opengrep(fetch, self.root, key)
+            updater.update_opengrep(fetch, self.root, key, assets=updater.OPENGREP_ASSETS)
         self.assertTrue(urls)
         self.assertFalse([url for url in urls if 'latest' in url or 'api.github.com' in url], urls)
 
@@ -207,22 +214,16 @@ class UpdaterTests(unittest.TestCase):
             self.assertRegex(sha256, r'^[0-9a-f]{64}$', asset)
 
     def test_only_installed_agents_are_updated(self) -> None:
-        calls: list[list[str]] = []
-        def run(command, cwd=None):
-            calls.append(command)
-            return subprocess.CompletedProcess(command, 0, 'ok', '')
-        installed = {'npm': '/bin/npm', 'qwen': '/bin/qwen', 'copilot': '/bin/copilot', 'claude': '/bin/claude',
-                     'specify': '/bin/specify', 'uv': '/bin/uv'}
-        results = updater.update_agents(run, installed.get)
-        self.assertIn(['/bin/npm', 'install', '-g', '@qwen-code/qwen-code@latest'], calls)
-        self.assertIn(['/bin/npm', 'install', '-g', '@github/copilot@latest'], calls)
-        self.assertIn(['/bin/claude', 'update'], calls)
-        self.assertTrue(any(call[:4] == ['/bin/uv', 'tool', 'install', '--force'] for call in calls))
-        self.assertFalse(any('@openai/codex@latest' in call for call in calls))
-        self.assertEqual({item.component for item in results},
-                         {'agent:qwen', 'agent:copilot', 'agent:claude', 'tool:specify'})
-        no_npm = updater.update_agents(run, {'codex': '/bin/codex'}.get)
-        self.assertEqual(no_npm[0].status, 'skip')
+        """Keep selection guarantee; use bounded exact managed acquisition instead of globals."""
+        installed = {'qwen': '/bin/qwen', 'copilot': '/bin/copilot', 'claude': '/bin/claude'}
+        report = {'components': [dict(component='owned', status='complete')]}
+        runner = mock.Mock(side_effect=AssertionError('no ambient installer'))
+        with mock.patch('getzilla.managed_software.install_software', return_value=report) as activate:
+            results = updater.update_agents(runner, installed.get, root=self.root, fetch=mock.sentinel.fetch)
+        self.assertEqual([c.kwargs['agent'] for c in activate.call_args_list], ['qwen', 'copilot', 'claude'])
+        self.assertTrue(all(c.kwargs['fetch'] is mock.sentinel.fetch for c in activate.call_args_list))
+        self.assertEqual({r.component for r in results}, {'agent:qwen:owned', 'agent:copilot:owned', 'agent:claude:owned'})
+        runner.assert_not_called()
 
     def test_main_records_results_and_status(self) -> None:
         fake = [updater.Result('osv:PyPI', 'ok', '1 KiB'), updater.Result('source:bmad', 'fail', 'offline')]
@@ -232,7 +233,7 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(updater.main(['--now', '--quiet']), 1)
             state = json.loads((self.root / updater.STATE_FILE).read_text())
             self.assertEqual(state['results']['source:bmad'], {'status': 'fail', 'detail': 'offline'})
-            self.assertEqual(updater.main(['--if-due', '--quiet']), 0)
+            self.assertEqual(updater.main(['--if-due', '--quiet']), 1)
 
     def test_session_start_only_reminds_when_tools_are_stale(self) -> None:
         now = 2_000_000.0
@@ -256,8 +257,8 @@ class UpdaterTests(unittest.TestCase):
             self.assertNotIn('getzilla_update.py', text, rel)
         shell = (ROOT / 'scripts/install.sh').read_text(encoding='utf-8')
         powershell = (ROOT / 'scripts/install.ps1').read_text(encoding='utf-8')
-        # Installers install only the pinned baseline (owner decision 2026-10-16); moving tools to their
-        # latest versions is never run by an installer, only printed as a separate command.
+        # The explicit installer uses its bounded managed join, not the broad
+        # updater command that also changes unrelated installed profiles.
         for text in (shell, powershell):
             for latest in ('--only agents', '--only sources', "'--only', 'agents'", "'--only', 'sources'"):
                 for line in text.splitlines():
@@ -299,6 +300,7 @@ class OfflineMirrorTests(unittest.TestCase):
     def test_every_download_comes_from_the_mirror_with_its_pins(self) -> None:
         results = self._update(self._mirror())
         self.assertEqual(results.pop('agents').status, 'skip')
+        self.assertEqual(results.pop('freshness').status, 'fail')
         self.assertEqual({name: item.status for name, item in results.items() if item.status != 'ok'}, {})
         for name, item in results.items():
             self.assertIn(f'[offline mirror {self.mirror_dir}', item.detail, name)

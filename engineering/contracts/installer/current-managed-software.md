@@ -37,9 +37,15 @@ approval. New unknown BMAD generator formats stay incomplete; old payloads never
 count as the new release.
 
 Grok's published installer does not establish an expected artifact checksum.
-Claude's signed newest-channel adapter is not established by this implementation.
-Those selections stay incomplete. Unix PHP and Docker service activation also
-require a supported explicit adapter. Source-built Python/Git verify published
+That selection stays incomplete. Claude uses the official newest-channel pointer
+and versioned native manifest checksum/size; no speculative GPG requirement is
+added. Unix PHP uses the global php.net current source SHA256 and a bounded
+per-user CLI build. Missing compiler/development libraries report an error.
+Docker service activation remains an operator prerequisite. Source-built Python/Git verify published
 SHA256 over official HTTPS; GPG/Sigstore material is not claimed verified. These
 limits are reported and are not waivers. Real Windows non-admin installation and
 the final integrated gate require separate execution evidence.
+
+Source build reuse checks fresh official source identity, exact retained local
+build inventory and actual executable version under a fixed owned cache namespace.
+This is local build custody, not a publisher compiled-binary attestation.

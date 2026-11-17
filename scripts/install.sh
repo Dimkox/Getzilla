@@ -4,14 +4,14 @@
 #   download this script from a release tag, check its SHA-256 against the digest
 #   published in README.md / QUICKSTART.md, then run it (never pipe it into a shell)
 #
-# Installs what is missing (Git, Python 3.10+, curl, your coding agent), downloads
-# Getzilla, points the agent at its models and runs the health check. Nothing is
+# Bootstraps Git/Python/curl, then resolves current managed software, downloads
+# Getzilla, reports provider setup and runs the final health check. Nothing is
 # changed in your projects unless you ask for it with one of the variables below.
 #
 # Coding agent (asked when a terminal is attached, otherwise Qwen Code):
 #   qwen    Qwen Code    (npm @qwen-code/qwen-code, needs Node.js 20+)
 #   codex   Codex CLI    (npm @openai/codex, needs Node.js 20+)
-#   claude  Claude Code  (official installer from claude.ai)
+#   claude  Claude Code  (official versioned manifest and verified native binary)
 #   gemini  Gemini CLI   (npm @google/gemini-cli, Google account or GEMINI_API_KEY)
 #   copilot Copilot CLI  (npm @github/copilot, needs Node.js 22+, GitHub Copilot account)
 #   grok    Grok Build   (official installer from x.ai, xAI account only)
@@ -35,11 +35,11 @@
 #   GETZILLA_NONINTERACTIVE=1  never ask; use the defaults above
 #
 # Every run (first install or re-run) installs the mandatory baseline: the vulnerability
-# data (OSV CVE database, pinned OpenGrep scanner) and the pinned, commit-verified
-# Superpowers, BMAD and Spec Kit for your coding agent. There is no option to skip it:
+# data (OSV CVE database, current verified OpenGrep) and current release-bound
+# Superpowers, BMAD and Spec Kit payloads for your coding agent. There is no option to skip it:
 # if any part does not install, the installer stops with an error and says what to fix.
-# Updating third-party tools to newer versions stays a separate command:
-# scripts/getzilla_update.py --only agents --only sources.
+# Selected managed software is resolved and verified each run. The updater is
+# also available as an explicit command after installation.
 #
 # Everything runs inside main(), so a partially downloaded script does nothing.
 
@@ -356,18 +356,18 @@ update_security_data() {
   # Not optional: without vulnerability data the gates would scan against an empty CVE
   # database, so a failure stops the install instead of warning.
   local home="$1" python="$2"
-  say "Updating vulnerability data (OSV CVE database) and the pinned OpenGrep scanner..."
+  say "Updating vulnerability data (OSV CVE database) and current verified OpenGrep..."
   (cd "$home" && "$python" scripts/getzilla_update.py --only osv --only opengrep) \
     || fail "Vulnerability data did not install (FAIL lines above). Fix the network or the error and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only osv --only opengrep)."
 }
 
 install_workflow_baseline() {
-  # Not optional: Superpowers, BMAD and Spec Kit at the pinned, commit-verified versions.
-  # BMAD runs on Node.js; Spec Kit installs through uv, which brings its own Python 3.11+.
+  # Not optional: current release-bound source and supported closed data payloads.
+  # No ambient workflow installer or vendor code runs during materialization.
   local home="$1" python="$2" venv_python
-  node_ok 20 || fail "Node.js 20 or newer is required for the BMAD installer and could not be installed."
+  node_ok 20 || fail "Node.js 20 or newer is required by the managed profile and is unavailable."
   venv_python="$home/.venv/bin/python"
-  [ -x "$venv_python" ] || fail "Getzilla's Python environment ($home/.venv) is missing; it is needed for the Spec Kit installer."
+  [ -x "$venv_python" ] || fail "Getzilla's Python environment ($home/.venv) is missing; it is needed by the workflow source/data adapter."
   say "Resolving the current verified workflow baseline (Superpowers, BMAD, Spec Kit)..."
   (cd "$home" && PATH="$home/.venv/bin:$PATH" "$python" scripts/getzilla_update.py --only baseline) \
     || fail "The workflow baseline did not install (FAIL lines above). Fix it and run this installer again (or: cd \"$home\" && $python scripts/getzilla_update.py --only baseline)."

@@ -403,3 +403,44 @@ def git_source(fetch: Fetch) -> Target:
                   metadata_sha256=hashlib.sha256(raw+sums).hexdigest(),
                   requirements={'route': 'per-user source build; compiler/make/curl/OpenSSL prerequisites required',
                                 'signature_material': sums_url, 'signature_verified': False})
+
+
+def claude_release(fetch: Fetch, system: str, architecture: str, *, musl=False) -> Target:
+    base = 'https://downloads.claude.ai/claude-code-releases'
+    raw = fetch(base+'/latest')
+    if type(raw) is not bytes or len(raw) > 128:
+        raise ValueError('invalid official Claude latest pointer')
+    version = raw.decode('ascii').strip()
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Claude latest channel is not a final version; no lagged stable fallback')
+    if architecture not in {'x64', 'arm64'} or system not in {'windows', 'linux', 'darwin'}:
+        raise ValueError('unsupported native Claude platform')
+    platform = ('win32' if system == 'windows' else system)+'-'+architecture+('-musl' if system == 'linux' and musl else '')
+    url = base+'/'+version+'/manifest.json'
+    body = fetch(url)
+    manifest = metadata(lambda _: body, url)
+    binary = 'claude.exe' if system == 'windows' else 'claude'
+    row = manifest.get('platforms', {}).get(platform, {})
+    if (manifest.get('version') != version or row.get('binary') != binary
+            or not re.fullmatch('[a-f0-9]{64}', row.get('checksum', ''))
+            or type(row.get('size')) is not int or not 0 < row['size'] <= 512*1024*1024):
+        raise ValueError('Claude exact native platform manifest size/checksum unavailable')
+    return Target('claude', version, base+'/'+version+'/'+platform+'/'+binary, sha256=row['checksum'], filename=binary,
+                  metadata_url=url, metadata_sha256=hashlib.sha256(raw+body).hexdigest(), requirements={'size': row['size']})
+
+
+def php_source(fetch: Fetch) -> Target:
+    url = 'https://www.php.net/releases/?json'
+    raw = fetch(url)
+    catalog = metadata(lambda _: raw, url)
+    rows = [r for r in catalog.values() if type(r) is dict and stable(r.get('version'))]
+    if not rows:
+        raise ValueError('PHP official current final release unavailable')
+    selected = max(rows, key=lambda r: stable(r['version']))
+    version = selected['version']
+    filename = 'php-'+version+'.tar.xz'
+    assets = [a for a in selected.get('source', []) if type(a) is dict and a.get('filename') == filename]
+    if len(assets) != 1 or not re.fullmatch('[a-f0-9]{64}', assets[0].get('sha256', '')):
+        raise ValueError('PHP newest exact source SHA256 unavailable; no old release fallback')
+    return Target('php', version, 'https://www.php.net/distributions/'+filename, sha256=assets[0]['sha256'],
+                  filename=filename, metadata_url=url, metadata_sha256=hashlib.sha256(raw).hexdigest())
