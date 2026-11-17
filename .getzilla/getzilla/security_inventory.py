@@ -365,7 +365,10 @@ def qualify_image_use(reference: str, path: str, line: int, source_sha256: str, 
             keys.add(key)
             if key == (path, line, source_sha256, original):
                 selected = row
-        if selected is not None:
+        if selected is None:
+            gaps.append({'code': 'missing-image-source-selection', 'path': path,
+                         'message': 'current image use requires its own exact selection'})
+        else:
             if platform is not None and platform != selected['platform']:
                 gaps.append({'code': 'image-selection-platform-mismatch', 'path': path,
                              'message': 'selected platform differs from current source platform'})
@@ -399,7 +402,7 @@ def qualify_image_use(reference: str, path: str, line: int, source_sha256: str, 
 
 def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
-    bindings = image_bindings or {}
+    bindings = {} if image_bindings is None else image_bindings
     # Preserve393's complete declaration schema while using the existing OCI
     # source-use matcher. This conversion grants no image/platform evidence.
     if isinstance(bindings, list) and bindings and all(isinstance(row, dict) and 'path' in row for row in bindings):
@@ -481,6 +484,32 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     yaml_image(fields['image'], relative, 'Compose image', platform=compose_image_platform(fields))
                 elif not set(fields) & {'build', 'extends', 'provider'}:
                     gap('unresolved-image', relative, 'Compose service has no resolved image; override/composition needs evidence')
+                # This named input selects the image used by the runner. Read
+                # only its source declaration, never the process environment.
+                # Both Compose environment forms retain the scalar's real line
+                # and the exact value expression for the current-use join.
+                environment = fields.get('environment')
+                runner = None
+                if environment is not None and environment.kind == 'mapping':
+                    runner = environment.value.get('TRUST_CI_RUNNER_IMAGE')
+                    if runner is not None:
+                        yaml_image(runner, relative, 'Compose runner image', platform=compose_image_platform(fields))
+                elif environment is not None and environment.kind == 'sequence':
+                    for entry in environment.value:
+                        if entry.kind != 'scalar':
+                            raise _YamlError('unsupported-yaml', 'Compose environment entries must be static strings')
+                        key, separator, expression = entry.value.partition('=')
+                        if key != 'TRUST_CI_RUNNER_IMAGE':
+                            continue
+                        if runner is not None:
+                            raise _YamlError('unsupported-yaml', 'duplicate Compose runner image input')
+                        runner = entry
+                        if not separator or not expression:
+                            gap('unresolved-image', relative, 'Compose runner image needs an explicit source value')
+                            continue
+                        image(expression, relative, entry.line, require_digest=True, platform=compose_image_platform(fields))
+                elif environment is not None:
+                    raise _YamlError('unsupported-yaml', 'Compose environment must be a static mapping or sequence')
             return
         known = {'name', 'run-name', 'on', 'permissions', 'env', 'defaults', 'concurrency', 'cache-mode', 'jobs'}
         if set(document) - known:
@@ -566,10 +595,9 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                             or not re.fullmatch(r'sha256:[a-f0-9]{64}', image_id)):
                         gap('unresolved-image', relative, f'{key}: exact image reference and ID required')
                         continue
-                    result['images'].append({'reference': reference, 'source_reference': reference,
-                        'manifest': relative, 'line': text[:text.index(key)].count('\n') + 1 if key in text else 1,
-                        'image_id': image_id, 'kind': 'oci-image', 'platform': data['platform'], 'usage': 'build-ci',
-                        'source_sha256': hashlib.sha256(payload).hexdigest()})
+                    image(reference, relative, text[:text.index(key)].count('\n') + 1 if key in text else 1,
+                          require_digest=True, platform=data['platform'])
+                    result['images'][-1].update(image_id=image_id, usage='build-ci')
             elif name == 'pyproject.toml':
                 data = tomllib.loads(text)
                 project = data.get('project', {})
