@@ -530,7 +530,7 @@ def evaluate(root: Path, route: Mapping[str, Any] | None, mode: str, bases: list
                           'absence of paid operations is not established')
     problems = [f'{item.kind}: {item.path}:{item.line} {item.detail}' for item in findings if item.blocking]
     scheduled = [item for item in findings if item.kind == 'SCHEDULED_PAID_CALL']
-    if contract_path is None or not contract_path.is_file():
+    if not declared:
         problems.append(f'COST_CONTRACT_MISSING: add {CONTRACT_NAME} to the active change package '
                         '(provider, max_calls, max_spend_usd_cents, stop_condition, alert, limit_symbol)')
     else:

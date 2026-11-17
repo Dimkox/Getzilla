@@ -125,6 +125,13 @@ class DeclaredContractTests(unittest.TestCase):
         self.assertEqual(result.status, 'fail')
         self.assertTrue(any(p.startswith('COST_CONTRACT_INVALID') for p in result.problems))
 
+    def test_inaccessible_contract_metadata_does_not_escape_validation(self):
+        with patch.object(Path, 'stat', side_effect=PermissionError('owned denied metadata')), \
+                patch.object(Path, 'read_text', side_effect=PermissionError('owned denied contract')):
+            result = self.run_guard()
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any(p.startswith('COST_CONTRACT_INVALID') for p in result.problems))
+
     def test_declared_bound_missing_from_source_fails(self):
         self.blobs['adapter.py'] = b'def dispatch(transport, items):\n    return [transport(x) for x in items]\n'
         result = self.run_guard()
