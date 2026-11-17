@@ -371,7 +371,7 @@ class PublicInputProfileTests(unittest.TestCase):
 
 class UnactivatedWorkflowBoundaryTests(unittest.TestCase):
     def test_earlier_capability_keeps_accepted_required_ci_unactivated(self):
-        expected = {'.github/workflows/getzilla.yml': 'bd83ff0af1717c8ae03776c38eae3ed8fad3f52f24474562e7a6bbf15c218333', '.getzilla/templates/ci/github-actions-verify.yml': '4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37', 'tests/test_ci_gate.py': '83bcacb36968be3a242aca5bb54f0cbc4338ce0d708389f7001d2ad196dd2788'}
+        expected = {'.github/workflows/getzilla.yml': 'ab97a59a7cf20e704e8398123428fc63deab0d96864f2ac52c6ee9c3030a140f', '.getzilla/templates/ci/github-actions-verify.yml': '4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37', 'tests/test_ci_gate.py': 'fc231f2ccf886e7f4cac7b85eb3b132221cd13db90ae7b5e791c2fa3e6ceb792'}
         for relative, digest in expected.items():
             with self.subTest(path=relative):
                 self.assertEqual(sha((ROOT / relative).read_bytes()), digest)

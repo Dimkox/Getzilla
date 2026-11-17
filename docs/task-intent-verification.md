@@ -2,7 +2,7 @@
 
 The existing canonical task, change package, verification report and receipt remain the sources of
 state. Questions add bounded task data. They do not create another task ledger, orchestrator or
-authority grant. The dependent required-plan integration remains a separate delivery.
+authority grant. Native verification also records the source-bound plan described below.
 
 ## Record a question before affected implementation
 
@@ -83,4 +83,36 @@ newer task context. The completion continuation fingerprint includes changed hum
 
 ## Required verification
 
-Task intent does not replace current verification or acceptance. The separate required-plan integration and isolated acceptance/publisher consumers are dependent deliveries; this component does not claim them implemented or qualified.
+Before dispatch, native verification records one required plan: exact task and specification,
+commit/tree/comparison bases, working-source fingerprint, full inventory, risk, selected profile,
+policy source hashes and stable producer/prerequisite IDs. Registered stack planners must belong
+to the actual runner. Compilation does not install tools or execute checks. Missing prerequisites
+and undispatched required checks stay unverified. Genuine optional applicability needs a bound
+source reason. A missing manifest for an explicit frontend profile is a refusal.
+
+A typed `test` reference selects the corresponding source-owned unittest class or method. The
+bounded criterion driver records unique case identities and closed outcomes. Imported, replaced,
+missing, duplicate, skipped and expected-failure cases cannot borrow an aggregate Core PASS.
+This proves execution identity, not test meaning. Agreed outcomes, independent review and required
+critical negative or mutation controls still determine adequacy.
+
+An existing typed `attestation` value `check:tool:public-api` can declare a required producer ID
+(`tool:public-api` in this example). This is only a declaration pointer. It is not an external
+attestation and grants no authority. The current adapter registry must declare that producer and
+return its bound result. Missing configuration, an unowned ID, absent results and malformed or
+duplicate pointers cannot qualify. No text keywords infer requirements. A declaration does not
+schedule every expensive check or block unrelated authorized work.
+
+The report retains all seven existing security families and complete structured findings. The
+text view can show at most 200 vulnerability rows. QG and receipt consumption independently
+rederive the current plan, source policy and data-source proof after report hydration. They need
+an aware clock and trusted source validator. Source age is inclusive from zero to 259200 seconds;
+future or older sources refuse. Creating a new report cannot renew acquisition time. Policy
+hashes read the actual known loader's Python source bytes, including compressed installations;
+an unavailable source never becomes an accepted null hash. These are local integrity observations.
+
+Historical receipts remain readable. A receipt without a current required plan cannot qualify
+today's work. Source, artifact, install/update and platform evidence remain distinct. Actual
+UI/API/NFR measurements, independent publisher/App verdicts, recovery and operator acceptance
+remain with their existing owners and later delivery phases. This source contract does not close
+the original parent requirements or authorize production, private-key or provider actions.
