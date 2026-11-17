@@ -9,15 +9,15 @@ evaluator to validate their body schema, counts and publication dates.
 Each source has one atomically replaced manifest. It names an immutable object
 by digest, never by an input path. The legacy all.zip export is not authoritative.
 
-Snapshot I/O requires POSIX directory descriptors and a physical, non-symlink
+POSIX snapshot I/O requires directory descriptors and a physical, non-symlink
 database path. The updater/runner must exclusively control this directory tree;
 directories must belong to the current UID or root and forbid group/other writes
 (only sticky ancestors, such as /tmp, may be shared).
 Descriptors cannot stop another process with the same UID or root privilege
 from renaming an already opened directory. Every operation checks held directory
-and regular-file identities before/after use. Windows path/lstat fallbacks are
-not qualified for this boundary: I/O fails explicitly, while pure validation
-and structural no-source results remain available.
+and regular-file identities before/after use. Windows uses a separate native
+held-handle store on supported local NTFS volumes, never a path/lstat fallback.
+Pure validation and structural no-source results require neither backend.
 """
 from __future__ import annotations
 
@@ -560,6 +560,13 @@ class _SnapshotStore:
             os.close(descriptor)
 
 
+def _snapshot_store(database: Path, *, create: bool = False):
+    if os.name == 'nt':
+        from .security_data_windows import SnapshotStore
+        return SnapshotStore(database, create=create)
+    return _SnapshotStore(database, create=create)
+
+
 def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisition: dict[str, Any],
                      coverage: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     """Commit the authoritative pointer after its object; pre-commit failures keep the old pointer."""
@@ -577,7 +584,7 @@ def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisit
     source_parts = folder.relative_to(Path(database)).parts
     target = ('.snapshots', 'sha256', document['content_sha256'])
     try:
-        with _SnapshotStore(database, create=True) as store:
+        with _snapshot_store(database, create=True) as store:
             # Bind both trees before creating an object or committing a pointer.
             store.directory(source_parts, create=True)
             store.directory(target[:-1], create=True)
@@ -609,7 +616,7 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
     current = _clock(now)
     source_parts = folder.relative_to(Path(database)).parts
     try:
-        with _SnapshotStore(database) as store:
+        with _snapshot_store(database) as store:
             raw = store.read((*source_parts, 'snapshot.json'), MAX_MANIFEST_BYTES)
             document = _json(raw)
             digest = document.get('content_sha256')
