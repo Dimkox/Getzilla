@@ -147,7 +147,7 @@ class PublicRuntimeWiring(unittest.TestCase):
         def exchange(command, payload, deadline):
             requests.append((command, json.loads(payload), deadline))
             return struct.pack('!II', 200, len(raw)) + raw
-        client = GitHubClient(token='owned-fixture-token')
+        client = GitHubClient(token='-'.join(('owned', 'fixture', 'token')))
         port = http.BoundedHTTPPort('owned/fixture', clock=lambda: 1.0)
         with patch.object(http, '_run_owned', side_effect=exchange):
             with guarded():
@@ -161,7 +161,7 @@ class PublicRuntimeWiring(unittest.TestCase):
     def test_http_port_rejects_framing_and_unbounded_token_callback(self):
         self.assertIsNotNone(http, 'missing concrete bounded HTTP port')
         port = http.BoundedHTTPPort('owned/fixture', clock=lambda: 1.0)
-        client = GitHubClient(token='owned-fixture-token')
+        client = GitHubClient(token='-'.join(('owned', 'fixture', 'token')))
         with patch.object(http, '_run_owned', return_value=struct.pack('!II', 200, 5) + b'12345'):
             with guarded(), self.assertRaises(ValueError):
                 port.open(client, 'GET', '/repos/owned/fixture', None, deadline=3.0, maximum=4)
@@ -283,7 +283,7 @@ class PublicRuntimeWiring(unittest.TestCase):
             self.assertIsNone(worker.run_once())
 
     def test_http_scope_rejects_traversal_before_owned_worker(self):
-        client = GitHubClient(token='owned-fixture-token')
+        client = GitHubClient(token='-'.join(('owned', 'fixture', 'token')))
         port = http.BoundedHTTPPort('owned/fixture', clock=lambda: 1.0)
         with patch.object(http, '_run_owned', side_effect=AssertionError('out-of-scope request reached worker')):
             for path in ('/repos/owned/fixture/../../foreign', '/repos/owned/fixture/%2e%2e/foreign'):

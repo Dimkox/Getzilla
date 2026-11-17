@@ -90,6 +90,35 @@ def _publish(path, content):
         fsx.fsync_dir(root.handle)
 
 
+def _allocate_output(output):
+    """Create one missing shared parent; keep the actual leaf exclusive.
+
+    Held ancestor binding prevents following a substituted/symlinked parent.
+    Existing operator parents must be owned and not group/other writable.
+    This is allocation only, not workload or cleanup acceptance.
+    """
+    output = Path(output).absolute()
+    try:
+        parent = fsx.ReadOnlyBoundRoot(output.parent)
+    except FileNotFoundError:
+        with fsx.ReadOnlyBoundRoot(output.parent.parent) as ancestor:
+            info = fsx.fstat_dir(ancestor.handle)
+            if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & 0o022):
+                raise ValueError('Live output ancestor must be owned and protected')
+            try:
+                fsx.mkdir_at(ancestor.handle, output.parent.name, 0o700)
+            except FileExistsError:
+                pass  # The held reader below validates any concurrent creation.
+            ancestor.check()
+        parent = fsx.ReadOnlyBoundRoot(output.parent)
+    with parent:
+        info = fsx.fstat_dir(parent.handle)
+        if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & 0o022):
+            raise ValueError('Live output parent must be owned and protected')
+        fsx.mkdir_at(parent.handle, output.name, 0o700)
+        parent.check()
+
+
 def valid_binding(binding):
     return (isinstance(binding, dict) and set(binding) == _BINDING_KEYS
             and all(isinstance(value, str) and 0 < len(value) <= 256 for value in binding.values())
@@ -867,7 +896,7 @@ def main(argv=None):
             attempt=os.environ['GITHUB_RUN_ATTEMPT'], cell=args.cell, producer_sha256=binding['producer_sha256'])
     if not valid_binding(binding):
         raise ValueError('Invalid live invocation identity')
-    output.mkdir(mode=0o700, exist_ok=False)
+    _allocate_output(output)
     _write(output/'invocation.json', binding)
     environment = dict(os.environ, GETZILLA_LIVE_NAMESPACE=binding['namespace'],
         GETZILLA_LIVE_BINDING=str(output/'invocation.json'), GETZILLA_LIVE_ARTIFACTS=str(output))

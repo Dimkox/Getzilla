@@ -54,6 +54,16 @@ class ProviderTransport:
         return GitHubClient(token='fixture', transport=transport)
 
 
+def _finite_evaluation_port(inventory, identity, checks):
+    """NEW pure fixture seam; supplied evidence cannot mutate fresh results."""
+    frozen = copy.deepcopy({'schema_version': 1, 'kind': 'security-expanded', 'status': 'pass',
+        'qualification_gaps': [], 'inventory_sha256': inventory['digest'], 'policy_sha256': POLICY,
+        'source': identity, 'checks': checks})
+    def evaluate(*args, **kwargs):
+        return copy.deepcopy(frozen)
+    return evaluate
+
+
 class CanonicalProducerFixture(unittest.TestCase):
     """Owned Git/byte/signature model; accepted pure marker/time functions only."""
     def setUp(self):
@@ -130,6 +140,9 @@ class CanonicalProducerFixture(unittest.TestCase):
             checks.append({'name': name, 'status': status, 'details': [marker]})
             normalized.append({'name': name, 'status': status, 'outcome': marker['outcome'], 'finding_count': 0,
                 'gap_count': 0, 'source_ids': [], 'coverage_sha256': inventory['digest']})
+        # Snapshot the finite evaluator independently from mutable evidence.
+        core.report.REQUIRED_CHECKS = tuple(required)
+        core.report.evaluate = _finite_evaluation_port(inventory, identity, checks)
         self.descriptors = {'checks': checks, 'source_descriptors': []}
         self.report = {'inventory_sha256': inventory['digest'], 'created_at': NOW.isoformat(),
             'valid_until': (NOW + timedelta(hours=72)).isoformat(), 'checks': normalized,

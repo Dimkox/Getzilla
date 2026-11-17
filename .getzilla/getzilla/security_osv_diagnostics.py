@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import sys
 
 
 def _shape(value):
@@ -86,3 +87,56 @@ def snapshot_alias_message(ecosystem, error, member, identifier):
         body.update(count=None, index=None, omitted=['count/index'])
         message = 'aliases: ' + json.dumps(body, separators=(',', ':'), sort_keys=True)
     return message if len(message) < 400 else None
+
+
+def emit_alias_rejection(ecosystem, error):
+    """Retain one full closed hash record in the existing captured error stream.
+
+    The original400-byte snapshot diagnostic ceiling and enclosing command log
+    rotation/output ceilings stay unchanged. This is observation, never input
+    admission. Malformed mutable sidecars cannot leak content or mask refusal.
+    """
+    if type(ecosystem) is not str or ecosystem not in {'PyPI','npm','Packagist','Go','crates.io','RubyGems','Maven'}:
+        return False
+    seen=set()
+    for _ in range(8):
+        if error is None or id(error) in seen:
+            return False
+        seen.add(id(error))
+        try:
+            value=getattr(error,'osv_snapshot_detail',None)
+        except Exception:
+            return False
+        if type(value) is dict:
+            required={'kind','reason','type','count','index','value_sha256','member_sha256','id_sha256'}
+            shapes={'string','array','object','integer','number','boolean','null','other'}
+            if (set(value) not in (required,required|{'omitted'}) or type(value.get('kind')) is not str or value['kind']!='osv-alias-rejection'
+                    or type(value.get('reason')) is not str or value['reason'] not in {'field-type','item-type','empty','charset'}
+                    or type(value.get('type')) is not str or value['type'] not in {a+'/'+b for a in shapes for b in shapes}
+                    or any(value.get(key) is not None and (type(value[key]) is not int or not 0<=value[key]<=1000000000) for key in ('count','index'))
+                    or any(type(value.get(key)) is not str or re.fullmatch('[0-9a-f]{64}',value[key]) is None
+                           for key in ('value_sha256','member_sha256','id_sha256'))
+                    or 'omitted' in value and (type(value['omitted']) is not list or len(value['omitted'])!=1
+                        or type(value['omitted'][0]) is not str or value['omitted'][0]!='count/index')):
+                return False
+            body={**value,'ecosystem':ecosystem}
+            encoded=json.dumps(body,sort_keys=True,separators=(',',':'))+'\n'
+            if len(encoded.encode('ascii'))>400:
+                # Preserve every hash and reason; explicitly omit only counters.
+                body.pop('count')
+                body.pop('index')
+                body['omitted']=['count/index']
+                encoded=json.dumps(body,sort_keys=True,separators=(',',':'))+'\n'
+            if len(encoded.encode('ascii'))>400:
+                return False
+            try:
+                sys.stderr.write(encoded)
+                sys.stderr.flush()
+                return True
+            except Exception:
+                return False
+        try:
+            error=error.__cause__
+        except Exception:
+            return False
+    return False

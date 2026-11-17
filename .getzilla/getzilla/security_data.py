@@ -263,7 +263,11 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
         from .security_osv_diagnostics import snapshot_alias_message
         alias_message = snapshot_alias_message(ecosystem, exc, current_member, current_id)
         if alias_message is not None:
-            raise SecurityDataError(alias_message) from exc
+            error = SecurityDataError(alias_message)
+            # Retain the original bounded hash-only record across exception
+            # wrapping, before the updater's smaller human log projection.
+            error.osv_snapshot_detail = json.loads(alias_message.removeprefix('aliases: '))
+            raise error from exc
         location = ''.join(f' {label}_sha256={hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()}'
                            for label, value in (('member', current_member), ('id', current_id)) if value is not None)
         raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}{location}') from exc

@@ -922,6 +922,7 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
 
 
 @diagnostics.entrypoint('core-tests')
+@diagnostics.observed('core-controller', stage='run')
 def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
     measured = mode in {'pr', 'release'}
     workers, engine = select_engine(workers, measured)
@@ -979,9 +980,11 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             if workers and engine == 'coverage-unittest-parallel':
                 test_files = _unittest_files(root)
                 workers = min(workers, len(test_files))
-                tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
+                with diagnostics.span('core-test-process', stage='run'):
+                    tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
             else:
-                tests = execute(command, root, environment)
+                with diagnostics.span('core-test-process', stage='run'):
+                    tests = execute(command, root, environment)
                 if engine != 'pytest-xdist':
                     tests = _unittest_result(tests, result_file)
             diagnostics.record_core_stop(tests)
@@ -1001,9 +1004,11 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             else:
                 exporting = False
                 try:
-                    coverage = execute(coverage_command, root, environment, timeout=120)
+                    with diagnostics.span('core-coverage-report', stage='run'):
+                        coverage = execute(coverage_command, root, environment, timeout=120)
                     exporting = True
-                    exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
+                    with diagnostics.span('core-coverage-export', stage='run'):
+                        exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
                     exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress,
                                               exc.result if exporting else None)

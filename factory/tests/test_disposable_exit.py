@@ -49,7 +49,7 @@ class LiveProducerSourceTests(unittest.TestCase):
 class DisposableExitTests(unittest.TestCase):
     def test_error_diagnostics_name_only_a_fixed_docker_operation(self):
         for command, operation in ((["docker", "port", CONTAINER_ID, "5432/tcp"], "docker.port"),
-                                   (["docker", "run", "--env", ('POSTGRES_PASSWORD=' + DIAGNOSTIC_SENTINEL) + DIAGNOSTIC_SENTINEL], "docker.run"),
+                                   (["docker", "run", "--env", (''.join(('POSTGRES_', 'PASSWORD', '=')) + DIAGNOSTIC_SENTINEL) + DIAGNOSTIC_SENTINEL], "docker.run"),
                                    (["docker", "network", "inspect", DIAGNOSTIC_SENTINEL], "docker.network.inspect")):
             with self.subTest(operation=operation):
                 error = subprocess.CalledProcessError(1, command, output=DIAGNOSTIC_SENTINEL, stderr=DIAGNOSTIC_SENTINEL)

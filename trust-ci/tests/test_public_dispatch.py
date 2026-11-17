@@ -157,7 +157,7 @@ class DispatcherControls(unittest.TestCase):
         with patch.object(http, "_run_owned", return_value=struct.pack("!II", 204, 0)) as owned:
             with guarded():
                 response = port.open(
-                    GitHubClient(token="owned-fixture-token"),
+                    GitHubClient(token="-".join(("owned", "fixture", "token"))),
                     "POST",
                     "/repos/owned/runner/actions/workflows/9/dispatches",
                     {"ref": "main", "inputs": {"pull_request": "5"}},

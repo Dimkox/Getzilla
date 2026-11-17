@@ -310,6 +310,69 @@ class _WorkerProgress:
             self.handle = None
 
 
+class _TerminalProgress:
+    """At most1024 bytes per actor in existing captured/rotated Core output.
+
+    Start/end observations identify hook boundaries, never their internal cause
+    or execution success. Missing/truncated events remain unknown/partial.
+    """
+    def __init__(self, nonce, worker):
+        if (type(nonce) is not str or re.fullmatch('[0-9a-f]{32}',nonce) is None
+                or worker is not None and (type(worker) is not int or not 0<=worker<MAX_WORKERS)):
+            raise ValueError('invalid terminal observation identity')
+        self.nonce,self.worker=nonce,worker
+        self.written=0
+        self.seen=set()
+        self.omitted=False
+
+    def _mark(self, phase, state):
+        if self.omitted or (phase,state) in self.seen:
+            return
+        if phase not in {'session-finish','terminal-summary','unconfigure'} or state not in {'start','end','error'}:
+            return
+        self.seen.add((phase,state))
+        try:
+            current=time.monotonic_ns()
+            if type(current) is not int or not 0<=current<=2**63-1:
+                return
+            row={'kind':'core-terminal','nonce':self.nonce,'worker':self.worker,
+                 'phase':phase,'state':state,'monotonic_ns':current}
+            raw=(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n').encode('ascii')
+            if self.written+len(raw)>MAX_PHASE_BYTES-128:
+                raw=(json.dumps({'kind':'core-terminal','worker':self.worker,'omitted':True},separators=(',',':'))+'\n').encode('ascii')
+                self.omitted=True
+            if self.written+len(raw)<=MAX_PHASE_BYTES:
+                sent=os.write(2,raw)
+                self.written+=sent
+                if sent!=len(raw):
+                    self.omitted=True
+        except (OSError,ValueError):
+            self.omitted=True
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        self._mark('session-finish','start')
+        try:
+            yield
+        except BaseException:
+            self._mark('session-finish','error')
+            raise
+        else:
+            self._mark('session-finish','end')
+
+    def pytest_terminal_summary(self, terminalreporter, exitstatus, config):
+        self._mark('terminal-summary','start')
+        try:
+            yield
+        except BaseException:
+            self._mark('terminal-summary','error')
+            raise
+        else:
+            self._mark('terminal-summary','end')
+
+    def pytest_unconfigure(self, config):
+        self._mark('unconfigure','end')
+
+
 def pytest_addoption(parser):
     group = parser.getgroup('getzilla-core-progress')
     for name in ('dir', 'nonce', 'workers'):
@@ -337,6 +400,19 @@ def pytest_configure(config):
             or not isinstance(workers, str) or not re.fullmatch('[1-9][0-9]?', workers)
             or not 1 <= int(workers) <= MAX_WORKERS):
         raise ValueError('invalid closed Core progress options')
+    if phases:
+        from pytest import hookimpl
+        actor = None
+        if hasattr(config, 'workerinput'):
+            identity = getattr(config, 'workerinput', {}).get('workerid')
+            if isinstance(identity, str) and re.fullmatch(r'gw(?:0|[1-9][0-9]?)', identity):
+                actor = int(identity[2:])
+            else:
+                actor = MAX_WORKERS
+        if actor is None or actor < int(workers):
+            for hook in ('pytest_sessionfinish', 'pytest_terminal_summary'):
+                hookimpl(hookwrapper=True, tryfirst=True)(getattr(_TerminalProgress, hook))
+            config.pluginmanager.register(_TerminalProgress(nonce, actor), 'getzilla-core-terminal-phases')
     if not hasattr(config, 'workerinput'):
         if not phases:
             return
