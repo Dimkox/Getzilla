@@ -15,11 +15,10 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from .security_data import MAX_AGE_SECONDS
+from .security_data import MAX_AGE_SECONDS, CVE_ID as _CVE, SecurityDataError, osv_decision_ids
 
 MAX_FEED_BYTES = 128 * 1024 * 1024
 MAX_ROWS = 1_000_000
-_CVE = re.compile(r'CVE-[0-9]{4}-[0-9]{4,19}\Z')
 
 
 class IntelligenceError(ValueError):
@@ -166,10 +165,10 @@ def enrich_findings(findings: list[dict[str, Any]], kev: dict[str, Any], epss: d
     """Retain every finding; absence of a score is explicitly unknown, never zero."""
     enriched = []
     for finding in findings:
-        aliases = finding.get('aliases', [])
-        if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
-            raise IntelligenceError('finding aliases are malformed')
-        cves = {item for item in [finding.get('id', ''), *aliases] if isinstance(item, str) and _CVE.fullmatch(item)}
+        try:
+            cves = {item for item in osv_decision_ids(finding) if _CVE.fullmatch(item)}
+        except SecurityDataError as exc:
+            raise IntelligenceError(str(exc)) from exc
         detail = {}
         for identifier in sorted(cves):
             entry = epss['records'].get(identifier)

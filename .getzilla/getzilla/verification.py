@@ -1911,7 +1911,9 @@ def _known_vulnerabilities(root: Path) -> CheckResult:
 
 def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
     """Flatten one finding and add the ``path``/``message`` keys the text report prints."""
-    detail = {key: ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
+    from .security_data import osv_alias_text
+    detail = {key: osv_alias_text(value) if key == 'raw_aliases' and isinstance(value, list)
+              else ', '.join(value) if isinstance(value, list) else str(value or '') for key, value in item.items()}
     advisory = detail.get('id', '')
     if detail.get('aliases'):
         advisory = f"{advisory} ({detail['aliases']})"

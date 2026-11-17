@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.known_vulns import ECOSYSTEMS, VulnerabilityError, download_database, scan  # noqa: E402
 from getzilla.util import find_root  # noqa: E402
+from getzilla.security_data import osv_alias_text  # noqa: E402
 
 parser = argparse.ArgumentParser(
     description='Check pinned dependencies against known vulnerabilities (OSV: GitHub Advisory, PyPA, RustSec, Go, npm, NVD).',
@@ -40,12 +41,13 @@ except VulnerabilityError as exc:
     raise SystemExit(2) from exc
 
 if args.json:
-    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(report, ensure_ascii=True, indent=2, sort_keys=True))
 else:
     print(f"{report['status'].upper()} known-vulnerabilities: {report['summary']}")
     for item in report['findings']:
         fixed = f" -> fixed in {', '.join(item['fixed'])}" if item['fixed'] else ' (no fixed version yet)'
-        aliases = f" ({', '.join(item['aliases'][:3])})" if item['aliases'] else ''
+        raw_aliases = item.get('raw_aliases', item['aliases'])
+        aliases = f" ({osv_alias_text(raw_aliases)})" if raw_aliases else ''
         severity = f" [{item['severity']}]" if item['severity'] else ''
         print(f"  {item['ecosystem']} {item['package']} {item['version']}: {item['id']}{aliases}{severity}{fixed} — {item['manifest']}")
     if os.environ.get('GITHUB_ACTIONS') == 'true':
