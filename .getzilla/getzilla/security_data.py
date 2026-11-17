@@ -109,11 +109,11 @@ def _json(data: bytes) -> dict[str, Any]:
 
 
 def osv_aliases(record: dict[str, Any]) -> list[str]:
-    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    """Retain exact provider strings; transport shape is not decision authority."""
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        error = SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = SecurityDataError('OSV aliases must be an array of strings' + '; ' + json.dumps(detail, sort_keys=True))
         error.osv_alias_detail = detail
         return error
     if not isinstance(record, dict):
@@ -124,9 +124,42 @@ def osv_aliases(record: dict[str, Any]) -> list[str]:
     if not isinstance(aliases, list):
         raise rejected()
     for index, alias in enumerate(aliases):
-        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+        if not isinstance(alias, str):
             raise rejected(index)
     return list(aliases)
+
+
+CVE_ID = re.compile(r'CVE-[0-9]{4}-[0-9]{4,19}\Z')
+
+
+def osv_decision_ids(record: dict[str, Any]) -> list[str]:
+    """Revalidate retained raw identities before any matched lookup or waiver.
+
+    Existing non-CVE identifier syntax remains supported. Other provider text
+    stays opaque. A caller-supplied safe projection cannot hide uncertain CVEs.
+    """
+    from .security_osv_diagnostics import alias_rejection
+    aliases = osv_aliases(record)
+    if 'raw_aliases' in record and not isinstance(record['raw_aliases'], list):
+        raise SecurityDataError('OSV retained raw aliases must be an array')
+    raw = osv_aliases({'aliases': record['raw_aliases']}) if 'raw_aliases' in record else aliases
+    primary = record.get('id')
+    if not isinstance(primary, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', primary):
+        raise SecurityDataError('OSV decision primary identifier is malformed')
+    for values in ([primary], raw, aliases):
+        for index, value in enumerate(values):
+            if re.search(r'(?i)(?<![A-Za-z0-9])cve(?=[^A-Za-z]|$)', value) and not CVE_ID.fullmatch(value):
+                detail = alias_rejection({'id': primary, 'aliases': values}, index)
+                error = SecurityDataError('OSV decision identifier is malformed; ' + json.dumps(detail, sort_keys=True))
+                error.osv_alias_detail = detail
+                raise error
+    return list(dict.fromkeys(value for values in ([primary], raw) for value in values
+                              if re.fullmatch(r'[A-Za-z0-9:_.-]+', value)))
+
+
+def osv_alias_text(aliases: list[str]) -> str:
+    """Only the human projection is bounded/escaped; retained raw data is exact."""
+    return json.dumps([value[:160] for value in aliases[:3]], ensure_ascii=True)
 
 
 def _https_repository(value: Any) -> bool:

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
-from .security_data import SecurityDataError, read_snapshot
+from .security_data import CVE_ID, SecurityDataError, osv_decision_ids, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
 from .security_inventory import canonical_digest, collect_inventory, read_image_selection, declared_inventory
 
@@ -282,7 +282,7 @@ def known_vulnerability_report(root: Path, *, environ: dict[str, str] | None = N
         accepted = {str(item['id']): item['expires'] for item in load_config(policy_root or root)['accept']
                     if date.fromisoformat(item['expires']) >= current.date()}
         for finding in findings:
-            expiry = next((accepted[item] for item in (finding.vuln_id, *finding.aliases) if item in accepted), None)
+            expiry = next((accepted[item] for item in osv_decision_ids(finding.to_dict()) if item in accepted), None)
             if expiry is not None:
                 finding.accepted_until = expiry
                 report['accepted'].append(finding.to_dict())
@@ -374,8 +374,8 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 all_sources = [proof, *source_evidence, *(image_scan.get('data_sources', []) if image_scan else [])]
                 if all_sources != obligation['data_sources']:
                     raise SecurityDataError('enrichment source changed since its required plan was derived')
-                cves = sorted({value for finding in all_findings for value in [finding['id'], *finding.get('aliases', [])]
-                               if isinstance(value, str) and value.startswith('CVE-')})
+                cves = sorted({value for finding in all_findings for value in osv_decision_ids(finding)
+                               if CVE_ID.fullmatch(value)})
                 if source_id == 'kev':
                     hits = [{'cve': identifier, **parsed['records'][identifier]} for identifier in cves if identifier in parsed['records']]
                     results.append(_result(name, 'finding' if hits else 'pass',
@@ -389,7 +389,7 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
             elif name == 'security-malicious-packages':
                 if query_error:
                     raise SecurityDataError(query_error)
-                hits = [item for item in findings if any(value.startswith('MAL-') for value in [item['id'], *item.get('aliases', [])])]
+                hits = [item for item in findings if any(value.startswith('MAL-') for value in osv_decision_ids(item))]
                 results.append(_result(name, 'finding' if hits else 'pass',
                                        f'{len(hits)} active malicious-package catalog matches in complete OSV ecosystem snapshots',
                                        inventory, policy, sources=source_evidence, findings=hits))

@@ -395,6 +395,7 @@ def _source_valid(source: dict) -> bool:
 
 
 def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
+    from .security_data import osv_decision_ids, SecurityDataError
     findings, accepted = detail['findings'], detail.get('accepted', [])
     if name == 'known-vulnerabilities':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary',
@@ -402,16 +403,19 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
         if findings or not isinstance(accepted, list):
             return False
         for finding in accepted:
-            if (not isinstance(finding, dict) or set(finding) != fields
+            if (not isinstance(finding, dict) or set(finding) not in (fields, fields | {'raw_aliases'})
                     or not all(isinstance(finding.get(k), str) and finding[k] for k in
                                ('ecosystem', 'package', 'version', 'manifest', 'id', 'accepted_until'))
                     or not all(isinstance(finding.get(k), list) and all(isinstance(v, str) for v in finding[k])
                                for k in ('aliases', 'fixed'))):
                 return False
             try:
+                identifiers = set(osv_decision_ids(finding))
+                if any(alias not in identifiers for alias in finding['aliases']):
+                    return False
                 if date.fromisoformat(finding['accepted_until']) < current.date():
                     return False
-            except ValueError:
+            except (ValueError, SecurityDataError):
                 return False
         return True
     if name == 'secret-scan':
@@ -424,7 +428,14 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
                    and type(f['column']) is int and f['column'] > 0 for f in findings)
     if name == 'security-epss':
         fields = {'ecosystem', 'package', 'version', 'manifest', 'id', 'aliases', 'summary', 'severity',
-                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason'}
+                  'fixed', 'accepted_until', 'image', 'target', 'intelligence', 'enrichment_reason', 'raw_aliases'}
+        try:
+            for finding in findings:
+                identifiers = set(osv_decision_ids(finding))
+                if any(alias not in identifiers for alias in finding.get('aliases', [])):
+                    return False
+        except SecurityDataError:
+            return False
         return all(isinstance(f, dict) and not set(f) - fields and isinstance(f.get('id'), str)
                    and isinstance(f.get('intelligence'), dict) and isinstance(f.get('aliases'), list)
                    and f.get('enrichment_reason') in {'cve-aliases', 'no-cve-alias'} for f in findings)

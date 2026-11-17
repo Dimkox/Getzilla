@@ -30,6 +30,8 @@ from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
+from .security_data import SecurityDataError, osv_aliases, osv_decision_ids
+
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -68,6 +70,7 @@ class Finding:
     severity: str = ''
     fixed: list[str] = field(default_factory=list)
     accepted_until: str | None = None
+    raw_aliases: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +84,7 @@ class Finding:
             'severity': self.severity,
             'fixed': self.fixed,
             'accepted_until': self.accepted_until,
+            'raw_aliases': list(self.aliases if self.raw_aliases is None else self.raw_aliases),
         }
 
 
@@ -483,28 +487,30 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
 
 
 def _aliases(record: dict[str, Any]) -> list[str]:
-    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    """Validate transport shape; rejected diagnostics contain hashes only."""
     from .security_osv_diagnostics import alias_rejection
     def rejected(index=None):
         detail = alias_rejection(record, index)
-        error = VulnerabilityError('OSV aliases must be null or a list of valid identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error = VulnerabilityError('OSV aliases must be null or a list of strings' + '; ' + json.dumps(detail, sort_keys=True))
         error.osv_alias_detail = detail
         return error
     if not isinstance(record, dict):
         raise rejected()
-    aliases = record.get('aliases')
-    if aliases is None:
-        return []
-    if not isinstance(aliases, list):
-        raise rejected()
-    for index, alias in enumerate(aliases):
-        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
-            raise rejected(index)
-    return list(aliases)
+    try:
+        return osv_aliases(record)
+    except SecurityDataError as exc:
+        raise rejected(getattr(exc, 'osv_alias_detail', {}).get('index')) from exc
 
 
 def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     aliases = _aliases(record)
+    try:
+        decision_ids = set(osv_decision_ids({'id': record.get('id'), 'aliases': aliases}))
+    except SecurityDataError as exc:
+        error = VulnerabilityError(str(exc))
+        if hasattr(exc, 'osv_alias_detail'):
+            error.osv_alias_detail = exc.osv_alias_detail
+        raise error from exc
     severity = ''
     fixed: list[str] = []
     for affected in record.get('affected') or []:
@@ -533,7 +539,8 @@ def _describe(record: dict[str, Any], dependency: Dependency) -> Finding:
     return Finding(
         dependency=dependency,
         vuln_id=str(record.get('id', '')),
-        aliases=sorted(aliases),
+        aliases=sorted(alias for alias in aliases if alias in decision_ids),
+        raw_aliases=list(aliases),
         summary=str(record.get('summary') or record.get('details') or '')[:300],
         severity=severity,
         fixed=fixed,
@@ -568,7 +575,12 @@ def query_online(dependencies: list[Dependency], *, fetch: Fetch = _default_fetc
             next_pending = []
             for index, result in zip(pending, results):
                 for vuln in result.get('vulns') or []:
-                    hits.append((chunk[index], str(vuln['id'])))
+                    identifier = vuln.get('id') if isinstance(vuln, dict) else None
+                    try:
+                        osv_decision_ids({'id': identifier})
+                    except SecurityDataError as exc:
+                        raise VulnerabilityError(str(exc)) from exc
+                    hits.append((chunk[index], identifier))
                 if result.get('next_page_token'):
                     tokens[index] = result['next_page_token']
                     next_pending.append(index)
@@ -667,7 +679,10 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
             accepted_ids[str(item['id'])] = str(item['expires'])
     open_findings = []
     for finding in findings:
-        names = {finding.vuln_id, *finding.aliases}
+        try:
+            names = osv_decision_ids(finding.to_dict())
+        except SecurityDataError as exc:
+            raise VulnerabilityError(str(exc)) from exc
         expiry = next((accepted_ids[name] for name in names if name in accepted_ids), None)
         if expiry:
             finding.accepted_until = expiry

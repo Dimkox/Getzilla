@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from getzilla import expanded_security, security_data
+from getzilla.architecture_diff import _git_command, _git_environment
 from getzilla import security_osv_snapshot as known_vulns
 from getzilla.security_acquisition import FetchResult, refresh_feeds
 from tests.test_security_intelligence import NOW, epss_payload, kev_payload
@@ -19,7 +21,9 @@ from tests.test_security_intelligence import NOW, epss_payload, kev_payload
 MISSING = object()
 ADVISORY = 'GHSA-alias-contract-fixture'
 CVE = 'CVE-2026-12345'
-INVALID = (CVE, {}, 1, True, [1], [None], [{}], [''], [' '], ['CVE-2026-12345\n'])
+INVALID = (CVE, {}, 1, True, [1], [None], [{}])
+RAW_ONLY = ([''], [' '])
+INVALID_DECISION = ['CVE-2026-12345\n']
 
 
 def record(aliases=MISSING):
@@ -64,6 +68,12 @@ class OnlineAliasTests(unittest.TestCase):
         for value in INVALID:
             with self.subTest(value=value), self.assertRaisesRegex(known_vulns.VulnerabilityError, 'aliases'):
                 self.query(value)
+        for value in RAW_ONLY:
+            finding = self.query(value)
+            self.assertEqual(finding.raw_aliases, value)
+            self.assertEqual(finding.aliases, [])
+        with self.assertRaisesRegex(known_vulns.VulnerabilityError, 'decision identifier'):
+            self.query(INVALID_DECISION)
 
 
 @unittest.skipUnless(security_data.DESCRIPTOR_IO_AVAILABLE, 'snapshot I/O requires qualified POSIX directory descriptors')
@@ -89,6 +99,12 @@ class SnapshotAliasTests(unittest.TestCase):
         for value in (MISSING, None, [], [CVE, 'x_fixture:2026_1']):
             with self.subTest(valid=value):
                 self.assertTrue(all(item['status'] == 'pass' for item in refresh(self.database, value)))
+        for value in (*RAW_ONLY, INVALID_DECISION):
+            self.assertTrue(all(item['status'] == 'pass' for item in refresh(self.database, value)))
+            self.assertEqual(security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], archive(value))
+        with self.assertRaises(known_vulns.VulnerabilityError):
+            known_vulns.query_offline([known_vulns.Dependency('PyPI','sample','1.0.0','requirements.txt')],
+                                      self.database, now=NOW)
 
     def test_consumer_revalidates_malformed_preexisting_snapshot_with_matching_hashes(self):
         self.assertTrue(all(item['status'] == 'pass' for item in refresh(self.database, [CVE])))
@@ -107,6 +123,14 @@ class SnapshotAliasTests(unittest.TestCase):
                     security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)
         pointer.write_text(json.dumps(original), encoding='utf-8', newline='\n')
         self.assertEqual(security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], archive([CVE]))
+        payload = archive(INVALID_DECISION)
+        digest = hashlib.sha256(payload).hexdigest()
+        (self.database / '.snapshots/sha256' / digest).write_bytes(payload)
+        pointer.write_text(json.dumps(dict(original, content_sha256=digest, payload_size=len(payload))))
+        self.assertEqual(security_data.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], payload)
+        with self.assertRaises(known_vulns.VulnerabilityError):
+            known_vulns.query_offline([known_vulns.Dependency('PyPI','sample','1.0.0','requirements.txt')],
+                                      self.database, now=NOW)
 
     def test_ordinary_exception_does_not_hide_kev_or_turn_malformed_source_into_no_match(self):
         wrong_osv = self.root / 'invalid-osv-store'
@@ -136,6 +160,18 @@ class SnapshotAliasTests(unittest.TestCase):
                 (config / 'known-vulnerabilities.json').write_text(json.dumps({'accept': [{
                     'id': ADVISORY, 'reason': 'synthetic ordinary exception', 'expires': '2026-12-01',
                 }]}), encoding='utf-8', newline='\n')
+                # An actual tiny Git root isolates fixtures beneath a canonical
+                # runtime from the enclosing repository's source-root guard.
+                def git(*arguments):
+                    return subprocess.run(_git_command(list(arguments), safe_directory=root),
+                        cwd=root, env=_git_environment(), stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, check=True, timeout=10).stdout
+                git('init', '-q', '--template=')
+                self.assertEqual(Path(os.fsdecode(git('rev-parse', '--show-toplevel')).strip()).resolve(), root.resolve())
+                paths = ['requirements.txt', '.getzilla/config/known-vulnerabilities.json']
+                git('add', '--', *paths)
+                tree = git('write-tree').decode().strip()
+                self.assertEqual(set(git('ls-tree', '-r', '--name-only', tree).decode().splitlines()), set(paths))
                 refresh(root / '.getzilla/runtime/security-data', aliases)
                 checks = {item['name']: item for item in expanded_security.run_checks(root, environ={}, now=NOW)}
                 kev = checks['security-kev']
@@ -143,7 +179,8 @@ class SnapshotAliasTests(unittest.TestCase):
                 self.assertEqual(kev['status'], 'fail')
                 if name == 'valid':
                     ordinary = expanded_security.known_vulnerability_report(root, environ={}, now=NOW)
-                    self.assertEqual(ordinary['status'], 'pass')
+                    self.assertEqual(ordinary['status'], 'pass', ordinary.get('gaps', ordinary.get('summary')))
+                    self.assertEqual(ordinary['dependencies'], 1)
                     self.assertEqual(len(ordinary['accepted']), 1)
                     self.assertEqual(len(kev['details'][0]['findings']), 1)
                     self.assertEqual(epss['details'][0]['findings'][0]['intelligence'][CVE]['epss'], 0.25)

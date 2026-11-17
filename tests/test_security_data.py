@@ -259,7 +259,8 @@ class OsvCompatibilityTests(unittest.TestCase):
             self.fail(f'valid nullable OSV field refused: {exc}')
 
     def test_nullable_alias_helper_returns_fresh_lists_without_truthiness_coercion(self):
-        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']},
+                       {'aliases': [',', ' ', '']}):
             with self.subTest(fields=fields):
                 record = dict(self.active_record(), **fields)
                 first = self.accepted(lambda: SD.osv_aliases(record))
@@ -267,16 +268,17 @@ class OsvCompatibilityTests(unittest.TestCase):
                 self.assertEqual(first, fields.get('aliases') or [])
                 self.assertIsNot(first, second)
                 self.assertIsNot(first, record.get('aliases'))
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
                 SD.osv_aliases(dict(self.active_record(), aliases=value))
 
     def test_nullable_aliases_pass_strict_zip_but_malformed_aliases_refuse(self):
-        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']}):
+        for fields in ({}, {'aliases': None}, {'aliases': []}, {'aliases': ['CVE-2026-12345']},
+                       {'aliases': [',', ' ', '']}):
             with self.subTest(fields=fields):
                 payload = self.archive(dict(self.active_record(), **fields))
                 self.assertEqual(self.accepted(lambda: SD.osv_coverage(payload, 'PyPI'))['record_count'], 1)
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(SD.SecurityDataError):
                 SD.osv_coverage(self.archive(dict(self.active_record(), aliases=value)), 'PyPI')
 
@@ -299,7 +301,11 @@ class OsvCompatibilityTests(unittest.TestCase):
                 except osv.VulnerabilityError as exc:
                     self.fail(f'valid nullable OSV aliases refused by query: {exc}')
                 self.assertEqual(answer.aliases, fields.get('aliases') or [])
-        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1], [','], [' ']):
+        for aliases in ([','], [' '], ['']):
+            answer = query(dict(self.active_record(), aliases=aliases))
+            self.assertEqual(answer.raw_aliases, aliases)
+            self.assertEqual(answer.aliases, [])
+        for value in (False, 0, '', 'CVE-2026-12345', {}, [None], ['CVE-2026-12345', 1]):
             with self.subTest(malformed=value), self.assertRaises(osv.VulnerabilityError):
                 query(dict(self.active_record(), aliases=value))
 
@@ -365,7 +371,7 @@ class OsvCompatibilityTests(unittest.TestCase):
         private = 'private-example-value-' * 600
         out = io.BytesIO()
         with zipfile.ZipFile(out, 'w') as archive:
-            archive.writestr(private + '.json', json.dumps({'id': private, 'aliases': [',']}))
+            archive.writestr(private + '.json', json.dumps({'id': private, 'aliases': [None]}))
         with self.assertRaisesRegex(SD.SecurityDataError, 'aliases') as exc:
             SD.osv_coverage(out.getvalue(), 'npm')
         message = str(exc.exception)
