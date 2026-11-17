@@ -350,6 +350,22 @@ class PackagistArtifactTests(unittest.TestCase):
                 with self.assertRaises(artifacts.ArtifactError):
                     security_packagist.satisfies('1.2.3', constraint)
 
+
+    def test_saved_registry_cannot_bind_traversal_archive_url(self):
+        with guarded(self.root):
+            bundle = self.acquire()
+            record = json.loads(json.dumps(bundle['records'][1]))
+            payload = (self.destination / record['path']).read_bytes()
+            index = json.loads(self.responses[self.parent[0]])
+            release = index['package']['versions']['v2.0.1']
+            release['source']['url'] = 'https://github.com/../root.git'
+            release['dist']['url'] = 'https://api.github.com/repos/../root/zipball/' + 'a'*40
+            record['origin']['artifact_url'] = release['dist']['url']
+            raw = encoded(index)
+            record['origin']['index_sha256'] = hashlib.sha256(raw).hexdigest()
+            with self.assertRaises(artifacts.ArtifactError):
+                artifacts.verify_origin(self.destination, record, payload, index_bytes=raw)
+
     def test_fixed_origins_and_effect_denial(self):
         with guarded(self.root):
             self.acquire()

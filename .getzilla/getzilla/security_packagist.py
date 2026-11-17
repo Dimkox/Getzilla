@@ -74,7 +74,7 @@ def select_release(index, dep):
     if type(source) is not dict or type(dist) is not dict:
         raise error('artifact-origin', 'Packagist requires source and distribution metadata')
     match = _ARCHIVE.fullmatch(dist.get('url', '')) if type(dist.get('url')) is str else None
-    if (not match or dist.get('type') != 'zip' or source.get('type') != 'git'
+    if (not match or not allowed_url(dist['url']) or dist.get('type') != 'zip' or source.get('type') != 'git'
             or source.get('url') != 'https://github.com/' + match[1] + '.git'
             or source.get('reference') != match[2] or dist.get('reference') != match[2]
             or type(dist.get('shasum', '')) is not str
