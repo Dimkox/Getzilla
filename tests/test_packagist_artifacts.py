@@ -13,6 +13,7 @@ import unittest
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 from getzilla import security_artifacts as artifacts
 from getzilla import security_license_acquisition as acquisition
@@ -325,19 +326,24 @@ class PackagistArtifactTests(unittest.TestCase):
                 licenses.artifact_catalog_source(self.current, self.destination, self.policy, now=NOW)
 
     def test_production_redirect_handler_refuses_cross_source(self):
-        import urllib.request
         with guarded(self.root):
             self.acquire()
             handler = acquisition._FixedOriginRedirect()
             target = 'https://codeload.github.com/owned/root/legacy.zip/' + 'a'*40
-            request = urllib.request.Request(self.parent[1])
-            redirected = handler.redirect_request(request, None, 302, '', {}, target)
-            self.assertEqual(redirected.full_url, target)
-            with self.assertRaises(artifacts.ArtifactError):
-                handler.redirect_request(request, None, 302, '', {}, target.replace('/root/', '/foreign/'))
-            with self.assertRaises(artifacts.ArtifactError):
-                handler.redirect_request(urllib.request.Request('https://pypi.org/pypi/owned/1.0.0/json'),
-                    None, 302, '', {}, self.parent[1])
+            request = SimpleNamespace(full_url=self.parent[1])
+            # Only the guard is under test; the stdlib delegate stays inert.
+            with patch.object(type(handler).__mro__[1], 'redirect_request', autospec=True,
+                              return_value=SimpleNamespace(full_url=target)) as delegate:
+                redirected = handler.redirect_request(request, None, 302, '', {}, target)
+                self.assertEqual(redirected.full_url, target)
+                delegate.assert_called_once_with(handler, request, None, 302, '', {}, target)
+                delegate.reset_mock()
+                with self.assertRaises(artifacts.ArtifactError):
+                    handler.redirect_request(request, None, 302, '', {}, target.replace('/root/', '/foreign/'))
+                with self.assertRaises(artifacts.ArtifactError):
+                    handler.redirect_request(SimpleNamespace(full_url='https://pypi.org/pypi/owned/1.0.0/json'),
+                        None, 302, '', {}, self.parent[1])
+                delegate.assert_not_called()
 
     def test_stable_composer_constraints_are_conservative(self):
         with guarded(self.root):

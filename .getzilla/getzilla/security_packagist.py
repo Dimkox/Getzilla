@@ -175,11 +175,11 @@ def satisfies(value, constraint):
         if not tokens or len(tokens) > 32:
             raise error('license-transitive-coverage', 'Composer constraint needs a supported resolver')
         comparisons = []
-        for token in tokens:
-            if token == '*':
+        for term in tokens:
+            if term == '*':
                 comparisons.append(True)
                 continue
-            match = re.fullmatch(r'(\^|~|>=|<=|!=|==|=|>|<)?(v?[0-9]+(?:\.[0-9]+){0,3})', token)
+            match = re.fullmatch(r'(\^|~|>=|<=|!=|==|=|>|<)?(v?[0-9]+(?:\.[0-9]+){0,3})', term)
             if not match:
                 raise error('license-transitive-coverage', 'Composer constraint needs a supported resolver')
             op, text = match.groups()
