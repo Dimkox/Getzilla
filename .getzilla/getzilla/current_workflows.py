@@ -9,13 +9,12 @@ import contextvars
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 
 from . import baseline_assets, state
 from .architecture import ArchitectureError
 from .architecture_diff import _git_command, _run_capped
-from .baseline import AGENTS, AGENT_SKILL_DIRS, Step, components
+from .baseline import AGENTS, AGENT_SKILL_DIRS, Step, components, temporary_cache
 from .component_state import BoundRoot, ComponentStateError, component_transaction, mode_matches, path_parts
 from .latest_releases import github_release, metadata
 from .managed_runtime import directory as managed_directory
@@ -138,7 +137,7 @@ def _source(home, repo, commit, prefixes):
         raise ValueError('linked workflow source cache')
     managed_directory(parent)
     # No checkout, hooks, credential helper, user's Git config, or source execution.
-    with tempfile.TemporaryDirectory(prefix='current-', dir=parent) as directory:
+    with temporary_cache(parent, prefix='current-') as directory:
         root = Path(directory)
         private = root/'private-home'
         private.mkdir(mode=0o700)
