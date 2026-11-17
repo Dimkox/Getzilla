@@ -266,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == 'approval-submit':
+        from .http_response import request_bytes
+
         payload = args.approval.read_bytes()
         request = urllib.request.Request(
             args.url.rstrip('/') + '/approvals',
@@ -274,11 +276,15 @@ def main(argv: list[str] | None = None) -> int:
             headers={'Content-Type': 'application/json', 'User-Agent': 'adaptive-trust-ci-human/2.1.0'},
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310: the operator names the Trust CI API URL
-                sys.stdout.buffer.write(response.read())
+            status, response_body = request_bytes(request)
+            if 200 <= status < 300:
+                sys.stdout.buffer.write(response_body)
                 sys.stdout.write('\n')
-        except urllib.error.HTTPError as exc:
-            sys.stderr.buffer.write(exc.read())
+            else:
+                sys.stderr.buffer.write(response_body)
+                return 1
+        except OSError as exc:
+            print(f'approval request failed: {exc}', file=sys.stderr)
             return 1
         return 0
 
