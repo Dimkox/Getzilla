@@ -170,6 +170,9 @@ flowchart LR
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem"| node_814a7fe70af9f16d
   node_22df40caedcff532 -->|"EDGE-PILOT-SYNTHETIC-UNIX-PROBE | control | unix_http"| node_22df40caedcff532
   node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-API-JOURNAL | data_flow | sqlite"| node_184d4805d75dbf51
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-DISPATCH | control | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-SOURCE | data_flow | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-VALIDATION | dependency | python"| node_d3130d35cc27975a
   node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-RUNTIME-BUNDLE | dependency | python"| node_d3130d35cc27975a
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-JOURNAL | data_flow | sqlite"| node_184d4805d75dbf51
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-RUNTIME | dependency | python"| node_d0e570b2fbe52f98

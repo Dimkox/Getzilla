@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 import math
 import os
 import stat
@@ -124,6 +125,32 @@ def _request_scope(repository, method, path, body):
             or method == 'PATCH' and re.fullmatch(re.escape(root) + r'/check-runs/[1-9][0-9]*', path) is not None)
 
 
+@dataclass(frozen=True)
+class WorkflowDispatchConfig:
+    repository: str
+    repository_id: int
+    app_id: int
+    installation_id: int
+    workflow_id: int
+    branch: str
+    key_path: Path
+
+    def token_request(self):
+        return {'repository_ids': [self.repository_id], 'permissions': {'actions': 'write', 'contents': 'read'}}
+
+
+def _dispatch_scope(repository, profile, method, path, body):
+    return (type(profile) is dict and set(profile) == {'workflow_id', 'branch'}
+            and type(profile['workflow_id']) is int and profile['workflow_id'] > 0
+            and type(profile['branch']) is str and re.fullmatch('[A-Za-z0-9_./-]{1,256}', profile['branch']) is not None
+            and '..' not in profile['branch'].split('/') and method == 'POST'
+            and path == f"/repos/{repository}/actions/workflows/{profile['workflow_id']}/dispatches"
+            and type(body) is dict and set(body) == {'ref', 'inputs'} and body['ref'] == profile['branch']
+            and type(body['inputs']) is dict and set(body['inputs']) == {'pull_request'}
+            and type(body['inputs']['pull_request']) is str
+            and re.fullmatch('[1-9][0-9]{0,9}', body['inputs']['pull_request']) is not None)
+
+
 class BoundedHTTPPort:
     """Concrete PublicationPort; token callbacks and ordinary transports cannot run."""
     def __init__(self, repository, *, clock=time.monotonic):
@@ -131,6 +158,9 @@ class BoundedHTTPPort:
         self.clock = clock
 
     def open(self, client, method, path, body, *, deadline, maximum):
+        return self._open(client, method, path, body, deadline=deadline, maximum=maximum)
+
+    def _open(self, client, method, path, body, *, deadline, maximum, dispatch=None):
         started = _time(self.clock, deadline)
         if (type(client) is not GitHubClient or type(client.api_url) is not str
                 or client.api_url != 'https://api.github.com' or client.token_provider is not None
@@ -139,7 +169,8 @@ class BoundedHTTPPort:
                 or type(client.api_version) is not str or not 0 < len(client.api_version) <= 64
                 or '\r' in client.api_version or '\n' in client.api_version
                 or type(maximum) is not int or not 0 < maximum <= _MAXIMUM
-                or not _request_scope(self.repository, method, path, body)):
+                or not (_request_scope(self.repository, method, path, body) if dispatch is None
+                           else _dispatch_scope(self.repository, dispatch, method, path, body))):
             raise ValueError('public-http-request-scope')
         # Read only bounded plain fields; never invoke an overridable client callback.
         headers = {'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
@@ -148,6 +179,8 @@ class BoundedHTTPPort:
         end = min(deadline, started + 5)
         request = dict(action='http', repository=self.repository, url=client.api_url + path, method=method, headers=headers, body=body,
                        maximum=maximum, remaining_ns=int((end - self.clock()) * 1000000000))
+        if dispatch is not None:
+            request['action'], request['dispatch'] = 'dispatch-http', dispatch
         output = _exchange(request, end)
         _time(self.clock, end)
         if len(output) < 8:
@@ -159,16 +192,35 @@ class BoundedHTTPPort:
         return _Response(raw, request['url'], status, self.clock, end)
 
 
-def issue_scoped_token(config, key_path, budget, *, now, purpose='publisher'):
+class WorkflowDispatchPort(BoundedHTTPPort):
+    def __init__(self, config, *, clock=time.monotonic):
+        if type(config) is not WorkflowDispatchConfig:
+            raise ValueError('dispatcher-configuration-required')
+        super().__init__(config.repository, clock=clock)
+        self.profile = {'workflow_id': config.workflow_id, 'branch': config.branch}
+
+    def open(self, client, method, path, body, *, deadline, maximum):
+        return self._open(client, method, path, body, deadline=deadline, maximum=maximum, dispatch=self.profile)
+
+
+def issue_scoped_token(config, key_path, budget, *, now, purpose='publisher', observer_repository_id=None):
     """One owned5s broker operation; both requests share the publication allocation."""
     end = min(budget.deadline, budget.clock() + 5)
     _time(budget.clock, end)
     allocations = [budget.reserve(524288, publication=True) for _ in range(2)]
-    if purpose not in ('observer', 'publisher'):
+    if purpose not in ('observer', 'publisher', 'dispatcher'):
         raise ValueError('public-token-purpose')
+    if purpose == 'dispatcher' and type(config) is not WorkflowDispatchConfig:
+        raise ValueError('public-dispatcher-role')
     token_request = config.token_request()
     if purpose == 'observer':
         token_request['permissions']['checks'] = 'read'
+        if observer_repository_id is not None:
+            if type(observer_repository_id) is not int or observer_repository_id <= 0:
+                raise ValueError('public-observer-repository')
+            token_request['repository_ids'] = sorted(set(token_request['repository_ids'] + [observer_repository_id]))
+    elif observer_repository_id is not None:
+        raise ValueError('public-publisher-repository-scope')
     request = dict(action='token', purpose=purpose, app_id=config.app_id, installation_id=config.installation_id,
                    key_path=str(key_path), token_request=token_request, maximums=allocations,
                    remaining_ns=int((end - budget.clock()) * 1000000000))
@@ -220,7 +272,7 @@ def _read_app_key(path):
 def _worker_main():
     try:
         request = bounded_json(sys.stdin.buffer.read(65537), maximum=65536)
-        if type(request) is not dict or request.get('action') not in ('http', 'token'):
+        if type(request) is not dict or request.get('action') not in ('http', 'dispatch-http', 'token'):
             raise ValueError('public-http-worker-input')
         remaining = request.get('remaining_ns')
         if type(remaining) is not int or not 0 < remaining <= 5000000000:
@@ -236,8 +288,11 @@ def _worker_main():
         http.client._MAXHEADERS = 64
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
         deadline = time.monotonic() + remaining / 1000000000
-        if request['action'] == 'http':
-            if set(request) != {'action', 'repository', 'url', 'method', 'headers', 'body', 'maximum', 'remaining_ns'}:
+        if request['action'] in ('http', 'dispatch-http'):
+            expected = {'action', 'repository', 'url', 'method', 'headers', 'body', 'maximum', 'remaining_ns'}
+            if request['action'] == 'dispatch-http':
+                expected.add('dispatch')
+            if set(request) != expected:
                 raise ValueError('public-http-worker-input')
             url, headers, maximum = request['url'], request['headers'], request['maximum']
             if (not isinstance(url, str) or not url.startswith('https://api.github.com/') or len(url) > 2048
@@ -248,7 +303,10 @@ def _worker_main():
                     or type(maximum) is not int or not 0 < maximum <= _MAXIMUM):
                 raise ValueError('public-http-worker-scope')
             repository = require_repository(request['repository'])
-            if not _request_scope(repository, request['method'], url.removeprefix('https://api.github.com'), request['body']):
+            path = url.removeprefix('https://api.github.com')
+            scoped = (_dispatch_scope(repository, request['dispatch'], request['method'], path, request['body'])
+                      if request['action'] == 'dispatch-http' else _request_scope(repository, request['method'], path, request['body']))
+            if not scoped:
                 raise ValueError('public-http-worker-scope')
             raw = canonical_json(request['body']) if request['body'] is not None else None
             status, body = _read_http(opener, request['method'], url, headers, raw, deadline, time.monotonic, maximum)
@@ -260,11 +318,13 @@ def _worker_main():
             from .models import utc_now
             ids = request['token_request'].get('repository_ids')
             checks = 'read' if request['purpose'] == 'observer' else 'write'
-            if (request['purpose'] not in ('observer', 'publisher') or type(request['app_id']) is not int or request['app_id'] <= 0
+            permissions = ({'actions': 'write', 'contents': 'read'} if request['purpose'] == 'dispatcher' else
+                {'checks': checks, 'actions': 'read', 'contents': 'read', 'pull_requests': 'read'})
+            if (request['purpose'] not in ('observer', 'publisher', 'dispatcher') or type(request['app_id']) is not int or request['app_id'] <= 0
                     or type(request['installation_id']) is not int or request['installation_id'] <= 0
-                    or not isinstance(ids, list) or len(ids) != 1 or type(ids[0]) is not int or ids[0] <= 0
-                    or request['token_request'] != {'repository_ids': ids, 'permissions': {
-                        'checks': checks, 'actions': 'read', 'contents': 'read', 'pull_requests': 'read'}}
+                    or not isinstance(ids, list) or not 1 <= len(ids) <= (2 if request['purpose'] == 'observer' else 1)
+                    or any(type(identity) is not int or identity <= 0 for identity in ids) or ids != sorted(set(ids))
+                    or request['token_request'] != {'repository_ids': ids, 'permissions': permissions}
                     or type(request['maximums']) is not list or len(request['maximums']) != 2
                     or any(type(n) is not int or not 0 < n <= 524288 for n in request['maximums'])):
                 raise ValueError('public-token-worker-scope')

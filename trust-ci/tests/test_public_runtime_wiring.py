@@ -268,7 +268,9 @@ class PublicRuntimeWiring(unittest.TestCase):
                 checker_sha='not-a-real-pin', checker_tree_sha='d'*40, workflow_blob_sha='e'*40, producer_app_id=15368,
                 event='workflow_dispatch', branch='main', policy_digest='a'*64, required_jobs=['owned-job']),
             producer_key_path='/UNREAD-PUBLIC-KEY', app_key_path='/UNREAD-PRIVATE-KEY',
-            journal_path='/UNREAD-JOURNAL', input_root='/UNREAD-INPUTS')
+            journal_path='/UNREAD-JOURNAL', input_root='/UNREAD-INPUTS',
+            producer={'snapshot_root':'/UNREAD-SNAPSHOTS', 'machine_key_path':'/UNREAD-MACHINE',
+                      'image_artifacts':None, 'cgroup_root':'/UNREAD-CGROUP', 'dispatch':{'enabled':False}})
         with patch.object(runtime, 'read_file', return_value=json.dumps(value).encode()):
             with guarded(), self.assertRaises(ValueError):
                 runtime.load_config(Path('/UNREAD-CONFIG'), enabled=True)

@@ -116,7 +116,7 @@ def read_file(path, maximum):
         os.close(fd)
 
 
-def content_manifest(root, maximum=bundle.SOURCE_BYTES):
+def content_manifest(root, maximum=bundle.SOURCE_BYTES, *, max_files=bundle.SOURCE_FILES):
     root = Path(root).absolute()
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
@@ -139,7 +139,7 @@ def content_manifest(root, maximum=bundle.SOURCE_BYTES):
             path = Path(directory) / name
             data = read_file(path, maximum - total)
             total += len(data)
-            if total > maximum or len(rows) >= 4096:
+            if total > maximum or len(rows) >= max_files or not bundle.source_size_ok(total, len(rows) + 1):
                 raise bundle.BundleError('source-limit')
             item = path.lstat()
             rows.append({'path': path.relative_to(root).as_posix(), 'bytes': len(data),
@@ -150,12 +150,20 @@ def content_manifest(root, maximum=bundle.SOURCE_BYTES):
     return rows
 
 
-def _core():
+def _core(*, policy_root=None):
     # This code's installation selects its validators, never the candidate root.
-    policy_root = Path(__file__).resolve().parents[3]
+    if policy_root is None:
+        installed = Path('/opt/getzilla-checker')
+        policy_root = installed if installed.is_dir() else Path(__file__).resolve().parents[3]
+    policy_root = Path(policy_root).absolute()
     library = policy_root / '.getzilla'
     if not (library / 'getzilla').is_dir():
         raise bundle.BundleError('accepted-validator-unavailable')
+    for name, loaded in tuple(sys.modules.items()):
+        if name == 'getzilla' or name.startswith('getzilla.'):
+            origin = getattr(loaded, '__file__', None)
+            if origin is None or not Path(origin).absolute().is_relative_to(library):
+                raise bundle.BundleError('accepted-validator-origin-mismatch')
     if str(library) not in sys.path:
         sys.path.insert(0, str(library))
     modules = {name: importlib.import_module('getzilla.' + module) for name, module in
@@ -165,7 +173,7 @@ def _core():
 
 
 def _snapshot_preflight(root):
-    rows = content_manifest(root, bundle.SNAPSHOT_BYTES)
+    rows = content_manifest(root, bundle.SNAPSHOT_BYTES, max_files=4096)
     expanded = members = 0
     for row in rows:
         data = read_file(Path(root) / row['path'], bundle.SNAPSHOT_BYTES)
@@ -224,13 +232,41 @@ def _scanner_targets(inventory, tools):
             for name, values in paths.items()}
 
 
+def recompute_family_checks(core, source_root, snapshot_root, inventory, *, now, expected_source=None):
+    """Execute the pinned accepted checker, never a candidate/supplied marker.
+
+    The accepted API can evaluate offline non-image families with explicit roots.
+    It cannot yet represent an independent runner's real head in an OCI input
+    profile. Refuse that contract rather than use a daemon or forge run fields.
+    """
+    if inventory.get('images'):
+        raise bundle.BundleError('accepted-independent-image-evaluator-unavailable')
+    operation = getattr(core.report, 'evaluate', None)
+    if not callable(operation):
+        raise bundle.BundleError('accepted-full-family-evaluator-unavailable')
+    current = operation(source_root, Path(snapshot_root) / 'database', Path(snapshot_root) / 'artifacts',
+                        Path(snapshot_root) / 'tools', refresh=False, provision=False, now=now)
+    expected = getattr(core.report, 'REQUIRED_CHECKS', ())
+    if (type(current) is not dict or current.get('schema_version') != 1
+            or current.get('kind') != 'security-expanded' or current.get('status') != 'pass'
+            or current.get('qualification_gaps') != []
+            or expected_source is not None and current.get('source') != expected_source
+            or current.get('inventory_sha256') != inventory['digest']
+            or current.get('policy_sha256') != core.security._policy_digest(core.policy_root)
+            or type(current.get('checks')) is not list or not expected
+            or len(current['checks']) != len(expected)
+            or {row.get('name') for row in current['checks']} != set(expected)):
+        raise bundle.BundleError('accepted-full-family-recomputation-refused')
+    return {row['name']: row for row in current['checks']}
+
+
 def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descriptors, now, core=None):
     """Real boundary validation outside pure evaluation; JSON claims never set facts."""
     value = evidence.document()
     source = evidence.source
-    def refused():
+    def refused(reason='input-validation-unavailable'):
         return bundle.ValidationFacts(bundle.digest(value['source']), policy.policy_digest, bundle.digest(value['report']),
-                                      value['report']['inventory_sha256'], (), (), ('input-validation-unavailable',), False)
+                                      value['report']['inventory_sha256'], (), (), (reason,), False)
     try:
         core = core or _core()
         before = content_manifest(source_root)
@@ -268,8 +304,8 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             applies = obligation['applicability']
             if applies not in ('required', 'not_applicable'):
                 return refused()
-            if applies == 'required' and obligation['check_id'] not in ('security-inventory', 'known-vulnerabilities'):
-                return refused()  # No invented non-OSV qualification.
+            if source.mode == 'local' and applies == 'required' and obligation['check_id'] not in ('security-inventory', 'known-vulnerabilities'):
+                return refused()  # Preserve the read-only offline/local-feedback profile.
             ids = []
             for descriptor in obligation['data_sources']:
                 identifier = descriptor['source_id']
@@ -286,11 +322,24 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
         supplied = descriptors['checks']
         if type(supplied) is not list or len(supplied) != len(required):
             return refused()
+        fresh = None
+        if source.mode == 'github':
+            try:
+                fresh = recompute_family_checks(core, source_root, snapshot_root, inventory, now=now, expected_source=source_before)
+            except bundle.BundleError as error:
+                reason = str(error)
+                allowed = {'accepted-independent-image-evaluator-unavailable',
+                           'accepted-full-family-evaluator-unavailable', 'accepted-full-family-recomputation-refused'}
+                return refused(reason if reason in allowed else 'input-validation-unavailable')
         normalized = []
         for check in supplied:
             markers = [m for m in check.get('details', []) if isinstance(m, dict) and m.get('kind') == 'security-result']
             if len(markers) != 1:
                 return refused()
+            actual = fresh.get(check.get('name')) if fresh is not None else None
+            if (fresh is not None and (type(actual) is not dict or actual.get('status') != check.get('status')
+                    or actual.get('details') != check.get('details'))):
+                return refused('accepted-full-family-result-mismatch')
             marker = markers[0]
             if check['name'] in targets:
                 coverage = marker.get('coverage', {'expected': [], 'observed': []})
@@ -304,7 +353,7 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             if any(item != actual_descriptors.get(item.get('source_id')) for item in marker['data_sources']):
                 return refused()
             normalized.append({'name': check['name'], 'status': check['status'], 'outcome': marker['outcome'],
-                'finding_count': len(marker['findings']), 'gap_count': len(marker['gaps']),
+                'finding_count': bundle.result_finding_count(check['name'], marker), 'gap_count': len(marker['gaps']),
                 'source_ids': [row['source_id'] for row in marker['data_sources']], 'coverage_sha256': inventory['digest']})
         if sorted(normalized, key=lambda row: row['name']) != sorted(value['report']['checks'], key=lambda row: row['name']):
             return refused()

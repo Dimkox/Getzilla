@@ -59,6 +59,7 @@ flowchart LR
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https | DATA-PILOT-STATE"| node_8b8a8cd21b180532
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem | DATA-PILOT-STATE"| node_814a7fe70af9f16d
   node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-API-JOURNAL | data_flow | sqlite | DATA-JOB-STATE | DATA-ATTESTATION"| node_184d4805d75dbf51
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-SOURCE | data_flow | https | DATA-REPOSITORY-SOURCE"| node_8b8a8cd21b180532
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-JOURNAL | data_flow | sqlite | DATA-JOB-STATE | DATA-ATTESTATION"| node_184d4805d75dbf51
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem | DATA-HOLDOUT"| node_0a0fe2f046a648e9
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-WORKSPACE | data_flow | filesystem | DATA-REPOSITORY-SOURCE"| node_2e8a7072de3f3743

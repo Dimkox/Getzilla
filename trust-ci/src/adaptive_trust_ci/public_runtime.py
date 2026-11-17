@@ -19,8 +19,10 @@ from types import SimpleNamespace
 from .github import GitHubClient
 from .github_observer import BoundedGetTransport
 from .models import utc_now, require_repository
-from .public_admission import Authority, Evidence, Selector, _core, read_file
+from .public_admission import Authority, Evidence, Selector, read_file
 from .public_http import BoundedHTTPPort, issue_scoped_token
+from .public_producer import load_checker, refresh_for_pr
+from .public_process import ProducerCleanupUnknown, ProducerEnvelope
 from .public_merge import BoundPublicVerifier, ObservationSessions
 from .public_publisher import (Publication, PublicationJournal, PublisherConfig, PublicWakeupQueue,
                                publish, verify_webhook)
@@ -36,6 +38,8 @@ class PublicConfig:
     journal_path: Path
     input_root: Path
     scope: str
+    config_path: Path
+    producer: dict
 
 
 def _validate_authority(authority):
@@ -70,7 +74,7 @@ def load_config(path, *, enabled=False):
         raise ValueError('absolute-public-configuration-required')
     raw = read_file(Path(path), 65536)
     value = bounded_json(raw, maximum=65536)
-    fields = {'schema_version', 'publisher', 'authority', 'producer_key_path', 'app_key_path', 'journal_path', 'input_root'}
+    fields = {'schema_version', 'publisher', 'authority', 'producer_key_path', 'app_key_path', 'journal_path', 'input_root', 'producer'}
     if type(value) is not dict or set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1:
         raise ValueError('public-configuration-shape')
     paths = {}
@@ -83,6 +87,36 @@ def load_config(path, *, enabled=False):
             or any(paths[name].is_relative_to(paths['input_root'])
                    for name in ('app_key_path', 'producer_key_path', 'journal_path'))):
         raise ValueError('operator-authority-must-stay-outside-candidate-input-root')
+    producer = value['producer']
+    if type(producer) is not dict or set(producer) != {'snapshot_root', 'machine_key_path', 'image_artifacts', 'cgroup_root', 'dispatch'}:
+        raise ValueError('public-producer-configuration')
+    for name in ('snapshot_root', 'machine_key_path', 'image_artifacts', 'cgroup_root'):
+        text = producer[name]
+        if name == 'image_artifacts' and text is None:
+            continue
+        if (not isinstance(text, str) or not Path(text).is_absolute() or '..' in Path(text).parts
+                or Path(text) == Path('/') or Path(text).is_relative_to(paths['input_root'])):
+            raise ValueError('public-producer-path')
+    if (any(path.is_relative_to(Path(producer['snapshot_root'])) for path in
+            (Path(path), paths['app_key_path'], paths['producer_key_path'], paths['journal_path'], paths['input_root']))
+            or Path(producer['machine_key_path']) in (paths['app_key_path'], paths['producer_key_path'])
+            or Path(producer['machine_key_path']).is_relative_to(Path(producer['snapshot_root']))
+            or producer['image_artifacts'] is not None
+            and not Path(producer['image_artifacts']).is_relative_to(Path(producer['snapshot_root']))):
+        raise ValueError('public-producer-key-or-snapshot-scope')
+    dispatch = producer['dispatch']
+    if type(dispatch) is not dict or type(dispatch.get('enabled')) is not bool:
+        raise ValueError('public-dispatch-configuration')
+    if dispatch['enabled']:
+        if (set(dispatch) != {'enabled', 'app_id', 'installation_id', 'key_path'}
+                or any(type(dispatch[name]) is not int or dispatch[name] <= 0 for name in ('app_id', 'installation_id'))
+                or type(dispatch['key_path']) is not str or not Path(dispatch['key_path']).is_absolute()
+                or '..' in Path(dispatch['key_path']).parts
+                or any(Path(dispatch['key_path']).is_relative_to(root) for root in
+                       (paths['input_root'], Path(producer['snapshot_root'])))):
+            raise ValueError('public-dispatch-role')
+    elif set(dispatch) != {'enabled'}:
+        raise ValueError('public-dispatch-disabled-shape')
     publisher = PublisherConfig(**value['publisher'])
     authority = dict(value['authority'])
     if 'security_core' in authority or 'public_key_pem' in authority:
@@ -92,10 +126,13 @@ def load_config(path, *, enabled=False):
     authority['required_jobs'] = tuple(authority['required_jobs'])
     authority = Authority(**authority, public_key_pem=b'')
     _validate_authority(authority)
+    if dispatch['enabled'] and authority.event != 'workflow_dispatch':
+        raise ValueError('automatic-dispatch-requires-workflow-dispatch-profile')
     if (authority.repository != publisher.repository or authority.repository_id != publisher.repository_id
             or authority.policy_digest != publisher.policy_digest):
         raise ValueError('public-configuration-policy-mismatch')
-    return PublicConfig(publisher, authority, **paths, scope=hashlib.sha256(canonical_json(value)).hexdigest())
+    return PublicConfig(publisher, authority, **paths, scope=hashlib.sha256(canonical_json(value)).hexdigest(),
+                        config_path=Path(path), producer=producer)
 
 
 def open_queue(config):
@@ -128,8 +165,12 @@ class PublicIngress:
         value = bounded_json(raw, maximum=1048576)
         repo = value.get('repository')
         expected = self.config.publisher
-        if (type(repo) is not dict or repo.get('full_name') != expected.repository
-                or type(repo.get('id')) is not int or repo['id'] != expected.repository_id):
+        runner = getattr(self.config, 'authority', None)
+        runner_event = (runner is not None and event == 'workflow_run' and type(repo) is dict
+                        and repo.get('full_name') == runner.runner_repository
+                        and type(repo.get('id')) is int and repo['id'] == runner.runner_repository_id)
+        if (not runner_event and (type(repo) is not dict or repo.get('full_name') != expected.repository
+                or type(repo.get('id')) is not int or repo['id'] != expected.repository_id)):
             raise ValueError('public-webhook-repository-mismatch')
         if event == 'pull_request':
             request = value.get('pull_request')
@@ -140,6 +181,8 @@ class PublicIngress:
             if not isinstance(requests, list) or len(requests) > 100:
                 raise ValueError('public-webhook-targets')
             targets = [item.get('number') if type(item) is dict else None for item in requests]
+        if not targets and runner_event:
+            targets = self.queue.blocked_targets()
         if not targets:
             return {'accepted': False, 'reason': 'no-pr-wakeup'}
         if any(type(pr) is not int or not 0 < pr <= 2147483647 for pr in targets):
@@ -175,10 +218,13 @@ class PublicWorker:
         self.stop_event = threading.Event()
         self.kill_switch_path = kill_switch_path
         self._pending_pr, self._pending_parts = None, None
+        self._active_job = None
 
     @classmethod
     def load(cls, path):
         config = load_config(path, enabled=True)
+        with ProducerEnvelope(config.producer['cgroup_root'], time.monotonic() + 5):
+            pass
         journal, queue = open_queue(config)
         return cls(config, queue, journal=journal, kill_switch_path=Path(
             os.environ.get('TRUST_CI_KILL_SWITCH_PATH', '/run/adaptive-trust-ci/STOP')))
@@ -195,7 +241,8 @@ class PublicWorker:
         self._publication_clock()
         if type(pr) is not int or not 0 < pr <= 2147483647:
             raise ValueError('public-wakeup-target')
-        root = self.config.input_root / str(pr)
+        self.queue.require_refresh_safe(self._active_job)
+        root = refresh_for_pr(self.config, pr, clock=self.clock, before_sign=self._publication_clock)
         record = bounded_json(read_file(root / 'record.json', CONTROL_TOTAL), maximum=CONTROL_TOTAL)
         if type(record) is not dict or set(record) != {'selector', 'evidence'}:
             raise ValueError('public-producer-record')
@@ -206,7 +253,7 @@ class PublicWorker:
             raise ValueError('public-producer-target-mismatch')
         evidence = Evidence(**record['evidence'])
         authority = replace(self.config.authority, public_key_pem=read_file(self.config.producer_key_path, 65536),
-                            security_core=_core())
+                            security_core=load_checker(self.config.authority))
         authority.as_policy()
         holder = []
         def unissued():
@@ -217,10 +264,11 @@ class PublicWorker:
                 raise ValueError('public-token-not-issued')
             return GitHubClient(token=holder[0], transport=BoundedGetTransport(clock=self.clock))
         budget = ObservationSessions(original, observe, purpose='publisher')
-        holder.append(issue_scoped_token(self.config.publisher, self.config.app_key_path, budget, now=self._publication_clock(), purpose='observer'))
+        holder.append(issue_scoped_token(self.config.publisher, self.config.app_key_path, budget, now=self._publication_clock(), purpose='observer',
+                                        observer_repository_id=authority.runner_repository_id))
         client = GitHubClient(token=holder[0], transport=BoundedGetTransport(clock=self.clock))
         verifier = BoundPublicVerifier(client, authority, evidence, candidate_root=root / 'candidate',
-                                       snapshot_root=root / 'snapshots', observations=budget)
+                                       snapshot_root=Path(self.config.producer['snapshot_root']), observations=budget)
         publication_client = []
         def factory(installation, request):
             if installation != self.config.publisher.installation_id or request != self.config.publisher.token_request():
@@ -237,7 +285,17 @@ class PublicWorker:
         recovery = self._pending_parts is not None
         if recovery and self._pending_pr != pr:
             return Publication('blocked', 'prior-public-operation-unresolved')
-        parts = self._pending_parts if recovery else self._prepare_publication(pr)
+        if recovery:
+            parts = self._pending_parts
+        else:
+            try:
+                parts = self._prepare_publication(pr)
+            except ProducerCleanupUnknown:
+                raise
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+                self.queue.require_refresh_safe(self._active_job)
+                from .public_dispatch import request_producer
+                return request_producer(self.config, pr, self.queue, guard=self._publication_clock)
         self._pending_pr, self._pending_parts = pr, parts
         result = publish(self.config.publisher, self.journal, parts.verifier, parts.selector,
                          client_factory=parts.client_factory, request_port=parts.request_port,
@@ -255,15 +313,20 @@ class PublicWorker:
         if job is None:
             return None
         key, pr = job
+        self._active_job = key
         try:
             result = self.operation(pr)
             if type(result) is not Publication or result.state not in ('published', 'blocked', 'unknown'):
                 result = Publication('unknown', 'public-operation-unconfirmed')
+        except ProducerCleanupUnknown:
+            result = Publication('unknown', 'producer-cleanup-unconfirmed')
         except (OSError, ValueError, TypeError, KeyError, RuntimeError):
             result = Publication('blocked', 'public-input-unavailable')
         except BaseException:
             self.queue.finish(key, 'unknown', 'public-operation-interrupted')
             raise
+        finally:
+            self._active_job = None
         self.queue.finish(key, result.state, result.reason)
         return {'job_id': key, 'state': result.state, 'reason': result.reason}
 

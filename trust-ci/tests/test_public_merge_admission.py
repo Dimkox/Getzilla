@@ -348,6 +348,13 @@ class ValidatedHorizonBoundaryTests(unittest.TestCase):
             records.append({'name': name, 'status': status, 'details': [marker]})
             checks.append({'name': name, 'status': status, 'outcome': marker['outcome'],
                 'finding_count': 0, 'gap_count': 0, 'source_ids': [], 'coverage_sha256': inventory['digest']})
+        # The fixture explicitly supplies the new protected full-evaluation port;
+        # execution remains mocked. All paired-source/horizon assertions remain.
+        core.report.REQUIRED_CHECKS = tuple(row['name'] for row in records)
+        core.report.evaluate = lambda *args, **kwargs: {
+            'schema_version': 1, 'kind': 'security-expanded', 'status': 'pass',
+            'qualification_gaps': [], 'inventory_sha256': inventory['digest'],
+            'policy_sha256': policy.policy_digest, 'source': identity, 'checks': copy.deepcopy(records)}
         descriptors = {'checks': records, 'source_descriptors': []}
         document = {'version': 1, 'source': source.as_dict(), 'policy_sha256': policy.policy_digest,
             'binding': None, 'integration': None, 'report': {'inventory_sha256': inventory['digest'],

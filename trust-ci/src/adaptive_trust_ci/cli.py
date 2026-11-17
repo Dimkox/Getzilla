@@ -26,6 +26,13 @@ def build_parser() -> argparse.ArgumentParser:
     public_init = sub.add_parser('public-journal-init', help='Explicitly initialize or extend a public journal without erasing prior records')
     public_init.add_argument('--public-config', required=True, type=Path)
 
+    public_prepare = sub.add_parser('public-prepare', help='Protected producer workflow: prepare unsigned qualified inputs for its actual run')
+    public_prepare.add_argument('--public-config', required=True, type=Path)
+    public_prepare.add_argument('--pr', required=True, type=int)
+
+    public_preflight = sub.add_parser('public-preflight', help='Measure the delegated Linux producer profile without keys, transport or scanning')
+    public_preflight.add_argument('--public-config', required=True, type=Path)
+
     sub.add_parser('migrate', help='Apply pending checksum-locked PostgreSQL migrations')
     sub.add_parser('migration-status', help='Report applied and pending migrations')
     sub.add_parser('policy-digest', help='Print the authoritative policy digest')
@@ -137,6 +144,21 @@ def main(argv: list[str] | None = None) -> int:
             worker = Worker.build(WorkerSettings.load())
         install_signal_handlers(worker)
         return worker.run(once=args.once)
+
+    if args.command == 'public-preflight':
+        import time
+        from .public_runtime import load_config
+        from .public_process import ProducerEnvelope
+        config = load_config(args.public_config, enabled=True)
+        with ProducerEnvelope(config.producer['cgroup_root'], time.monotonic() + 5) as envelope:
+            pass
+        print(json.dumps({'kind': 'local-producer-profile', 'empty_confirmed': envelope.empty_confirmed, 'external_eligible': False}))
+        return 0
+
+    if args.command == 'public-prepare':
+        from .public_producer import prepare_workflow
+        prepare_workflow(args.public_config, args.pr)
+        return 0
 
     if args.command == 'public-journal-init':
         from .public_runtime import initialize_journal

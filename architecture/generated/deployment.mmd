@@ -124,6 +124,9 @@ flowchart LR
   node_fd325b0205e2e68b -->|"EDGE-PILOT-GITHUB-BROKER | dependency | python_import"| node_c439f662476a4d4b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-SANDBOX | control | process"| node_dd1c01e42bec9cba
   node_22df40caedcff532 -->|"EDGE-PILOT-SYNTHETIC-UNIX-PROBE | control | unix_http"| node_22df40caedcff532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-DISPATCH | control | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-SOURCE | data_flow | https"| node_8b8a8cd21b180532
+  node_070dda93443dcc1f -->|"EDGE-PUBLIC-PRODUCER-VALIDATION | dependency | python"| node_d3130d35cc27975a
   node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-RUNTIME-BUNDLE | dependency | python"| node_d3130d35cc27975a
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-RUNTIME | dependency | python"| node_d0e570b2fbe52f98
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-WORKFLOW-COMPILER | control | filesystem"| node_05e59b1e4a9cc0f9

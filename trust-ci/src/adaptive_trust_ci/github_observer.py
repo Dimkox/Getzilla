@@ -78,7 +78,7 @@ def _read_response(opener, url, headers, deadline, clock, maximum):
         return response.status, canonical_json(value), length
 
 
-def _run_owned(command, payload, deadline):
+def _run_owned(command, payload, deadline, *, containment=None):
     """Bounded IPC; signal only the owned unreaped leader/group, then reap."""
     if os.name != 'posix' or len(payload) > 65536 or deadline - time.monotonic() <= 0.2:
         raise ObservationError('worker-boundary-unavailable')
@@ -89,6 +89,8 @@ def _run_owned(command, payload, deadline):
         proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True, env={'PATH': os.defpath, 'LANG': 'C.UTF-8'})
         streams = [proc.stdin, proc.stdout, proc.stderr]
+        if containment is not None:
+            containment.attach(proc)
         work_deadline = deadline - 0.15  # Reserve the request's final interval for kill/reap.
         with selectors.DefaultSelector() as selector:
             for stream, name, events in ((proc.stdin, 'input', selectors.EVENT_WRITE),
@@ -143,9 +145,13 @@ def _run_owned(command, payload, deadline):
                 except subprocess.TimeoutExpired as exc:
                     raise ObservationError('worker-cleanup-uncertain') from exc
         finally:
-            for stream in streams:
-                if stream is not None:
-                    stream.close()
+            try:
+                if containment is not None:
+                    containment.close()
+            finally:
+                for stream in streams:
+                    if stream is not None:
+                        stream.close()
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
