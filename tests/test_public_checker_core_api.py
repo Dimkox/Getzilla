@@ -25,6 +25,7 @@ from unittest.mock import patch
 
 import yaml  # Load the qualified syntax reader before closing fixture I/O.
 from getzilla import expanded_security as expanded
+from getzilla import pytest_progress
 from getzilla import security_cli as cli
 from getzilla import security_inventory as inventory
 from getzilla import security_oci as oci
@@ -179,13 +180,12 @@ class CoreApiTests(unittest.TestCase):
 
     def test_compose_runner_and_service_exact_source_uses(self):
         for form in ('mapping', 'sequence'):
-            with self.subTest(form=form):
-                self.compose(form=form)
-                current = inventory.collect_inventory(self.root)
-                self.assertEqual([row['reference'] for row in current['images']], [SERVICE, RUNNER])
-                self.assertTrue(current['complete'], current['gaps'])
-                self.assertEqual([row['line'] for row in current['images']], [4, 6])
-                self.assertEqual([row['platform'] for row in current['images']], ['linux/amd64'] * 2)
+            self.compose(form=form)
+            current = inventory.collect_inventory(self.root)
+            self.assertEqual([row['reference'] for row in current['images']], [SERVICE, RUNNER], form)
+            self.assertTrue(current['complete'], (form, current['gaps']))
+            self.assertEqual([row['line'] for row in current['images']], [4, 6], form)
+            self.assertEqual([row['platform'] for row in current['images']], ['linux/amd64'] * 2, form)
 
     def test_exact_bindings_reject_drift_duplicates_missing_conflict_and_unused(self):
         self.require_api()
@@ -195,9 +195,8 @@ class CoreApiTests(unittest.TestCase):
                            ('path', 'absent.yaml'), ('platform', 'linux/arm64')):
             bad = copy.deepcopy(rows)
             bad[1][key] = value
-            with self.subTest(key=key):
-                current = inventory.collect_inventory(self.root, image_bindings=bad)
-                self.assertFalse(current['complete'])
+            current = inventory.collect_inventory(self.root, image_bindings=bad)
+            self.assertFalse(current['complete'], key)
         self.assertFalse(inventory.collect_inventory(self.root, image_bindings=rows[:1])['complete'])
         with self.assertRaisesRegex(ValueError, 'duplicate'):
             inventory.collect_inventory(self.root, image_bindings=rows + rows[:1])
@@ -233,7 +232,7 @@ class CoreApiTests(unittest.TestCase):
             with self.assertRaisesRegex(SecurityDataError, 'stale'):
                 cli.validate_selection_authority(source(), run, selection, now=NOW)
             for key, value in (('run_id', True), ('runner_sha', 'F' * 40), ('extra', 'x'), ('head_sha', 'f' * 40)):
-                with self.subTest(key=key), self.assertRaises(ValueError):
+                with self.assertRaises(ValueError, msg=key):
                     public.validate_context(dict(declared, **{key: value}), source())
             with self.assertRaisesRegex(ValueError, 'clean'):
                 public.validate_context(declared, dict(source(), candidate_clean=False))
@@ -394,7 +393,7 @@ class CoreApiTests(unittest.TestCase):
         oci, current, profile, catalog, blobs, config, layer = self.oci_fixture()
         for key, value in (('max_storage_bytes', 1), ('max_compressed_bytes', 1), ('max_unpacked_bytes', 1),
                            ('max_manifest_bytes', 1), ('platform', 'linux/arm64')):
-            with self.subTest(key=key), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError, msg=key):
                 with oci.import_layouts(catalog, current, dict(profile, **{key: value}), self.roots[2]):
                     self.fail('bound/platform ignored')
         with patch.object(oci.time, 'monotonic', side_effect=[0, 901]), self.assertRaisesRegex(ValueError, 'deadline'):
@@ -517,22 +516,21 @@ class CoreApiTests(unittest.TestCase):
         for kwargs, message in ((dict(config_platform='arm64'), 'platform'),
                                 (dict(diff_id='sha256:' + 'f' * 64), 'uncompressed layer digest'),
                                 (dict(extra_layer=True), 'resource bound')):
-            with self.subTest(case=kwargs):
-                # Each graph has its own fixture root; no bytes from prior
-                # failed imports can substitute for this selected graph.
-                with tempfile.TemporaryDirectory(dir=self.base) as directory:
-                    snapshot = Path(directory)
-                    previous = self.snapshot
-                    self.snapshot = snapshot
-                    try:
-                        oci, current, profile, catalog, *_ = self.oci_fixture(**kwargs)
-                        if kwargs.get('extra_layer'):
-                            profile['max_layers'] = 1
-                        with self.assertRaisesRegex(ValueError, message):
-                            with oci.import_layouts(catalog, current, profile, self.roots[2]):
-                                self.fail('invalid graph accepted')
-                    finally:
-                        self.snapshot = previous
+            # Each graph has its own fixture root; no bytes from prior
+            # failed imports can substitute for this selected graph.
+            with tempfile.TemporaryDirectory(dir=self.base) as directory:
+                snapshot = Path(directory)
+                previous = self.snapshot
+                self.snapshot = snapshot
+                try:
+                    oci, current, profile, catalog, *_ = self.oci_fixture(**kwargs)
+                    if kwargs.get('extra_layer'):
+                        profile['max_layers'] = 1
+                    with self.assertRaisesRegex(ValueError, message, msg=str(kwargs)):
+                        with oci.import_layouts(catalog, current, profile, self.roots[2]):
+                            self.fail('invalid graph accepted')
+                finally:
+                    self.snapshot = previous
 
 
 class CoreApiReviewRegressionTests(unittest.TestCase):
@@ -606,20 +604,19 @@ class CoreApiReviewRegressionTests(unittest.TestCase):
         sibling = blobs / manifests['arm64']['digest'][7:]
         original = sibling.read_bytes()
         for damage in ('missing', 'equal-size-corruption'):
-            with self.subTest(damage=damage):
-                if damage == 'missing':
-                    sibling.unlink()
-                else:
-                    changed = bytearray(original)
-                    changed[0] ^= 1
-                    sibling.write_bytes(changed)
-                    self.assertEqual(sibling.stat().st_size, len(original))
-                try:
-                    with self.assertRaises(oci.OCIError, msg='non-selected sibling must remain fully verified'):
-                        with oci.import_layouts(catalog, current, profile, self.workspace):
-                            pass
-                finally:
-                    sibling.write_bytes(original)
+            if damage == 'missing':
+                sibling.unlink()
+            else:
+                changed = bytearray(original)
+                changed[0] ^= 1
+                sibling.write_bytes(changed)
+                self.assertEqual(sibling.stat().st_size, len(original), damage)
+            try:
+                with self.assertRaises(oci.OCIError, msg=damage + ': non-selected sibling must remain fully verified'):
+                    with oci.import_layouts(catalog, current, profile, self.workspace):
+                        pass
+            finally:
+                sibling.write_bytes(original)
 
     def test_equal_size_retained_layer_damage_refuses_scanner_identity(self):
         catalog, current, profile, _, _, configs, layers = self.nested_graph()
@@ -640,6 +637,61 @@ class CoreApiReviewRegressionTests(unittest.TestCase):
                 oci.scanner_identity(report, image)
             private = image.layout
         self.assertFalse(private.exists())
+
+
+class CoreApiFixtureIntegrationTests(unittest.TestCase):
+    def test_framework_reports_after_owned_guarded_cases(self):
+        """Mock report I/O stays outside the guarded production-consumer loop.
+
+        This models the unittest-to-pytest report hook boundary. It does not
+        claim to reproduce the exact upstream whole-suite I/O path.
+        """
+        scratch = PROJECT / '.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='owned-framework-boundary-', dir=scratch) as name:
+            owned = Path(name)
+            inputs = owned / 'inputs'
+            inputs.mkdir()
+            (inputs / 'data').write_bytes(b'owned')
+            report_input = owned / 'mock-framework-report'
+            report_input.write_bytes(b'owned report metadata')
+            consumed, reported = [], []
+
+            def emit(*args, **kwargs):
+                reported.append(report_input.read_bytes())
+
+            writer = SimpleNamespace(emit=emit, source_root=owned)
+            report = SimpleNamespace(when='call', failed=False, skipped=False, location=None,
+                                     nodeid='tests/owned.py::OwnedCases::runTest')
+
+            class OwnedResult(unittest.TestResult):
+                def addSubTest(self, test, subtest, error):
+                    # Real report consumer; emit is an explicit owned effect.
+                    pytest_progress._journal_report(writer, report)
+                    super().addSubTest(test, subtest, error)
+
+                def addSuccess(self, test):
+                    pytest_progress._journal_report(writer, report)
+                    super().addSuccess(test)
+
+            class OwnedCases(unittest.TestCase):
+                def runTest(self):
+                    with fixture_guard(inputs):
+                        for value in (1, 2):
+                            self.assertEqual((inputs / 'data').read_bytes(), b'owned', value)
+                            consumed.append(value)
+                        with self.assertRaisesRegex(AssertionError, 'outside-fixture'):
+                            report_input.read_bytes()
+                        for effect in (lambda: subprocess.run(['never-execute']), lambda: socket.socket(),
+                                       lambda: ctypes.CDLL(None)):
+                            with self.assertRaisesRegex(AssertionError, 'effect denied'):
+                                effect()
+
+            result = OwnedResult()
+            OwnedCases().run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            self.assertEqual(consumed, [1, 2])
+            self.assertEqual(reported, [b'owned report metadata'])
 
 
 if __name__ == '__main__':
