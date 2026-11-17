@@ -142,7 +142,8 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn('apt-get', install_command(PYTHON_SPEC, 'linux'))
         self.assertIn('python.org', install_command(PYTHON_SPEC, 'unknown-os'))
 
-    def test_unparseable_version_is_unverified_failure(self) -> None:
+    def test_unparseable_version_is_present_pass(self) -> None:
+        """Historical ID: mere presence must now fail when the version is unproved."""
         with patch('getzilla.toolchain.command_exists', return_value=True), patch(
             'getzilla.toolchain.run',
             return_value=SimpleNamespace(returncode=0, stdout='no version here', stderr=''),
