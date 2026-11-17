@@ -114,7 +114,7 @@ def policy_binding(root: Path) -> dict:
                  'verification_scope.py', 'verification_tool_workspace.py',
                  'expanded_security.py', 'security_cli.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
                  'public_security_context.py', 'security_oci.py',
-                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py',
+                 'security_intelligence.py', 'security_data.py', 'security_data_windows.py', 'security_osv_snapshot.py',
                  'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
                  'cost_guard.py',
                  'baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py',

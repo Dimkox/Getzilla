@@ -4657,6 +4657,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/security_data.py",
+        ".getzilla/getzilla/security_data_windows.py",
         ".getzilla/getzilla/security_intelligence.py",
         ".getzilla/getzilla/security_inventory.py",
         ".getzilla/getzilla/security_artifacts.py",
