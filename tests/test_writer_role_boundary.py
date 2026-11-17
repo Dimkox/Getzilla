@@ -57,8 +57,7 @@ class WriterRoleBoundaryTests(unittest.TestCase):
         module = self.module()
         self.assertEqual(module['WRITE_ROLES'], EXPECTED)
         for data in (None, [], {}, {'write_roles': None}, {'write_roles': 'custom_writer'}, {'write_roles': [None, '', ' ']}):
-            with self.subTest(kind=type(data).__name__):
-                self.assertEqual(module['parse_write_roles'](data), EXPECTED)
+            self.assertEqual(module['parse_write_roles'](data), EXPECTED, type(data).__name__)
         first = module['parse_write_roles']({})
         first.clear()
         self.assertEqual(module['parse_write_roles']({}), EXPECTED)
