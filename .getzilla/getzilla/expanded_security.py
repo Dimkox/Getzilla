@@ -15,7 +15,7 @@ from typing import Any
 from .security_osv_snapshot import Dependency, VulnerabilityError, load_config, query_offline
 from .security_data import SecurityDataError, read_snapshot
 from .security_intelligence import IntelligenceError, enrich_findings, validate_epss, validate_kev
-from .security_inventory import canonical_digest, collect_inventory
+from .security_inventory import canonical_digest, collect_inventory, read_image_selection, declared_inventory
 
 CHECK_FAMILIES = {
     'security-inventory': 'inventory', 'known-vulnerabilities': 'vulnerabilities',
@@ -91,28 +91,55 @@ def _source_descriptor(root: Path, database: Path, source_id: str, now: datetime
         return {'database': named, 'source_id': source_id, 'unavailable': True}
 
 
-def selected_inventory(root: Path, *, environ: dict[str, str] | None = None) -> dict[str, Any]:
-    """Reread explicit local choices and current source; never execution credit.
+def _selection_authority(root, env):
+    from .security_cli import source_binding, ci_run_context
+    from .security_tools import TRUSTED_ROOT
+    from .public_security_context import current_context, validate_context
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='selection-binding-', dir=Path(root).parent) as directory:
+        source = source_binding(root, TRUSTED_ROOT, Path(directory))
+    context = current_context()
+    run = validate_context(context, source) if context is not None else ci_run_context(env)
+    return source, run
 
-    The native plan, receipt revalidation and checks must derive the same image
-    uses as the isolated CLI. A retained catalog cannot replace current source.
-    Graph bytes and scanner provenance remain separately required at scanning.
-    """
+
+def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now=None) -> dict[str, Any]:
+    """Validate source/run/freshness at every native consumption, not declaration."""
     from .security_artifacts import MAX_INDEX_BYTES, read_file
     from .security_data import _json
     from .security_oci import source_bindings, validate_selection
+    from .security_cli import validate_selection_authority, validate_input_profile
     env = os.environ if environ is None else environ
     selected = env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS')
-    if not selected:
+    declaration = env.get('GETZILLA_SECURITY_IMAGE_SELECTION')
+    if not selected and not declaration:
         return collect_inventory(root)
-    path = Path(selected).absolute()
-    catalog = _json(read_file(path.parent, path.name, MAX_INDEX_BYTES))
-    inventory = collect_inventory(root, image_bindings=source_bindings(catalog))
-    raw_profile = env.get('GETZILLA_SECURITY_IMAGE_PROFILE', '')
-    if not isinstance(raw_profile, str) or len(raw_profile.encode()) > MAX_INDEX_BYTES:
-        raise SecurityDataError('selected image profile is absent or exceeds its bound')
-    profile = _json(raw_profile.encode())
-    validate_selection(catalog, inventory, profile)
+    selection = read_image_selection(Path(declaration)) if declaration else None
+    catalog = None
+    if selected:
+        path = Path(selected).absolute()
+        catalog = _json(read_file(path.parent, path.name, MAX_INDEX_BYTES))
+    before, run = _selection_authority(root, env)
+    validate_selection_authority(before, run, selection, now=now)
+    inventory = (declared_inventory(root, selection) if selection is not None else
+                 collect_inventory(root, image_bindings=source_bindings(catalog)))
+    raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE', '')
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_INDEX_BYTES:
+        raise SecurityDataError('selected image current input profile absent or excessive')
+    profile = _json(raw.encode())
+    roots = {'database': str(_database(root, env)),
+             'artifacts': str(Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts').absolute()),
+             'tools': str(Path(env.get('GETZILLA_SECURITY_TOOLS') or root / '.getzilla/runtime/security-tools').absolute())}
+    from .security_tools import TRUSTED_ROOT
+    validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
+                           now=now, image_artifacts=catalog, image_selection=selection)
+    if catalog is not None:
+        validate_selection(catalog, inventory, profile['image_profile'])
+    after, after_run = _selection_authority(root, env)
+    if after != before or after_run != run or (declaration and read_image_selection(Path(declaration)) != selection):
+        raise SecurityDataError('image selection authority changed during native consumption')
+    if selected and _json(read_file(path.parent, path.name, MAX_INDEX_BYTES)) != catalog:
+        raise SecurityDataError('selected image catalog changed during native consumption')
     return inventory
 
 
@@ -131,7 +158,7 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
         from .security_licenses import artifact_catalog_source, load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
-        inventory = selected_inventory(root, environ=env)
+        inventory = selected_inventory(root, environ=env, now=now)
         proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now)
         if proof != binding:
             raise SecurityDataError('license catalog differs from the frozen required source')
@@ -153,7 +180,7 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
                          policy_root: Path | None = None) -> list[dict[str, Any]]:
     root = Path(root).resolve()
     current = _clock(now)
-    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ, now=now) if inventory is None else inventory
     database = _database(root, environ)
     dependencies, images, tools = inventory['dependencies'], inventory['images'], inventory['tools']
     unknown = not inventory['complete']
@@ -215,7 +242,7 @@ def known_vulnerability_report(root: Path, *, environ: dict[str, str] | None = N
     """Qualifying offline scan of the complete derived inventory, including build inputs."""
     root = Path(root).resolve()
     current = _clock(now)
-    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ, now=now) if inventory is None else inventory
     report: dict[str, Any] = {'status': 'fail', 'findings': [], 'accepted': [], 'source_evidence': [],
                               'dependencies': len(inventory['dependencies']), 'inventory_sha256': inventory['digest'],
                               'policy_sha256': _policy_digest(policy_root or root), 'assurance': 'local-input-integrity-only'}
@@ -266,7 +293,7 @@ def known_vulnerability_check(root: Path, *, environ: dict[str, str] | None = No
                               now: datetime | None = None, inventory: dict[str, Any] | None = None,
                               policy_root: Path | None = None) -> dict[str, Any]:
     """Keep the native verifier and isolated scanner on one complete evidence contract."""
-    inventory = selected_inventory(root, environ=environ) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=environ, now=now) if inventory is None else inventory
     report = known_vulnerability_report(root, environ=environ, now=now, inventory=inventory,
                                         policy_root=policy_root)
     outcome = ('not_applicable' if report['status'] == 'skip' else 'pass' if report['status'] == 'pass'
@@ -283,7 +310,7 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
     root = Path(root).resolve()
     current = _clock(now)
     env = os.environ if environ is None else environ
-    inventory = selected_inventory(root, environ=env) if inventory is None else inventory
+    inventory = selected_inventory(root, environ=env, now=now) if inventory is None else inventory
     policy = _policy_digest(policy_root or root)
     obligations = {item['check_id']: item for item in security_obligations(root, inventory, environ=env, now=current,
                                                                         policy_root=policy_root)}

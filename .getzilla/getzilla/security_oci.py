@@ -387,8 +387,10 @@ def _selection(catalog, inventory, profile):
     _profile(profile)
     references = profile['images']
     if (not isinstance(inventory, dict) or not isinstance(catalog, dict)
-            or set(catalog) not in ({'schema_version', 'inventory_sha256', 'records'},
+            or set(catalog) - {'source_catalog_sha256'} not in ({'schema_version', 'inventory_sha256', 'records'},
                                    {'schema_version', 'inventory_sha256', 'records', 'source_bindings'})
+            or ('source_catalog_sha256' in catalog and (not isinstance(catalog['source_catalog_sha256'], str)
+                or re.fullmatch('[0-9a-f]{64}', catalog['source_catalog_sha256']) is None))
             or type(catalog['schema_version']) is not int or catalog['schema_version'] != 1
             or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not isinstance(inventory.get('digest'), str)

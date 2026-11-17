@@ -317,6 +317,10 @@ def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
+    if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and any(
+            row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
+        return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
+                'findings':[], 'gaps':[{'code':'unqualified-image-selection'}], 'images':[], 'data_sources':[]}
     results, gaps, findings = [], [], []
     try:
         trivy = pinned_tool('trivy', tools)
@@ -331,6 +335,8 @@ def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
                 image_acquisition_profile(inventory, profile)
                 imported = import_layouts(catalog, inventory, profile, scratch)
             else:
+                if any(row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
+                    raise SecurityDataError('Declared public images require verified local OCI graph; no daemon fallback')
                 imported = nullcontext([])
             with imported as images:
                 verified = {image.reference: image for image in images}

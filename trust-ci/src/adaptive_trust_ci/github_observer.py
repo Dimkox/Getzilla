@@ -129,6 +129,8 @@ def _run_owned(command, payload, deadline, *, containment=None):
                 raise ObservationError('provider-worker-refused')
             if time.monotonic() > deadline:
                 raise ObservationError('worker-deadline')
+            if containment is not None:
+                containment.completed(command, bytes(output))
             return bytes(output)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ObservationError('provider-worker-unavailable') from exc

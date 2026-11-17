@@ -247,6 +247,79 @@ def workflow_downloads(command: str, manifest: str, line: int, source: bytes, re
     return tools, gaps
 
 
+def selected_image_use(uses: list[dict], *, path: str, line: int, source_sha256: str,
+                       expression: str, platform: str | None = None) -> dict:
+    """Select declared local inputs for one exact source use; not scan evidence."""
+    if not isinstance(uses, list) or not 1 <= len(uses) <= 512:
+        raise ValueError('image selection requires a bounded nonempty source-use list')
+    keys = set()
+    found = None
+    for row in uses:
+        if (not isinstance(row, dict) or set(row) != {'path', 'line', 'source_sha256', 'expression', 'reference', 'platform'}
+                or not isinstance(row['path'], str) or not 0 < len(row['path']) <= 256
+                or re.fullmatch(r'[A-Za-z0-9_./-]+', row['path']) is None
+                or PurePosixPath(row['path']).is_absolute() or any(p in {'', '.', '..'} for p in row['path'].split('/'))
+                or type(row['line']) is not int or row['line'] <= 0
+                or not isinstance(row['source_sha256'], str) or re.fullmatch('[0-9a-f]{64}', row['source_sha256']) is None
+                or not isinstance(row['expression'], str) or not 0 < len(row['expression']) <= 8192
+                or not isinstance(row['reference'], str) or len(row['reference']) > 2048
+                or _IMAGE_DIGEST.fullmatch(row['reference']) is None
+                or not isinstance(row['platform'], str) or row['platform'] not in {'linux/amd64', 'linux/arm64'}):
+            raise ValueError('image selection has an invalid closed source-use schema')
+        key = (row['path'], row['line'], row['source_sha256'], row['expression'])
+        if key in keys:
+            raise ValueError('duplicate image source-use selection')
+        keys.add(key)
+        if key == (path, line, source_sha256, expression):
+            found = row
+    if found is None:
+        raise ValueError('current source image use has no exact selection')
+    original = expression.removeprefix('docker://')
+    if (_IMAGE_DIGEST.fullmatch(original) and original != found['reference']) or (platform and platform != found['platform']):
+        raise ValueError('image selection conflicts with immutable source identity or literal platform')
+    return dict(found)
+
+
+def read_image_selection(path: Path | None) -> dict | None:
+    """Read at most64KiB of explicit declarations, never image evidence.
+
+    The closed document has schema_version1, exact source/run objects matching
+    input_profile, a timezone-aware created_at, and1..512 uses. Each use names
+    path/line/source_sha256/expression/reference/platform. All uses must still
+    exist in current bytes. The caller must obtain genuine immutable image and
+    platform provenance separately; no transport or scanner authority is added.
+    """
+    if path is None:
+        return None
+    from .security_artifacts import read_file
+    from .security_data import _json
+    path = Path(path).absolute()
+    document = _json(read_file(path.parent, path.name, 65536))
+    if (set(document) != {'schema_version', 'source', 'run', 'created_at', 'uses'}
+            or type(document['schema_version']) is not int or document['schema_version'] != 1
+            or not isinstance(document['source'], dict) or not isinstance(document['run'], dict)
+            or not isinstance(document['created_at'], str) or not 0 < len(document['created_at']) <= 128
+            or not isinstance(document['uses'], list) or not 1 <= len(document['uses']) <= 512):
+        raise ValueError('image selection document is malformed')
+    return document
+
+
+def declared_inventory(root: Path, selection: dict | None) -> dict[str, Any]:
+    """Bind the complete declaration identity, without granting currentness.
+
+    Callers must separately validate it against independent current authority.
+    Image rows remain declaration-only-unverified and cannot start a scanner.
+    """
+    result = collect_inventory(root, image_bindings=selection['uses'] if selection else None)
+    if selection is not None:
+        result.pop('digest')
+        result['image_selection_sha256'] = canonical_digest(selection)
+        for image in result['images']:
+            image['selection_assurance'] = 'declaration-only-unverified'
+        result['digest'] = canonical_digest(result)
+    return result
+
+
 def compose_image_platform(fields: dict) -> str | None:
     value = fields.get('platform')
     if value is None:
@@ -327,6 +400,15 @@ def qualify_image_use(reference: str, path: str, line: int, source_sha256: str, 
 def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
     bindings = image_bindings or {}
+    # Preserve393's complete declaration schema while using the existing OCI
+    # source-use matcher. This conversion grants no image/platform evidence.
+    if isinstance(bindings, list) and bindings and all(isinstance(row, dict) and 'path' in row for row in bindings):
+        for row in bindings:
+            selected_image_use(bindings, path=row.get('path',''), line=row.get('line',0), source_sha256=row.get('source_sha256',''),
+                               expression=row.get('expression',''), platform=row.get('platform'))
+        bindings = [{'manifest': row['path'], 'line': row['line'], 'source_sha256': row['source_sha256'],
+                     'source_reference': row['expression'], 'reference': row['reference'], 'platform': row['platform']}
+                    for row in bindings]
     used_image_bindings = set()
     result: dict[str, Any] = {'schema_version': 1, 'files': [], 'manifests': [], 'dependencies': [],
                               'images': [], 'tools': [], 'gaps': [], 'excluded_fixture_paths': []}

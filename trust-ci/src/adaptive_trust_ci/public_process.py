@@ -41,6 +41,8 @@ class ProducerEnvelope:
         self.root, self.deadline, self.clock = Path(root), deadline, clock
         self.descriptors, self.path, self.identity = {}, None, None
         self.closed, self.empty_confirmed = False, False
+        self._attached = None
+        self._completion = None
         try:
             if (
                 not self.root.is_absolute()
@@ -138,6 +140,18 @@ class ProducerEnvelope:
         members = self._read("cgroup.procs").split()
         if members != [str(process.pid).encode("ascii")]:
             raise ValueError("producer-cgroup-membership-unconfirmed")
+        self._attached = process.pid
+
+    def completed(self, command, raw):
+        if self.closed or self._attached is None:
+            raise ProducerCleanupUnknown('producer-execution-unconfirmed')
+        import hashlib
+        self._completion = (tuple(command), hashlib.sha256(raw).digest())
+
+    def confirms(self, command, raw):
+        import hashlib
+        return (self.closed is True and self.empty_confirmed is True and self._attached is not None
+                and self._completion == (tuple(command), hashlib.sha256(raw).digest()))
 
     def close(self):
         if self.closed:

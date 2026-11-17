@@ -43,6 +43,9 @@ class PublicConfig:
 
 
 def _validate_authority(authority):
+    from .security_bundle import SNAPSHOT_PROFILES
+    if type(authority.snapshot_profile) is not str or authority.snapshot_profile not in SNAPSHOT_PROFILES:
+        raise ValueError('public-authority-snapshot-profile')
     for name in ('repository', 'runner_repository'):
         if require_repository(getattr(authority, name)) != getattr(authority, name):
             raise ValueError('public-authority-repository')
@@ -242,7 +245,8 @@ class PublicWorker:
         if type(pr) is not int or not 0 < pr <= 2147483647:
             raise ValueError('public-wakeup-target')
         self.queue.require_refresh_safe(self._active_job)
-        root = refresh_for_pr(self.config, pr, clock=self.clock, before_sign=self._publication_clock)
+        prepared = refresh_for_pr(self.config, pr, clock=self.clock, before_sign=self._publication_clock)
+        root = prepared.root
         record = bounded_json(read_file(root / 'record.json', CONTROL_TOTAL), maximum=CONTROL_TOTAL)
         if type(record) is not dict or set(record) != {'selector', 'evidence'}:
             raise ValueError('public-producer-record')
@@ -268,7 +272,7 @@ class PublicWorker:
                                         observer_repository_id=authority.runner_repository_id))
         client = GitHubClient(token=holder[0], transport=BoundedGetTransport(clock=self.clock))
         verifier = BoundPublicVerifier(client, authority, evidence, candidate_root=root / 'candidate',
-                                       snapshot_root=Path(self.config.producer['snapshot_root']), observations=budget)
+                                       snapshot_root=Path(self.config.producer['snapshot_root']), observations=budget, measurement=prepared.measurement)
         publication_client = []
         def factory(installation, request):
             if installation != self.config.publisher.installation_id or request != self.config.publisher.token_request():

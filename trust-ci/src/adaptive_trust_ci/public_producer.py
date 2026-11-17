@@ -7,7 +7,7 @@ worker; it never imports a module, hook or configuration from a candidate.
 from __future__ import annotations
 
 import base64
-from dataclasses import replace
+from dataclasses import replace, asdict, dataclass
 from datetime import timedelta
 import os
 from pathlib import Path
@@ -34,16 +34,24 @@ from .public_admission import (
     read_file,
     validate_local_inputs,
     _snapshot_preflight,
+    execution_context,
 )
 from .public_http import _read_app_key, issue_scoped_token
 from .public_merge import ObservationSessions
 from .public_process import ProducerEnvelope, ProducerCleanupUnknown
+from . import public_preparation
 
 CHECKER_ROOT = Path("/opt/getzilla-checker")
 _WORKER = str(Path(__file__).resolve())
 # One complete selected source plus its bounded Git store and control records.
 # This storage profile is distinct from the unchanged32MiB snapshot limit.
 SOURCE_STORAGE_BYTES = 2 * bundle.SOURCE_BYTES + bundle.CONTROL_TOTAL
+PREPARATION_SECONDS = 600  # Existing input-preparation profile, not publication credit.
+
+@dataclass(frozen=True)
+class PreparedRecord:
+    root: Path
+    measurement: object
 binding_valid = bundle._binding
 
 
@@ -209,6 +217,8 @@ def _normalize(selector, authority, report):
             }
         )
     descriptors = {"checks": supplied, "source_descriptors": sorted(sources)}
+    if "public_inputs" in report:
+        descriptors["public_inputs"] = report["public_inputs"]
     normalized = {
         "inventory_sha256": report["inventory_sha256"],
         "created_at": report["created_at_utc"],
@@ -219,7 +229,7 @@ def _normalize(selector, authority, report):
     return normalized, descriptors
 
 
-def _checked_preparation(selector, authority, report, integration, *, candidate_root, snapshot_root, core, now):
+def _checked_preparation(selector, authority, report, integration, *, candidate_root, snapshot_root, core, now, image_artifacts=None):
     """Canonical input/coverage precondition only; no provider eligibility."""
     normalized, descriptors = _normalize(selector, authority, report)
     policy, source = authority.as_policy(), selector.source()
@@ -240,6 +250,7 @@ def _checked_preparation(selector, authority, report, integration, *, candidate_
         descriptors=descriptors,
         now=now,
         core=core,
+        public_context=execution_context(authority, selector), image_artifacts=image_artifacts,
     )
     if (
         facts.source_validated is not True
@@ -255,9 +266,9 @@ def _checked_preparation(selector, authority, report, integration, *, candidate_
     return normalized, descriptors, facts, policy, source, doc
 
 
-def _signing_plan(selector, authority, report, integration, *, candidate_root, snapshot_root, core, client, now):
+def _signing_plan(selector, authority, report, integration, *, candidate_root, snapshot_root, core, client, now, image_artifacts=None, return_facts=False, prechecked=None):
     """Only canonical facts + fresh provider observations can reach MACHINE signing."""
-    normalized, descriptors, facts, policy, source, doc = _checked_preparation(
+    normalized, descriptors, facts, policy, source, doc = prechecked or _checked_preparation(
         selector,
         authority,
         report,
@@ -265,7 +276,7 @@ def _signing_plan(selector, authority, report, integration, *, candidate_root, s
         candidate_root=candidate_root,
         snapshot_root=snapshot_root,
         core=core,
-        now=now,
+        now=now, image_artifacts=image_artifacts,
     )
     # Repeat complete provider currentness immediately before signing. observe
     # checks repository/app/workflow/jobs/latest run/attempt and re-reads PR/run.
@@ -296,7 +307,7 @@ def _signing_plan(selector, authority, report, integration, *, candidate_root, s
         "expires_at": expires.isoformat(),
         "integration_sha256": bundle.digest(integration),
     }
-    return {
+    record = {
         "selector": selector.__dict__,
         "evidence": {
             "binding": {"payload": payload, "signature": None},
@@ -305,6 +316,8 @@ def _signing_plan(selector, authority, report, integration, *, candidate_root, s
             "descriptors": descriptors,
         },
     }
+
+    return (record, facts) if return_facts else record
 
 
 def _finish_signature(record, authority, *, sign, now):
@@ -327,16 +340,14 @@ def _finish_signature(record, authority, *, sign, now):
 
 
 def reuse_record(record, selector, authority, *, root, snapshot, client, now):
-    # Reuse an original signed execution only inside its unchanged lifetime.
-    # The canonical evaluator revalidates it; no retained JSON becomes a new run.
-    if type(record) is not dict or set(record) != {"selector", "evidence"} or record["selector"] != selector.__dict__:
-        raise ValueError("producer-cached-source-mismatch")
-    evidence = Evidence(**record["evidence"])
-    decision = evaluate(
-        client, authority, selector, evidence, now=now, candidate_root=root / "candidate", snapshot_root=snapshot
-    )
+    # Historical direct canonical surface: actual full revalidation, no signing
+    # and no creation of a live preparation capability from this JSON.
+    if type(record) is not dict or set(record) != {'selector','evidence'} or record['selector'] != selector.__dict__:
+        raise ValueError('producer-cached-source-mismatch')
+    evidence=Evidence(**record['evidence'])
+    decision=evaluate(client,authority,selector,evidence,now=now,candidate_root=root / 'candidate',snapshot_root=snapshot)
     if decision.eligible is not True:
-        raise ValueError("producer-cached-evidence-refused")
+        raise ValueError('producer-cached-evidence-refused')
     return record
 
 
@@ -463,11 +474,12 @@ def materialize(selector, root, deadline):
 
 def run_checker(core, selector, authority, candidate, snapshot, *, image_artifacts, now):
     """Accepted offline API; never forge a candidate head as the runner head."""
-    inventory = core.inventory.collect_inventory(candidate)
-    if inventory.get('images') or image_artifacts is not None:
-        raise ValueError('accepted-independent-image-evaluator-unavailable')
+    operation = getattr(core.report, 'evaluate_public', None)
+    if not callable(operation):
+        raise ValueError('accepted-public-input-contract-unavailable')
     database, artifacts, tools = (snapshot / name for name in ('database', 'artifacts', 'tools'))
-    return core.report.evaluate(candidate, database, artifacts, tools, refresh=False, provision=False, now=now)
+    return operation(candidate, database, artifacts, tools, context=execution_context(authority, selector),
+                     image_artifacts=image_artifacts, now=now)
 
 
 def machine_sign(path, public_key, payload):
@@ -531,14 +543,15 @@ def refresh_for_pr(config, pr, *, clock=time.monotonic, before_sign=None):
     """One bounded owned producer; returns its sealed record path, never a callback."""
     if not config.producer:
         raise ValueError("public-producer-unconfigured")
-    deadline = clock() + 20
+    deadline = clock() + PREPARATION_SECONDS
     request = bundle.canonical_json(
         {"config_path": str(config.config_path), "pr": pr, "remaining_ns": int((deadline - clock()) * 1000000000)}
     )
     check_cleanup_latch(config)
+    command = [sys.executable, "-I", "-B", _WORKER, "--produce"]
     try:
         with ProducerEnvelope(config.producer["cgroup_root"], deadline, clock=clock) as envelope:
-            raw = _run_owned([sys.executable, "-I", "-B", _WORKER, "--produce"], request, deadline, containment=envelope)
+            raw = _run_owned(command, request, deadline, containment=envelope)
     except ProducerCleanupUnknown:
         try:
             retain_cleanup_latch(config)
@@ -550,7 +563,7 @@ def refresh_for_pr(config, pr, *, clock=time.monotonic, before_sign=None):
     result = bundle.bounded_json(raw, maximum=65536)
     if (
         type(result) is not dict
-        or set(result) != {"root", "ready"}
+        or set(result) != {"root", "ready", "facts"}
         or type(result["ready"]) is not bool
         or not isinstance(result["root"], str)
     ):
@@ -558,6 +571,7 @@ def refresh_for_pr(config, pr, *, clock=time.monotonic, before_sign=None):
     root = Path(result["root"])
     if root.parent != config.input_root or re.fullmatch("public-[a-z0-9_]{8,64}", root.name) is None:
         raise ValueError("producer-worker-root")
+    measurement = public_preparation.from_owned(envelope, command, raw)
     if result["ready"]:
         if not callable(before_sign):
             raise ValueError("producer-signing-stop-guard-required")
@@ -571,10 +585,17 @@ def refresh_for_pr(config, pr, *, clock=time.monotonic, before_sign=None):
             or set(plan) != {"record", "content_sha256", "snapshot_sha256", "scope"}
             or plan["scope"] != config.scope
             or bundle.digest(content_manifest(root / "candidate")) != plan["content_sha256"]
-            or bundle.digest(_snapshot_preflight(snapshot)) != plan["snapshot_sha256"]
+            or bundle.digest(_snapshot_preflight(snapshot, config.authority.as_policy())) != plan["snapshot_sha256"]
         ):
             raise ValueError("producer-plan-inputs-changed")
         authority = replace(config.authority, public_key_pem=read_file(config.producer_key_path, 65536))
+        selected = Selector(**plan['record']['selector'])
+        facts = public_preparation.consume(measurement, selected.source().as_dict(),
+            plan['record']['evidence']['report'], authority.as_policy(), now=utc_now())
+        if (facts.content_digest != plan['content_sha256'] or facts.snapshot_digest != plan['snapshot_sha256']
+                or facts.integration_digest != bundle.digest(plan['record']['evidence']['integration'])
+                or facts.checker_source != (authority.checker_sha, authority.checker_tree_sha)):
+            raise ValueError('producer-live-facts-plan-mismatch')
         before_sign()
         record = _finish_signature(
             plan["record"],
@@ -585,11 +606,11 @@ def refresh_for_pr(config, pr, *, clock=time.monotonic, before_sign=None):
         if (
             clock() >= deadline
             or bundle.digest(content_manifest(root / "candidate")) != plan["content_sha256"]
-            or bundle.digest(_snapshot_preflight(snapshot)) != plan["snapshot_sha256"]
+            or bundle.digest(_snapshot_preflight(snapshot, config.authority.as_policy())) != plan["snapshot_sha256"]
         ):
             raise ValueError("producer-plan-inputs-changed")
         _seal_file(root / "record.json", bundle.canonical_json(record))
-    return root
+    return PreparedRecord(root, measurement)
 
 
 def retain_step(root, step, state):
@@ -676,95 +697,111 @@ def _request(fields):
     if type(value) is not dict or set(value) != fields:
         raise ValueError("producer-worker-input")
     remaining = value["remaining_ns"]
-    if type(remaining) is not int or not 0 < remaining <= 20000000000:
+    if type(remaining) is not int or not 0 < remaining <= PREPARATION_SECONDS * 1000000000:
         raise ValueError("producer-worker-deadline")
     return value, time.monotonic() + remaining / 1000000000
 
 
+def _prepared_input(config, authority, pr):
+    """Read only shipped producer generations as DATA; provider verifies later."""
+    choices=[]
+    count=0
+    for entry in config.input_root.iterdir():
+        count+=1
+        if count > 4096:
+            raise ValueError('producer-generation-index-limit')
+        if re.fullmatch('public-[a-f0-9]{64}',entry.name) is None:
+            continue
+        info=entry.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('producer-generation-directory')
+        path=entry / 'preparation.json'
+        try:
+            value=bundle.bounded_json(read_file(path,bundle.CONTROL_TOTAL),maximum=bundle.CONTROL_TOTAL)
+        except FileNotFoundError:
+            continue
+        if type(value) is not dict or set(value) != {'selector','report','integration','snapshot_sha256'}:
+            raise ValueError('producer-workflow-preparation-mismatch')
+        selector=Selector(**value['selector'])
+        selector.source()
+        if selector.pr_number != pr:
+            continue
+        if (_record_root(config,selector,authority) != entry or selector.repository != authority.repository
+                or selector.repository_id != authority.repository_id):
+            raise ValueError('producer-generation-scope-mismatch')
+        choices.append((selector.run_id,selector.run_attempt,selector,entry,value))
+    if not choices:
+        raise ValueError('producer-workflow-preparation-unavailable')
+    choices.sort(key=lambda row:row[:2],reverse=True)
+    if len(choices)>1 and choices[0][:2]==choices[1][:2]:
+        raise ValueError('producer-workflow-generation-ambiguous')
+    return choices[0][2:]
+
+
 def _worker_main():
-    config, step = None, "configuration"
+    config, step = None, 'configuration'
     try:
-        request, deadline = _request({"config_path", "pr", "remaining_ns"})
+        request, deadline = _request({'config_path','pr','remaining_ns'})
         config, core, authority = _configuration(request)
-        retain_step(config.input_root, step, "complete")
-        snapshot = Path(config.producer["snapshot_root"])
-        before = _snapshot_preflight(snapshot)
-        holder = []
-        original = GitHubClient(token_provider=lambda: holder[0], transport=BoundedGetTransport())
-        budget = ObservationSessions(
-            original,
-            lambda end, maximum: GitHubClient(token=holder[0], transport=BoundedGetTransport(clock=budget.clock)),
-            purpose="publisher",
-        )
-        holder.append(
-            issue_scoped_token(
-                config.publisher,
-                config.app_key_path,
-                budget,
-                now=utc_now(),
-                purpose="observer",
-                observer_repository_id=authority.runner_repository_id,
-            )
-        )
-        context = bundle.digest({"pr": request["pr"], "scope": config.scope})
-        step = "selection"
+        retain_step(config.input_root,step,'complete')
+        snapshot=Path(config.producer['snapshot_root'])
+        before=_snapshot_preflight(snapshot,authority.as_policy())
+        selector,root,preparation=_prepared_input(config,authority,request['pr'])
+        if preparation['snapshot_sha256'] != bundle.digest(before):
+            raise ValueError('producer-workflow-preparation-mismatch')
+        cached=(root / 'record.json').exists()
+        if not cached and (root / 'signing-plan.json').exists():
+            raise ValueError('producer-prior-signing-unresolved')
+        step='checker'
+        # No publication/observer allocation has opened. These are actual bounded
+        # protected checks, not credit derived from the retained preparation.
+        checked=_checked_preparation(selector,authority,preparation['report'],preparation['integration'],
+            candidate_root=root / 'candidate',snapshot_root=snapshot,core=core,now=utc_now(),
+            image_artifacts=(Path(config.producer['image_artifacts']) if config.producer['image_artifacts'] else None))
+        normalized,descriptors,facts,policy,source,doc=checked
+        if time.monotonic() >= deadline:
+            raise ValueError('producer-preparation-deadline')
+        holder=[]
+        original=GitHubClient(token_provider=lambda:holder[0],transport=BoundedGetTransport())
+        budget=ObservationSessions(original,
+            lambda end,maximum:GitHubClient(token=holder[0],transport=BoundedGetTransport(clock=budget.clock)),
+            purpose='publisher')
+        holder.append(issue_scoped_token(config.publisher,config.app_key_path,budget,now=utc_now(),
+            purpose='observer',observer_repository_id=authority.runner_repository_id))
+        context=bundle.digest({'pr':request['pr'],'scope':config.scope})
         with budget.session(context) as client:
-            selector = select_current(client, authority, request["pr"])
-        retain_step(config.input_root, step, "complete")
-        root = _record_root(config, selector, authority)
-        # The shipped protected workflow produces this immutable unsigned
-        # preparation. A completed GitHub run alone never manufactures it.
-        if not root.is_dir():
-            raise ValueError("producer-workflow-preparation-unavailable")
+            if select_current(client,authority,request['pr']) != selector:
+                raise ValueError('producer-workflow-currentness-mismatch')
         with budget.session(context) as client:
-            step = "cache" if (root / "record.json").exists() else "binding"
-            if step == "cache":
-                record = bundle.bounded_json(
-                    read_file(root / "record.json", bundle.CONTROL_TOTAL), maximum=bundle.CONTROL_TOTAL
-                )
-                reuse_record(record, selector, authority, root=root, snapshot=snapshot, client=client, now=utc_now())
+            if cached:
+                step='cache'
+                record=bundle.bounded_json(read_file(root / 'record.json',bundle.CONTROL_TOTAL),maximum=bundle.CONTROL_TOTAL)
+                if (type(record) is not dict or set(record) != {'selector','evidence'}
+                        or record['selector'] != selector.__dict__
+                        or record['evidence']['report'] != normalized or record['evidence']['descriptors'] != descriptors
+                        or record['evidence']['integration'] != preparation['integration']):
+                    raise ValueError('producer-cached-input-mismatch')
+                evidence=Evidence(**record['evidence'])
+                parsed=bundle.parse_bundle(bundle.canonical_json({**doc,'binding':evidence.binding}))
+                observed=observe(client,authority,source)
+                if bundle.evaluate_bundle(policy,source,parsed,observed,facts,now=utc_now()).consistent is not True:
+                    raise ValueError('producer-cached-evidence-refused')
             else:
-                preparation = bundle.bounded_json(
-                    read_file(root / "preparation.json", bundle.CONTROL_TOTAL), maximum=bundle.CONTROL_TOTAL
-                )
-                if (
-                    type(preparation) is not dict
-                    or set(preparation) != {"selector", "report", "integration", "snapshot_sha256"}
-                    or preparation["selector"] != selector.__dict__
-                    or preparation["snapshot_sha256"] != bundle.digest(before)
-                ):
-                    raise ValueError("producer-workflow-preparation-mismatch")
-                if (root / "signing-plan.json").exists():
-                    raise ValueError("producer-prior-signing-unresolved")
-                record = _signing_plan(
-                    selector,
-                    authority,
-                    preparation["report"],
-                    preparation["integration"],
-                    candidate_root=root / "candidate",
-                    snapshot_root=snapshot,
-                    core=core,
-                    client=client,
-                    now=utc_now(),
-                )
-                if _snapshot_preflight(snapshot) != before or time.monotonic() >= deadline:
-                    raise ValueError("producer-input-or-lifetime-changed")
-                _seal_file(
-                    root / "signing-plan.json",
-                    bundle.canonical_json(
-                        {
-                            "record": record,
-                            "content_sha256": bundle.digest(content_manifest(root / "candidate")),
-                            "snapshot_sha256": bundle.digest(before),
-                            "scope": config.scope,
-                        }
-                    ),
-                )
-        retain_step(config.input_root, step, "complete")
-        sys.stdout.buffer.write(bundle.canonical_json({"root": str(root), "ready": step == "binding"}))
+                step='binding'
+                record=_signing_plan(selector,authority,preparation['report'],preparation['integration'],
+                    candidate_root=root / 'candidate',snapshot_root=snapshot,core=core,client=client,
+                    now=utc_now(),prechecked=checked)
+                _seal_file(root / 'signing-plan.json',bundle.canonical_json(dict(record=record,
+                    content_sha256=facts.content_digest,snapshot_sha256=facts.snapshot_digest,scope=config.scope)))
+        if (_snapshot_preflight(snapshot,authority.as_policy()) != before
+                or bundle.digest(content_manifest(root / 'candidate')) != facts.content_digest
+                or time.monotonic() >= deadline):
+            raise ValueError('producer-input-or-lifetime-changed')
+        retain_step(config.input_root,step,'complete')
+        sys.stdout.buffer.write(bundle.canonical_json(dict(root=str(root),ready=not cached,facts=asdict(facts))))
         return 0
     except Exception:
-        _refused(config, step)
+        _refused(config,step)
         return 1
 
 
@@ -806,7 +843,7 @@ def prepare_workflow(config_path, pr, *, environ=None, clock=time.monotonic):
     ids = [environment.get(name, "") for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")]
     if any(type(value) is not str or re.fullmatch("[1-9][0-9]{0,19}", value) is None for value in ids):
         raise ValueError("producer-workflow-run-required")
-    deadline = clock() + 20
+    deadline = clock() + PREPARATION_SECONDS
     request = bundle.canonical_json(
         {
             "config_path": str(config_path),
@@ -911,7 +948,7 @@ def _prepare_main():
         if any(entry.name.startswith("public-tmp-") for entry in config.input_root.iterdir()):
             raise ValueError("producer-prior-generation-unresolved")
         snapshot = Path(config.producer["snapshot_root"])
-        before = _snapshot_preflight(snapshot)
+        before = _snapshot_preflight(snapshot, authority.as_policy())
         with tempfile.TemporaryDirectory(prefix="public-tmp-", dir=config.input_root) as owned:
             temporary = Path(owned)
             step = "materialize"
@@ -932,8 +969,7 @@ def _prepare_main():
             )
             _normalize(selector, authority, report)
             if (
-                select_current(client, authority, request["pr"], running=tuple(request["run"])) != selector
-                or _snapshot_preflight(snapshot) != before
+                _snapshot_preflight(snapshot, authority.as_policy()) != before
                 or time.monotonic() >= deadline
             ):
                 raise ValueError("producer-workflow-inputs-changed")

@@ -4581,6 +4581,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/getzilla/security_cli.py",
+        ".getzilla/getzilla/public_security_context.py",
         "scripts/getzilla_security.py"
       ],
       "runtime": {
@@ -4778,6 +4779,7 @@
         "trust-ci/src/adaptive_trust_ci/worker.py",
         "trust-ci/src/adaptive_trust_ci/public_http.py",
         "trust-ci/src/adaptive_trust_ci/public_producer.py",
+        "trust-ci/src/adaptive_trust_ci/public_preparation.py",
         "trust-ci/src/adaptive_trust_ci/public_process.py",
         "trust-ci/src/adaptive_trust_ci/public_dispatch.py",
         "trust-ci/scripts/install_public_checker.py",

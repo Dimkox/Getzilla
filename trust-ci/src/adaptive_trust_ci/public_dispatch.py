@@ -100,7 +100,7 @@ def _context(config, pr, guard):
             active = run.get("status") != "completed"
     # Actual selected bytes identify a generation; they confer no qualification.
     # A failed/missing family cannot be fixed by repeatedly dispatching this key.
-    snapshots = digest(_snapshot_preflight(Path(config.producer["snapshot_root"])))
+    snapshots = digest(_snapshot_preflight(Path(config.producer["snapshot_root"]), authority.as_policy()))
     key = digest({"scope": config.scope, "pr": pr, "base": base, "head": head, "snapshots": snapshots})
     role = config.producer["dispatch"]
     selected = WorkflowDispatchConfig(

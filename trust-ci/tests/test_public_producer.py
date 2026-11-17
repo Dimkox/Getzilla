@@ -288,7 +288,7 @@ class ProducerControls(unittest.TestCase):
         )
         with (
             patch.object(
-                runtime, "refresh_for_pr", side_effect=lambda *args, **kwargs: calls.append("refresh") or root
+                runtime, "refresh_for_pr", side_effect=lambda *args, **kwargs: calls.append("refresh") or producer.PreparedRecord(root, object())
             ),
             patch.object(
                 runtime,
@@ -324,11 +324,13 @@ class ProducerControls(unittest.TestCase):
                 side_effect=lambda *a, **k: contextlib.nullcontext(SimpleNamespace(empty_confirmed=True)),
             ),
             patch.object(
-                producer, "_run_owned", return_value=b'{"root":"/OWNED/public-12345678","ready":false}'
+                producer, "_run_owned", return_value=b'{"root":"/OWNED/public-12345678","ready":false,"facts":{}}'
             ) as owned,
+            patch.object(producer.public_preparation, "from_owned", return_value="owned-mocked-capability"),
         ):
             root = self.guarded(lambda: producer.refresh_for_pr(config, 5, clock=lambda: 1.0))
-        self.assertEqual(root, Path("/OWNED/public-12345678"))
+        self.assertEqual(root.root, Path("/OWNED/public-12345678"))
+        self.assertEqual(root.measurement, "owned-mocked-capability")
         self.assertEqual(owned.call_args.args[0][-1], "--produce")
         self.assertEqual(json.loads(owned.call_args.args[1])["pr"], 5)
         with (
@@ -337,7 +339,7 @@ class ProducerControls(unittest.TestCase):
                 "ProducerEnvelope",
                 side_effect=lambda *a, **k: contextlib.nullcontext(SimpleNamespace(empty_confirmed=True)),
             ),
-            patch.object(producer, "_run_owned", return_value=b'{"root":"/FOREIGN/public-12345678","ready":false}'),
+            patch.object(producer, "_run_owned", return_value=b'{"root":"/FOREIGN/public-12345678","ready":false,"facts":{}}'),
         ):
             with self.assertRaises(ValueError):
                 self.guarded(lambda: producer.refresh_for_pr(config, 5, clock=lambda: 1.0))

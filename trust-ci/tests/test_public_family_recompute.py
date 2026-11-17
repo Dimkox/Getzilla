@@ -33,7 +33,7 @@ class FullFamilyRecomputation(unittest.TestCase):
         def execute(*args, **kwargs):
             self.calls.append((args, kwargs))
             return self.report
-        self.core = SimpleNamespace(report=SimpleNamespace(evaluate=execute, REQUIRED_CHECKS=NAMES),
+        self.core = SimpleNamespace(report=SimpleNamespace(evaluate=execute, evaluate_public=execute, REQUIRED_CHECKS=NAMES),
             inventory=SimpleNamespace(collect_inventory=lambda root: self.inventory),
             security=SimpleNamespace(_policy_digest=lambda root: 'b' * 64), policy_root=Path('/UNREAD-checker'))
     def guarded(self, callback):
@@ -67,10 +67,26 @@ class FullFamilyRecomputation(unittest.TestCase):
             self.guarded(self.run_fixture)
         self.assertEqual(self.calls, [])
     def test_offline_checker_never_forges_candidate_as_actual_runner_head(self):
-        self.guarded(lambda: producer.run_checker(self.core, object(), object(), Path('/UNREAD-source'),
+        selector=SimpleNamespace(**{key: 1 for key in ('repository','repository_id','pr_number','base_sha','head_sha','tree_sha','run_id','run_attempt')})
+        authority=SimpleNamespace(**{key: 2 for key in ('checker_sha','checker_tree_sha','runner_repository','runner_repository_id','runner_sha','runner_tree_sha','workflow_id','workflow_blob_sha')})
+        self.guarded(lambda: producer.run_checker(self.core, selector, authority, Path('/UNREAD-source'),
             Path('/UNREAD-snapshots'), image_artifacts=None, now=self.now))
         self.assertNotIn('run', self.calls[0][1])
         self.assertNotIn('profile', self.calls[0][1])
+        self.assertEqual(self.calls[0][1]['context']['runner_sha'],2)
+    def test_public_image_consumer_forwards_only_explicit_bound_inputs(self):
+        self.inventory['images'] = [{'owned':'explicit-image'}]
+        inputs=dict(profile={'owned':'current-profile'},run={'head_sha':'actual-runner'},
+                    image_artifacts=Path('/UNREAD-owned-catalog'),image_selection=Path('/UNREAD-owned-selection'))
+        self.guarded(lambda: admission.recompute_family_checks(self.core,Path('/UNREAD-source'),Path('/UNREAD-snapshots'),
+            self.inventory,now=self.now,public_inputs=inputs))
+        self.assertEqual(self.calls[0][1],dict(refresh=False,provision=False,now=self.now,**inputs))
+    def test_old_accepted_checker_cannot_be_used_as_public_api(self):
+        del self.core.report.evaluate_public
+        with self.assertRaisesRegex(ValueError,'^accepted-public-input-contract-unavailable$'):
+            self.guarded(lambda: producer.run_checker(self.core,object(),object(),Path('/UNREAD-source'),
+                Path('/UNREAD-snapshots'),image_artifacts=None,now=self.now))
+        self.assertEqual(self.calls,[])
     def test_positive_compliance_records_are_preserved_and_not_vulnerability_counts(self):
         marker = {'outcome': 'pass', 'findings': [{'owned': 'positive-record'}]}
         for name in ('security-licenses', 'security-epss'):

@@ -17,6 +17,8 @@ BUNDLE_BYTES = 2097152
 CONTROL_BYTES, CONTROL_TOTAL = 1048576, 6291456
 SOURCE_BYTES, SOURCE_FILES = 67108864, 8192
 SNAPSHOT_BYTES = 33554432
+PUBLIC_SNAPSHOT_BYTES = 768 * 1024 * 1024
+SNAPSHOT_PROFILES = {"legacy": SNAPSHOT_BYTES, "public-768": PUBLIC_SNAPSHOT_BYTES}
 MEMBER_BYTES, OUTPUT_BYTES = 16777216, 65536
 AGE_SECONDS = 259200
 MAX_CHECKS, MAX_SOURCES, MAX_JOBS = 64, 128, 100
@@ -184,6 +186,7 @@ class BundlePolicy:
     public_key_pem: bytes = b''
     authority_digest: str | None = None
     required_jobs: tuple = ()
+    snapshot_profile: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -337,6 +340,14 @@ def result_finding_count(name, marker):
     if name in ('security-licenses', 'security-epss') and marker.get('outcome') == 'pass':
         return 0
     return len(marker['findings'])
+
+
+def snapshot_limit(policy=None):
+    if policy is None:
+        return SNAPSHOT_BYTES
+    if type(policy) is not BundlePolicy or policy.snapshot_profile not in SNAPSHOT_PROFILES:
+        raise BundleError('protected-snapshot-profile-required')
+    return SNAPSHOT_PROFILES[policy.snapshot_profile]
 
 
 def source_size_ok(total, count):
