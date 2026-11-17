@@ -3423,15 +3423,26 @@ def _queue_import_equivalent_tree(tree: ast.Module) -> ast.Module:
     return projected
 
 
+class _QueueNormalizedSource(NamedTuple):
+    tree: ast.Module
+    nodes: int
+    declared_exports: tuple[str, ...]
+
+
 @lru_cache(maxsize=128)
-def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+def _queue_normalized_source(path: str, source: bytes) -> _QueueNormalizedSource:
     """Prepare an analysis-owned tree once per exact immutable source version.
 
     Downstream slicing/projection copies before changing nodes. Caller-owned
     ASTs enter _queue_import_equivalent_tree directly and never reuse a proof
     cached by mutable object identity.
     """
-    return _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    tree = _queue_import_equivalent_tree(_queue_source_tree(path, source))
+    return _QueueNormalizedSource(tree, sum(1 for _ in ast.walk(tree)), _declared_module_exports(tree))
+
+
+def _queue_normalized_source_tree(path: str, source: bytes) -> ast.Module:
+    return _queue_normalized_source(path, source).tree
 
 
 class _QueueSourcePreparation(NamedTuple):
@@ -3472,11 +3483,11 @@ def _queue_owned_callable_mutation(path: str, source: bytes, requested: frozense
 
 def _budgeted_queue_tree(path: str, source: bytes, budget: _QueueBudget) -> ast.Module:
     budget.source(path, source)
-    tree = _queue_source_tree(path, source)
+    _queue_source_tree(path, source)
     budget.source(path, source, _queue_source_node_count(path, source))
-    tree = _queue_normalized_source_tree(path, source)
-    budget.source(path, source, sum(1 for _ in ast.walk(tree)))
-    return tree
+    normalized = _queue_normalized_source(path, source)
+    budget.source(path, source, normalized.nodes)
+    return normalized.tree
 
 
 def _local_queue_resolution(
@@ -3566,12 +3577,13 @@ def _local_queue_resolution_impl(
         # Declaration inspection does not expand a dependency. It is bounded by
         # the prefetched module batch and AST node cap, unlike recursive returns.
         source_path, value, _package = prefetched.sources[0]
-        declaration = _budgeted_queue_tree(source_path, value, budget)
+        _budgeted_queue_tree(source_path, value, budget)
         prepared = _queue_source_preparation(source_path, value)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
         if requested and requested <= prepared.plain_callables:
-            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue', declared_exports=_declared_module_exports(declaration))
+            result = _QueueAdapterResolution('not_queue', 'local_module_not_queue',
+                declared_exports=_queue_normalized_source(source_path, value).declared_exports)
             cache.demands[demand_key] = result
             return result
     if module not in visited:
@@ -3600,7 +3612,7 @@ def _local_queue_resolution_impl(
         source_path, value, current_package = sources[0]
         tree = _budgeted_queue_tree(source_path, value, budget)
         prepared = _queue_source_preparation(source_path, value)
-        declared = _declared_module_exports(tree)
+        declared = _queue_normalized_source(source_path, value).declared_exports
         requested = requested if requested is not None else frozenset(declared)
         if _queue_owned_callable_mutation(source_path, value, requested):
             raise ArchitectureError('aliased callable attribute mutation is unsupported', code='fitness')
