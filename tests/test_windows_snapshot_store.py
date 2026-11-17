@@ -1,0 +1,405 @@
+"""Windows snapshot policy/model controls; native tests qualify only on Windows."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import security_data as SD
+from getzilla import security_data_windows as W
+
+NOW = datetime(2026, 11, 17, tzinfo=timezone.utc)
+
+
+class DispatchTests(unittest.TestCase):
+    def test_windows_read_uses_native_store_and_shared_validation(self):
+        payload = b'{"vulnerabilities":[]}'
+        import hashlib
+        digest = hashlib.sha256(payload).hexdigest()
+        manifest = {'schema_version': 1, 'source_id': 'kev', 'source_url': SD.SOURCE_URLS['kev'],
+                    'content_sha256': digest, 'payload_size': len(payload),
+                    'acquisition': {'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'},
+                    'coverage': {'scopes': ['CVE'], 'complete': True, 'record_count': 0, 'schema': 'kev-1'}}
+        bodies = {('feeds', 'kev', 'snapshot.json'): json.dumps(manifest).encode(),
+                  ('.snapshots', 'sha256', digest): payload}
+
+        class NativeStore:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read(self, parts, maximum):
+                return bodies[parts]
+
+        backend = SimpleNamespace(SnapshotStore=NativeStore)
+        with mock.patch.object(SD, 'os', SimpleNamespace(name='nt')), \
+                mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False), \
+                mock.patch.dict(sys.modules, {'getzilla.security_data_windows': backend}):
+            found, evidence = SD.read_snapshot(ROOT / '.getzilla/runtime/unused-native-fixture', 'kev', now=NOW)
+            self.assertEqual(found, payload)
+            self.assertEqual(evidence['acquisition']['last_verified_sync_utc'], NOW.isoformat())
+            manifest['payload_size'] = 1
+            bodies[('feeds', 'kev', 'snapshot.json')] = json.dumps(manifest).encode()
+            with self.assertRaisesRegex(SD.SecurityDataError, 'size'):
+                SD.read_snapshot(ROOT / '.getzilla/runtime/unused-native-fixture', 'kev', now=NOW)
+
+
+
+
+class AclPolicyTests(unittest.TestCase):
+    def test_substituted_drive_refuses_before_native_open(self):
+        class Kernel:
+            def GetDriveTypeW(self, drive):
+                return 3
+
+            def QueryDosDeviceW(self, drive, buffer, length):
+                buffer.value = r'\??\C:\unheld\ancestor'
+                return len(buffer.value) + 1
+
+        native = W.Native.__new__(W.Native)
+        native.k = Kernel()
+        with self.assertRaisesRegex(SD.SecurityDataError, 'substituted'):
+            native.root('X:\\')
+
+    def test_sibling_creation_is_allowed_only_on_ancestors(self):
+        aces = [(0, 0, 0x4, 'Everyone'), (0, 8, 0x1F01FF, 'CreatorOwner')]
+        W.check_acl('TrustedInstaller', aces, {'user', 'TrustedInstaller'}, owned=False)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'untrusted'):
+            W.check_acl('user', aces, {'user'}, owned=True)
+
+    def test_destructive_ancestor_and_generic_owned_write_grants_refuse(self):
+        for mask in (0x40, 0x10000, 0x40000, 0x80000, 0x100, 0x10):
+            with self.subTest(mask=mask), self.assertRaises(SD.SecurityDataError):
+                W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=False)
+        for mask in (0x40000000, 0x10000000, 2, 4):
+            with self.subTest(mask=mask), self.assertRaises(SD.SecurityDataError):
+                W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=True)
+
+    def test_trustedinstaller_is_ancestry_only_and_unknown_aces_refuse(self):
+        with self.assertRaisesRegex(SD.SecurityDataError, 'owner'):
+            W.check_acl('TrustedInstaller', [], {'user', 'SYSTEM', 'Admins'}, owned=True)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'ACE'):
+            W.check_acl('user', [(9, 8, 0, 'user')], {'user'}, owned=True)
+
+
+class MemoryNative:
+    """Finite owned data model. It has no filesystem, process, registry or network I/O."""
+    trusted = {'user', 'SYSTEM', 'Admins'}
+    ancestors = trusted | {'TrustedInstaller'}
+
+    def __init__(self):
+        self.nodes, self.handles, self.next_node, self.next_handle = {}, {}, 0, 0
+        self.root_id = self.node(True, security=('TrustedInstaller', ((0, 0, 4, 'Everyone'),)))
+        self.fail_rename = False
+        self.discarded = []
+
+    def node(self, directory, *, security=None):
+        self.next_node += 1
+        self.nodes[self.next_node] = dict(directory=directory, children={}, body=b'', links=1,
+                                        reparse=False, version=0,
+                                        security=security or ('user', ((0, 0, 0x1F01FF, 'user'),)))
+        return self.next_node
+
+    def handle(self, node):
+        self.next_handle += 1
+        self.handles[self.next_handle] = [node, 0]
+        return self.next_handle
+
+    def root(self, drive):
+        return self.handle(self.root_id)
+
+    def open(self, parent, name, *, directory, create=False, **kwargs):
+        entry = self.nodes[self.handles[parent][0]]
+        if create:
+            if name in entry['children']:
+                raise FileExistsError(name)
+            entry['children'][name] = self.node(directory)
+        if name not in entry['children']:
+            raise FileNotFoundError(name)
+        return self.handle(entry['children'][name])
+
+    def metadata(self, handle):
+        node_id = self.handles[handle][0]
+        node = self.nodes[node_id]
+        return W.Metadata((1, node_id.to_bytes(16, 'little')), 0x400 if node['reparse'] else 0,
+                          node['directory'], node['links'], len(node['body']), node['version'],
+                          node['version'], node['security'])
+
+    def close(self, handle):
+        del self.handles[handle]
+
+    def shutdown(self):
+        pass
+
+    def seek(self, handle):
+        self.handles[handle][1] = 0
+
+    def read(self, handle, size):
+        node, offset = self.handles[handle]
+        result = self.nodes[node]['body'][offset:offset + size]
+        self.handles[handle][1] += len(result)
+        return result
+
+    def write(self, handle, payload):
+        node = self.nodes[self.handles[handle][0]]
+        node['body'] += payload
+        node['version'] += 1
+        return len(payload)
+
+    def flush(self, handle):
+        pass
+
+    def rename(self, handle, parent, name, *, replace):
+        if self.fail_rename:
+            raise OSError('owned failure before rename')
+        entries = self.nodes[self.handles[parent][0]]['children']
+        if not replace and name in entries:
+            raise FileExistsError(name)
+        identifier = self.handles[handle][0]
+        old = next(key for key, value in entries.items() if value == identifier)
+        del entries[old]
+        entries[name] = identifier
+        self.nodes[identifier]['version'] += 1
+
+    def discard(self, handle):
+        identifier = self.handles[handle][0]
+        self.discarded.append(identifier)
+        for node in self.nodes.values():
+            for name in [name for name, value in node['children'].items() if value == identifier]:
+                del node['children'][name]
+
+
+class StoreModelTests(unittest.TestCase):
+    def test_held_model_roundtrip_update_and_bounded_read(self):
+        native = MemoryNative()
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            store.write(('feeds', 'kev', 'snapshot.json'), b'first')
+            self.assertEqual(store.read(('feeds', 'kev', 'snapshot.json'), 5), b'first')
+            with self.assertRaisesRegex(SD.SecurityDataError, 'bounded'):
+                store.read(('feeds', 'kev', 'snapshot.json'), 4)
+            store.write(('feeds', 'kev', 'snapshot.json'), b'next')
+            self.assertEqual(store.read(('feeds', 'kev', 'snapshot.json'), 4), b'next')
+        self.assertEqual(native.handles, {})
+
+    def test_failed_atomic_pointer_commit_keeps_old_bytes_and_cleans_exact_temp(self):
+        native = MemoryNative()
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            store.write(('snapshot.json',), b'old')
+            native.fail_rename = True
+            with self.assertRaisesRegex(OSError, 'before rename'):
+                store.write(('snapshot.json',), b'new')
+            self.assertEqual(store.read(('snapshot.json',), 3), b'old')
+            self.assertEqual(len(native.discarded), 1)
+            names = native.nodes[native.handles[store.relative[()].handle][0]]['children']
+            self.assertEqual(set(names), {'snapshot.json'})
+        self.assertEqual(native.handles, {})
+
+    def test_reparse_hardlink_and_changed_name_identity_refuse(self):
+        for mode in ('reparse', 'hardlink', 'identity'):
+            native = MemoryNative()
+            with self.subTest(mode=mode):
+                store = W.SnapshotStore('C:\\database', create=True, _native=native).__enter__()
+                try:
+                    store.write(('snapshot.json',), b'owned')
+                    parent = native.nodes[native.handles[store.relative[()].handle][0]]
+                    identifier = parent['children']['snapshot.json']
+                    if mode == 'reparse':
+                        native.nodes[identifier]['reparse'] = True
+                    elif mode == 'hardlink':
+                        native.nodes[identifier]['links'] = 2
+                    else:
+                        parent['children']['snapshot.json'] = native.node(False)
+                    with self.assertRaises(SD.SecurityDataError):
+                        store.read(('snapshot.json',), 5)
+                finally:
+                    store.close()
+                self.assertEqual(native.handles, {})
+
+    def test_unsafe_owned_dacl_refuses_before_file_creation(self):
+        native = MemoryNative()
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            node = native.nodes[native.handles[store.relative[()].handle][0]]
+            node['security'] = ('user', ((0, 0, 2, 'Everyone'),))
+            with self.assertRaisesRegex(SD.SecurityDataError, 'untrusted'):
+                store.write(('snapshot.json',), b'never written')
+            self.assertEqual(node['children'], {})
+            node['security'] = ('user', ((0, 0, 0x1F01FF, 'user'),))
+
+    def test_missing_target_appearance_cannot_be_replaced(self):
+        native = MemoryNative()
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            rename = native.rename
+
+            def appearance(handle, parent, name, *, replace):
+                entries = native.nodes[native.handles[parent][0]]['children']
+                appeared = native.node(False)
+                native.nodes[appeared]['body'] = b'unrelated'
+                entries[name] = appeared
+                return rename(handle, parent, name, replace=replace)
+
+            native.rename = appearance
+            with self.assertRaises(FileExistsError):
+                store.write(('snapshot.json',), b'new')
+            self.assertEqual(store.read(('snapshot.json',), 9), b'unrelated')
+        self.assertEqual(native.handles, {})
+
+
+@unittest.skipUnless(os.name == 'nt', 'native Windows NTFS handle/ACL execution required')
+class NativeWindowsTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        runtime = ROOT / '.getzilla/runtime'
+        runtime.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=runtime)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.database = self.root / 'database'
+
+    def publish(self, database=None, payload=b'{"vulnerabilities":[]}'):
+        return SD.publish_snapshot(database or self.database, 'kev', payload,
+                                   acquisition={'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'},
+                                   coverage={'scopes': ['CVE'], 'complete': True, 'record_count': 0, 'schema': 'kev-1'}, now=NOW)
+
+    def set_fixture_acl(self, path, extra=''):
+        # Only a private test-owned directory; never an ancestor outside this fixture.
+        import ctypes as C
+        native = W.Native()
+        descriptor = C.c_void_p()
+        try:
+            sddl = f'O:{native.user}D:P(A;OICI;FA;;;{native.user})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA){extra}'
+            native._ok(native.a.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, C.byref(descriptor), None))
+            setter = native.a.SetFileSecurityW
+            setter.argtypes, setter.restype = [C.c_wchar_p, W.U32, C.c_void_p], C.c_int
+            native._ok(setter(str(path), 0x80000004, descriptor))
+        finally:
+            if descriptor:
+                native.k.LocalFree(descriptor)
+            native.shutdown()
+
+    def test_native_public_roundtrip_copy_and_old_acquisition(self):
+        self.publish()
+        with W.SnapshotStore(self.database) as store:
+            self.assertTrue(store.native.metadata(store.relative[()].handle).security[2])
+            store.read(('feeds', 'kev', 'snapshot.json'), SD.MAX_MANIFEST_BYTES)
+            self.assertTrue(all(store.native.metadata(f.handle).security[2] for f in store.files.values()))
+        payload, evidence = SD.read_snapshot(self.database, 'kev', now=NOW)
+        self.assertEqual(payload, b'{"vulnerabilities":[]}')
+        self.assertEqual(evidence['acquisition']['last_verified_sync_utc'], NOW.isoformat())
+        target = self.root / 'copy'
+        copied = SD.copy_snapshot(self.database, target, 'kev', now=NOW)
+        self.assertEqual(copied['acquisition'], evidence['acquisition'])
+        self.assertEqual(SD.read_snapshot(target, 'kev', now=NOW)[0], payload)
+
+    def test_native_existing_private_inherited_database_can_refresh(self):
+        self.database.mkdir()  # the normal cache from an older installer
+        self.publish()
+        self.assertEqual(SD.read_snapshot(self.database, 'kev', now=NOW)[0], b'{"vulnerabilities":[]}')
+
+    def test_native_osv_snapshot_and_compatibility_export(self):
+        import io
+        import zipfile
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as stream:
+            stream.writestr('OSV-owned.json', json.dumps({'id': 'OSV-owned', 'affected': [{
+                'package': {'ecosystem': 'PyPI', 'name': 'owned'}, 'versions': ['1.0.0']}]}))
+        payload = archive.getvalue()
+        SD.publish_snapshot(self.database, 'osv:PyPI', payload,
+                            acquisition={'last_verified_sync_utc': NOW.isoformat(), 'retrieval_kind': 'download'},
+                            coverage=SD.osv_coverage(payload, 'PyPI'), now=NOW)
+        self.assertEqual(SD.read_snapshot(self.database, 'osv:PyPI', now=NOW)[0], payload)
+        self.assertEqual((self.database / 'PyPI/all.zip').read_bytes(), payload)
+
+    def test_native_ancestor_sibling_create_acl_and_service_owner_resolution(self):
+        parent = self.root / 'normal-parent'
+        parent.mkdir()
+        self.set_fixture_acl(parent, '(A;;0x4;;;WD)')
+        database = parent / 'database'
+        self.publish(database)
+        self.assertEqual(SD.read_snapshot(database, 'kev', now=NOW)[0], b'{"vulnerabilities":[]}')
+        native = W.Native()
+        try:
+            service = native._lookup_service()
+            if service is not None:
+                self.assertIn(service, native.ancestors)
+                self.assertNotIn(service, native.trusted)
+        finally:
+            native.shutdown()
+
+    def test_native_held_database_cannot_be_renamed(self):
+        self.publish()
+        with W.SnapshotStore(self.database):
+            with self.assertRaises(PermissionError):
+                self.database.rename(self.root / 'replaced')
+        self.assertTrue((self.database / 'feeds/kev/snapshot.json').exists())
+
+    def test_native_untrusted_store_write_acl_refuses(self):
+        self.publish()
+        self.set_fixture_acl(self.database, '(A;;FW;;;WD)')
+        try:
+            with self.assertRaisesRegex(SD.SecurityDataError, 'untrusted'):
+                SD.read_snapshot(self.database, 'kev', now=NOW)
+        finally:
+            self.set_fixture_acl(self.database)
+
+    def test_native_hardlink_refusal_keeps_other_link_bytes(self):
+        self.publish()
+        pointer = self.database / 'feeds/kev/snapshot.json'
+        alias = self.root / 'alias'
+        os.link(pointer, alias)
+        before = alias.read_bytes()
+        try:
+            with self.assertRaisesRegex(SD.SecurityDataError, 'hardlink'):
+                SD.read_snapshot(self.database, 'kev', now=NOW)
+            self.assertEqual(alias.read_bytes(), before)
+        finally:
+            alias.unlink()
+
+    def test_native_junction_never_reads_or_writes_outside(self):
+        import _winapi
+        if not hasattr(_winapi, 'CreateJunction'):
+            self.skipTest('CPython native junction fixture helper unavailable')
+        outside = self.root / 'outside'
+        outside.mkdir()
+        (outside / 'marker').write_bytes(b'unchanged')
+        self.database.mkdir()
+        _winapi.CreateJunction(str(outside), str(self.database / 'feeds'))
+        try:
+            with self.assertRaises(SD.SecurityDataError):
+                self.publish()
+            self.assertEqual((outside / 'marker').read_bytes(), b'unchanged')
+            self.assertEqual(sorted(p.name for p in outside.iterdir()), ['marker'])
+        finally:
+            os.rmdir(self.database / 'feeds')
+
+    def test_native_pointer_failure_preserves_old_pointer_and_cleans_temporary(self):
+        self.publish()
+        pointer = self.database / 'feeds/kev/snapshot.json'
+        before = pointer.read_bytes()
+        rename = W.Native.rename
+
+        def fail_pointer(native, handle, parent, name, *, replace):
+            if name == 'snapshot.json':
+                raise OSError('before atomic pointer commit')
+            return rename(native, handle, parent, name, replace=replace)
+
+        with mock.patch.object(W.Native, 'rename', new=fail_pointer), \
+                self.assertRaises(SD.SecurityDataError):
+            self.publish(payload=b'{"vulnerabilities":[{}]}')
+        self.assertEqual(pointer.read_bytes(), before)
+        self.assertFalse(list(self.database.rglob('*.partial')))
+
+
+if __name__ == '__main__':
+    unittest.main()

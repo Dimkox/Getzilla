@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import io
 import json
 import os
@@ -591,11 +592,18 @@ class SnapshotCapabilityTests(unittest.TestCase):
     def test_missing_descriptor_capability_refuses_io_without_creating_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / 'database'
-            with mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True):
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False, create=True))
+                if os.name == 'nt':
+                    # Missing POSIX descriptors no longer disables a native Windows store.
+                    # Refuse the selected backend's actual missing capability instead.
+                    from getzilla import security_data_windows
+                    stack.enter_context(mock.patch.object(security_data_windows, 'Native', side_effect=
+                        SD.SecurityDataError('native Windows snapshot handles unavailable')))
                 for operation in (lambda: publish(database),
                                   lambda: SD.read_snapshot(database, 'osv:PyPI', now=NOW),
                                   lambda: SD.copy_snapshot(database, database / 'mirror', 'osv:PyPI', now=NOW)):
-                    with self.subTest(operation=operation), self.assertRaisesRegex(SD.SecurityDataError, 'descriptor|POSIX'):
+                    with self.subTest(operation=operation), self.assertRaisesRegex(SD.SecurityDataError, 'descriptor|POSIX|native Windows'):
                         operation()
             self.assertFalse(database.exists())
 
