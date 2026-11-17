@@ -169,6 +169,11 @@ class BaselineStatus:
 def inspect(home: Path, project: Path | None = None, agent: str | None = None, *,
             run: Runner = default_runner, which: Callable[[str], str | None] = shutil.which,
             environ: Mapping[str, str] | None = None) -> BaselineStatus:
+    if (home/'workflow-current.json').exists():
+        # Presence chooses a stricter current-source check. Its JSON never grants
+        # source authority; official metadata and exact objects are rederived.
+        from .current_workflows import inspect_current
+        return inspect_current(home, project, agent)
     env = os.environ if environ is None else environ
     config = components()
     missing: list[str] = []

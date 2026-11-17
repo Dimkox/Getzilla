@@ -27,7 +27,7 @@ class ManagedEnvironmentTests(unittest.TestCase):
 
     def fetch(self, url):
         if url == 'https://pypi.org/pypi/pytest/json':
-            return json.dumps(dict(info=dict(name='pytest'), releases={'9.0.0': [{}], '10.0.0': [{}]})).encode()
+            return json.dumps(dict(info=dict(name='pytest'), releases={'9.0.0': [{'yanked': False}], '10.0.0': [{'yanked': False}]})).encode()
         if url == 'https://pypi.org/pypi/pytest/10.0.0/json':
             return json.dumps(dict(info=dict(name='pytest', version='10.0.0'), urls=[dict(filename='pytest-10.0.0-py3-none-any.whl',
                   url=self.url, digests={'sha256': self.digest}, yanked=False, packagetype='bdist_wheel')])).encode()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import re
+import subprocess
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +56,7 @@ def parse_tool_version(tool_id: str, text: str) -> str | None:
     pattern = _BANNERS.get(tool_id)
     match = re.search(pattern + _NUMBER, text, re.M) if pattern else None
     if tool_id == 'git':
-        match = re.search(r'^git version (\d+\.\d+\.\d+(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
+        match = re.search(r'^git version (\d+(?:\.\d+){1,3}(?:\.windows\.\d+)?)(?![\w.-])', text, re.M)
     return match[1] if match else None
 
 
@@ -109,7 +110,7 @@ def probe_commands(spec: dict[str, Any]) -> list[CommandProbe]:
         args = [executable, *list(spec.get('version_args') or ['--version'])]
         try:
             proc = run(args, cwd=Path.cwd(), timeout=10)
-        except OSError as exc:
+        except (OSError, subprocess.TimeoutExpired) as exc:
             probes.append(CommandProbe(executable, None, None, type(exc).__name__))
             continue
         code = getattr(proc, 'returncode', None)
@@ -139,9 +140,9 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
     install = install_command(spec, host)
     command, found = detect_command(spec)
     # A tool without a recorded build-host version says nothing about it, never "built )".
-    built_on = f', built on {built}' if built else ''
-    built_note = f' (built {built})' if built else ''
-    built_pin = f', built {built}' if built else ''
+    built_on = f', historically tested {built}' if built else ''
+    built_note = f' (historically tested {built}; freshness not checked)' if built else ''
+    built_pin = f', historically tested {built}; freshness not checked' if built else ''
     offer = (
         f'Install fallback {name} {fallback} (or newer{built_on}): {install}'
         if install else f'Install fallback {name} {fallback} (or newer{built_on})'
@@ -181,7 +182,7 @@ def check_tool(spec: dict[str, Any], *, host: str | None = None) -> ToolCheck:
         )
     extra = ''
     if found and built and version_tuple(found) < version_tuple(built):
-        extra = f'; older than built pin {built}, still supported'
+        extra = f'; older than historically tested {built}, meets minimum; freshness not checked'
     return ToolCheck(
         id=tool_id,
         name=name,

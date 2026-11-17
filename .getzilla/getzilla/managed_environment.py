@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .latest_releases import metadata, pypi_version
+from .managed_runtime import directory
 
 PROJECTS = ('pip', 'pytest', 'pytest-xdist', 'pytest-cov', 'coverage', 'jsonschema', 'ruff', 'bandit', 'uv')
 
@@ -61,7 +62,7 @@ def _wheel(row, fetch):
 def install_environment(home: Path, python: str, *, fetch, run=execute, projects=PROJECTS) -> Path:
     targets = {_name(name): pypi_version(name, fetch) for name in projects}
     base = home/'.getzilla/runtime/environments'
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory(base)
     if any(p.is_symlink() for p in (home, home/'.getzilla', home/'.getzilla/runtime', base)):
         raise ValueError('linked Getzilla environment root')
     stage = Path(tempfile.mkdtemp(prefix='current-', dir=base))
@@ -119,22 +120,34 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
     if json.loads(actual.stdout) != exact:
         raise ValueError('actual managed environment differs from qualified wheel closure')
     activation = home/'.venv'
+    candidate = home/('.venv.activate-'+uuid.uuid4().hex)
+    previous = home/('.venv.previous-'+uuid.uuid4().hex)
     if activation.is_symlink() or getattr(activation, 'is_junction', lambda: False)():
         if not activation.resolve().is_relative_to(base.resolve()):
             raise ValueError('user environment link conflicts with managed activation')
+    elif activation.exists() and not activation.is_dir():
+        raise ValueError('user .venv file conflicts with managed activation')
+    moved = False
+    try:
         if os.name == 'nt':
-            activation.rmdir()
+            checked([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/c', 'mklink', '/J', str(candidate), str(stage)],
+                    'stage per-user environment junction')
         else:
-            activation.unlink()
-    elif activation.exists():
-        if not activation.is_dir():
-            raise ValueError('user .venv file conflicts with managed activation')
-        activation.rename(home/('.venv.previous-'+uuid.uuid4().hex))
-    if os.name == 'nt':
-        checked([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/c', 'mklink', '/J', str(activation), str(stage)],
-                'activate per-user environment junction')
-    else:
-        activation.symlink_to(stage, target_is_directory=True)
-    if not activation.resolve().samefile(stage):
-        raise ValueError('managed environment activation path differs')
+            candidate.symlink_to(stage, target_is_directory=True)
+        if not candidate.resolve().samefile(stage):
+            raise ValueError('managed environment activation path differs')
+        if activation.exists() or activation.is_symlink():
+            activation.rename(previous)
+            moved = True
+        try:
+            candidate.rename(activation)
+        except BaseException:
+            if moved:
+                previous.rename(activation)
+            raise
+    finally:
+        if candidate.is_symlink():
+            candidate.unlink()
+        elif getattr(candidate, 'is_junction', lambda: False)():
+            candidate.rmdir()
     return activation/('Scripts/python.exe' if os.name == 'nt' else 'bin/python')

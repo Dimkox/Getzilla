@@ -1,5 +1,6 @@
 """Installer427 regressions with explicit inert command/configuration effects."""
 import sys
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,3 +51,9 @@ class InstallerProbeReadinessTests(unittest.TestCase):
                              'pending-credentials')
             self.assertEqual(configure('copilot', 'native', Path('/unused'), key=None).status,
                              'pending-authentication')
+
+    def test_actual_timeout_exception_continues_to_valid_alias(self):
+        result = self.check([subprocess.TimeoutExpired(['owned-python3', '--version'], 10),
+                             SimpleNamespace(returncode=0, stdout='Python 4.0.0', stderr='')])
+        self.assertEqual(result.found, '4.0.0')
+        self.assertEqual(result.status, 'pass')

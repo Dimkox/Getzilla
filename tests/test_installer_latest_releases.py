@@ -15,12 +15,22 @@ def encoded(value):
     return json.dumps(value).encode()
 
 
+def github_rows(rows):
+    def fetch(url):
+        if '/git/matching-refs/' in url:
+            return encoded([dict(ref='refs/tags/'+r['tag_name']) for r in rows])
+        if '/releases/tags/' in url:
+            return encoded(next(r for r in rows if r['tag_name'] == url.rsplit('/', 1)[1]))
+        return encoded(rows[0])
+    return fetch
+
+
 class LatestReleaseTests(unittest.TestCase):
     def test_github_new_major_selected_before_platform_compatibility(self):
         rows = [dict(tag_name='v1.9.0', draft=False, prerelease=False, assets=[]),
                 dict(tag_name='v2.0.0', draft=False, prerelease=False, assets=[]),
                 dict(tag_name='v3.0.0rc1', draft=False, prerelease=True, assets=[])]
-        release = releases.github_release('owned/tool', lambda url: encoded(rows))
+        release = releases.github_release('owned/tool', github_rows(rows))
         self.assertEqual(release['version'], '2.0.0')
         with self.assertRaisesRegex(ValueError, 'asset'):
             releases.github_asset(release, 'missing.zip')
@@ -29,10 +39,10 @@ class LatestReleaseTests(unittest.TestCase):
         row = dict(tag_name='v2.0.0', draft=False, prerelease=False,
                    assets=[dict(name='tool.zip', size=7, digest='sha256:' + 'a'*64,
                                 browser_download_url='https://github.com/owned/tool/releases/download/v2.0.0/tool.zip')])
-        release = releases.github_release('owned/tool', lambda url: encoded([row]))
+        release = releases.github_release('owned/tool', github_rows([row]))
         self.assertEqual(releases.github_asset(release, 'tool.zip').sha256, 'a'*64)
         row['assets'][0]['digest'] = None
-        release = releases.github_release('owned/tool', lambda url: encoded([row]))
+        release = releases.github_release('owned/tool', github_rows([row]))
         with self.assertRaisesRegex(ValueError, 'digest'):
             releases.github_asset(release, 'tool.zip')
 
@@ -51,10 +61,20 @@ class LatestReleaseTests(unittest.TestCase):
         calls = []
         def fetch(url):
             calls.append(url)
-            return encoded(dict(info={'name': 'pytest'}, releases={'9.0.0': [{}], '10.0.0': [{}], '11.0.0a1': [{}]}))
+            return encoded(dict(info={'name': 'pytest'}, releases={'9.0.0': [{'yanked': False}], '10.0.0': [{'yanked': False}], '11.0.0a1': [{'yanked': False}]}))
         self.assertEqual(releases.pypi_version('pytest', fetch), '10.0.0')
         self.assertEqual(releases.pypi_version('pytest', fetch), '10.0.0')
         self.assertEqual(len(calls), 2)
+
+    def test_pypi_epochs_post_and_partial_yanking_do_not_select_older_versions(self):
+        rows = {'9.9.9': [{'yanked': False}], '1!1.0.0.post1': [{'yanked': False}, {'yanked': True}],
+                '1!1.0.0.post2rc1': [{'yanked': False}]}
+        def fetch(_):
+            return encoded(dict(info={'name': 'owned'}, releases=rows))
+        self.assertEqual(releases.pypi_version('owned', fetch), '1!1.0.0.post1')
+        rows['1!1.0.0.post2'] = []
+        with self.assertRaisesRegex(ValueError, 'no artifacts'):
+            releases.pypi_version('owned', fetch)
 
     def test_metadata_failure_and_exhaustion_never_use_old_release(self):
         for body in (b'html', encoded([]), encoded([dict(tag_name='v1.0.0', draft=False, prerelease=False)] * 100)):

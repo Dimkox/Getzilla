@@ -24,7 +24,9 @@ class RuntimeTargetTests(unittest.TestCase):
         row = dict(tag_name='v3.0.1.windows.2', draft=False, prerelease=False, assets=[dict(
             name='MinGit-3.0.1-64-bit.zip', size=10, digest='sha256:'+'a'*64,
             browser_download_url='https://github.com/git-for-windows/git/releases/download/v3.0.1.windows.2/MinGit-3.0.1-64-bit.zip')])
-        target = releases.git_windows(lambda _: json.dumps(row).encode(), 'x64')
+        def fetch(url):
+            return json.dumps([dict(ref='refs/tags/'+row['tag_name'])] if '/matching-refs/' in url else row).encode()
+        target = releases.git_windows(fetch, 'x64')
         self.assertEqual(target.version, '3.0.1.windows.2')
         self.assertIn('/v3.0.1.windows.2/', target.url)
 

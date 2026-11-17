@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -164,80 +165,109 @@ def _default_fetch(url: str) -> bytes:
         return response.read()
 
 
+_RELEASE_HOSTS = {'api.github.com', 'github.com', 'nodejs.org', 'www.python.org', 'getcomposer.org',
+                  'pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org', 'www.php.net', 'downloads.php.net',
+                  'git-scm.com', 'www.kernel.org', 'release-assets.githubusercontent.com'}
+
+
+def _release_origin(url):
+    origin = urllib.parse.urlsplit(url)
+    if origin.scheme != 'https' or origin.netloc not in _RELEASE_HOSTS or origin.fragment:
+        raise ValueError('release redirect leaves official public origins')
+    return origin
+
+
+class _ReleaseRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Check before the stdlib can send the redirected request.
+        _release_origin(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_RELEASE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _ReleaseRedirect())
+
+
+def _release_fetch(url: str) -> bytes:
+    """Bounded public release transport, owned by the existing updater boundary."""
+    origin = urllib.parse.urlsplit(url)
+    _release_origin(url)
+    catalog = origin.netloc == 'pypi.org' and re.fullmatch(r'/pypi/[A-Za-z0-9_.-]+/json', origin.path)
+    metadata_host = origin.netloc in {'api.github.com', 'pypi.org', 'www.php.net', 'git-scm.com'} or origin.netloc == 'registry.npmjs.org' and not origin.path.endswith('.tgz')
+    limit = 2*1024*1024 if metadata_host or origin.path.endswith(('.json', '.txt', '.sha256sum', '.asc')) else 512*1024*1024
+    decoded_limit = 64*1024*1024 if catalog else limit
+    headers = {'User-Agent': 'Getzilla-release-resolver/1', 'Accept-Encoding': 'gzip' if catalog else 'identity'}
+    request = urllib.request.Request(url, headers=headers)  # nosec B310
+    started = time.monotonic()
+    with _RELEASE_OPENER.open(request, timeout=20) as response:  # nosec B310
+        _release_origin(response.geturl())
+        encoding = response.headers.get('Content-Encoding', 'identity')
+        if encoding not in ({'identity', 'gzip'} if catalog else {'identity'}):
+            raise ValueError('unsupported upstream release content encoding')
+        decoder = zlib.decompressobj(16+zlib.MAX_WBITS) if encoding == 'gzip' else None
+        wire_limit = limit if decoder else decoded_limit
+        chunks, wire, decoded = [], 0, 0
+        while True:
+            if time.monotonic()-started > 60:
+                raise ValueError('upstream release response exceeded total deadline')
+            block = response.read1(min(65536, wire_limit-wire+1))
+            if not block:
+                break
+            wire += len(block)
+            if wire > wire_limit:
+                raise ValueError('upstream release wire byte bound exceeded')
+            try:
+                body = decoder.decompress(block, decoded_limit-decoded+1) if decoder else block
+            except zlib.error as exc:
+                raise ValueError('invalid compressed release metadata') from exc
+            decoded += len(body)
+            if decoded > decoded_limit or decoder and decoder.unconsumed_tail:
+                raise ValueError('upstream release decoded byte bound exceeded')
+            chunks.append(body)
+        if decoder and (not decoder.eof or decoder.unused_data):
+            raise ValueError('truncated/trailing compressed release metadata')
+    return b''.join(chunks)
+
+
 def _tail(process: subprocess.CompletedProcess) -> str:
     text = (process.stderr or process.stdout or '').strip().splitlines()
     return text[-1] if text else f'exit {process.returncode}'
 
 
-def update_agents(run: Runner, which: Callable[[str], str | None] = shutil.which) -> list[Result]:
+def update_agents(run: Runner, which: Callable[[str], str | None] = shutil.which, *, root=None, fetch=None) -> list[Result]:
+    """Update installed agents through the same exact verified managed installer."""
+    from .managed_environment import execute
+    from .managed_software import install_software
+    root = root or home_dir()
     results = []
-    npm = which('npm')
-    for command, package in NPM_AGENTS.items():
+    # Native calls require the isolated environment-capable runner, never an
+    # ambient global npm installer. Explicit test runners may accept **kwargs.
+    native = execute if run is _default_runner else run
+    for command in (*NPM_AGENTS, 'claude', 'grok'):
         if not which(command):
             continue
-        if not npm:
-            results.append(Result(f'agent:{command}', 'skip', 'npm not found'))
-            continue
-        process = run([npm, 'install', '-g', package], None)
-        results.append(Result(f'agent:{command}', 'ok' if process.returncode == 0 else 'fail',
-                              package if process.returncode == 0 else _tail(process)))
-    if which('claude'):
-        process = run([which('claude') or 'claude', 'update'], None)
-        results.append(Result('agent:claude', 'ok' if process.returncode == 0 else 'fail', _tail(process)))
-    if which('grok'):
-        if os.name == 'nt':
-            shell = which('pwsh') or which('powershell') or 'powershell'
-            command = [shell, '-NoProfile', '-Command', 'irm https://x.ai/cli/install.ps1 | iex']
-        else:
-            command = ['bash', '-c', 'curl -fsSL https://x.ai/cli/install.sh | bash']
-        process = run(command, None)
-        results.append(Result('agent:grok', 'ok' if process.returncode == 0 else 'fail', _tail(process)))
-    if which('specify') and which('uv'):
-        process = run([which('uv') or 'uv', 'tool', 'install', '--force', 'specify-cli', '--from',
-                       f'git+{SOURCES["spec-kit"]}'], None)
-        results.append(Result('tool:specify', 'ok' if process.returncode == 0 else 'fail', _tail(process)))
+        report = install_software(root, Path(__file__).resolve().parents[2], agent=command,
+                                  fetch=fetch or _release_fetch, run=native, which=which)
+        for row in report['components']:
+            results.append(Result('agent:'+command+':'+row['component'],
+                                  'ok' if row['status'] == 'complete' else 'fail', json.dumps(row)))
     return results
 
 
-def update_jscpd(run: Runner, which: Callable[[str], str | None] = shutil.which) -> list[Result]:
-    """Install the supported optional adapter version only on explicit updater runs."""
-    npm = which('npm')
-    if not npm:
-        return [Result('tool:jscpd', 'skip', 'npm not found; install Node.js/npm first')]
-    process = run([npm, 'install', '-g', '--ignore-scripts', '--no-audit', '--no-fund',
-                   f'jscpd@{JSCPD_VERSION}'], None)
-    if process.returncode:
-        return [Result('tool:jscpd', 'fail', _tail(process))]
-    binary = which('jscpd')
-    if not binary:
-        return [Result('tool:jscpd', 'fail', 'installed but jscpd is not on PATH')]
-    checked = run([binary, '--version'], None)
-    version = (checked.stdout or '').strip()
-    if checked.returncode or version != JSCPD_VERSION:
-        return [Result('tool:jscpd', 'fail', f'version check failed; require {JSCPD_VERSION}')]
-    return [Result('tool:jscpd', 'ok', f'jscpd@{JSCPD_VERSION}; installed version {version}')]
+def update_jscpd(run: Runner, which: Callable[[str], str | None] = shutil.which, *, root=None, fetch=None) -> list[Result]:
+    from .managed_environment import execute
+    from .managed_software import install_software
+    report = install_software(root or home_dir(), Path(__file__).resolve().parents[2], tools=('jscpd',),
+                              fetch=fetch or _release_fetch, run=execute if run is _default_runner else run, which=which)
+    return [Result('tool:'+row['component'], 'ok' if row['status'] == 'complete' else 'fail', json.dumps(row))
+            for row in report['components']]
 
 
-def update_sources(run: Runner, root: Path, sources: dict[str, str] | None = None) -> list[Result]:
-    results = []
-    vendor = root / 'vendor'
-    vendor.mkdir(parents=True, exist_ok=True)
-    for name, url in (sources or SOURCES).items():
-        target = vendor / name
-        if (target / '.git').is_dir():
-            fetched = run(['git', '-C', str(target), 'fetch', '-q', '--depth', '1', 'origin', 'HEAD'], None)
-            if fetched.returncode == 0:
-                fetched = run(['git', '-C', str(target), 'reset', '-q', '--hard', 'FETCH_HEAD'], None)
-        else:
-            if target.exists():
-                shutil.rmtree(target)
-            fetched = run(['git', 'clone', '-q', '--depth', '1', url, str(target)], None)
-        if fetched.returncode != 0:
-            results.append(Result(f'source:{name}', 'fail', _tail(fetched)))
-            continue
-        head = run(['git', '-C', str(target), 'rev-parse', '--short=12', 'HEAD'], None)
-        results.append(Result(f'source:{name}', 'ok', (head.stdout or '').strip()))
-    return results
+def update_sources(run: Runner, root: Path, sources: dict[str, str] | None = None, *, fetch=None) -> list[Result]:
+    if sources is not None:
+        # An offline snapshot/foreign URL cannot establish current official data.
+        return [Result('sources', 'fail', 'snapshot source mapping cannot establish current stable releases; existing files preserved')]
+    from .current_workflows import prepare_latest
+    return [Result(step.component, step.status, step.detail) for step in prepare_latest(root, fetch=fetch or _release_fetch)]
 
 
 def _replace_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
@@ -395,29 +425,25 @@ def run_all(root: Path, *, run: Runner = _default_runner, fetch: Fetch = _defaul
             mirror: Mirror | None = None) -> list[Result]:
     if mirror is not None:
         return _run_from_mirror(root, mirror, run=run, which=which, components=components)
-    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd'))
+    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd', 'baseline'))
     results: list[Result] = []
     if 'agents' in wanted:
-        results += update_agents(run, which)
-    if 'sources' in wanted:
-        results += update_sources(run, root)
+        results += update_agents(run, which, root=root, fetch=_release_fetch if fetch is _default_fetch else fetch)
+    if {'sources', 'baseline'} & wanted:
+        results += update_sources(run, root, fetch=_release_fetch if fetch is _default_fetch else fetch)
     if 'osv' in wanted:
         results += update_osv(fetch, root)
     if 'opengrep' in wanted:
-        results += update_opengrep(fetch, root, run=run)
+        results += update_opengrep(_release_fetch if fetch is _default_fetch else fetch, root, run=run)
     if 'jscpd' in wanted:
-        results += update_jscpd(run, which)
-    if 'baseline' in wanted:
-        from .baseline import install_user
-        results += [Result(step.component, step.status, step.detail)
-                    for step in install_user(root, run=run, which=which)]
+        results += update_jscpd(run, which, root=root, fetch=_release_fetch if fetch is _default_fetch else fetch)
     return results
 
 
 def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable[[str], str | None],
                      components: tuple[str, ...] | None) -> list[Result]:
     """Every component from the offline mirror; nothing here reaches the network."""
-    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd'))
+    wanted = set(components or ('agents', 'sources', 'osv', 'opengrep', 'jscpd', 'baseline'))
     results: list[Result] = []
     if 'agents' in wanted:
         results.append(Result('agents', 'skip', f'{MIRROR_ENV} is set: agent CLIs update only from the network'))
@@ -441,6 +467,7 @@ def _run_from_mirror(root: Path, mirror: Mirror, *, run: Runner, which: Callable
         for step in install_user(root, run=run, which=which, config=config, locate=mirror.url):
             pinned = step.component.removeprefix('baseline:') in mirror.baseline
             results.append(Result(step.component, step.status, step.detail + mirror.note(pinned)))
+    results.append(Result('freshness', 'fail', 'offline snapshot imported; current official targets are unestablished'))
     return results
 
 
@@ -513,10 +540,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--now', action='store_true', help='update now (the default)')
     parser.add_argument('--if-due', action='store_true',
-                        help='update only when GETZILLA_UPDATE_INTERVAL_HOURS (default 1) has passed since the last run')
+                        help='compatibility flag; every invocation still rechecks current official stable releases')
     parser.add_argument('--only', action='append', choices=('agents', 'sources', 'osv', 'opengrep', 'jscpd', 'baseline'),
-                        help='limit to one component (repeatable); baseline installs the pinned Superpowers, BMAD '
-                             'and Spec Kit (never part of the default latest-version update)')
+                        help='limit to one component (repeatable); baseline resolves current official workflow payloads')
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--status', action='store_true', help='print the last update results and exit')
     args = parser.parse_args(argv)
@@ -530,15 +556,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2
     now = time.time()
-    if args.if_due and not args.now and not is_due(root, now):
-        if not args.quiet:
-            print('Getzilla tools are up to date (checked recently).')
-        return 0
     with update_lock(root, now) as acquired:
         if not acquired:
             if not args.quiet:
-                print('Another Getzilla update is running.')
-            return 0
+                print('INCOMPLETE: another Getzilla update is running; freshness was not checked.')
+            return 1
         if mirror is not None and not args.quiet:
             print(f'Offline mirror {mirror.root} ({MIRROR_ENV}): nothing is downloaded.')
         results = run_all(root, components=tuple(args.only) if args.only else None, mirror=mirror)

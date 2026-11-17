@@ -250,31 +250,36 @@ def _intent_path(payload, *, agent=None):
     return '.getzilla/runtime/baseline-assets/' + payload.component + '-' + (agent or payload.agent) + '.json'
 
 
+def render_for_project(project: Path, payload: AssetPayload):
+    prepared = []
+    for name, content, mode in payload.files:
+        if payload.component == 'bmad' and name in {'_bmad/core/config.yaml', '_bmad/bmm/config.yaml'}:
+            content = re.sub(rb'(?m)^project_name: work$',
+                             lambda _match: b'project_name: ' + json.dumps(project.name, ensure_ascii=True).encode(), content)
+        prepared.append((name, content, mode))
+    if payload.component == 'bmad':
+        rendered_hashes = {name.removeprefix('_bmad/'): digest(content) for name, content, _ in prepared}
+        fixed = []
+        for name, content, mode in prepared:
+            if name == '_bmad/_config/files-manifest.csv':
+                rows = list(csv.reader(io.StringIO(content.decode('utf-8'))))
+                for row in rows:
+                    if len(row) == 5 and row[3] in rendered_hashes:
+                        row[4] = rendered_hashes[row[3]]
+                output = io.StringIO(newline='')
+                csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n').writerows(rows)
+                content = output.getvalue().encode('utf-8')
+            fixed.append((name, content, mode))
+        prepared = fixed
+    return prepared
+
+
 def materialize(project: Path, payload: AssetPayload) -> dict:
     if preflight_destination(project, payload):
         return {'status': 'preserved', 'added': 0, 'marker': '_bmad' if payload.component == 'bmad' else '.specify'}
     try:
         marker = '_bmad' if payload.component == 'bmad' else '.specify' if payload.component == 'spec-kit' else '.agents/skills'
-        prepared = []
-        for name, content, mode in payload.files:
-            if payload.component == 'bmad' and name in {'_bmad/core/config.yaml', '_bmad/bmm/config.yaml'}:
-                content = re.sub(rb'(?m)^project_name: work$',
-                                 lambda _match: b'project_name: ' + json.dumps(project.name, ensure_ascii=True).encode(), content)
-            prepared.append((name, content, mode))
-        if payload.component == 'bmad':
-            rendered_hashes = {name.removeprefix('_bmad/'): digest(content) for name, content, _ in prepared}
-            fixed = []
-            for name, content, mode in prepared:
-                if name == '_bmad/_config/files-manifest.csv':
-                    rows = list(csv.reader(io.StringIO(content.decode('utf-8'))))
-                    for row in rows:
-                        if len(row) == 5 and row[3] in rendered_hashes:
-                            row[4] = rendered_hashes[row[3]]
-                    output = io.StringIO(newline='')
-                    csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n').writerows(rows)
-                    content = output.getvalue().encode('utf-8')
-                fixed.append((name, content, mode))
-            prepared = fixed
+        prepared = render_for_project(project, payload)
 
         def authorize(name):
             # Preserve the existing explicitly invoked unrouted initializer. In an

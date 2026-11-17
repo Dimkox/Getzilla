@@ -28,6 +28,7 @@ $script:reads=0
 function Invoke-RestMethod {
  param($Uri,[switch]$UseBasicParsing,$TimeoutSec)
  $script:reads++
+ if ($Uri -like '*matching-refs*') { return @(@{ref='refs/tags/v4.1.0.windows.2'}) }
  if ($Uri -like '*git-for-windows*') {
   return @{ tag_name='v4.1.0.windows.2';draft=$false;prerelease=$false;assets=@(@{
    name='MinGit-4.1.0-64-bit.zip';digest=('sha256:'+('a'*64));
@@ -47,7 +48,7 @@ for ($i=0; $i -lt 2; $i++) {
  $git=Get-CurrentRuntimeTarget 'git-x64'
  if ($git.Version -cne '4.1.0.windows.2') { throw 'Git build identity lost' }
 }
-if ($script:reads -ne 4) { throw 'rerun did not resolve authoritative metadata' }
+if ($script:reads -ne 6) { throw 'rerun did not resolve authoritative metadata' }
 'owned-current-resolvers:PASS'
 ''')
             result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File', str(harness), str(library)],

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import posixpath
 import re
@@ -17,6 +18,20 @@ from .latest_releases import Target
 MAX_FILES = 16384
 MAX_BYTES = 512 * 1024 * 1024
 MAX_FILE_BYTES = 128 * 1024 * 1024
+
+
+def directory(path: Path, *, mode=0o700):
+    """Check ancestors before creating anything; owned staging stays private."""
+    chain = [path, *path.parents]
+    for parent in chain:
+        if parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)():
+            raise ValueError('linked managed directory ancestor')
+        if parent.exists() and not parent.is_dir():
+            raise ValueError('non-directory managed ancestor')
+    path.mkdir(parents=True, exist_ok=True, mode=mode)
+    for parent in chain:
+        if parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)():
+            raise ValueError('managed directory ancestor changed')
 
 
 def entries(target: Target, data: bytes):
@@ -69,6 +84,10 @@ def entries(target: Target, data: bytes):
                         add(item.name, stream.read(MAX_FILE_BYTES+1), 0o755 if item.mode & 0o111 else 0o644)
                 else:
                     raise ValueError('special runtime archive entry')
+    elif target.component == 'cosign' and target.filename.startswith('cosign-'):
+        add('cosign.exe' if target.filename.endswith('.exe') else 'cosign', data, 0o755)
+    elif target.component == 'composer' and target.filename == 'composer.phar':
+        add('composer.phar', data, 0o644)
     else:
         raise ValueError('unsupported current runtime archive format')
     # Node's tarballs/ZIPs contain one version-named outer directory.
@@ -103,7 +122,7 @@ def _validate(folder: Path, files, links):
         raise ValueError('unmanaged runtime files conflict')
 
 
-def install(target: Target, data: bytes, root: Path, *, executable: str, run, version_args=('--version',)) -> Path:
+def install(target: Target, data: bytes, root: Path, *, executable: str, run, version_args=('--version',), launcher=()) -> Path:
     from .toolchain import parse_tool_version
     if not re.fullmatch('[a-z][a-z0-9-]*', target.component) or not re.fullmatch(r'[A-Za-z0-9_.-]+', target.version):
         raise ValueError('unsafe runtime target identity')
@@ -111,11 +130,12 @@ def install(target: Target, data: bytes, root: Path, *, executable: str, run, ve
     if executable not in files:
         raise ValueError(f'{target.component} {target.version}: executable absent from current archive')
     parent = root / 'runtimes' / target.component
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory(parent)
     for path in (root, root/'runtimes', parent):
         if path.is_symlink() or not path.is_dir():
             raise ValueError('linked managed runtime root')
-    folder = parent / (target.version+'-'+(target.sha256 or '')[:16])
+    identity = target.sha256 or hashlib.sha256((target.integrity or '').encode()).hexdigest()
+    folder = parent / (target.version+'-'+identity[:16])
     if folder.is_symlink():
         raise ValueError('linked managed runtime conflict')
     if folder.exists():
@@ -140,7 +160,7 @@ def install(target: Target, data: bytes, root: Path, *, executable: str, run, ve
             if stage.exists():
                 shutil.rmtree(stage)
     path = folder/executable
-    result = run([str(path), *version_args], None)
+    result = run([*launcher, str(path), *version_args], None)
     actual = parse_tool_version('python3' if target.component == 'python' else target.component,
                                 (result.stdout or '')+'\n'+(result.stderr or ''))
     if result.returncode or actual != target.version:

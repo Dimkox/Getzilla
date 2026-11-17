@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import updater
 from getzilla import verification
-from getzilla import opengrep_releases
 
 
 class OpenGrepLatestTests(unittest.TestCase):
@@ -38,8 +37,10 @@ class OpenGrepLatestTests(unittest.TestCase):
 
     def fetch(self, url):
         self.urls.append(url)
-        if url.startswith('https://api.github.com/repos/opengrep/opengrep/releases?'):
-            return json.dumps(self.metadata).encode()
+        if '/git/matching-refs/' in url:
+            return json.dumps([dict(ref='refs/tags/'+r['tag_name']) for r in self.metadata]).encode()
+        if url == 'https://api.github.com/repos/opengrep/opengrep/releases/latest':
+            return json.dumps(self.metadata[0]).encode()
         self.assertEqual(url, self.url)
         return self.payload
 
@@ -52,14 +53,14 @@ class OpenGrepLatestTests(unittest.TestCase):
             result = updater.update_opengrep(self.fetch, self.root, ('windows', 'amd64'), run=self.run_inert)
             self.assertEqual(result[0].status, 'ok', result)
             self.assertEqual((self.root / 'bin/support.dll').read_bytes(), b'owned inert DLL')
-        self.assertEqual(sum('api.github.com' in url for url in self.urls), 2)
+        self.assertEqual(sum('api.github.com' in url for url in self.urls), 4)
 
     def test_verifier_rederives_official_integrity_not_forged_manifest(self):
         binary = self.root / 'opengrep.exe'
         binary.write_bytes(b'forged')
         (self.root / 'opengrep-current.json').write_text(json.dumps({'sha256': hashlib.sha256(b'forged').hexdigest()}))
         with patch.object(updater, '_platform_key', return_value=('windows', 'amd64')), \
-                patch.object(opengrep_releases, 'public_fetch', side_effect=self.fetch):
+                patch.object(updater, '_release_fetch', side_effect=self.fetch):
             self.assertIsNotNone(verification._unpinned_opengrep(binary))
             binary.write_bytes(b'owned inert EXE')
             (self.root / 'support.dll').write_bytes(b'owned inert DLL')
@@ -79,3 +80,33 @@ class OpenGrepLatestTests(unittest.TestCase):
         result = updater.update_opengrep(self.fetch, self.root, ('windows', 'amd64'), run=self.run_inert)
         self.assertEqual(result[0].status, 'fail')
         self.assertFalse(binary.exists())
+
+    def test_new_major_upgrade_rederives_previous_bytes_before_replacement(self):
+        self.assertEqual(updater.update_opengrep(self.fetch, self.root, ('windows', 'amd64'), run=self.run_inert)[0].status, 'ok')
+        old_payload = self.payload
+        old_row = self.metadata[0]
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w') as archive:
+            archive.writestr('opengrep.exe', b'new inert EXE')
+            archive.writestr('support.dll', b'new inert DLL')
+        new_payload = stream.getvalue()
+        new_url = self.url.replace('v2.1.0', 'v3.0.0')
+        row = dict(tag_name='v3.0.0', draft=False, prerelease=False, assets=[dict(name=self.asset,
+                   size=len(new_payload), digest='sha256:'+hashlib.sha256(new_payload).hexdigest(), browser_download_url=new_url)])
+        def fetch(url):
+            if '/matching-refs/' in url:
+                return json.dumps([dict(ref='refs/tags/v3.0.0'), dict(ref='refs/tags/v2.1.0')]).encode()
+            if '/releases/latest' in url:
+                return json.dumps(row).encode()
+            if '/releases/tags/v2.1.0' in url:
+                return json.dumps(old_row).encode()
+            if url == new_url:
+                return new_payload
+            if url == self.url:
+                return old_payload
+            self.fail(url)
+        def run(command, cwd):
+            return subprocess.CompletedProcess(command, 0, 'opengrep 3.0.0', '')
+        result = updater.update_opengrep(fetch, self.root, ('windows', 'amd64'), run=run)
+        self.assertEqual(result[0].status, 'ok', result)
+        self.assertEqual((self.root/'bin/support.dll').read_bytes(), b'new inert DLL')

@@ -2,29 +2,24 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import stat
-import urllib.request
 import zipfile
 from pathlib import Path
 
-from .latest_releases import github_asset, github_release
+from .latest_releases import github_asset, github_release, metadata, stable
+from .managed_runtime import directory
 
-MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
-
-
-def public_fetch(url: str) -> bytes:
-    limit = 2*1024*1024 if url.startswith('https://api.github.com/') else MAX_ARTIFACT_BYTES
-    request = urllib.request.Request(url, headers={'User-Agent': 'Getzilla-release-resolver/1'})  # nosec B310
-    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310
-        data = response.read(limit+1)
-    if len(data) > limit:
-        raise ValueError('upstream release response exceeds byte bound')
-    return data
+MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 
 
 def resolve(fetch, key):
     release = github_release('opengrep/opengrep', fetch)
+    return _asset(release, key)
+
+
+def _asset(release, key):
     system, arch = key
     arch = {'amd64': 'x86_64', 'x64': 'x86_64', 'arm64': 'aarch64'}.get(arch, arch)
     names = {('linux', 'x86_64'): 'opengrep_linux_x86', ('linux', 'aarch64'): 'opengrep_linux_aarch64',
@@ -62,7 +57,7 @@ def members(target, data):
     return files
 
 
-def verify_active(executable: Path, *, fetch=public_fetch, key):
+def verify_active(executable: Path, *, fetch, key):
     """No JSON receipt grants trust: fresh official digest and exact archive bytes do."""
     target = resolve(fetch, key)
     data = fetch(target.url)
@@ -83,15 +78,36 @@ def install(fetch, root, key, *, run):
     data = fetch(target.url)
     expected = members(target, data)
     folder = root / 'bin'
-    # A current rerun still resolves and validates all active members.
+    directory(folder)
+    hint = root/'opengrep-current-version.json'
+    previous = {}
+    if hint.exists():
+        if hint.is_symlink() or hint.stat().st_size > 1024:
+            raise ValueError('invalid OpenGrep version hint')
+        saved = json.loads(hint.read_bytes())
+        version = saved.get('version') if type(saved) is dict else None
+        if not stable(version):
+            raise ValueError('invalid OpenGrep previous version identity')
+        if version != target.version:
+            url = 'https://api.github.com/repos/opengrep/opengrep/releases/tags/v'+version
+            release = metadata(fetch, url)
+            if release.get('tag_name') != 'v'+version or release.get('draft') is not False or release.get('prerelease') is not False:
+                raise ValueError('previous OpenGrep release is not official stable data')
+            release.update(version=version, repository='opengrep/opengrep', metadata_url=url, metadata_sha256='')
+            old = _asset(release, key)
+            previous = members(old, fetch(old.url))
+    # A writable version hint only selects an independent official lookup. It
+    # never supplies expected hashes or authorizes arbitrary executable bytes.
     legacy = {digest for _name, digest in OPENGREP_ASSETS.values()}
-    for name, body in expected.items():
-        path = folder / name
+    snapshots = {}
+    for name in set(expected) | set(previous):
+        path = folder/name
         if path.is_symlink() or path.exists() and not path.is_file():
             raise ValueError(f'user path conflict: {path}')
-        if path.exists() and path.read_bytes() != body and _sha256_file(path) not in legacy:
-            # Do not accept a writable local receipt as overwrite authority either.
-            raise ValueError(f'user/previous-version conflict: {path}; preserve it until its upstream bytes are proved')
+        body = path.read_bytes() if path.exists() else None
+        snapshots[name] = body
+        if body is not None and body != expected.get(name) and body != previous.get(name) and _sha256_file(path) not in legacy:
+            raise ValueError(f'user/previous-version conflict: {path}; upstream bytes are unproved')
     for name, body in expected.items():
         path = folder / name
         if not path.exists() or path.read_bytes() != body:
@@ -104,5 +120,13 @@ def install(fetch, root, key, *, run):
     for name, body in expected.items():
         if (folder / name).read_bytes() != body:
             raise ValueError('OpenGrep changed after activation')
+    for name in set(previous)-set(expected):
+        if snapshots[name] is None:
+            continue
+        path = folder/name
+        if path.read_bytes() != snapshots[name]:
+            raise ValueError('OpenGrep previous file changed before removal')
+        path.unlink()
+    _replace_bytes(hint, json.dumps({'version': target.version}).encode(), mode=0o600)
     return [Result('tool:opengrep', 'ok', f'target={target.version}; actual={target.version}; path={executable}; '
                    f'official SHA256 verified; {len(expected)} active files; fresh metadata {target.metadata_sha256}')]

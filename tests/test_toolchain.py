@@ -90,7 +90,7 @@ class ToolchainTests(unittest.TestCase):
         ):
             result = check_tool(PYTHON_SPEC, host='linux')
         self.assertEqual(result.status, 'pass')
-        self.assertIn('older than built', result.message)
+        self.assertIn('older than historically tested', result.message)
 
     def test_optional_missing_is_info_not_fail(self) -> None:
         spec = {

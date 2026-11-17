@@ -15,6 +15,7 @@ from typing import Callable
 
 Fetch = Callable[[str], bytes]
 MAX_METADATA_BYTES = 2 * 1024 * 1024
+MAX_PYPI_CATALOG_BYTES = 64 * 1024 * 1024
 _FINAL = re.compile(r'v?(\d+(?:\.\d+){1,3})(?:\.post(\d+))?\Z')
 
 
@@ -28,11 +29,21 @@ def stable(value: object) -> tuple[int, ...] | None:
 
 def metadata(fetch: Fetch, url: str):
     raw = fetch(url)
-    if type(raw) is not bytes or not raw or len(raw) > MAX_METADATA_BYTES:
+    parsed = urllib.parse.urlsplit(url)
+    limit = MAX_PYPI_CATALOG_BYTES if parsed.netloc == 'pypi.org' and re.fullmatch(r'/pypi/[A-Za-z0-9_.-]+/json', parsed.path) else MAX_METADATA_BYTES
+    if type(raw) is not bytes or not raw or len(raw) > limit:
         raise ValueError('release metadata exceeds bounds or is empty')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('duplicate official release metadata member')
+            value[key] = item
+        return value
     try:
-        return json.loads(raw)
-    except (ValueError, UnicodeError) as exc:
+        return json.loads(raw, object_pairs_hook=unique,
+                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite metadata')))
+    except (ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError('invalid official release metadata') from exc
 
 
@@ -59,24 +70,49 @@ class Target:
             raise ValueError(f'{self.component} {self.version}: artifact integrity mismatch')
 
 
-def github_release(repository: str, fetch: Fetch) -> dict:
+def github_release(repository: str, fetch: Fetch, *, version_key=stable) -> dict:
+    from urllib.error import HTTPError
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('invalid official repository identity')
-    url = f'https://api.github.com/repos/{repository}/releases?per_page=100'
+    url = f'https://api.github.com/repos/{repository}/releases/latest'
     raw = fetch(url)
-    rows = metadata(lambda _: raw, url)
-    if type(rows) is not list or not 0 < len(rows) < 100:
-        raise ValueError('official release listing absent or exhausted; newest stable unproved')
-    final = [r for r in rows if type(r) is dict and r.get('draft') is False
-             and r.get('prerelease') is False and stable(r.get('tag_name'))]
-    if not final:
-        raise ValueError('no supported final upstream release')
-    newest = max(stable(r['tag_name']) for r in final)
-    matches = [r for r in final if stable(r['tag_name']) == newest]
-    if len(matches) != 1:
-        raise ValueError('ambiguous newest stable release')
-    return {**matches[0], 'version': matches[0]['tag_name'].removeprefix('v'), 'repository': repository,
-            'metadata_url': url, 'metadata_sha256': hashlib.sha256(raw).hexdigest()}
+    latest = metadata(lambda _: raw, url)
+    if (type(latest) is not dict or latest.get('draft') is not False
+            or latest.get('prerelease') is not False or not version_key(latest.get('tag_name'))):
+        raise ValueError('official current stable release is unavailable')
+    refs_url = f'https://api.github.com/repos/{repository}/git/matching-refs/tags/'
+    refs_raw = fetch(refs_url)
+    refs = metadata(lambda _: refs_raw, refs_url)
+    if type(refs) is not list or not 0 < len(refs) <= 4096:
+        raise ValueError('official complete tag index unavailable or exceeds bound')
+    names = []
+    for row in refs:
+        ref = row.get('ref', '') if type(row) is dict else ''
+        if type(ref) is not str or not ref.startswith('refs/tags/') or ref in names:
+            raise ValueError('duplicate/invalid official tag reference')
+        names.append(ref)
+    newer = sorted((ref[10:] for ref in names if version_key(ref[10:])
+                    and version_key(ref[10:]) > version_key(latest['tag_name'])), key=version_key, reverse=True)
+    if len(newer) > 16:
+        raise ValueError('published higher-version lookup exceeds bound')
+    observations = [raw, refs_raw]
+    for tag in newer:
+        tagged_url = f'https://api.github.com/repos/{repository}/releases/tags/{tag}'
+        try:
+            tagged_raw = fetch(tagged_url)
+        except HTTPError as exc:
+            if exc.code == 404:
+                continue  # A tag without a published release is not a stable release.
+            raise
+        candidate = metadata(lambda _: tagged_raw, tagged_url)
+        observations.append(tagged_raw)
+        if type(candidate) is not dict or candidate.get('tag_name') != tag:
+            raise ValueError('higher official release identity differs')
+        if candidate.get('draft') is False and candidate.get('prerelease') is False:
+            latest = candidate
+            break
+    return {**latest, 'version': latest['tag_name'].removeprefix('v'), 'repository': repository,
+            'metadata_url': url, 'metadata_sha256': hashlib.sha256(b''.join(observations)).hexdigest()}
 
 
 def github_asset(release: dict, filename: str, *, component: str | None = None) -> Target:
@@ -93,13 +129,16 @@ def github_asset(release: dict, filename: str, *, component: str | None = None) 
                   metadata_url=release['metadata_url'], metadata_sha256=release['metadata_sha256'], filename=filename)
 
 
-def npm_release(name: str, fetch: Fetch) -> Target:
+def npm_release(name: str, fetch: Fetch, *, version: str | None = None) -> Target:
     if not re.fullmatch(r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]+', name):
         raise ValueError('invalid npm publication identity')
-    url = 'https://registry.npmjs.org/' + urllib.parse.quote(name, safe='@') + '/latest'
+    if version is not None and not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9_.-]+)?(?:\+[A-Za-z0-9_.-]+)?', version):
+        raise ValueError('invalid locked npm version')
+    url = 'https://registry.npmjs.org/' + urllib.parse.quote(name, safe='@') + '/' + (version or 'latest')
     raw = fetch(url)
     row = metadata(lambda _: raw, url)
-    if type(row) is not dict or row.get('name') != name or not stable(row.get('version')):
+    if (type(row) is not dict or row.get('name') != name
+            or (row.get('version') != version if version else not stable(row.get('version')))):
         raise ValueError('npm latest identity or final version is invalid')
     dist = row.get('dist', {})
     artifact = dist.get('tarball', '')
@@ -122,11 +161,30 @@ def pypi_version(name: str, fetch: Fetch) -> str:
     if type(row) is not dict or row.get('info', {}).get('name', '').lower().replace('_', '-') != name.lower().replace('_', '-'):
         raise ValueError('PyPI project identity differs')
     releases = row.get('releases', {})
-    final = [v for v, files in releases.items() if stable(v) and files
-             and all(type(f) is dict and f.get('yanked') is not True for f in files)]
+    final = [v for v, files in releases.items() if pep440_final(v) and files
+             and any(type(f) is dict and f.get('yanked') is False for f in files)]
     if not final:
         raise ValueError(f'{name}: no current final non-yanked PyPI release')
-    return max(final, key=stable)
+    selected = max(final, key=pep440_final)
+    if any(pep440_final(v) and pep440_final(v) > pep440_final(selected) and not files for v, files in releases.items()):
+        raise ValueError(f'{name}: newest final release has no artifacts; no older fallback')
+    return selected
+
+
+def pep440_final(value):
+    """Final PEP440 ordering, including epoch/post/local; pre/dev are ineligible."""
+    if type(value) is not str or len(value) > 128:
+        return None
+    match = re.fullmatch(r'\s*v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:(?:[-_.]?(?:post|rev|r)[-_.]?(\d+))|-(\d+))?'
+                         r'(?:\+([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*))?\s*', value, re.I)
+    if not match:
+        return None
+    release = tuple(int(p) for p in match[2].split('.'))
+    if len(release) > 32:
+        raise ValueError('PEP440 release precision exceeds finite bound')
+    local = tuple((1, int(p)) if p.isdigit() else (0, p.lower())
+                  for p in re.split('[-_.]', match[5] or '') if p)
+    return int(match[1] or 0), release+(0,)*(32-len(release)), int(match[3] or match[4] or -1), local
 
 
 def node_release(fetch: Fetch, system: str, architecture: str) -> Target:
@@ -196,18 +254,24 @@ def python_windows(fetch: Fetch, architecture: str) -> Target:
 
 
 def git_windows(fetch: Fetch, architecture: str) -> Target:
-    url = 'https://api.github.com/repos/git-for-windows/git/releases/latest'
-    raw = fetch(url)
-    row = metadata(lambda _: raw, url)
+    def vendor_version(value):
+        match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)\.windows\.(\d+)', str(value))
+        return tuple(int(p) for p in match.groups()) if match else None
+    row = github_release('git-for-windows/git', fetch, version_key=vendor_version)
     match = re.fullmatch(r'v(\d+\.\d+\.\d+\.windows\.\d+)', str(row.get('tag_name', '')))
     if not match or row.get('draft') is not False or row.get('prerelease') is not False:
         raise ValueError('Git for Windows newest stable vendor build unavailable')
     version = match[1]
     base = version.split('.windows.')[0]
     suffix = {'x64': '64-bit', 'amd64': '64-bit', 'arm64': 'arm64', 'x86': '32-bit'}.get(architecture)
-    release = {**row, 'version': version, 'repository': 'git-for-windows/git',
-               'metadata_url': url, 'metadata_sha256': hashlib.sha256(raw).hexdigest()}
-    return github_asset(release, f'MinGit-{base}-{suffix}.zip', component='git')
+    release = row
+    build = version.rsplit('.', 1)[-1]
+    names = [a.get('name') for a in row.get('assets', []) if type(a) is dict and
+             re.fullmatch(r'MinGit-'+re.escape(base)+r'(?:\.'+re.escape(build)+r')?-'+str(suffix)+r'\.zip',
+                          str(a.get('name')))]
+    if len(names) != 1:
+        raise ValueError('Git current vendor-build native ZIP unavailable or ambiguous')
+    return github_asset(release, names[0], component='git')
 
 
 def composer_release(fetch: Fetch) -> Target:
@@ -260,3 +324,82 @@ def php_windows(fetch: Fetch, architecture: str) -> Target:
     return Target('php', version, 'https://downloads.php.net/~windows/releases/'+filename, sha256=sha,
                   filename=filename, metadata_url=url, metadata_sha256=hashlib.sha256(global_raw+raw).hexdigest(),
                   requirements={'runtime': 'Visual C++ Redistributable 2015-2022; probe must succeed'})
+
+
+class _ReleaseHTML:
+    @staticmethod
+    def read(raw):
+        from html.parser import HTMLParser
+        class Reader(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.text, self.rows, self.row, self.code = [], [], None, 0
+            def handle_starttag(self, tag, attrs):
+                if tag == 'tr':
+                    self.row = {'urls': [], 'code': []}
+                if self.row is not None and tag == 'a':
+                    self.row['urls'].extend(v for k, v in attrs if k == 'href')
+                if tag == 'code':
+                    self.code += 1
+            def handle_endtag(self, tag):
+                if tag == 'tr' and self.row is not None:
+                    self.rows.append(self.row)
+                    self.row = None
+                if tag == 'code':
+                    self.code = max(0, self.code-1)
+            def handle_data(self, data):
+                self.text.append(data)
+                if self.row is not None and self.code:
+                    self.row['code'].append(data)
+        if len(raw) > MAX_METADATA_BYTES:
+            raise ValueError('official release HTML exceeds bound')
+        parser = Reader()
+        parser.feed(raw.decode('utf-8'))
+        return ' '.join(parser.text), parser.rows
+
+
+def python_source(fetch: Fetch) -> Target:
+    url = 'https://www.python.org/downloads/'
+    raw = fetch(url)
+    text, _ = _ReleaseHTML.read(raw)
+    versions = re.findall(r'Python\s+(\d+\.\d+\.\d+)(?![\w.])', text)
+    if not versions:
+        raise ValueError('Python global stable release unavailable')
+    version = max(versions, key=stable)
+    page = f'https://www.python.org/downloads/release/python-{version.replace(".", "")}/'
+    detail = fetch(page)
+    _, rows = _ReleaseHTML.read(detail)
+    artifact = f'https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz'
+    hashes = []
+    for row in rows:
+        if artifact in [urllib.parse.urljoin(page, link) for link in row['urls']]:
+            hashes.extend(re.findall('[a-f0-9]{64}', ''.join(row['code']).replace(' ', '').replace('\n', '')))
+    if len(hashes) != 1:
+        raise ValueError('Python current source SHA256 unavailable/ambiguous')
+    return Target('python', version, artifact, sha256=hashes[0], filename=f'Python-{version}.tar.xz',
+                  metadata_url=page, metadata_sha256=hashlib.sha256(raw+detail).hexdigest(),
+                  requirements={'route': 'per-user source build; compiler/OpenSSL/venv prerequisites required',
+                                'signature_material': artifact+'.sigstore', 'signature_verified': False})
+
+
+def git_source(fetch: Fetch) -> Target:
+    url = 'https://git-scm.com/install/'
+    raw = fetch(url)
+    text, _ = _ReleaseHTML.read(raw)
+    versions = re.findall(r'Latest version:\s*(\d+(?:\.\d+){1,3})(?![\w.])', text)
+    if len(versions) != 1:
+        raise ValueError('Git official global stable release unavailable/ambiguous')
+    version = versions[0]
+    filename = f'git-{version}.tar.xz'
+    sums_url = 'https://www.kernel.org/pub/software/scm/git/sha256sums.asc'
+    sums = fetch(sums_url)
+    if len(sums) > MAX_METADATA_BYTES:
+        raise ValueError('Git official checksum metadata exceeds bound')
+    hashes = re.findall(rb'(?m)^([a-f0-9]{64})  '+re.escape(filename.encode())+rb'\r?$', sums)
+    if len(hashes) != 1:
+        raise ValueError('Git exact current source archive SHA256 unavailable/ambiguous')
+    return Target('git', version, 'https://www.kernel.org/pub/software/scm/git/'+filename,
+                  sha256=hashes[0].decode(), filename=filename, metadata_url=url,
+                  metadata_sha256=hashlib.sha256(raw+sums).hexdigest(),
+                  requirements={'route': 'per-user source build; compiler/make/curl/OpenSSL prerequisites required',
+                                'signature_material': sums_url, 'signature_verified': False})
