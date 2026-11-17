@@ -57,6 +57,11 @@ def main() -> None:
         context = unavailable_authority_notice(root) or 'No active route. Submit a development task to classify work.'
     context += package_note
     model_note = startup_note(root, harness())
+    if os.name == 'nt':
+        model_note += (' Installing pwsh does not change this client\'s current tool shell. '
+                       'Use PowerShell 5.1 syntax when the tool runs powershell.exe; '
+                       'use PowerShell 7 operators only when the client explicitly runs pwsh. '
+                       'Hook launchers and shell tools have separate shell contracts.')
     context = f'{context} {model_note}'
     note = _tool_update_note()
     if note:
