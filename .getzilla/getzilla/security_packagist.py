@@ -198,9 +198,23 @@ def satisfies(value, constraint):
     return any(answers)
 
 
+
+def _lock_identity(dependency):
+    from .security_artifacts import ArtifactError, safe_parts
+    value = dependency.get('manifest')
+    try:
+        parts = safe_parts(value) if type(value) is str else ()
+    except ArtifactError:
+        parts = ()
+    if not parts or parts[-1] != 'composer.lock':
+        raise error('license-transitive-coverage', 'Packagist requires an explicit normalized relative composer.lock identity')
+    return value
+
+
 def closure(metadata, dep, dependencies, environment):
     if metadata.get('requires_external'):
         raise error('license-transitive-coverage', 'Composer virtual providers/replacements need qualified coverage')
+    lock = _lock_identity(dep)
     for name, constraints in metadata['requires']:
         if name in {'php', 'composer', 'composer-plugin-api', 'composer-runtime-api'} or re.fullmatch(r'(?:ext|lib)-[a-z0-9][a-z0-9_-]*', name):
             platform = environment.get('composer_platform', {})
@@ -213,7 +227,7 @@ def closure(metadata, dep, dependencies, environment):
         key(name, '1.0.0')
         matches = [d for d in dependencies if d.get('ecosystem') == 'Packagist' and d.get('name') == name
                    and d.get('delivery_context') == dep.get('delivery_context')
-                   and d.get('manifest') == dep.get('manifest')]
+                   and _lock_identity(d) == lock]
         versions = {d.get('version') for d in matches}
         if len(versions) != 1 or not satisfies(next(iter(versions)), constraints):
             raise error('license-transitive-coverage', 'Composer requires one exact covered transitive version')
@@ -224,6 +238,6 @@ def closure(metadata, dep, dependencies, environment):
         key(name, '1.0.0')
         matches = [d for d in dependencies if d.get('ecosystem') == 'Packagist' and d.get('name') == name
                    and d.get('delivery_context') == dep.get('delivery_context')
-                   and d.get('manifest') == dep.get('manifest')]
+                   and _lock_identity(d) == lock]
         if any(satisfies(d.get('version'), constraints) for d in matches):
             raise error('license-transitive-coverage', 'Covered Composer version conflicts with artifact requirements')

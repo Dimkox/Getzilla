@@ -40,7 +40,10 @@ PHP opening tag are source code, not separate license-text documents. Other
 license/copying/notice candidates still require the ordinary text validation.
 
 Runtime package requirements must be covered by one exact version in the same
-Composer lock manifest and delivery context. Supported stable constraints are
+Composer lock manifest and delivery context. Every Packagist dependency must
+supply an explicit nonempty normalized relative `composer.lock` path. Missing,
+absolute, traversal or non-lock manifest identities refuse closure; two unknown
+identities never establish shared scope. Supported stable constraints are
 numeric equality/comparisons, `^`, `~`, comma/space conjunction, `||` alternatives
 and `*`. Unknown forms refuse; this adapter is not Composer's resolver. An
 installed package matching a declared conflict refuses. Virtual provide/replace
