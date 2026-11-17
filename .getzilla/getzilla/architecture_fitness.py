@@ -2493,8 +2493,10 @@ def _operation_dependencies(
     requested: frozenset[str] = frozenset(),
 ) -> _OperationDependencies:
     """Return names that can feed a changed callable/decorator expression."""
+    # This invocation owns a fresh index, so caller mutation cannot reuse facts.
+    nodes = tuple(ast.walk(tree))
     dependencies: set[str] = set(requested)
-    for node in ast.walk(tree):
+    for node in nodes:
         values: list[ast.AST] = []
         if isinstance(node, ast.Call):
             values.append(node.func)
@@ -2506,7 +2508,7 @@ def _operation_dependencies(
             )
     assignments: dict[str, set[str]] = {}
     imported_names = {
-        alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        alias.asname or alias.name for node in nodes if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
     def target_names(target: ast.AST) -> set[str]:
@@ -2519,7 +2521,7 @@ def _operation_dependencies(
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             return {target.value.id}
         return set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 for name in target_names(target):
