@@ -27,6 +27,7 @@ import yaml  # Load the qualified syntax reader before closing fixture I/O.
 from getzilla import expanded_security as expanded
 from getzilla import security_cli as cli
 from getzilla import security_inventory as inventory
+from getzilla import security_oci as oci
 from getzilla import security_tools as tools
 from getzilla.security_data import SecurityDataError
 
@@ -532,6 +533,113 @@ class CoreApiTests(unittest.TestCase):
                                 self.fail('invalid graph accepted')
                     finally:
                         self.snapshot = previous
+
+
+class CoreApiReviewRegressionTests(unittest.TestCase):
+    """Fresh review repairs; execute no earlier test method or scanner effect."""
+
+    def setUp(self):
+        scratch = PROJECT / '.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        directory = tempfile.TemporaryDirectory(prefix='owned-oci-review-repair-', dir=scratch)
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name)
+        self.workspace = self.base / 'workspace'
+        self.workspace.mkdir()
+        guard = fixture_guard(self.base)
+        guard.__enter__()
+        self.addCleanup(guard.__exit__, None, None, None)
+
+    def nested_graph(self):
+        layout = self.base / 'layout'
+        blobs = layout / 'blobs/sha256'
+        blobs.mkdir(parents=True)
+
+        def store(media, raw):
+            digest = hashlib.sha256(raw).hexdigest()
+            (blobs / digest).write_bytes(raw)
+            return dict(mediaType=media, digest='sha256:' + digest, size=len(raw))
+
+        manifests, configs, layers = {}, {}, {}
+        for architecture in ('amd64', 'arm64'):
+            payload = io.BytesIO()
+            body = ('owned-' + architecture).encode()
+            with tarfile.open(fileobj=payload, mode='w') as archive:
+                member = tarfile.TarInfo('platform.txt')
+                member.size = len(body)
+                archive.addfile(member, io.BytesIO(body))
+            layers[architecture] = store(oci.TAR, payload.getvalue())
+            configs[architecture] = store(oci.CONFIG, encoded(dict(os='linux', architecture=architecture,
+                rootfs=dict(type='layers', diff_ids=[layers[architecture]['digest']]))))
+            manifests[architecture] = store(oci.MANIFEST, encoded(dict(schemaVersion=2, mediaType=oci.MANIFEST,
+                config=configs[architecture], layers=[layers[architecture]])))
+            manifests[architecture]['platform'] = dict(os='linux', architecture=architecture)
+        nested = store(oci.INDEX, encoded(dict(schemaVersion=2, mediaType=oci.INDEX,
+            manifests=[manifests['amd64'], manifests['arm64']])))
+        (layout / 'oci-layout').write_bytes(encoded({'imageLayoutVersion': '1.0.0'}))
+        (layout / 'index.json').write_bytes(encoded(dict(schemaVersion=2, manifests=[nested])))
+        reference = 'owned/review-graph@' + nested['digest']
+        current = dict(complete=True, gaps=[], digest='d' * 64,
+                       images=[dict(reference=reference, platform='linux/amd64')])
+        profile = dict(oci.LIMITS, images=[reference], platform='linux/amd64',
+                       max_images=1, max_compressed_bytes=65536, max_unpacked_bytes=65536,
+                       max_storage_bytes=65536, max_manifest_bytes=16384, max_layers=2, deadline_seconds=30)
+        catalog = dict(schema_version=1, inventory_sha256=current['digest'],
+                       records=[dict(reference=reference, platform='linux/amd64', layout=str(layout))])
+        return catalog, current, profile, blobs, manifests, configs, layers
+
+    def test_nested_two_platform_graph_requires_nonselected_sibling(self):
+        catalog, current, profile, blobs, manifests, configs, _ = self.nested_graph()
+        with oci.import_layouts(catalog, current, profile, self.workspace) as images:
+            self.assertEqual(len(images), 1)
+            image = images[0]
+            self.assertEqual(image.reference, current['images'][0]['reference'])
+            self.assertEqual(image.platform, 'linux/amd64')
+            self.assertEqual(image.manifest_digest, manifests['amd64']['digest'])
+            self.assertEqual(image.config_digest, configs['amd64']['digest'])
+            singleton = json.loads((image.layout / 'index.json').read_bytes())
+            self.assertEqual(singleton['manifests'], [manifests['amd64']])
+            oci.scanner_identity({'Metadata': {'ImageID': configs['amd64']['digest']}}, image)
+            private = image.layout
+        self.assertFalse(private.exists())
+
+        sibling = blobs / manifests['arm64']['digest'][7:]
+        original = sibling.read_bytes()
+        for damage in ('missing', 'equal-size-corruption'):
+            with self.subTest(damage=damage):
+                if damage == 'missing':
+                    sibling.unlink()
+                else:
+                    changed = bytearray(original)
+                    changed[0] ^= 1
+                    sibling.write_bytes(changed)
+                    self.assertEqual(sibling.stat().st_size, len(original))
+                try:
+                    with self.assertRaises(oci.OCIError, msg='non-selected sibling must remain fully verified'):
+                        with oci.import_layouts(catalog, current, profile, self.workspace):
+                            pass
+                finally:
+                    sibling.write_bytes(original)
+
+    def test_equal_size_retained_layer_damage_refuses_scanner_identity(self):
+        catalog, current, profile, _, _, configs, layers = self.nested_graph()
+        with oci.import_layouts(catalog, current, profile, self.workspace) as images:
+            image = images[0]
+            report = {'Metadata': {'ImageID': configs['amd64']['digest']}}
+            oci.scanner_identity(report, image)
+            layer = image.layout / 'blobs/sha256' / layers['amd64']['digest'][7:]
+            original = layer.read_bytes()
+            changed = bytearray(original)
+            changed[512] ^= 1  # Alter file contents, retaining tar length/header.
+            layer.write_bytes(changed)
+            self.assertNotEqual(bytes(changed), original)
+            self.assertEqual(layer.stat().st_size, len(original))
+            self.assertEqual(report['Metadata']['ImageID'], image.config_digest)
+            self.assertGreater(image.remaining_seconds(), 0)
+            with self.assertRaisesRegex(oci.OCIError, 'Private OCI graph changed during scanning'):
+                oci.scanner_identity(report, image)
+            private = image.layout
+        self.assertFalse(private.exists())
 
 
 if __name__ == '__main__':
