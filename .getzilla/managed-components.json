@@ -5194,15 +5194,15 @@
           "sha256": "807e1bb7eacd5d8b3b41434cad7a834dd3e2553bdf1f879c275f90467fc6a7aa"
         },
         "post_tool_use.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "pre_compact.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "pre_tool_use.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "ruff.toml": {
@@ -5398,27 +5398,27 @@
           "sha256": "e7501913357e1475c541defa41d6aee6343c3985a936dbbf8b1f417014b5ac2b"
         },
         "session_end.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "session_start.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "stop_gate.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "subagent_start.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "subagent_stop.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         },
         "user_prompt_submit.py": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
         }
       }
@@ -6278,7 +6278,7 @@
           "sha256": "e3056131edbf1ada5f609dbc881c429be0ec9bb6b30d55ea15514b7e6b894065"
         },
         "factory/README.md": {
-          "mode": 436,
+          "mode": 420,
           "sha256": "cc3c0147b49d92c5661843a58017f5662b67d5acfa4b2e464e22d7dc8be9c844"
         },
         "factory/actors.example.json": {
