@@ -71,6 +71,8 @@ def _allowed_skip(name: str, summary: str, docs_scope: dict[str, object] | None)
         return summary == "no python quality paths"
     if name == "bandit":
         return summary == "no non-test python paths"
+    if name == "php-lint":
+        return summary == "no changed PHP files"
     if name == "architecture-inputs":
         return summary == "architecture authority inputs are absent; not executed"
     if name == "change-spec":
