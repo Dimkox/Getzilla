@@ -671,497 +671,6 @@
   "edges": [
     {
       "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-LOCAL-API",
-      "id": "EDGE-FACTORY-API-CONTROL",
-      "network_policy": "no_network",
-      "protocol": "unix_http",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-CONTROL",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 1000
-      },
-      "from": "NODE-FACTORY-LOCAL-API",
-      "id": "EDGE-FACTORY-INSTALLER-LOOPBACK-PREFLIGHT",
-      "network_policy": "local_only",
-      "protocol": "tcp",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LOCAL-API",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 300000
-      },
-      "from": "NODE-FACTORY-LOCAL-API",
-      "id": "EDGE-FACTORY-API-LANDING-DOGFOOD",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-DOGFOOD",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-LANDING-DOGFOOD",
-      "id": "EDGE-FACTORY-LANDING-SQLITE",
-      "network_policy": "no_network",
-      "protocol": "sqlite",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-SQLITE",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
-      "id": "EDGE-FACTORY-LANDING-LIVE-EXECUTORS",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-DOGFOOD",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
-      "id": "EDGE-FACTORY-LANDING-LIVE-MODELS",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-MODEL-PROVIDER",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-FACTORY-STATE",
-        "DATA-FACTORY-AUDIT"
-      ],
-      "authentication": "database_role",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 2,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-DURABLE-STATE-FAILURE",
-        "terminal_action": "dead_letter",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-CONTROL",
-      "id": "EDGE-FACTORY-CONTROL-POSTGRES",
-      "network_policy": "local_only",
-      "protocol": "postgresql",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-POSTGRES",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-CONTROL",
-      "id": "EDGE-FACTORY-CONTROL-EXECUTION-CORE",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-EXECUTION-CORE",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-PROVIDER-ADAPTERS",
-      "id": "EDGE-FACTORY-ADAPTERS-EXECUTION-CORE",
-      "network_policy": "no_network",
-      "protocol": "jsonl",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-EXECUTION-CORE",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-FACTORY-RESULT-DISPATCHER",
-      "id": "EDGE-FACTORY-INTERNAL-RESULT-HANDOFF-UDS",
-      "network_policy": "local_only",
-      "protocol": "unix_http",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-EXECUTION-CORE",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-CONTROL",
-      "id": "EDGE-FACTORY-CONTROL-PROPOSAL-BROKER",
-      "network_policy": "no_network",
-      "protocol": "python_call",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-PROPOSAL-BROKER",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-PROPOSAL-BROKER",
-      "id": "EDGE-FACTORY-PROPOSAL-BROKER-EXECUTION-CORE",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-EXECUTION-CORE",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-CONTROL",
-      "id": "EDGE-FACTORY-CONTROL-WORKSPACE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-WORKSPACE-BROKER",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE",
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-WORKSPACE-BROKER",
-      "id": "EDGE-FACTORY-WORKSPACE-CONTROL",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-CONTROL",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-LOCAL-ROUTE-POLICY",
-      "id": "EDGE-ROUTE-CHANGE-EVIDENCE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-CHANGE-SPEC-EVIDENCE",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-CHANGE-EVIDENCE",
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-CHANGE-SPEC-EVIDENCE",
-      "id": "EDGE-CHANGE-LOCAL-VERIFIER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "batch",
-      "to": "NODE-LOCAL-VERIFIER",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-LOCAL-VERIFIER",
-      "id": "EDGE-LOCAL-VERIFIER-SEO-LAB",
-      "network_policy": "local_only",
-      "protocol": "tcp",
-      "sync_or_async": "synchronous",
-      "to": "NODE-SEO-SHOWCASE-LAB",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-GOVERNANCE-REGISTRIES",
-      "id": "EDGE-GOVERNANCE-REGISTRIES-VALIDATOR",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-GOVERNANCE-VALIDATOR",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-GOVERNANCE-EVIDENCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-GOVERNANCE-VALIDATOR",
-      "id": "EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-LOCAL-VERIFIER",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-PR-PROJECTION"
-      ],
-      "authentication": "signature",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-WEBHOOK-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-GITHUB",
-      "id": "EDGE-GITHUB-TRUST-CI-API",
-      "network_policy": "external_managed",
-      "protocol": "https",
-      "sync_or_async": "asynchronous",
-      "to": "NODE-TRUST-CI-API",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-APPROVAL"
-      ],
-      "authentication": "human_signature",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-APPROVAL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-HUMAN-APPROVAL",
-      "id": "EDGE-HUMAN-TRUST-CI-API",
-      "network_policy": "external_managed",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-TRUST-CI-API",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
         "DATA-APPROVAL",
         "DATA-ATTESTATION",
         "DATA-JOB-STATE"
@@ -1182,31 +691,6 @@
       "network_policy": "local_only",
       "protocol": "postgresql",
       "sync_or_async": "synchronous",
-      "to": "NODE-TRUST-CI-POSTGRES",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-APPROVAL",
-        "DATA-ATTESTATION",
-        "DATA-JOB-STATE"
-      ],
-      "authentication": "database_role",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 3,
-        "mode": "retry_bounded",
-        "observable_signal": "SIG-WORKER-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-TRUST-CI-WORKER",
-      "id": "EDGE-WORKER-POSTGRES",
-      "network_policy": "local_only",
-      "protocol": "postgresql",
-      "sync_or_async": "asynchronous",
       "to": "NODE-TRUST-CI-POSTGRES",
       "type": "data_flow"
     },
@@ -1259,238 +743,6 @@
     },
     {
       "allowed_data": [
-        "DATA-REPOSITORY-SOURCE",
-        "DATA-CHECK-STATUS"
-      ],
-      "authentication": "github_app",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 20000
-      },
-      "from": "NODE-OPTIONAL-GITHUB-OBSERVER",
-      "id": "EDGE-OPTIONAL-GET-GITHUB",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-GITHUB",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-CHECK-STATUS"
-      ],
-      "authentication": "github_app",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 3,
-        "mode": "retry_bounded",
-        "observable_signal": "SIG-PUBLICATION-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-TRUST-CI-WORKER",
-      "id": "EDGE-WORKER-GITHUB-PUBLICATION",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "asynchronous",
-      "to": "NODE-GITHUB",
-      "type": "publication"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 3,
-        "mode": "retry_bounded",
-        "observable_signal": "SIG-WORKSPACE-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-TRUST-CI-WORKER",
-      "id": "EDGE-WORKER-WORKSPACE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "batch",
-      "to": "NODE-EXACT-SHA-WORKSPACE",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-JOB-STATE"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 3,
-        "mode": "retry_bounded",
-        "observable_signal": "SIG-DOCKER-API-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-TRUST-CI-WORKER",
-      "id": "EDGE-WORKER-DOCKER-TCP-2375",
-      "network_policy": "local_only",
-      "protocol": "docker_api",
-      "sync_or_async": "synchronous",
-      "to": "NODE-DOCKER-ENGINE",
-      "type": "deployment"
-    },
-    {
-      "allowed_data": [
-        "DATA-JOB-STATE"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 3,
-        "mode": "retry_bounded",
-        "observable_signal": "SIG-RUNNER-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-DOCKER-ENGINE",
-      "id": "EDGE-DOCKER-ISOLATED-RUNNER",
-      "network_policy": "isolated_executor",
-      "protocol": "docker_api",
-      "sync_or_async": "synchronous",
-      "to": "NODE-ISOLATED-RUNNER",
-      "type": "deployment"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-RUNNER-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-ISOLATED-RUNNER",
-      "id": "EDGE-RUNNER-WORKSPACE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "batch",
-      "to": "NODE-EXACT-SHA-WORKSPACE",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-HOLDOUT"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-HOLDOUT-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 3600000
-      },
-      "from": "NODE-ISOLATED-RUNNER",
-      "id": "EDGE-RUNNER-EXTERNAL-HOLDOUT",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "batch",
-      "to": "NODE-EXTERNAL-HOLDOUT",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-INTENT",
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-EXECUTION-CORE",
-      "id": "EDGE-FACTORY-EXECUTION-SEMANTIC-VALIDATION",
-      "network_policy": "no_network",
-      "protocol": "json",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-SEMANTIC-VALIDATION",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-EARNED-AUTONOMY",
-      "id": "EDGE-FACTORY-AUTONOMY-SHADOW-HANDOFF",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-SHADOW-HANDOFF",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-STAGED-DELIVERY-SOURCE",
-      "id": "EDGE-STAGED-DELIVERY-EARNED-AUTONOMY",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-EARNED-AUTONOMY",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
         "DATA-CHANGE-EVIDENCE"
       ],
       "authentication": "local_os",
@@ -1502,10 +754,34 @@
         "mode": "fail_closed",
         "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
         "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-CHANGE-SPEC-EVIDENCE",
+      "id": "EDGE-CHANGE-EVIDENCE-WORKFLOW-COMPILER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHANGE-EVIDENCE",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
         "timeout_ms": 3600000
       },
-      "from": "NODE-STAGED-DELIVERY-SOURCE",
-      "id": "EDGE-STAGED-DELIVERY-LOCAL-VERIFIER",
+      "from": "NODE-CHANGE-SPEC-EVIDENCE",
+      "id": "EDGE-CHANGE-LOCAL-VERIFIER",
       "network_policy": "no_network",
       "protocol": "filesystem",
       "sync_or_async": "batch",
@@ -1514,164 +790,26 @@
     },
     {
       "allowed_data": [
-        "DATA-PILOT-STATE"
+        "DATA-REPOSITORY-SOURCE"
       ],
-      "authentication": "local_os",
+      "authentication": "none",
       "direction": "from_to",
       "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
         "max_retries": 0,
         "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
-        "terminal_action": "manual_recovery",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
         "timeout_ms": 5000
       },
-      "from": "NODE-PILOT-CONTROL",
-      "id": "EDGE-PILOT-STATE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-SQLITE",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-PILOT-CONTROL",
-      "id": "EDGE-PILOT-GITHUB-BROKER",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-GITHUB-BROKER",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-EXTERNAL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-PILOT-GITHUB-BROKER",
-      "id": "EDGE-PILOT-GITHUB",
-      "network_policy": "allowlisted_egress",
+      "from": "NODE-LOCAL-DEMO-TEST-CLIENT",
+      "id": "EDGE-DEMO-TEST-CLIENT-LOOPBACK",
+      "network_policy": "local_only",
       "protocol": "https",
       "sync_or_async": "synchronous",
-      "to": "NODE-GITHUB",
-      "type": "publication"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-PILOT-CONTROL",
-      "id": "EDGE-PILOT-CODEX-SUPERVISOR",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-CODEX-SUPERVISOR",
+      "to": "NODE-LOCAL-DEMO-UI",
       "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-EXTERNAL-FAILURE",
-        "terminal_action": "manual_recovery",
-        "timeout_ms": 300000
-      },
-      "from": "NODE-PILOT-CODEX-SUPERVISOR",
-      "id": "EDGE-PILOT-CODEX",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-MODEL-PROVIDER",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-PILOT-CODEX-SUPERVISOR",
-      "id": "EDGE-PILOT-SYNTHETIC-UNIX-PROBE",
-      "network_policy": "no_network",
-      "protocol": "unix_http",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-CODEX-SUPERVISOR",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-PILOT-STATE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 900000
-      },
-      "from": "NODE-PILOT-CONTROL",
-      "id": "EDGE-PILOT-SANDBOX",
-      "network_policy": "no_network",
-      "protocol": "process",
-      "sync_or_async": "synchronous",
-      "to": "NODE-PILOT-SANDBOX",
-      "type": "control"
     },
     {
       "allowed_data": [
@@ -1709,269 +847,38 @@
         "mode": "fail_closed",
         "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
         "terminal_action": "reject",
-        "timeout_ms": 5000
+        "timeout_ms": 15000
       },
-      "from": "NODE-LOCAL-DEMO-TEST-CLIENT",
-      "id": "EDGE-DEMO-TEST-CLIENT-LOOPBACK",
+      "from": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "id": "EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP",
       "network_policy": "local_only",
-      "protocol": "https",
+      "protocol": "tcp",
       "sync_or_async": "synchronous",
-      "to": "NODE-LOCAL-DEMO-UI",
+      "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
       "type": "dependency"
     },
     {
       "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 330000
-      },
-      "from": "NODE-FACTORY-LANDING-FAILOVER",
-      "id": "EDGE-FACTORY-FAILOVER-API",
-      "network_policy": "local_only",
-      "protocol": "unix_http",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LOCAL-API",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-LANDING-FAILOVER",
-      "id": "EDGE-FACTORY-FAILOVER-CONTRACTS",
-      "network_policy": "no_network",
-      "protocol": "in_process",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-DOGFOOD",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-FACTORY-LANDING-INPUT"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-FACTORY-LANDING-FAILOVER",
-      "id": "EDGE-FACTORY-FAILOVER-SQLITE",
-      "network_policy": "no_network",
-      "protocol": "in_process",
-      "sync_or_async": "synchronous",
-      "to": "NODE-FACTORY-LANDING-SQLITE",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-LOCAL-ROUTE-POLICY",
-      "id": "EDGE-ROUTE-WORKFLOW-COMPILER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "type": "control"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-WORKFLOW-ARTIFACT-SOURCES",
-      "id": "EDGE-WORKFLOW-SOURCES-COMPILER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-CHANGE-EVIDENCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "id": "EDGE-WORKFLOW-COMPILER-CHANGE-EVIDENCE",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-CHANGE-SPEC-EVIDENCE",
-      "type": "publication"
-    },
-    {
-      "allowed_data": [
-        "DATA-CHANGE-EVIDENCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "id": "EDGE-WORKFLOW-COMPILER-LOCAL-VERIFIER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-LOCAL-VERIFIER",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-CHANGE-EVIDENCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 30000
-      },
-      "from": "NODE-CHANGE-SPEC-EVIDENCE",
-      "id": "EDGE-CHANGE-EVIDENCE-WORKFLOW-COMPILER",
-      "network_policy": "no_network",
-      "protocol": "filesystem",
-      "sync_or_async": "synchronous",
-      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-ATTESTATION"
+        "DATA-JOB-STATE"
       ],
       "authentication": "none",
       "direction": "from_to",
       "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 300000
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 3,
+        "mode": "retry_bounded",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 3600000
       },
-      "from": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
-      "id": "EDGE-LOCAL-SUPPLY-CHAIN-FETCH",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
+      "from": "NODE-DOCKER-ENGINE",
+      "id": "EDGE-DOCKER-ISOLATED-RUNNER",
+      "network_policy": "isolated_executor",
+      "protocol": "docker_api",
       "sync_or_async": "synchronous",
-      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-PACKAGE-IDENTITY",
-        "DATA-VULNERABILITY-ADVISORY"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
-      "id": "EDGE-SCANNER-OSV-QUERY",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-OSV-API",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-VULNERABILITY-ADVISORY"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
-      "id": "EDGE-SCANNER-OSV-MIRROR-DOWNLOAD",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-OSV-ADVISORY-BUCKET",
-      "type": "dependency"
+      "to": "NODE-ISOLATED-RUNNER",
+      "type": "deployment"
     },
     {
       "allowed_data": [
@@ -2062,11 +969,11 @@
         "timeout_ms": 2000
       },
       "from": "NODE-LOCAL-ENTIRE-ADAPTER",
-      "id": "EDGE-ENTIRE-VERSION-MANIFEST",
+      "id": "EDGE-ENTIRE-VERSION-GITHUB-FALLBACK",
       "network_policy": "external_managed",
       "protocol": "https",
       "sync_or_async": "synchronous",
-      "to": "NODE-ENTIRE",
+      "to": "NODE-GITHUB",
       "type": "dependency"
     },
     {
@@ -2085,12 +992,595 @@
         "timeout_ms": 2000
       },
       "from": "NODE-LOCAL-ENTIRE-ADAPTER",
-      "id": "EDGE-ENTIRE-VERSION-GITHUB-FALLBACK",
+      "id": "EDGE-ENTIRE-VERSION-MANIFEST",
       "network_policy": "external_managed",
       "protocol": "https",
       "sync_or_async": "synchronous",
-      "to": "NODE-GITHUB",
+      "to": "NODE-ENTIRE",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PROVIDER-ADAPTERS",
+      "id": "EDGE-FACTORY-ADAPTERS-EXECUTION-CORE",
+      "network_policy": "no_network",
+      "protocol": "jsonl",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-EXECUTION-CORE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LOCAL-API",
+      "id": "EDGE-FACTORY-API-CONTROL",
+      "network_policy": "no_network",
+      "protocol": "unix_http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-CONTROL",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-FACTORY-LOCAL-API",
+      "id": "EDGE-FACTORY-API-LANDING-DOGFOOD",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-DOGFOOD",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-EARNED-AUTONOMY",
+      "id": "EDGE-FACTORY-AUTONOMY-SHADOW-HANDOFF",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-SHADOW-HANDOFF",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-CONTROL",
+      "id": "EDGE-FACTORY-CONTROL-EXECUTION-CORE",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-EXECUTION-CORE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-FACTORY-STATE",
+        "DATA-FACTORY-AUDIT"
+      ],
+      "authentication": "database_role",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 2,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-DURABLE-STATE-FAILURE",
+        "terminal_action": "dead_letter",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-CONTROL",
+      "id": "EDGE-FACTORY-CONTROL-POSTGRES",
+      "network_policy": "local_only",
+      "protocol": "postgresql",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-POSTGRES",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-CONTROL",
+      "id": "EDGE-FACTORY-CONTROL-PROPOSAL-BROKER",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-PROPOSAL-BROKER",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-CONTROL",
+      "id": "EDGE-FACTORY-CONTROL-WORKSPACE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-WORKSPACE-BROKER",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-INTENT",
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-EXECUTION-CORE",
+      "id": "EDGE-FACTORY-EXECUTION-SEMANTIC-VALIDATION",
+      "network_policy": "no_network",
+      "protocol": "json",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-SEMANTIC-VALIDATION",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 330000
+      },
+      "from": "NODE-FACTORY-LANDING-FAILOVER",
+      "id": "EDGE-FACTORY-FAILOVER-API",
+      "network_policy": "local_only",
+      "protocol": "unix_http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LOCAL-API",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-FAILOVER",
+      "id": "EDGE-FACTORY-FAILOVER-CONTRACTS",
+      "network_policy": "no_network",
+      "protocol": "in_process",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-DOGFOOD",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-FAILOVER",
+      "id": "EDGE-FACTORY-FAILOVER-SQLITE",
+      "network_policy": "no_network",
+      "protocol": "in_process",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1000
+      },
+      "from": "NODE-FACTORY-LOCAL-API",
+      "id": "EDGE-FACTORY-INSTALLER-LOOPBACK-PREFLIGHT",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LOCAL-API",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-FACTORY-RESULT-DISPATCHER",
+      "id": "EDGE-FACTORY-INTERNAL-RESULT-HANDOFF-UDS",
+      "network_policy": "local_only",
+      "protocol": "unix_http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-EXECUTION-CORE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-DOGFOOD",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-FACTORY-LANDING-LIVE-MODELS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-MODEL-PROVIDER",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-DOGFOOD",
+      "id": "EDGE-FACTORY-LANDING-SQLITE",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PROPOSAL-BROKER",
+      "id": "EDGE-FACTORY-PROPOSAL-BROKER-EXECUTION-CORE",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-EXECUTION-CORE",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-STATE",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-WORKSPACE-BROKER",
+      "id": "EDGE-FACTORY-WORKSPACE-CONTROL",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-CONTROL",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-PR-PROJECTION"
+      ],
+      "authentication": "signature",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-WEBHOOK-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-GITHUB",
+      "id": "EDGE-GITHUB-TRUST-CI-API",
+      "network_policy": "external_managed",
+      "protocol": "https",
+      "sync_or_async": "asynchronous",
+      "to": "NODE-TRUST-CI-API",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-GOVERNANCE-REGISTRIES",
+      "id": "EDGE-GOVERNANCE-REGISTRIES-VALIDATOR",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GOVERNANCE-VALIDATOR",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-GOVERNANCE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-GOVERNANCE-VALIDATOR",
+      "id": "EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-VERIFIER",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-APPROVAL"
+      ],
+      "authentication": "human_signature",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-APPROVAL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-HUMAN-APPROVAL",
+      "id": "EDGE-HUMAN-TRUST-CI-API",
+      "network_policy": "external_managed",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-TRUST-CI-API",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-LIVE-COMPONENT-OBSERVER",
+      "id": "EDGE-LIVE-OBSERVER-DOCKER",
+      "network_policy": "local_only",
+      "protocol": "docker_api",
+      "sync_or_async": "synchronous",
+      "to": "NODE-DOCKER-ENGINE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 1800000
+      },
+      "from": "NODE-LIVE-COMPONENT-OBSERVER",
+      "id": "EDGE-LIVE-OBSERVER-POSTGRES",
+      "network_policy": "local_only",
+      "protocol": "postgresql",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LIVE-DISPOSABLE-POSTGRES",
+      "type": "data_flow"
     },
     {
       "allowed_data": [
@@ -2109,6 +1599,168 @@
       },
       "from": "NODE-LOCAL-CI-GATE",
       "id": "EDGE-LOCAL-CI-GITHUB-VISIBILITY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 15000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW",
+      "network_policy": "no_network",
+      "protocol": "python_call",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-ATTESTATION"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 300000
+      },
+      "from": "NODE-LOCAL-SUPPLY-CHAIN-UPDATER",
+      "id": "EDGE-LOCAL-SUPPLY-CHAIN-FETCH",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-LOCAL-VERIFIER-SEO-LAB",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEO-SHOWCASE-LAB",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE",
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "github_app",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 20000
+      },
+      "from": "NODE-OPTIONAL-GITHUB-OBSERVER",
+      "id": "EDGE-OPTIONAL-GET-GITHUB",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-CISA",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CISA-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-EPSS",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-EPSS-SECURITY-FEED",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
       "sync_or_async": "synchronous",
@@ -2164,75 +1816,6 @@
     },
     {
       "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 10000
-      },
-      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
-      "id": "EDGE-OPTIONAL-SECURITY-GITHUB-ASSETS",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-GITHUB",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-VULNERABILITY-ADVISORY"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 10000
-      },
-      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
-      "id": "EDGE-OPTIONAL-SECURITY-CISA",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-CISA-SECURITY-FEED",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-VULNERABILITY-ADVISORY"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 10000
-      },
-      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
-      "id": "EDGE-OPTIONAL-SECURITY-EPSS",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-EPSS-SECURITY-FEED",
-      "type": "dependency"
-    },
-    {
-      "allowed_data": [
         "DATA-PACKAGE-IDENTITY",
         "DATA-REPOSITORY-SOURCE"
       ],
@@ -2257,31 +1840,261 @@
     },
     {
       "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
+        "DATA-PILOT-STATE"
       ],
-      "authentication": "none",
+      "authentication": "external_managed",
       "direction": "from_to",
       "failure_behavior": {
-        "correlation_id": "not_required",
+        "correlation_id": "required",
         "idempotency": "not_required",
         "max_retries": 0,
         "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 15000
+        "observable_signal": "SIG-PILOT-EXTERNAL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 300000
       },
-      "from": "NODE-LOCAL-VERIFIER",
-      "id": "EDGE-LOCAL-EXPLICIT-DESIGN-PREVIEW",
+      "from": "NODE-PILOT-CODEX-SUPERVISOR",
+      "id": "EDGE-PILOT-CODEX",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PILOT-MODEL-PROVIDER",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-PILOT-CONTROL",
+      "id": "EDGE-PILOT-CODEX-SUPERVISOR",
       "network_policy": "no_network",
-      "protocol": "python_call",
+      "protocol": "python_import",
       "sync_or_async": "synchronous",
-      "to": "NODE-OPTIONAL-DESIGN-PREVIEW",
+      "to": "NODE-PILOT-CODEX-SUPERVISOR",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-EXTERNAL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-PILOT-GITHUB-BROKER",
+      "id": "EDGE-PILOT-GITHUB",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-GITHUB",
+      "type": "publication"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-PILOT-CONTROL",
+      "id": "EDGE-PILOT-GITHUB-BROKER",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PILOT-GITHUB-BROKER",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 900000
+      },
+      "from": "NODE-PILOT-CONTROL",
+      "id": "EDGE-PILOT-SANDBOX",
+      "network_policy": "no_network",
+      "protocol": "process",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PILOT-SANDBOX",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-PILOT-CONTROL",
+      "id": "EDGE-PILOT-STATE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PILOT-SQLITE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-PILOT-STATE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-PILOT-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-PILOT-CODEX-SUPERVISOR",
+      "id": "EDGE-PILOT-SYNTHETIC-UNIX-PROBE",
+      "network_policy": "no_network",
+      "protocol": "unix_http",
+      "sync_or_async": "synchronous",
+      "to": "NODE-PILOT-CODEX-SUPERVISOR",
+      "type": "control"
     },
     {
       "allowed_data": [
         "DATA-REPOSITORY-SOURCE"
       ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-ROUTE-CHANGE-EVIDENCE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CHANGE-SPEC-EVIDENCE",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-ROUTE-WORKFLOW-COMPILER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-HOLDOUT"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-HOLDOUT-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 3600000
+      },
+      "from": "NODE-ISOLATED-RUNNER",
+      "id": "EDGE-RUNNER-EXTERNAL-HOLDOUT",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "batch",
+      "to": "NODE-EXTERNAL-HOLDOUT",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-RUNNER-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 3600000
+      },
+      "from": "NODE-ISOLATED-RUNNER",
+      "id": "EDGE-RUNNER-WORKSPACE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "batch",
+      "to": "NODE-EXACT-SHA-WORKSPACE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-VULNERABILITY-ADVISORY"
+      ],
       "authentication": "none",
       "direction": "from_to",
       "failure_behavior": {
@@ -2291,19 +2104,20 @@
         "mode": "fail_closed",
         "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
         "terminal_action": "reject",
-        "timeout_ms": 15000
+        "timeout_ms": 60000
       },
-      "from": "NODE-OPTIONAL-DESIGN-PREVIEW",
-      "id": "EDGE-DESIGN-PREVIEW-CONTROLLED-LOOPBACK-HTTP",
-      "network_policy": "local_only",
-      "protocol": "tcp",
+      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
+      "id": "EDGE-SCANNER-OSV-MIRROR-DOWNLOAD",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
       "sync_or_async": "synchronous",
-      "to": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "to": "NODE-OSV-ADVISORY-BUCKET",
       "type": "dependency"
     },
     {
       "allowed_data": [
-        "DATA-SEARCH-QUERY-EVIDENCE"
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-VULNERABILITY-ADVISORY"
       ],
       "authentication": "none",
       "direction": "from_to",
@@ -2316,67 +2130,13 @@
         "terminal_action": "reject",
         "timeout_ms": 60000
       },
-      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "id": "EDGE-SEARCH-SEARXNG",
+      "from": "NODE-LOCAL-VULNERABILITY-SCANNER",
+      "id": "EDGE-SCANNER-OSV-QUERY",
       "network_policy": "allowlisted_egress",
-      "protocol": "tcp",
+      "protocol": "https",
       "sync_or_async": "synchronous",
-      "to": "NODE-SEARCH-SEARXNG",
+      "to": "NODE-OSV-API",
       "type": "dependency"
-    },
-    {
-      "allowed_data": [
-        "DATA-SEARCH-QUERY-EVIDENCE",
-        "DATA-SEARCH-PROVIDER-AUTH"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "id": "EDGE-SEARCH-SERPER",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "secret_classes": [
-        "SECRET-SEARCH-SERPER"
-      ],
-      "sync_or_async": "synchronous",
-      "to": "NODE-SEARCH-SERPER",
-      "type": "secret_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-SEARCH-QUERY-EVIDENCE",
-        "DATA-SEARCH-PROVIDER-AUTH"
-      ],
-      "authentication": "external_managed",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "id": "EDGE-SEARCH-SERPAPI",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "secret_classes": [
-        "SECRET-SEARCH-SERPAPI"
-      ],
-      "sync_or_async": "synchronous",
-      "to": "NODE-SEARCH-SERPAPI",
-      "type": "secret_flow"
     },
     {
       "allowed_data": [
@@ -2407,10 +2167,9 @@
     },
     {
       "allowed_data": [
-        "DATA-SEARCH-QUERY-EVIDENCE",
-        "DATA-SEARCH-PROVIDER-AUTH"
+        "DATA-SEARCH-UNTRUSTED-RESULT"
       ],
-      "authentication": "external_managed",
+      "authentication": "none",
       "direction": "from_to",
       "failure_behavior": {
         "correlation_id": "not_required",
@@ -2421,16 +2180,13 @@
         "terminal_action": "reject",
         "timeout_ms": 60000
       },
-      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "id": "EDGE-SEARCH-TAVILY",
+      "from": "NODE-SEARCH-BRAVE",
+      "id": "EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
-      "secret_classes": [
-        "SECRET-SEARCH-TAVILY"
-      ],
       "sync_or_async": "synchronous",
-      "to": "NODE-SEARCH-TAVILY",
-      "type": "secret_flow"
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
     },
     {
       "allowed_data": [
@@ -2458,6 +2214,53 @@
       "sync_or_async": "synchronous",
       "to": "NODE-SEARCH-FIRECRAWL",
       "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-SEARCH-FIRECRAWL",
+      "id": "EDGE-SEARCH-FIRECRAWL-UNTRUSTED-RESULT",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-UNTRUSTED-RESULT"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-LOCAL-VERIFIER",
+      "id": "EDGE-SEARCH-LOOPBACK-TEST-CLIENT",
+      "network_policy": "local_only",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "type": "dependency"
     },
     {
       "allowed_data": [
@@ -2501,13 +2304,36 @@
         "terminal_action": "reject",
         "timeout_ms": 60000
       },
-      "from": "NODE-SEARCH-SEARXNG",
-      "id": "EDGE-SEARCH-SEARXNG-UNTRUSTED-RESULT",
+      "from": "NODE-SEARCH-SCRAPINGDOG",
+      "id": "EDGE-SEARCH-SCRAPINGDOG-UNTRUSTED-RESULT",
       "network_policy": "allowlisted_egress",
-      "protocol": "tcp",
+      "protocol": "https",
       "sync_or_async": "synchronous",
       "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SEARXNG",
+      "network_policy": "allowlisted_egress",
+      "protocol": "tcp",
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SEARXNG",
+      "type": "dependency"
     },
     {
       "allowed_data": [
@@ -2524,13 +2350,40 @@
         "terminal_action": "reject",
         "timeout_ms": 60000
       },
-      "from": "NODE-SEARCH-SERPER",
-      "id": "EDGE-SEARCH-SERPER-UNTRUSTED-RESULT",
+      "from": "NODE-SEARCH-SEARXNG",
+      "id": "EDGE-SEARCH-SEARXNG-UNTRUSTED-RESULT",
       "network_policy": "allowlisted_egress",
-      "protocol": "https",
+      "protocol": "tcp",
       "sync_or_async": "synchronous",
       "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SERPAPI",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPAPI"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SERPAPI",
+      "type": "secret_flow"
     },
     {
       "allowed_data": [
@@ -2557,6 +2410,33 @@
     },
     {
       "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-SERPER",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-SERPER"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-SERPER",
+      "type": "secret_flow"
+    },
+    {
+      "allowed_data": [
         "DATA-SEARCH-UNTRUSTED-RESULT"
       ],
       "authentication": "none",
@@ -2570,13 +2450,40 @@
         "terminal_action": "reject",
         "timeout_ms": 60000
       },
-      "from": "NODE-SEARCH-BRAVE",
-      "id": "EDGE-SEARCH-BRAVE-UNTRUSTED-RESULT",
+      "from": "NODE-SEARCH-SERPER",
+      "id": "EDGE-SEARCH-SERPER-UNTRUSTED-RESULT",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
       "sync_or_async": "synchronous",
       "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
       "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-SEARCH-QUERY-EVIDENCE",
+        "DATA-SEARCH-PROVIDER-AUTH"
+      ],
+      "authentication": "external_managed",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 60000
+      },
+      "from": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "id": "EDGE-SEARCH-TAVILY",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "secret_classes": [
+        "SECRET-SEARCH-TAVILY"
+      ],
+      "sync_or_async": "synchronous",
+      "to": "NODE-SEARCH-TAVILY",
+      "type": "secret_flow"
     },
     {
       "allowed_data": [
@@ -2603,121 +2510,346 @@
     },
     {
       "allowed_data": [
-        "DATA-SEARCH-UNTRUSTED-RESULT"
+        "DATA-FACTORY-STATE"
       ],
-      "authentication": "none",
+      "authentication": "local_os",
       "direction": "from_to",
       "failure_behavior": {
         "correlation_id": "not_required",
-        "idempotency": "not_required",
+        "idempotency": "required",
         "max_retries": 0,
         "mode": "fail_closed",
         "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
         "terminal_action": "reject",
-        "timeout_ms": 60000
+        "timeout_ms": 5000
       },
-      "from": "NODE-SEARCH-FIRECRAWL",
-      "id": "EDGE-SEARCH-FIRECRAWL-UNTRUSTED-RESULT",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
+      "from": "NODE-STAGED-DELIVERY-SOURCE",
+      "id": "EDGE-STAGED-DELIVERY-EARNED-AUTONOMY",
+      "network_policy": "no_network",
+      "protocol": "python_import",
       "sync_or_async": "synchronous",
-      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-SEARCH-UNTRUSTED-RESULT"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-SEARCH-SCRAPINGDOG",
-      "id": "EDGE-SEARCH-SCRAPINGDOG-UNTRUSTED-RESULT",
-      "network_policy": "allowlisted_egress",
-      "protocol": "https",
-      "sync_or_async": "synchronous",
-      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
-      "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-SEARCH-QUERY-EVIDENCE",
-        "DATA-SEARCH-UNTRUSTED-RESULT"
-      ],
-      "authentication": "none",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 60000
-      },
-      "from": "NODE-LOCAL-VERIFIER",
-      "id": "EDGE-SEARCH-LOOPBACK-TEST-CLIENT",
-      "network_policy": "local_only",
-      "protocol": "tcp",
-      "sync_or_async": "synchronous",
-      "to": "NODE-OPTIONAL-SEARCH-GATEWAY",
+      "to": "NODE-FACTORY-EARNED-AUTONOMY",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 3600000
+      },
+      "from": "NODE-STAGED-DELIVERY-SOURCE",
+      "id": "EDGE-STAGED-DELIVERY-LOCAL-VERIFIER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "batch",
+      "to": "NODE-LOCAL-VERIFIER",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-JOB-STATE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 3,
+        "mode": "retry_bounded",
+        "observable_signal": "SIG-DOCKER-API-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 3600000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-WORKER-DOCKER-TCP-2375",
+      "network_policy": "local_only",
+      "protocol": "docker_api",
+      "sync_or_async": "synchronous",
+      "to": "NODE-DOCKER-ENGINE",
+      "type": "deployment"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHECK-STATUS"
+      ],
+      "authentication": "github_app",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 3,
+        "mode": "retry_bounded",
+        "observable_signal": "SIG-PUBLICATION-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-WORKER-GITHUB-PUBLICATION",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "asynchronous",
+      "to": "NODE-GITHUB",
+      "type": "publication"
+    },
+    {
+      "allowed_data": [
+        "DATA-APPROVAL",
+        "DATA-ATTESTATION",
+        "DATA-JOB-STATE"
+      ],
+      "authentication": "database_role",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 3,
+        "mode": "retry_bounded",
+        "observable_signal": "SIG-WORKER-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-WORKER-POSTGRES",
+      "network_policy": "local_only",
+      "protocol": "postgresql",
+      "sync_or_async": "asynchronous",
+      "to": "NODE-TRUST-CI-POSTGRES",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 3,
+        "mode": "retry_bounded",
+        "observable_signal": "SIG-WORKSPACE-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 3600000
+      },
+      "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-WORKER-WORKSPACE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "batch",
+      "to": "NODE-EXACT-SHA-WORKSPACE",
+      "type": "control"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "id": "EDGE-WORKFLOW-COMPILER-CHANGE-EVIDENCE",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-CHANGE-SPEC-EVIDENCE",
+      "type": "publication"
+    },
+    {
+      "allowed_data": [
+        "DATA-CHANGE-EVIDENCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "id": "EDGE-WORKFLOW-COMPILER-LOCAL-VERIFIER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-VERIFIER",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 30000
+      },
+      "from": "NODE-WORKFLOW-ARTIFACT-SOURCES",
+      "id": "EDGE-WORKFLOW-SOURCES-COMPILER",
+      "network_policy": "no_network",
+      "protocol": "filesystem",
+      "sync_or_async": "synchronous",
+      "to": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "type": "data_flow"
     }
   ],
   "nodes": [
     {
-      "data_classification": "DATA-FACTORY-INTENT",
-      "id": "NODE-FACTORY-LOCAL-API",
-      "owner": "local factory operators",
-      "public_contracts": [
-        "CONTRACT-FACTORY-CONTROL-OPENAPI",
-        "CONTRACT-FACTORY-EXECUTION-OPENAPI",
-        "CONTRACT-FACTORY-EXECUTION-OPENAPI-V2",
-        "CONTRACT-FACTORY-EXECUTION-OPENAPI-V3",
-        "CONTRACT-FACTORY-V15-RESULT-ADMISSION-API",
-        "CONTRACT-FACTORY-V15-RESULT-ADMISSION-API-V2",
-        "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
-        "CONTRACT-FACTORY-SEMANTIC-OPENAPI",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
-        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3"
-      ],
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-CHANGE-SPEC-EVIDENCE",
+      "owner": "repository engineering",
+      "public_contracts": [],
       "repository_paths": [
-        "factory/.env.example",
-        "factory/contracts/openapi",
-        "factory/runtime",
-        "factory/src/getzilla_factory/api.py",
-        "factory/src/getzilla_factory/cli.py",
-        "factory/src/getzilla_factory/landing_backend_api.py",
-        "factory/src/getzilla_factory/landing_host.py",
-        "factory/src/getzilla_factory/landing_server.py",
-        "factory/src/getzilla_factory/server.py",
-        "factory/src/getzilla_factory/settings.py",
-        "factory/tests/test_runtime_installer.py",
-        "factory/tests/test_landing_host.py",
-        "factory/tests/test_landing_server.py",
-        "factory/tests/test_server.py",
-        "factory/tests/test_landing_failover_backend.py"
+        "engineering/changes"
       ],
       "runtime": {
         "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
+        "kind": "none",
+        "lifecycle": "none",
         "network": "none"
       },
-      "secrets": [
-        "SECRET-FACTORY-TOKEN"
-      ],
-      "trust_domain": "TD-FACTORY-CONTROL",
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-CISA-SECURITY-FEED",
+      "owner": "public CISA feed endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-CONTROLLED-DESIGN-FIXTURE",
+      "owner": "caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-JOB-STATE",
+      "id": "NODE-DOCKER-ENGINE",
+      "owner": "Trust CI operators; compose-described TCP/2375 local executor",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "container",
+        "lifecycle": "long_running",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-TRUST-CI-EXECUTION",
       "type": "service"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-ENTIRE",
+      "owner": "Entire",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-EPSS-SECURITY-FEED",
+      "owner": "public EPSS feed endpoint",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-EXACT-SHA-WORKSPACE",
+      "owner": "Trust CI operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "trust-ci/runtime"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "job",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-TRUST-CI-EXECUTION",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-HOLDOUT",
+      "id": "NODE-EXTERNAL-HOLDOUT",
+      "owner": "external Trust CI policy operators",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-POLICY",
+      "type": "policy_bundle"
     },
     {
       "data_classification": "DATA-FACTORY-STATE",
@@ -2765,25 +2897,31 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-FACTORY-AUDIT",
-      "id": "NODE-FACTORY-POSTGRES",
-      "owner": "local factory operators",
-      "public_contracts": [],
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-EARNED-AUTONOMY",
+      "owner": "local factory operators and human reviewers",
+      "public_contracts": [
+        "CONTRACT-FACTORY-EARNED-AUTONOMY-V2",
+        "CONTRACT-FACTORY-OWNER-AUTONOMY-V1"
+      ],
       "repository_paths": [
-        "factory/compose.yaml",
-        "factory/src/getzilla_factory/resources"
+        "factory/src/getzilla_factory/autonomy.py",
+        "factory/src/getzilla_factory/m7_autonomy_bridge.py",
+        "factory/src/getzilla_factory/owner_autonomy.py",
+        "factory/runtime/owner-autonomy-policy.v1.json",
+        "factory/contracts/jsonschema/earned-autonomy.v2.schema.json",
+        "factory/contracts/jsonschema/owner-autonomy.v1.schema.json",
+        "scripts/getzilla_m8.py"
       ],
       "runtime": {
         "evidence": "source_described",
-        "kind": "postgresql",
+        "kind": "python_process",
         "lifecycle": "on_demand",
-        "network": "local_only"
+        "network": "none"
       },
-      "secrets": [
-        "SECRET-FACTORY-DATABASE"
-      ],
+      "secrets": [],
       "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "datastore"
+      "type": "local_component"
     },
     {
       "data_classification": "DATA-FACTORY-INTENT",
@@ -2803,561 +2941,6 @@
         "factory/src/getzilla_factory/pricing.py",
         "factory/src/getzilla_factory/protocol.py",
         "factory/src/getzilla_factory/semantic_bridge.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-PROVIDER-ADAPTERS",
-      "owner": "local factory operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "factory/src/getzilla_factory/adapters/__init__.py",
-        "factory/src/getzilla_factory/adapters/base.py",
-        "factory/src/getzilla_factory/adapters/codex.py",
-        "factory/src/getzilla_factory/adapters/grok.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-PROPOSAL-BROKER",
-      "owner": "local factory operators",
-      "public_contracts": [
-        "CONTRACT-FACTORY-V15-RESULT-ENVELOPE",
-        "CONTRACT-FACTORY-V15-RESULT-ENVELOPE-V2",
-        "CONTRACT-FACTORY-V15-RESULT-CHANNEL-QUALIFICATION",
-        "CONTRACT-FACTORY-V15-RESULT-CHANNEL-QUALIFICATION-V2"
-      ],
-      "repository_paths": [
-        "factory/src/getzilla_factory/brokers.py",
-        "factory/src/getzilla_factory/result_broker.py",
-        "factory/src/getzilla_factory/result_contracts.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-RESULT-DISPATCHER",
-      "owner": "dormant unqualified internal foundation; local factory operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "factory/contracts/jsonschema/native-result-handoff.v1.schema.json",
-        "factory/src/getzilla_factory/result_dispatch.py",
-        "factory/src/getzilla_factory/result_dispatch_cli.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "local_only"
-      },
-      "secrets": [
-        "SECRET-FACTORY-TOKEN"
-      ],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "worker"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-FACTORY-WORKSPACE-BROKER",
-      "owner": "local factory operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "factory/src/getzilla_factory/workspace.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-LOCAL-ROUTE-POLICY",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        ".claude",
-        ".codex",
-        ".gemini",
-        ".getzilla/agents",
-        ".getzilla/config",
-        ".getzilla/cursor-rules",
-        ".getzilla/getzilla",
-        ".getzilla/getzilla/component_state.py",
-        ".getzilla/getzilla/model_data_admission.py",
-        ".getzilla/hooks",
-        ".getzilla/managed-components.json",
-        ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
-        ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
-        ".getzilla/templates",
-        ".grok",
-        ".qwen"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-CHECK-STATUS",
-      "id": "NODE-LOCAL-CI-GATE",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        ".getzilla/getzilla/ci_gate.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "declared_egress"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-CHANGE-EVIDENCE",
-      "id": "NODE-CHANGE-SPEC-EVIDENCE",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        "engineering/changes"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "none",
-        "lifecycle": "none",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-REPOSITORY",
-      "type": "repository"
-    },
-    {
-      "data_classification": "DATA-CHANGE-EVIDENCE",
-      "id": "NODE-LOCAL-VERIFIER",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        "pilot/tests",
-        "scripts",
-        "tests",
-        "trust-ci/tests"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "local_only"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-SEO-SHOWCASE-LAB",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        ".agents/skills/seo-landing",
-        "side-projects/seo-landing-showcase"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "local_only"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-GOVERNANCE-EVIDENCE",
-      "id": "NODE-GOVERNANCE-VALIDATOR",
-      "owner": "repository engineering",
-      "public_contracts": [
-        "CONTRACT-GOVERNANCE-HANDOFF-V1"
-      ],
-      "repository_paths": [
-        ".getzilla/getzilla/governance.py",
-        "schemas/canonical-example.schema.json",
-        "schemas/debt-entry.schema.json",
-        "schemas/governance-handoff-v1.schema.json",
-        "schemas/governance-rule.schema.json",
-        "scripts/getzilla_governance.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-GOVERNANCE-EVIDENCE",
-      "id": "NODE-GOVERNANCE-REGISTRIES",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        "governance"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "none",
-        "lifecycle": "none",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-REPOSITORY",
-      "type": "repository"
-    },
-    {
-      "data_classification": "DATA-JOB-STATE",
-      "id": "NODE-TRUST-CI-API",
-      "owner": "Trust CI operators",
-      "public_contracts": [
-        "CONTRACT-APPROVAL-ENVELOPE",
-        "CONTRACT-GITHUB-PR-PROJECTION",
-        "CONTRACT-TRUST-CI-OPENAPI"
-      ],
-      "repository_paths": [
-        "trust-ci/src/adaptive_trust_ci/api.py",
-        "trust-ci/src/adaptive_trust_ci/metrics.py",
-        "trust-ci/src/adaptive_trust_ci/public_merge.py",
-        "trust-ci/src/adaptive_trust_ci/public_publisher.py",
-        "trust-ci/src/adaptive_trust_ci/webhooks.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "container",
-        "lifecycle": "long_running",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-DATABASE",
-        "SECRET-READ-TOKEN",
-        "SECRET-WEBHOOK"
-      ],
-      "trust_domain": "TD-TRUST-CI-CONTROL",
-      "type": "service"
-    },
-    {
-      "data_classification": "DATA-JOB-STATE",
-      "id": "NODE-TRUST-CI-POSTGRES",
-      "owner": "Trust CI operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/postgres",
-        "trust-ci/sql",
-        "trust-ci/src/adaptive_trust_ci/backup.py",
-        "trust-ci/src/adaptive_trust_ci/lease.py",
-        "trust-ci/src/adaptive_trust_ci/migrations.py",
-        "trust-ci/src/adaptive_trust_ci/resources",
-        "trust-ci/src/adaptive_trust_ci/store.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "postgresql",
-        "lifecycle": "long_running",
-        "network": "local_only"
-      },
-      "secrets": [
-        "SECRET-DATABASE"
-      ],
-      "trust_domain": "TD-TRUST-CI-CONTROL",
-      "type": "datastore"
-    },
-    {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-LOCAL-SECURITY-BUNDLE",
-      "owner": "repository engineering; local validation only, no App, DB or mandatory observer",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/src/adaptive_trust_ci/public_admission.py",
-        "trust-ci/src/adaptive_trust_ci/security_bundle.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-OPTIONAL-GITHUB-OBSERVER",
-      "owner": "repository engineering; optional GET-only adapter, source-described not activated",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/src/adaptive_trust_ci/github_observer.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-GITHUB-APP"
-      ],
-      "trust_domain": "TD-TRUST-CI-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-TRUST-CI-WORKER",
-      "owner": "Trust CI operators",
-      "public_contracts": [
-        "CONTRACT-ATTESTATION-ENVELOPE",
-        "CONTRACT-ATTESTATION-ENVELOPE-V2"
-      ],
-      "repository_paths": [
-        "trust-ci/compose.yaml",
-        "trust-ci/src/adaptive_trust_ci/__init__.py",
-        "trust-ci/src/adaptive_trust_ci/cli.py",
-        "trust-ci/src/adaptive_trust_ci/customers.py",
-        "trust-ci/src/adaptive_trust_ci/github.py",
-        "trust-ci/src/adaptive_trust_ci/github_app.py",
-        "trust-ci/src/adaptive_trust_ci/lookup.py",
-        "trust-ci/src/adaptive_trust_ci/models.py",
-        "trust-ci/src/adaptive_trust_ci/onboarding.py",
-        "trust-ci/src/adaptive_trust_ci/policy.py",
-        "trust-ci/src/adaptive_trust_ci/runner.py",
-        "trust-ci/src/adaptive_trust_ci/settings.py",
-        "trust-ci/src/adaptive_trust_ci/signing.py",
-        "trust-ci/src/adaptive_trust_ci/worker.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "container",
-        "lifecycle": "long_running",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-CI-SIGNING",
-        "SECRET-DATABASE",
-        "SECRET-GITHUB-APP"
-      ],
-      "trust_domain": "TD-TRUST-CI-EXECUTION",
-      "type": "worker"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-EXACT-SHA-WORKSPACE",
-      "owner": "Trust CI operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/runtime"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "none",
-        "lifecycle": "job",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-TRUST-CI-EXECUTION",
-      "type": "repository"
-    },
-    {
-      "data_classification": "DATA-JOB-STATE",
-      "id": "NODE-DOCKER-ENGINE",
-      "owner": "Trust CI operators; compose-described TCP/2375 local executor",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "container",
-        "lifecycle": "long_running",
-        "network": "local_only"
-      },
-      "secrets": [],
-      "trust_domain": "TD-TRUST-CI-EXECUTION",
-      "type": "service"
-    },
-    {
-      "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-ISOLATED-RUNNER",
-      "owner": "Trust CI operators",
-      "public_contracts": [],
-      "repository_paths": [
-        "trust-ci/scripts",
-        "trust-ci/src/adaptive_trust_ci/holdout.py",
-        "trust-ci/src/adaptive_trust_ci/sandbox.py",
-        "trust-ci/src/adaptive_trust_ci/workspace.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "container",
-        "lifecycle": "job",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-TRUST-CI-EXECUTION",
-      "type": "runner"
-    },
-    {
-      "data_classification": "DATA-HOLDOUT",
-      "id": "NODE-EXTERNAL-HOLDOUT",
-      "owner": "external Trust CI policy operators",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "none",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-POLICY",
-      "type": "policy_bundle"
-    },
-    {
-      "data_classification": "DATA-CHECK-STATUS",
-      "id": "NODE-GITHUB",
-      "owner": "GitHub",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-APPROVAL",
-      "id": "NODE-HUMAN-APPROVAL",
-      "owner": "human security approvers",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "on_demand",
-        "network": "external_managed"
-      },
-      "secrets": [
-        "SECRET-HUMAN-APPROVAL"
-      ],
-      "trust_domain": "TD-PRODUCTION-TRUST",
-      "type": "actor"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-SEMANTIC-VALIDATION",
-      "owner": "independent local semantic validators",
-      "public_contracts": [
-        "CONTRACT-FACTORY-SEMANTIC-COVERAGE-V1",
-        "CONTRACT-FACTORY-SEMANTIC-FINDING-V1",
-        "CONTRACT-FACTORY-SEMANTIC-REPAIR-DIRECTIVE-V1",
-        "CONTRACT-FACTORY-SEMANTIC-SUBJECT-V1",
-        "CONTRACT-FACTORY-SEMANTIC-VERDICT-V1"
-      ],
-      "repository_paths": [
-        "factory/src/getzilla_factory/semantic_adjudication.py",
-        "factory/src/getzilla_factory/semantic_contracts.py",
-        "factory/src/getzilla_factory/semantic_repair.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-SHADOW-HANDOFF",
-      "owner": "local factory operators and human reviewers",
-      "public_contracts": [
-        "CONTRACT-FACTORY-M7-OPERATOR-HANDOFF-V1",
-        "CONTRACT-FACTORY-M7-PREDECESSOR-BRIDGES-V1",
-        "CONTRACT-FACTORY-M7-READY-BUNDLE-V1",
-        "CONTRACT-FACTORY-M7-SHADOW-COHORT-V1",
-        "CONTRACT-FACTORY-M7-SHADOW-OUTCOME-V1",
-        "CONTRACT-FACTORY-M7-TASK-EVIDENCE-V1"
-      ],
-      "repository_paths": [
-        "factory/src/getzilla_factory/shadow_contracts.py",
-        "factory/src/getzilla_factory/shadow_evaluation.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-FACTORY-STATE",
-      "id": "NODE-FACTORY-EARNED-AUTONOMY",
-      "owner": "local factory operators and human reviewers",
-      "public_contracts": [
-        "CONTRACT-FACTORY-EARNED-AUTONOMY-V2",
-        "CONTRACT-FACTORY-OWNER-AUTONOMY-V1"
-      ],
-      "repository_paths": [
-        "factory/src/getzilla_factory/autonomy.py",
-        "factory/src/getzilla_factory/m7_autonomy_bridge.py",
-        "factory/src/getzilla_factory/owner_autonomy.py",
-        "factory/runtime/owner-autonomy-policy.v1.json",
-        "factory/contracts/jsonschema/earned-autonomy.v2.schema.json",
-        "factory/contracts/jsonschema/owner-autonomy.v1.schema.json",
-        "scripts/getzilla_m8.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3438,6 +3021,34 @@
     },
     {
       "data_classification": "DATA-FACTORY-LANDING-INPUT",
+      "id": "NODE-FACTORY-LANDING-FAILOVER",
+      "owner": "local factory operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "factory/src/getzilla_factory/landing_failover.py",
+        "factory/src/getzilla_factory/landing_failover_config.py",
+        "factory/src/getzilla_factory/landing_failover_journal.py",
+        "factory/src/getzilla_factory/landing_failover_cli.py",
+        "factory/src/getzilla_factory/landing_failover_transport.py",
+        "factory/tests/test_landing_failover.py",
+        "factory/tests/test_landing_failover_cli.py",
+        "factory/tests/test_landing_failover_recovery.py",
+        "factory/tests/test_landing_failover_transport.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [
+        "SECRET-FACTORY-TOKEN"
+      ],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-FACTORY-LANDING-INPUT",
       "id": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
       "owner": "local factory operators",
       "public_contracts": [],
@@ -3492,15 +3103,258 @@
       "type": "datastore"
     },
     {
-      "data_classification": "DATA-CHANGE-EVIDENCE",
-      "id": "NODE-STAGED-DELIVERY-SOURCE",
+      "data_classification": "DATA-FACTORY-INTENT",
+      "id": "NODE-FACTORY-LOCAL-API",
+      "owner": "local factory operators",
+      "public_contracts": [
+        "CONTRACT-FACTORY-CONTROL-OPENAPI",
+        "CONTRACT-FACTORY-EXECUTION-OPENAPI",
+        "CONTRACT-FACTORY-EXECUTION-OPENAPI-V2",
+        "CONTRACT-FACTORY-EXECUTION-OPENAPI-V3",
+        "CONTRACT-FACTORY-V15-RESULT-ADMISSION-API",
+        "CONTRACT-FACTORY-V15-RESULT-ADMISSION-API-V2",
+        "CONTRACT-FACTORY-LANDING-OPENAPI-V1",
+        "CONTRACT-FACTORY-SEMANTIC-OPENAPI",
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V1",
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V2",
+        "CONTRACT-FACTORY-LANDING-FAILOVER-OPENAPI-V3"
+      ],
+      "repository_paths": [
+        "factory/.env.example",
+        "factory/contracts/openapi",
+        "factory/runtime",
+        "factory/src/getzilla_factory/api.py",
+        "factory/src/getzilla_factory/cli.py",
+        "factory/src/getzilla_factory/landing_backend_api.py",
+        "factory/src/getzilla_factory/landing_host.py",
+        "factory/src/getzilla_factory/landing_server.py",
+        "factory/src/getzilla_factory/server.py",
+        "factory/src/getzilla_factory/settings.py",
+        "factory/tests/test_runtime_installer.py",
+        "factory/tests/test_landing_host.py",
+        "factory/tests/test_landing_server.py",
+        "factory/tests/test_server.py",
+        "factory/tests/test_landing_failover_backend.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [
+        "SECRET-FACTORY-TOKEN"
+      ],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "service"
+    },
+    {
+      "data_classification": "DATA-FACTORY-AUDIT",
+      "id": "NODE-FACTORY-POSTGRES",
+      "owner": "local factory operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "factory/compose.yaml",
+        "factory/src/getzilla_factory/resources"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "postgresql",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [
+        "SECRET-FACTORY-DATABASE"
+      ],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-PROPOSAL-BROKER",
+      "owner": "local factory operators",
+      "public_contracts": [
+        "CONTRACT-FACTORY-V15-RESULT-ENVELOPE",
+        "CONTRACT-FACTORY-V15-RESULT-ENVELOPE-V2",
+        "CONTRACT-FACTORY-V15-RESULT-CHANNEL-QUALIFICATION",
+        "CONTRACT-FACTORY-V15-RESULT-CHANNEL-QUALIFICATION-V2"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/brokers.py",
+        "factory/src/getzilla_factory/result_broker.py",
+        "factory/src/getzilla_factory/result_contracts.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-PROVIDER-ADAPTERS",
+      "owner": "local factory operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "factory/src/getzilla_factory/adapters/__init__.py",
+        "factory/src/getzilla_factory/adapters/base.py",
+        "factory/src/getzilla_factory/adapters/codex.py",
+        "factory/src/getzilla_factory/adapters/grok.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-RESULT-DISPATCHER",
+      "owner": "dormant unqualified internal foundation; local factory operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "factory/contracts/jsonschema/native-result-handoff.v1.schema.json",
+        "factory/src/getzilla_factory/result_dispatch.py",
+        "factory/src/getzilla_factory/result_dispatch_cli.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [
+        "SECRET-FACTORY-TOKEN"
+      ],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "worker"
+    },
+    {
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-SEMANTIC-VALIDATION",
+      "owner": "independent local semantic validators",
+      "public_contracts": [
+        "CONTRACT-FACTORY-SEMANTIC-COVERAGE-V1",
+        "CONTRACT-FACTORY-SEMANTIC-FINDING-V1",
+        "CONTRACT-FACTORY-SEMANTIC-REPAIR-DIRECTIVE-V1",
+        "CONTRACT-FACTORY-SEMANTIC-SUBJECT-V1",
+        "CONTRACT-FACTORY-SEMANTIC-VERDICT-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/semantic_adjudication.py",
+        "factory/src/getzilla_factory/semantic_contracts.py",
+        "factory/src/getzilla_factory/semantic_repair.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-FACTORY-STATE",
+      "id": "NODE-FACTORY-SHADOW-HANDOFF",
+      "owner": "local factory operators and human reviewers",
+      "public_contracts": [
+        "CONTRACT-FACTORY-M7-OPERATOR-HANDOFF-V1",
+        "CONTRACT-FACTORY-M7-PREDECESSOR-BRIDGES-V1",
+        "CONTRACT-FACTORY-M7-READY-BUNDLE-V1",
+        "CONTRACT-FACTORY-M7-SHADOW-COHORT-V1",
+        "CONTRACT-FACTORY-M7-SHADOW-OUTCOME-V1",
+        "CONTRACT-FACTORY-M7-TASK-EVIDENCE-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/shadow_contracts.py",
+        "factory/src/getzilla_factory/shadow_evaluation.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-FACTORY-WORKSPACE-BROKER",
+      "owner": "local factory operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "factory/src/getzilla_factory/workspace.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-GITHUB",
+      "owner": "GitHub",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-GOVERNANCE-EVIDENCE",
+      "id": "NODE-GOVERNANCE-REGISTRIES",
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        "delivery/contracts/jsonschema/landing-publication-request.v1.schema.json",
-        "delivery/pyproject.toml",
-        "delivery/src/getzilla_delivery",
-        "delivery/tests"
+        "governance"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
+    },
+    {
+      "data_classification": "DATA-GOVERNANCE-EVIDENCE",
+      "id": "NODE-GOVERNANCE-VALIDATOR",
+      "owner": "repository engineering",
+      "public_contracts": [
+        "CONTRACT-GOVERNANCE-HANDOFF-V1"
+      ],
+      "repository_paths": [
+        ".getzilla/getzilla/governance.py",
+        "schemas/canonical-example.schema.json",
+        "schemas/debt-entry.schema.json",
+        "schemas/governance-handoff-v1.schema.json",
+        "schemas/governance-rule.schema.json",
+        "scripts/getzilla_governance.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3513,122 +3367,9 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-CONTROL",
-      "owner": "single local pilot operator",
-      "public_contracts": [
-        "CONTRACT-PILOT-ISSUE-SNAPSHOT",
-        "CONTRACT-PILOT-CANDIDATE-CHANGE",
-        "CONTRACT-PILOT-CANDIDATE-VALIDATION",
-        "CONTRACT-PILOT-PULL-REQUEST-PROPOSAL",
-        "CONTRACT-PILOT-DESIGN-PARTNER-OUTCOME"
-      ],
-      "repository_paths": [
-        "pilot"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-PILOT-OPERATOR",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-SQLITE",
-      "owner": "single local pilot operator",
-      "public_contracts": [],
-      "repository_paths": [
-        "pilot/store.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "none",
-        "lifecycle": "none",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-PILOT-OPERATOR",
-      "type": "datastore"
-    },
-    {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-GITHUB-BROKER",
-      "owner": "single local pilot operator",
-      "public_contracts": [
-        "CONTRACT-PILOT-ISSUE-SNAPSHOT",
-        "CONTRACT-PILOT-PULL-REQUEST-PROPOSAL",
-        "CONTRACT-PILOT-DESIGN-PARTNER-OUTCOME"
-      ],
-      "repository_paths": [
-        "pilot/authority.py",
-        "pilot/github.py",
-        "pilot/issue_source.py",
-        "pilot/live_github.py",
-        "pilot/runtime_authority.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-PILOT-GITHUB"
-      ],
-      "trust_domain": "TD-PILOT-EXECUTION",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-CODEX-SUPERVISOR",
-      "owner": "single local pilot operator",
-      "public_contracts": [
-        "CONTRACT-PILOT-CANDIDATE-CHANGE"
-      ],
-      "repository_paths": [
-        "pilot/codex_executor.py",
-        "pilot/workspace.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "job",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-PILOT-CODEX"
-      ],
-      "trust_domain": "TD-PILOT-EXECUTION",
-      "type": "worker"
-    },
-    {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-SANDBOX",
-      "owner": "single local pilot operator",
-      "public_contracts": [
-        "CONTRACT-PILOT-CANDIDATE-VALIDATION"
-      ],
-      "repository_paths": [
-        "pilot/validation.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "job",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-PILOT-EXECUTION",
-      "type": "runner"
-    },
-    {
-      "data_classification": "DATA-PILOT-STATE",
-      "id": "NODE-PILOT-MODEL-PROVIDER",
-      "owner": "external model provider",
+      "data_classification": "DATA-APPROVAL",
+      "id": "NODE-HUMAN-APPROVAL",
+      "owner": "human security approvers",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
@@ -3637,9 +3378,109 @@
         "lifecycle": "on_demand",
         "network": "external_managed"
       },
+      "secrets": [
+        "SECRET-HUMAN-APPROVAL"
+      ],
+      "trust_domain": "TD-PRODUCTION-TRUST",
+      "type": "actor"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-ISOLATED-RUNNER",
+      "owner": "Trust CI operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "trust-ci/scripts",
+        "trust-ci/src/adaptive_trust_ci/holdout.py",
+        "trust-ci/src/adaptive_trust_ci/sandbox.py",
+        "trust-ci/src/adaptive_trust_ci/workspace.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "container",
+        "lifecycle": "job",
+        "network": "none"
+      },
       "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
+      "trust_domain": "TD-TRUST-CI-EXECUTION",
+      "type": "runner"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LIVE-COMPONENT-OBSERVER",
+      "owner": "local component test operators",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/disposable_resources.py",
+        ".getzilla/getzilla/live_acceptance.py",
+        ".getzilla/getzilla/live_lifecycle.py",
+        "factory/tests/postgres_restart_probe.py",
+        "factory/tests/run_disposable_exit.py",
+        "factory/tests/run_live_suite.py",
+        "scripts/getzilla_live.py",
+        "scripts/getzilla_live_lifecycle.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LIVE-DISPOSABLE-POSTGRES",
+      "owner": "local component test operators",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "postgresql",
+        "lifecycle": "job",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-CHECK-STATUS",
+      "id": "NODE-LOCAL-CI-GATE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/ci_gate.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-DEMO-TEST-CLIENT",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "tests/test_demo_http.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
     },
     {
       "data_classification": "DATA-REPOSITORY-SOURCE",
@@ -3668,85 +3509,47 @@
     },
     {
       "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-LOCAL-DEMO-TEST-CLIENT",
+      "id": "NODE-LOCAL-ENTIRE-ADAPTER",
       "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        "tests/test_demo_http.py"
+        ".getzilla/integrations/getzilla_entire",
+        "scripts/getzilla_entire.py"
       ],
       "runtime": {
         "evidence": "source_described",
         "kind": "python_process",
         "lifecycle": "on_demand",
-        "network": "local_only"
+        "network": "declared_egress"
       },
-      "secrets": [],
+      "secrets": [
+        "SECRET-ENTIRE-SESSION"
+      ],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-FACTORY-LANDING-INPUT",
-      "id": "NODE-FACTORY-LANDING-FAILOVER",
-      "owner": "local factory operators",
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-LOCAL-ROUTE-POLICY",
+      "owner": "repository engineering",
       "public_contracts": [],
       "repository_paths": [
-        "factory/src/getzilla_factory/landing_failover.py",
-        "factory/src/getzilla_factory/landing_failover_config.py",
-        "factory/src/getzilla_factory/landing_failover_journal.py",
-        "factory/src/getzilla_factory/landing_failover_cli.py",
-        "factory/src/getzilla_factory/landing_failover_transport.py",
-        "factory/tests/test_landing_failover.py",
-        "factory/tests/test_landing_failover_cli.py",
-        "factory/tests/test_landing_failover_recovery.py",
-        "factory/tests/test_landing_failover_transport.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "local_only"
-      },
-      "secrets": [
-        "SECRET-FACTORY-TOKEN"
-      ],
-      "trust_domain": "TD-FACTORY-CONTROL",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-WORKFLOW-ARTIFACT-SOURCES",
-      "owner": "repository contributors",
-      "public_contracts": [
-        "CONTRACT-WORKFLOW-SOURCE-V1"
-      ],
-      "repository_paths": [
-        ".specify"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "none",
-        "lifecycle": "none",
-        "network": "none"
-      },
-      "secrets": [],
-      "trust_domain": "TD-REPOSITORY",
-      "type": "repository"
-    },
-    {
-      "data_classification": "DATA-CHANGE-EVIDENCE",
-      "id": "NODE-WORKFLOW-ARTIFACT-COMPILER",
-      "owner": "repository engineering",
-      "public_contracts": [
-        "CONTRACT-WORKFLOW-CONVERGENCE-REPORT-V1",
-        "CONTRACT-WORKFLOW-SOURCE-V1",
-        "CONTRACT-WORKFLOW-TASK-GRAPH-V1"
-      ],
-      "repository_paths": [
-        ".getzilla/getzilla/workflow_artifacts.py",
-        "schemas/workflow-convergence-report-v1.schema.json",
-        "schemas/workflow-source-v1.schema.json",
-        "schemas/workflow-task-graph-v1.schema.json",
-        "scripts/getzilla_artifacts.py"
+        ".claude",
+        ".codex",
+        ".gemini",
+        ".getzilla/agents",
+        ".getzilla/config",
+        ".getzilla/cursor-rules",
+        ".getzilla/getzilla",
+        ".getzilla/getzilla/component_state.py",
+        ".getzilla/getzilla/model_data_admission.py",
+        ".getzilla/hooks",
+        ".getzilla/managed-components.json",
+        ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
+        ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
+        ".getzilla/templates",
+        ".grok",
+        ".qwen"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3760,19 +3563,22 @@
     },
     {
       "data_classification": "DATA-ATTESTATION",
-      "id": "NODE-SUPPLY-CHAIN-REGISTRY",
-      "owner": "external artifact registries",
+      "id": "NODE-LOCAL-SECURITY-BUNDLE",
+      "owner": "repository engineering; local validation only, no App, DB or mandatory observer",
       "public_contracts": [],
-      "repository_paths": [],
+      "repository_paths": [
+        "trust-ci/src/adaptive_trust_ci/public_admission.py",
+        "trust-ci/src/adaptive_trust_ci/security_bundle.py"
+      ],
       "runtime": {
         "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
       },
       "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
     },
     {
       "data_classification": "DATA-REPOSITORY-SOURCE",
@@ -3788,6 +3594,27 @@
         "kind": "python_process",
         "lifecycle": "on_demand",
         "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-LOCAL-VERIFIER",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "pilot/tests",
+        "scripts",
+        "tests",
+        "trust-ci/tests"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
       },
       "secrets": [],
       "trust_domain": "TD-LOCAL-PREFLIGHT",
@@ -3813,143 +3640,6 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-VULNERABILITY-ADVISORY",
-      "id": "NODE-OSV-API",
-      "owner": "OSV public advisory service",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-VULNERABILITY-ADVISORY",
-      "id": "NODE-OSV-ADVISORY-BUCKET",
-      "owner": "OSV public advisory service",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-LOCAL-ENTIRE-ADAPTER",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        ".getzilla/integrations/getzilla_entire",
-        "scripts/getzilla_entire.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "declared_egress"
-      },
-      "secrets": [
-        "SECRET-ENTIRE-SESSION"
-      ],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-ENTIRE",
-      "owner": "Entire",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-OPTIONAL-SECURITY-ACQUISITION",
-      "owner": "repository engineering",
-      "public_contracts": [],
-      "repository_paths": [
-        ".getzilla/getzilla/security_acquisition.py",
-        ".getzilla/getzilla/security_license_acquisition.py",
-        ".getzilla/getzilla/security_osv_snapshot.py"
-      ],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "python_process",
-        "lifecycle": "on_demand",
-        "network": "declared_egress"
-      },
-      "secrets": [],
-      "trust_domain": "TD-LOCAL-PREFLIGHT",
-      "type": "local_component"
-    },
-    {
-      "data_classification": "DATA-VULNERABILITY-ADVISORY",
-      "id": "NODE-CISA-SECURITY-FEED",
-      "owner": "public CISA feed endpoints",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-VULNERABILITY-ADVISORY",
-      "id": "NODE-EPSS-SECURITY-FEED",
-      "owner": "public EPSS feed endpoint",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-PYPI-REGISTRY",
-      "owner": "public PyPI registry and artifact endpoints",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [],
-      "trust_domain": "TD-EXTERNAL-PLATFORM",
-      "type": "external_system"
-    },
-    {
       "data_classification": "DATA-REPOSITORY-SOURCE",
       "id": "NODE-OPTIONAL-DESIGN-PREVIEW",
       "owner": "repository engineering; explicit optional fixture capture only",
@@ -3968,20 +3658,24 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-REPOSITORY-SOURCE",
-      "id": "NODE-CONTROLLED-DESIGN-FIXTURE",
-      "owner": "caller-owned synthetic127.0.0.1 HTTP fixture; exact selected URLs only; no live/private source",
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-OPTIONAL-GITHUB-OBSERVER",
+      "owner": "repository engineering; optional GET-only adapter, source-described not activated",
       "public_contracts": [],
-      "repository_paths": [],
+      "repository_paths": [
+        "trust-ci/src/adaptive_trust_ci/github_observer.py"
+      ],
       "runtime": {
         "evidence": "source_described",
-        "kind": "external_managed",
+        "kind": "python_process",
         "lifecycle": "on_demand",
-        "network": "local_only"
+        "network": "declared_egress"
       },
-      "secrets": [],
-      "trust_domain": "TD-REPOSITORY",
-      "type": "external_system"
+      "secrets": [
+        "SECRET-GITHUB-APP"
+      ],
+      "trust_domain": "TD-TRUST-CI-CONTROL",
+      "type": "local_component"
     },
     {
       "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
@@ -4013,9 +3707,29 @@
       "type": "local_component"
     },
     {
-      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
-      "id": "NODE-SEARCH-SEARXNG",
-      "owner": "operator configured SearXNG endpoint",
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".getzilla/getzilla/security_acquisition.py",
+        ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_osv_snapshot.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-OSV-ADVISORY-BUCKET",
+      "owner": "OSV public advisory service",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
@@ -4029,9 +3743,9 @@
       "type": "external_system"
     },
     {
-      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
-      "id": "NODE-SEARCH-SERPER",
-      "owner": "google.serper.dev",
+      "data_classification": "DATA-VULNERABILITY-ADVISORY",
+      "id": "NODE-OSV-API",
+      "owner": "OSV public advisory service",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
@@ -4040,16 +3754,143 @@
         "lifecycle": "long_running",
         "network": "external_managed"
       },
-      "secrets": [
-        "SECRET-SEARCH-SERPER"
-      ],
-      "trust_domain": "TD-SEARCH-SERPER",
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
       "type": "external_system"
     },
     {
-      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
-      "id": "NODE-SEARCH-SERPAPI",
-      "owner": "serpapi.com",
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-CODEX-SUPERVISOR",
+      "owner": "single local pilot operator",
+      "public_contracts": [
+        "CONTRACT-PILOT-CANDIDATE-CHANGE"
+      ],
+      "repository_paths": [
+        "pilot/codex_executor.py",
+        "pilot/workspace.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "job",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-PILOT-CODEX"
+      ],
+      "trust_domain": "TD-PILOT-EXECUTION",
+      "type": "worker"
+    },
+    {
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-CONTROL",
+      "owner": "single local pilot operator",
+      "public_contracts": [
+        "CONTRACT-PILOT-ISSUE-SNAPSHOT",
+        "CONTRACT-PILOT-CANDIDATE-CHANGE",
+        "CONTRACT-PILOT-CANDIDATE-VALIDATION",
+        "CONTRACT-PILOT-PULL-REQUEST-PROPOSAL",
+        "CONTRACT-PILOT-DESIGN-PARTNER-OUTCOME"
+      ],
+      "repository_paths": [
+        "pilot"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-PILOT-OPERATOR",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-GITHUB-BROKER",
+      "owner": "single local pilot operator",
+      "public_contracts": [
+        "CONTRACT-PILOT-ISSUE-SNAPSHOT",
+        "CONTRACT-PILOT-PULL-REQUEST-PROPOSAL",
+        "CONTRACT-PILOT-DESIGN-PARTNER-OUTCOME"
+      ],
+      "repository_paths": [
+        "pilot/authority.py",
+        "pilot/github.py",
+        "pilot/issue_source.py",
+        "pilot/live_github.py",
+        "pilot/runtime_authority.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-PILOT-GITHUB"
+      ],
+      "trust_domain": "TD-PILOT-EXECUTION",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-MODEL-PROVIDER",
+      "owner": "external model provider",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "on_demand",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-SANDBOX",
+      "owner": "single local pilot operator",
+      "public_contracts": [
+        "CONTRACT-PILOT-CANDIDATE-VALIDATION"
+      ],
+      "repository_paths": [
+        "pilot/validation.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "job",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-PILOT-EXECUTION",
+      "type": "runner"
+    },
+    {
+      "data_classification": "DATA-PILOT-STATE",
+      "id": "NODE-PILOT-SQLITE",
+      "owner": "single local pilot operator",
+      "public_contracts": [],
+      "repository_paths": [
+        "pilot/store.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-PILOT-OPERATOR",
+      "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-PYPI-REGISTRY",
+      "owner": "public PyPI registry and artifact endpoints",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
@@ -4058,10 +3899,8 @@
         "lifecycle": "long_running",
         "network": "external_managed"
       },
-      "secrets": [
-        "SECRET-SEARCH-SERPAPI"
-      ],
-      "trust_domain": "TD-SEARCH-SERPAPI",
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
       "type": "external_system"
     },
     {
@@ -4080,24 +3919,6 @@
         "SECRET-SEARCH-BRAVE"
       ],
       "trust_domain": "TD-SEARCH-BRAVE",
-      "type": "external_system"
-    },
-    {
-      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
-      "id": "NODE-SEARCH-TAVILY",
-      "owner": "api.tavily.com",
-      "public_contracts": [],
-      "repository_paths": [],
-      "runtime": {
-        "evidence": "source_described",
-        "kind": "external_managed",
-        "lifecycle": "long_running",
-        "network": "external_managed"
-      },
-      "secrets": [
-        "SECRET-SEARCH-TAVILY"
-      ],
-      "trust_domain": "TD-SEARCH-TAVILY",
       "type": "external_system"
     },
     {
@@ -4135,6 +3956,272 @@
       ],
       "trust_domain": "TD-SEARCH-SCRAPINGDOG",
       "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SEARXNG",
+      "owner": "operator configured SearXNG endpoint",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SERPAPI",
+      "owner": "serpapi.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SERPAPI"
+      ],
+      "trust_domain": "TD-SEARCH-SERPAPI",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-SERPER",
+      "owner": "google.serper.dev",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-SERPER"
+      ],
+      "trust_domain": "TD-SEARCH-SERPER",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-SEARCH-QUERY-EVIDENCE",
+      "id": "NODE-SEARCH-TAVILY",
+      "owner": "api.tavily.com",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [
+        "SECRET-SEARCH-TAVILY"
+      ],
+      "trust_domain": "TD-SEARCH-TAVILY",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-SEO-SHOWCASE-LAB",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        ".agents/skills/seo-landing",
+        "side-projects/seo-landing-showcase"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "local_only"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-STAGED-DELIVERY-SOURCE",
+      "owner": "repository engineering",
+      "public_contracts": [],
+      "repository_paths": [
+        "delivery/contracts/jsonschema/landing-publication-request.v1.schema.json",
+        "delivery/pyproject.toml",
+        "delivery/src/getzilla_delivery",
+        "delivery/tests"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-SUPPLY-CHAIN-REGISTRY",
+      "owner": "external artifact registries",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-JOB-STATE",
+      "id": "NODE-TRUST-CI-API",
+      "owner": "Trust CI operators",
+      "public_contracts": [
+        "CONTRACT-APPROVAL-ENVELOPE",
+        "CONTRACT-GITHUB-PR-PROJECTION",
+        "CONTRACT-TRUST-CI-OPENAPI"
+      ],
+      "repository_paths": [
+        "trust-ci/src/adaptive_trust_ci/api.py",
+        "trust-ci/src/adaptive_trust_ci/metrics.py",
+        "trust-ci/src/adaptive_trust_ci/public_merge.py",
+        "trust-ci/src/adaptive_trust_ci/public_publisher.py",
+        "trust-ci/src/adaptive_trust_ci/webhooks.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "container",
+        "lifecycle": "long_running",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-DATABASE",
+        "SECRET-READ-TOKEN",
+        "SECRET-WEBHOOK"
+      ],
+      "trust_domain": "TD-TRUST-CI-CONTROL",
+      "type": "service"
+    },
+    {
+      "data_classification": "DATA-JOB-STATE",
+      "id": "NODE-TRUST-CI-POSTGRES",
+      "owner": "Trust CI operators",
+      "public_contracts": [],
+      "repository_paths": [
+        "trust-ci/postgres",
+        "trust-ci/sql",
+        "trust-ci/src/adaptive_trust_ci/backup.py",
+        "trust-ci/src/adaptive_trust_ci/lease.py",
+        "trust-ci/src/adaptive_trust_ci/migrations.py",
+        "trust-ci/src/adaptive_trust_ci/resources",
+        "trust-ci/src/adaptive_trust_ci/store.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "postgresql",
+        "lifecycle": "long_running",
+        "network": "local_only"
+      },
+      "secrets": [
+        "SECRET-DATABASE"
+      ],
+      "trust_domain": "TD-TRUST-CI-CONTROL",
+      "type": "datastore"
+    },
+    {
+      "data_classification": "DATA-ATTESTATION",
+      "id": "NODE-TRUST-CI-WORKER",
+      "owner": "Trust CI operators",
+      "public_contracts": [
+        "CONTRACT-ATTESTATION-ENVELOPE",
+        "CONTRACT-ATTESTATION-ENVELOPE-V2"
+      ],
+      "repository_paths": [
+        "trust-ci/compose.yaml",
+        "trust-ci/src/adaptive_trust_ci/__init__.py",
+        "trust-ci/src/adaptive_trust_ci/cli.py",
+        "trust-ci/src/adaptive_trust_ci/customers.py",
+        "trust-ci/src/adaptive_trust_ci/github.py",
+        "trust-ci/src/adaptive_trust_ci/github_app.py",
+        "trust-ci/src/adaptive_trust_ci/lookup.py",
+        "trust-ci/src/adaptive_trust_ci/models.py",
+        "trust-ci/src/adaptive_trust_ci/onboarding.py",
+        "trust-ci/src/adaptive_trust_ci/policy.py",
+        "trust-ci/src/adaptive_trust_ci/runner.py",
+        "trust-ci/src/adaptive_trust_ci/settings.py",
+        "trust-ci/src/adaptive_trust_ci/signing.py",
+        "trust-ci/src/adaptive_trust_ci/worker.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "container",
+        "lifecycle": "long_running",
+        "network": "declared_egress"
+      },
+      "secrets": [
+        "SECRET-CI-SIGNING",
+        "SECRET-DATABASE",
+        "SECRET-GITHUB-APP"
+      ],
+      "trust_domain": "TD-TRUST-CI-EXECUTION",
+      "type": "worker"
+    },
+    {
+      "data_classification": "DATA-CHANGE-EVIDENCE",
+      "id": "NODE-WORKFLOW-ARTIFACT-COMPILER",
+      "owner": "repository engineering",
+      "public_contracts": [
+        "CONTRACT-WORKFLOW-CONVERGENCE-REPORT-V1",
+        "CONTRACT-WORKFLOW-SOURCE-V1",
+        "CONTRACT-WORKFLOW-TASK-GRAPH-V1"
+      ],
+      "repository_paths": [
+        ".getzilla/getzilla/workflow_artifacts.py",
+        "schemas/workflow-convergence-report-v1.schema.json",
+        "schemas/workflow-source-v1.schema.json",
+        "schemas/workflow-task-graph-v1.schema.json",
+        "scripts/getzilla_artifacts.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-LOCAL-PREFLIGHT",
+      "type": "local_component"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-WORKFLOW-ARTIFACT-SOURCES",
+      "owner": "repository contributors",
+      "public_contracts": [
+        "CONTRACT-WORKFLOW-SOURCE-V1"
+      ],
+      "repository_paths": [
+        ".specify"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "none",
+        "lifecycle": "none",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-REPOSITORY",
+      "type": "repository"
     }
   ],
   "schema_version": 1,

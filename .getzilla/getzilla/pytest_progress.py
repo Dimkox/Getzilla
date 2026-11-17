@@ -21,6 +21,35 @@ _PHASES = ('configured', 'collection_finished', 'first_test_start')
 _FIELDS = {'version', 'nonce', 'worker', 'sequence', 'state', 'path', 'key'}
 
 
+def _failure_diagnostic_valid(value):
+    # Keep older minimal SDK imports and the existing closed policy shape.
+    if (type(value) is dict and set(value) == {'decision', 'reason'}
+            and type(value['decision']) is str and value['decision'] in {'allow', 'deny', 'unavailable'}
+            and type(value['reason']) is str
+            and value['reason'] in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
+        return True
+    try:
+        from . import verification_failure_excerpt as helper
+    except ImportError:
+        return False
+    return any(callable(validator) and validator(value) is True for validator in
+               (getattr(helper, 'valid_factory_diagnostic', None), getattr(helper, 'valid_update_diagnostic', None)))
+
+
+def _exception_diagnostic(error):
+    try:
+        from . import verification_failure_excerpt as helper
+    except ImportError:
+        return None
+    for name in ('policy_exception_diagnostic', 'factory_exception_diagnostic', 'update_exception_diagnostic'):
+        reader = getattr(helper, name, None)
+        if callable(reader):
+            value = reader(error)
+            if value is not None and _failure_diagnostic_valid(value):
+                return value
+    return None
+
+
 def _node_identity(nodeid: str) -> tuple[str | None, str | None]:
     # Parameters are arbitrary values. Strip them before validation or hashing.
     canonical = nodeid.partition('[')[0].replace('\\', '/')
@@ -193,6 +222,17 @@ class _WorkerProgress:
                                  'worker': self.worker}, 128)
         reserve = (64 if not self.failure_dropped else 0) + 64 if record['kind'] == 'failure' else (
             64 if record['kind'] == 'dropped' else 0)
+        if 'diagnostic' in record:
+            length = len(json.dumps(record, separators=(',', ':'), ensure_ascii=True).encode('ascii')) + 1
+            # Optional detail must not spend the space for later bounded failure
+            # identities. Reserve their largest closed shape, including omission.
+            future = {'kind': 'failure', 'ordinal': 2**63 - 1, 'phase': 'teardown',
+                      'path': 'x' * 256, 'key': 'f' * 64, 'diagnostic_omitted': True}
+            identity_bytes = len(json.dumps(future, separators=(',', ':')).encode('ascii')) + 1
+            identity_reserve = max(0, MAX_FAILURE_EVENTS - self.failure_rows - 1) * identity_bytes
+            if self.failure_written + length + reserve + identity_reserve > MAX_FAILURE_BYTES:
+                record = {key: value for key, value in record.items() if key != 'diagnostic'}
+                record['diagnostic_omitted'] = True
         self._failure_write(record, reserve)
 
     def pytest_runtest_makereport(self, item, call):
@@ -201,8 +241,7 @@ class _WorkerProgress:
         try:
             if call.excinfo is None:
                 return
-            from .verification_failure_excerpt import policy_exception_diagnostic
-            value = policy_exception_diagnostic(call.excinfo.value)
+            value = _exception_diagnostic(call.excinfo.value)
             if value is not None:
                 self._pending_diagnostic = (item.nodeid, call.when, value)
         except Exception:
@@ -532,7 +571,8 @@ def _read_failure_prefix(handle, ordinal, nonce):
         serial = number
         if kind == 'failure':
             if (set(row) not in ({'kind', 'ordinal', 'phase', 'path', 'key'},
-                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic'}) or len(events) >= MAX_FAILURE_EVENTS
+                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic'},
+                                     {'kind', 'ordinal', 'phase', 'path', 'key', 'diagnostic_omitted'}) or len(events) >= MAX_FAILURE_EVENTS
                     or row['phase'] not in ('setup', 'call', 'teardown')
                     or type(row['path']) is not str or len(row['path']) > 256
                     or not re.fullmatch(r'tests/[A-Za-z0-9_./-]+\.py', row['path'])
@@ -541,13 +581,15 @@ def _read_failure_prefix(handle, ordinal, nonce):
                 raise ValueError('invalid failure source')
             if 'diagnostic' in row:
                 value = row['diagnostic']
-                if (type(value) is not dict or set(value) != {'decision', 'reason'}
-                        or type(value['decision']) is not str or value['decision'] not in {'allow', 'deny', 'unavailable'}
-                        or type(value['reason']) is not str or value['reason'] not in {'budget', 'grant', 'secret', 'root', 'degraded', 'other'}):
+                if not _failure_diagnostic_valid(value):
                     raise ValueError('invalid failure diagnostic')
+            if 'diagnostic_omitted' in row and row['diagnostic_omitted'] is not True:
+                raise ValueError('invalid diagnostic omission')
             event = {key: row[key] for key in ('ordinal', 'phase', 'path', 'key')}
             if 'diagnostic' in row:
                 event['diagnostic'] = row['diagnostic']
+            if 'diagnostic_omitted' in row:
+                event['diagnostic_omitted'] = True
             events.append(event)
         elif kind == 'dropped' and set(row) == {'kind', 'ordinal'} and not dropped:
             dropped = True

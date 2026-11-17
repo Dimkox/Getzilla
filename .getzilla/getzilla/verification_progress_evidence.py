@@ -10,6 +10,15 @@ from pathlib import Path, PurePosixPath
 
 from .util import run
 from .verification_failure_excerpt import valid_policy_diagnostic
+from . import verification_failure_excerpt as _failure_excerpt
+
+
+def _valid_failure_diagnostic(value):
+    if valid_policy_diagnostic(value):
+        return True
+    return any(callable(validate) and validate(value) is True for validate in
+               (getattr(_failure_excerpt, 'valid_factory_diagnostic', None),
+                getattr(_failure_excerpt, 'valid_update_diagnostic', None)))
 
 
 def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
@@ -125,7 +134,8 @@ def _progress_failure_rows(progress, workers):
         previous, valid = 0, True
         for event in row['events']:
             if (type(event) is not dict or set(event) not in ({'ordinal', 'phase', 'path', 'key'},
-                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic'})
+                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic'},
+                                                {'ordinal', 'phase', 'path', 'key', 'diagnostic_omitted'})
                     or type(event['ordinal']) is not int or not previous < event['ordinal'] <= row['sequence']
                     or event['phase'] not in ('setup', 'call', 'teardown')
                     or type(event['path']) is not str or len(event['path']) > 256
@@ -134,7 +144,10 @@ def _progress_failure_rows(progress, workers):
                     or type(event['key']) is not str or not re.fullmatch('[0-9a-f]{64}', event['key'])):
                 valid = False
                 break
-            if 'diagnostic' in event and not valid_policy_diagnostic(event['diagnostic']):
+            if 'diagnostic' in event and not _valid_failure_diagnostic(event['diagnostic']):
+                valid = False
+                break
+            if 'diagnostic_omitted' in event and event['diagnostic_omitted'] is not True:
                 valid = False
                 break
             previous = event['ordinal']
@@ -149,6 +162,10 @@ def _failure_progress_details(rows, identities, workers):
               'render_truncated': False, 'events': []}
     if not rows:
         return output
+    diagnostic_omissions = any(event.get('diagnostic_omitted') is True
+                              for row in rows for event in row['events'])
+    if diagnostic_omissions:
+        output['diagnostics_omitted'] = True
     known = len(rows) == workers
     proven = {name: any(row[name] for row in rows) for name in ('overflow', 'dropped', 'partial_tail')}
     # Positive facts survive uncertainty; absence is not yet a negative proof.
@@ -163,6 +180,8 @@ def _failure_progress_details(rows, identities, workers):
                          'phase': event['phase'], 'identity': identity}
             if identity is not None and 'diagnostic' in event:
                 candidate['diagnostic'] = dict(event['diagnostic'])
+            if identity is not None and event.get('diagnostic_omitted') is True:
+                candidate['diagnostic_omitted'] = True
             proposed = {**output, 'events': output['events'] + [candidate]}
             # Reserve the longest final flag spelling without publishing a
             # provisional FALSE. Finalizing certainty must not exceed the cap.
@@ -173,7 +192,7 @@ def _failure_progress_details(rows, identities, workers):
             output['events'].append(candidate)
         if output['render_truncated']:
             break
-    uncertain = not known or unknown or output['render_truncated'] or any(proven.values())
+    uncertain = not known or unknown or output['render_truncated'] or any(proven.values()) or diagnostic_omissions
     for name, value in proven.items():
         output[name] = True if value else None if uncertain else False
     output['status'] = 'partial' if uncertain else 'observed'

@@ -52,6 +52,8 @@
     "UserPromptSubmit"
   ],
   "scripts": [
+    "getzilla_live.py",
+    "getzilla_live_lifecycle.py",
     "getzilla_approve.py",
     "getzilla_artifacts.py",
     "getzilla_architecture.py",
