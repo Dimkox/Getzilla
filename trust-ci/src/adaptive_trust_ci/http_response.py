@@ -141,7 +141,9 @@ def request_bytes(request, *, deadline=None):
                           'body': base64.b64encode(request.data).decode('ascii')
                           if request.data is not None else None,
                           'seconds': min(RESPONSE_SECONDS, deadline - time.monotonic())}).encode('utf-8')
-    command = [sys.executable, str(Path(__file__).resolve())]
+    # This stdlib-only worker must not run ambient Python startup/customization
+    # code before it receives authentication headers through its private pipe.
+    command = [sys.executable, '-I', '-S', '-B', str(Path(__file__).resolve())]
     raw = _run_owned(command, payload, deadline=deadline)
     try:
         value = json.loads(raw)

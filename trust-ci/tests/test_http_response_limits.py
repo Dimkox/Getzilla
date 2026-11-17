@@ -49,6 +49,27 @@ class SizedStream:
 
 
 class HttpResponseLimitTests(unittest.TestCase):
+    def test_fixed_worker_ignores_pythonpath_startup_code(self):
+        import urllib.request
+
+        runtime = Path(__file__).resolve().parents[2] / '.getzilla/runtime'
+        runtime.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            canary = Path(directory) / 'startup-executed'
+            (Path(directory) / 'sitecustomize.py').write_text(
+                f'from pathlib import Path; Path({str(canary)!r}).write_text("executed")\n')
+
+            def empty_input_worker(command, payload, *, deadline):
+                # Real owned worker launch, but invalid input stops before urllib.
+                return _run_owned(command, b'', deadline=deadline)
+
+            with mock.patch.dict(os.environ, {'PYTHONPATH': directory}), \
+                    mock.patch('adaptive_trust_ci.http_response._run_owned',
+                               side_effect=empty_input_worker), \
+                    self.assertRaisesRegex(ResponseLimitError, 'worker failed'):
+                request_bytes(urllib.request.Request('https://fixture.invalid'))
+            self.assertFalse(canary.exists(), 'ambient sitecustomize ran before the fixed worker')
+
     def error_exchange(self, request, error):
         def opener(*args, **kwargs):
             raise error
