@@ -1939,6 +1939,45 @@ def _byte_only_http_imports(tree: ast.AST) -> set[str]:
     return {item[2] for item in http_events} if calls else set()
 
 
+def _shutdown_constant_socket_imports(tree: ast.AST) -> set[str]:
+    """Prove one unchanged module binding supplies shutdown constants only."""
+    if not namespace_is_closed(tree):
+        return set()
+    events = [event for event in binding_events(tree) if event.name == 'socket']
+    if len(events) != 1 or events[0].node not in getattr(tree, 'body', ()):
+        return set()
+    declaration = events[0].node
+    if not isinstance(declaration, ast.Import):
+        return set()
+    imports = [alias for node in ast.walk(tree) if isinstance(node, ast.Import)
+               for alias in node.names if alias.name.split('.')[0] == 'socket']
+    if (len(imports) != 1 or imports[0].name != 'socket' or imports[0].asname is not None
+            or any(isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'socket'
+                   for node in ast.walk(tree))):
+        return set()
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    used = False
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and 'socket' in node.names:
+            return set()
+        if not isinstance(node, ast.Name) or node.id != 'socket':
+            continue
+        member = parents.get(node)
+        if (not isinstance(node.ctx, ast.Load) or not isinstance(member, ast.Attribute)
+                or member.value is not node or not isinstance(member.ctx, ast.Load)
+                or member.attr not in {'SHUT_RD', 'SHUT_WR', 'SHUT_RDWR'}):
+            return set()
+        parent = parents.get(member)
+        if isinstance(parent, ast.Call) and parent.func is member:
+            return set()
+        used = True
+    return {'socket'} if used else set()
+
+
+def _non_client_imports(tree: ast.AST) -> set[str]:
+    return _byte_only_http_imports(tree) | _shutdown_constant_socket_imports(tree)
+
+
 def _network_clients(
     snapshot: ArchitectureSnapshot,
     diff: ArchitectureDiff,
@@ -1956,7 +1995,7 @@ def _network_clients(
         try:
             tree = python.tree(path)
             imports = _import_targets(tree)
-            byte_only = _byte_only_http_imports(tree)
+            byte_only = _non_client_imports(tree)
         except SyntaxError as exc:
             unsupported.append(f"{path}: {exc}")
             continue
@@ -4320,7 +4359,7 @@ def _new_import_family(
 
 
 def _network_families(tree: ast.AST, project_roots: set[str]) -> set[str]:
-    byte_only = _byte_only_http_imports(tree)
+    byte_only = _non_client_imports(tree)
     values = {
         imported for imported in _import_targets(tree) if imported not in byte_only and _network_protocol(imported) is not None
     }
