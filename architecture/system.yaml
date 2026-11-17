@@ -4105,7 +4105,8 @@
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/templates",
         ".grok",
-        ".qwen"
+        ".qwen",
+        "scripts/getzilla_hook.py"
       ],
       "runtime": {
         "evidence": "source_described",

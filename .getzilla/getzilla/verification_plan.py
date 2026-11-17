@@ -41,6 +41,7 @@ _POLICY_PATHS = (
     '.getzilla/config/stacks.json',
     '.getzilla-verification.json', '.getzilla-test-runner.json', '.getzilla-evals.json',
     'architecture/system.yaml', 'architecture/rules.yaml',
+    'scripts/getzilla_cli.py', 'scripts/getzilla_hook.py',
 )
 
 
@@ -123,7 +124,7 @@ def policy_binding(root: Path) -> dict:
                  'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
                  'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
                  'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
-                 'verification_journal.py'):
+                 'verification_journal.py', 'harnesses.py'):
         module = importlib.import_module('.' + name[:-3], __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR
