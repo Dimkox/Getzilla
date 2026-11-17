@@ -112,9 +112,12 @@ def policy_binding(root: Path) -> dict:
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
-                 'expanded_security.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
-                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py', 'security_oci.py',
-                 'security_cli.py', 'public_security_context.py'):
+                 'expanded_security.py', 'security_cli.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
+                 'public_security_context.py', 'security_oci.py',
+                 'security_intelligence.py', 'security_data.py', 'security_osv_snapshot.py',
+                 'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
+                 'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
+                 'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py'):
         module = importlib.import_module('.' + name[:-3], __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR
@@ -552,14 +555,29 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
 
 def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=None) -> dict:
     """Read the current native source and policy; never trust the old plan to select obligations."""
-    from .continuity import context_binding, legacy_evidence_allowed
     from .state import get_active_route
-    from .verification import _git_range_selection, _changed_file_inventory
+    from .verification import GitRangeSelection, _git_range_selection
+    route = get_active_route(root) or {}
+    range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
+    ranges = _git_range_selection(root, route or None, range_mode)
+    if ranges.qualification_bases is not None:
+        ranges = GitRangeSelection(list(ranges.qualification_bases), list(ranges.findings))
+    return _compile_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope,
+                                  route=route, ranges=ranges)
+
+
+def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route: dict, ranges) -> dict:
+    """Compile live policy and observations from already proved explicit ranges.
+
+    No range acquisition or receipt lookup occurs here. Prior qualification can
+    therefore be checked without re-entering its own witness reader.
+    """
+    from .continuity import context_binding, legacy_evidence_allowed
+    from .verification import _changed_file_inventory
     from .review_plan import assess
     from .verification_scope import select_docs_state_scope, FOCUSED_TEST_TARGETS
     from .verification import _docs_state_status_inventory
     from .expanded_security import security_obligations
-    route = get_active_route(root) or {}
     documents = _plan_documents(root, route)
     context = context_binding(root, route) if route and not legacy_evidence_allowed(route) else {
         'version': 1, 'variant': 'legacy' if route else 'unrouted', 'route_id': route.get('route_id'),
@@ -568,8 +586,6 @@ def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=No
         context['package'] = {'path': documents['path'], 'change_id': documents['spec']['change_id'],
                               'spec_digest': documents['spec_digest'],
                               'requirements_digest': documents['requirements_digest']}
-    range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
-    ranges = _git_range_selection(root, route or None, range_mode)
     files, metadata = _changed_file_inventory(root, route or None, mode, ranges)
     fingerprint = tree_fingerprint(root)
     head = git_head(root)
@@ -645,6 +661,18 @@ def report_gaps(root: Path, report: Any, *, now: datetime | None = None) -> list
         if not isinstance(report, dict) or not isinstance(report.get('required_plan'), dict):
             raise ValueError('qualifying verification requires an embedded required_plan')
         current = current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'))
+        gaps = _report_plan_gaps(root, report, current, now=now)
+        if not gaps and current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles')) != current:
+            return [_finding('required-plan-changed', 'required_plan',
+                             'current complete binding changed during result validation')]
+        return gaps
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        return [_finding('required-plan-unavailable', 'required_plan', 'current required plan and evidence could not be established')]
+
+
+def _report_plan_gaps(root: Path, report: dict, current: dict, *, now=None) -> list[dict[str, str]]:
+    """Validate complete results against a freshly compiled plan, without acquiring ranges."""
+    try:
         selected = current['binding']['selection']
         if report.get('mode') == 'fast' and selected.get('delivery_expected') and selected.get('delivery_lane') != 'light':
             return [_finding('required-qualifying-mode', 'mode', 'full task completion requires pr/release; fast qualifies only a measured light diff')]

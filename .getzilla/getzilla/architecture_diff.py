@@ -14,7 +14,7 @@ import subprocess  # nosec B404
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -947,18 +947,58 @@ class ArchitectureBaseSelection:
     comparison_base_sha: str
     base_kind: str
     bootstrap_baseline: bool
+    candidate_sha: str | None = None
+    target_sha: str | None = None
+    target_ref: str | None = None
+    ranges_digest: str | None = None
+    model_digest: str | None = None
+    range_mode: str = 'pr'
+
+
+def _comparison_ranges_digest(selection: ArchitectureBaseSelection) -> str:
+    # These are proved comparison operands, not a moving target observation.
+    return _digest({name: getattr(selection, name) for name in (
+        'route_base_sha', 'comparison_base_sha', 'base_kind', 'bootstrap_baseline',
+        'candidate_sha', 'target_sha', 'target_ref', 'model_digest', 'range_mode')})
+
+
+def _comparison_model_digest(root: Path, commits: tuple[str, ...]) -> str:
+    values = []
+    for commit in commits:
+        for path in (*_MODEL_PATHS, _ADOPTION_PATH):
+            raw = _git_blob(root, commit, path, required=True)
+            if raw is None:
+                raise ArchitectureError('comparison model or adoption is absent', code='missing')
+            if path == _ADOPTION_PATH:
+                parse_adoption_marker(raw)
+            values.append((commit, path, hashlib.sha256(raw).hexdigest()))
+    return _digest(values)
 
 
 def select_architecture_comparison_base(
     root: Path,
     route: dict[str, Any] | None,
+    *,
+    _trusted_ranges: Any = None,
 ) -> ArchitectureBaseSelection:
+    from .verification import GitRangeSelection, _git_range_selection, _RANGE_MODES
+    range_mode = 'pr'
+    if _trusted_ranges is not None:
+        if (type(_trusted_ranges) is not GitRangeSelection
+                or type(_trusted_ranges.mode) is not str
+                or _trusted_ranges.mode not in {'fast', *_RANGE_MODES}):
+            raise ArchitectureError('architecture ranges are foreign or stale', code='git')
+        range_mode = _trusted_ranges.mode
     candidate = (route or {}).get("base_commit")
     route_base = _exact_commit(
         root,
         candidate if isinstance(candidate, str) else _head_commit(root),
         label="architecture_route_base_sha",
     )
+    head = _head_commit(root)
+    ranges = _git_range_selection(root, route, range_mode)
+    if ranges.head_sha != head or (_trusted_ranges is not None and _trusted_ranges != ranges):
+        raise ArchitectureError('architecture ranges are foreign or stale', code='git')
     marker_present = _git_blob(root, route_base, _ADOPTION_PATH) is not None
     model_present = tuple(
         _git_blob(root, route_base, path) is not None for path in _MODEL_PATHS
@@ -982,6 +1022,37 @@ def select_architecture_comparison_base(
         comparison_base = route_base
         base_kind = "route_model"
         bootstrap_baseline = False
+        if ranges.findings:
+            raise ArchitectureError('architecture ranges are unproved', code='git')
+        targets = [entry for entry in ranges.bases if entry.kind == 'pr-target']
+        if len(targets) > 1:
+            raise ArchitectureError('architecture target is ambiguous', code='git')
+        if targets:
+            target = targets[0]
+            if target.comparison_base_sha not in (target.target_sha, head):
+                raise ArchitectureError('architecture target is not contained by candidate', code='git')
+            if target.comparison_base_sha == head and route_base != head:
+                from .receipts import _qualified_architecture_comparison
+                qualified = _qualified_architecture_comparison(root, route or {}, head)
+                if qualified is not None:
+                    old_base = _git(root, ['merge-base', '--all', qualified.comparison_base_sha, head])
+                    if (old_base is None or old_base.decode().splitlines() != [qualified.comparison_base_sha]
+                            or _comparison_model_digest(root, (route_base, qualified.target_sha, head)) != qualified.model_digest):
+                        raise ArchitectureError('qualified architecture comparison is stale', code='git')
+                    if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+                        raise ArchitectureError('qualified comparison operands changed', code='git')
+                    current = replace(qualified, range_mode=range_mode)
+                    return replace(current, ranges_digest=_comparison_ranges_digest(current))
+            if target.comparison_base_sha != head and target.target_sha != route_base:
+                ancestor = _git(root, ['merge-base', '--all', route_base, target.target_sha])
+                if ancestor is None or ancestor.decode().splitlines() != [route_base]:
+                    raise ArchitectureError('architecture target does not descend from anchor', code='git')
+                identity = _comparison_model_digest(root, (route_base, target.target_sha, head))
+                result = ArchitectureBaseSelection(route_base, target.target_sha, 'accepted_target', False,
+                    head, target.target_sha, target.source, None, identity, range_mode)
+                if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+                    raise ArchitectureError('architecture comparison operands changed', code='git')
+                return replace(result, ranges_digest=_comparison_ranges_digest(result))
     else:
         bootstrap_baseline = True
         try:
@@ -994,12 +1065,17 @@ def select_architecture_comparison_base(
         except ArchitectureError:
             comparison_base = route_base
             base_kind = "route_pre_adoption"
-    return ArchitectureBaseSelection(
+    if _head_commit(root) != head or _git_range_selection(root, route, range_mode) != ranges:
+        raise ArchitectureError('architecture comparison operands changed', code='git')
+    result = ArchitectureBaseSelection(
         route_base_sha=route_base,
         comparison_base_sha=comparison_base,
         base_kind=base_kind,
         bootstrap_baseline=bootstrap_baseline,
+        candidate_sha=head,
+        range_mode=range_mode,
     )
+    return replace(result, ranges_digest=_comparison_ranges_digest(result))
 
 
 def _worktree_open_flags() -> tuple[int, int, int]:
@@ -1919,9 +1995,21 @@ def diff_architecture(
     base = _exact_commit(repository, base_sha, label="base_sha")
     bootstrap_baseline = False
     if _trusted_base_selection is not None:
+        if type(_trusted_base_selection) is not ArchitectureBaseSelection:
+            raise ArchitectureError('architecture base selection is foreign', code='git')
+        from .state import get_active_route
+        from .verification import _git_range_selection, _RANGE_MODES
+        if (type(_trusted_base_selection.range_mode) is not str
+                or _trusted_base_selection.range_mode not in {'fast', *_RANGE_MODES}
+                or _trusted_base_selection.candidate_sha != _head_commit(repository)
+                or not isinstance(_trusted_base_selection.ranges_digest, str)
+                or not re.fullmatch(r'[0-9a-f]{64}', _trusted_base_selection.ranges_digest)):
+            raise ArchitectureError('architecture base selection mode is foreign', code='git')
+        selection_route = get_active_route(repository) or {"base_commit": _trusted_base_selection.route_base_sha}
         verified_selection = select_architecture_comparison_base(
             repository,
-            {"base_commit": _trusted_base_selection.route_base_sha},
+            selection_route,
+            _trusted_ranges=_git_range_selection(repository, selection_route, _trusted_base_selection.range_mode),
         )
         if verified_selection != _trusted_base_selection:
             raise ArchitectureError("architecture base selection is stale", code="git")

@@ -589,6 +589,8 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     if image_artifacts is not None:
         env['GETZILLA_SECURITY_IMAGE_ARTIFACTS'] = str(image_artifacts.absolute())
         env['GETZILLA_SECURITY_IMAGE_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
+    if image_selection is not None and profile is None:
+        raise SecurityDataError('explicit image selection requires a current source/run input profile')
     selection = read_image_selection(image_selection)
     if selection is not None:
         env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
@@ -783,6 +785,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.image_artifacts is not None:
         args.image_artifacts = args.image_artifacts.absolute()
+    if args.image_selection is not None:
+        args.image_selection = args.image_selection.absolute()
     if args.family_records is not None and not (args.prepare_inputs and args.refresh):
         parser.error('--family-records requires explicit input preparation and refresh')
     if args.write_input_profile is not None and args.input_profile is not None:

@@ -242,6 +242,9 @@ class GitRangeBase:
 class GitRangeSelection:
     bases: list[GitRangeBase] = field(default_factory=list)
     findings: list[dict[str, str]] = field(default_factory=list)
+    qualification_bases: tuple[GitRangeBase, ...] | None = None
+    mode: str = 'pr'
+    head_sha: str | None = None
 
 
 FOCUSED_STATIC_SEO_LANDING_MODE = 'focused-static-seo-landing'
@@ -291,16 +294,19 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
-        binding = active_architecture_binding(root, route or {})
+        binding = (active_architecture_binding(root, route or {}) if _trusted_ranges is None else
+                   active_architecture_binding(root, route or {}, _trusted_ranges=_trusted_ranges))
         if binding is None:
             return (
                 CheckResult("architecture", "skip", "architecture is not configured"),
                 {"configured": False, "status": "not_configured"},
             )
         snapshot = load_architecture(root)
-        base_selection = select_architecture_comparison_base(root, route)
+        base_selection = select_architecture_comparison_base(root, route, _trusted_ranges=_trusted_ranges)
         base = base_selection.comparison_base_sha
         if (
             binding["architecture_base_sha"] != base
@@ -330,6 +336,8 @@ def _architecture_check(
         diagram_status = "fail" if mismatches else "pass"
         failed = fitness.status != "pass" or bool(drift) or bool(mismatches)
         core: dict[str, object] = {
+            **({'architecture_comparison_witness': binding['architecture_comparison_witness']}
+               if 'architecture_comparison_witness' in binding else {}),
             "architecture_contract_version": 1,
             "adoption_digest": binding["architecture_adoption_digest"],
             "architecture_digest": binding["architecture_digest"],
@@ -341,6 +349,7 @@ def _architecture_check(
                 "architecture_bootstrap_baseline"
             ],
             "architecture_route_base_sha": binding["architecture_route_base_sha"],
+            "architecture_range_mode": binding["architecture_range_mode"],
             "baseline_introduced": diff.baseline_introduced,
             "base_adoption_state": diff.base_adoption_state,
             "head_adoption_state": diff.head_adoption_state,
@@ -419,22 +428,29 @@ def _governance_check(
     root: Path,
     route: dict[str, object] | None,
     architecture: dict[str, object],
+    *,
+    _trusted_ranges: GitRangeSelection | None = None,
 ) -> tuple[CheckResult, dict[str, object]]:
     try:
         checked_architecture: dict[str, object] | None = None
         if architecture.get("status") == "pass" and architecture.get("configured") is True:
             checked_architecture = {
-                field: architecture[field]
+                field: architecture.get(field)
                 for field in (
                     "architecture_digest",
                     "architecture_base_sha",
                     "architecture_head_commit",
+                    "architecture_route_base_sha",
+                    "architecture_base_kind",
+                    "architecture_comparison_witness",
+                    "architecture_range_mode",
                 )
             }
         binding = active_governance_binding(
             root,
             route or {},
             checked_architecture,
+            **({'_trusted_ranges': _trusted_ranges} if _trusted_ranges is not None else {}),
         )
         if binding is None:
             return (
@@ -703,9 +719,14 @@ def _git_range_selection(
     route: dict[str, object] | None,
     mode: str,
 ) -> GitRangeSelection:
-    selection = GitRangeSelection()
+    mode = 'pr' if mode == 'fast' and ((route or {}).get('delivery_lane') == 'light'
+                                      or (route or {}).get('light_lane_candidate') is True) else mode
+    selection = GitRangeSelection(mode=mode)
     if mode not in _RANGE_MODES or not command_exists('git'):
+        if mode == 'fast' and command_exists('git'):
+            selection.head_sha = _resolve_commit(root, 'HEAD')
         return selection
+    selection.head_sha = _resolve_commit(root, 'HEAD')
 
     if route:
         raw_route_base = route.get('base_commit')
@@ -776,6 +797,18 @@ def _git_range_selection(
                 target_sha=target_sha,
                 comparison_base_sha=bases[0],
             ))
+            if bases[0] == _resolve_commit(root, 'HEAD') and route:
+                from .receipts import _qualified_architecture_comparison
+                qualified = _qualified_architecture_comparison(root, route, bases[0])
+                if qualified is not None and qualified.comparison_base_sha not in {item.comparison_base_sha for item in selection.bases}:
+                    selection.bases.append(GitRangeBase('qualified-pr-target', qualified.target_ref,
+                                                       qualified.target_sha, qualified.comparison_base_sha))
+                    # The live target remains in the full review union. A prior
+                    # qualifying plan retains its exact range metadata separately.
+                    selection.qualification_bases = (
+                        GitRangeBase('route', 'route.base_commit', qualified.route_base_sha, qualified.route_base_sha),
+                        GitRangeBase('pr-target', qualified.target_ref, qualified.target_sha, qualified.comparison_base_sha),
+                    )
     elif route and route.get('delivery_expected') is True:
         selection.findings.append({
             'severity': 'error',
@@ -2858,19 +2891,25 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
 
 
 def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
-    """Both local admission and stored receipt consumers require fresh, explicit bindings."""
+    """Failed admission cannot supply fresh bindings; other paths still rederive them."""
     from .verification_plan import current_required_plan
     from .expanded_security import validate_data_source
+    hard_failure = any(isinstance(item, CheckResult) and item.status in {'fail', 'cancelled'} for item in results)
     current = None
-    try:
-        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
-        if observed == required_plan:
-            current = observed['binding']
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-        pass
-    return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+    if not hard_failure:
+        try:
+            observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+            if observed == required_plan:
+                current = observed['binding']
+        except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+            pass
+    decision = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
         required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
         data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
+    if hard_failure:
+        decision.details.append({'severity': 'info', 'code': 'required-plan-revalidation-unexecuted',
+            'path': 'required_plan', 'message': 'Final plan revalidation not executed after a prior failed or cancelled check; current binding unavailable.'})
+    return decision
 
 
 def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
@@ -3013,13 +3052,14 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             architecture_check = dispatch.run('architecture', None)
             architecture_metadata = {'status': 'not_run'}
         else:
-            architecture_check, architecture_metadata = _architecture_check(root, route)
+            architecture_check, architecture_metadata = _architecture_check(root, route, _trusted_ranges=git_ranges)
             dispatch.add(architecture_check)
         if dispatch.blocked_by:
             governance_check = dispatch.run('governance', None)
             governance_metadata = {'status': 'not_run'}
         else:
-            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata)
+            governance_check, governance_metadata = _governance_check(root, route, architecture_metadata,
+                                                                     _trusted_ranges=git_ranges)
             dispatch.add(governance_check)
     if architecture_check.status == 'fail' or governance_check.status == 'fail':
         state.receipt_eligible = False
