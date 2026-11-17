@@ -125,7 +125,7 @@ def _owned_route(root: Path) -> dict:
 @serialized_task
 def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | None = None,
                 generation: str | None = None, requirement_ids: tuple[str, ...] | None = None) -> dict:
-    from .policy import write_roles
+    from .writer_roles import write_roles
 
     agent_id, agent_type = _identity(agent_id), _identity(agent_type)
     if requirement_ids is not None and (not isinstance(requirement_ids, tuple) or
