@@ -1,8 +1,10 @@
 """The small-change lane is admitted from complete source evidence, never task wording."""
 from __future__ import annotations
 import sys
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
@@ -131,13 +133,13 @@ class LightLaneVerificationTests(unittest.TestCase):
                 self.assertTrue(allowed, refusal)
                 self.assertEqual(start_agent(root, 'test-review', reviewer)['lifecycle'], 'running')
 
-    def test_fast_verifier_admits_small_code_without_package_then_restores_full_floor(self):
+    def test_light_diff_needs_no_package_but_missing_security_still_blocks_verification(self):
         from getzilla.router import build_route
         from getzilla.state import get_active_route
         from tests._support import activate_owned_route
         from getzilla.verification import verify
         from tests._support import project_copy
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = git(root, 'rev-parse', 'HEAD')
             git(root, 'update-ref', 'refs/remotes/origin/main', base)
             route = build_route(root, 'Fix the greeting text', 'light-e2e').to_dict()
@@ -146,13 +148,16 @@ class LightLaneVerificationTests(unittest.TestCase):
             self.assertEqual(route['delivery_lane'], 'light')
             activate_owned_route(root, route)
             (root / 'app.py').write_text('def greeting():\n    return "hello"\n')
-            (root / 'tests').mkdir()
+            (root / 'tests').mkdir(exist_ok=True)
             (root / 'tests/test_app.py').write_text('import unittest\nfrom app import greeting\nclass Tests(unittest.TestCase):\n    def test_greeting(self):\n        self.assertEqual(greeting(), "hello")\n')
             git(root, 'add', '.')
             git(root, 'commit', '-qm', 'small code and regression')
-            report = verify(root, mode='fast', record=False)
+            missing_data = str(root / '.getzilla/runtime/missing-security-data')
+            with patch.dict(os.environ, {'GETZILLA_SECURITY_DB': missing_data, 'GETZILLA_OSV_DB': missing_data}):
+                report = verify(root, mode='fast', record=False)
             self.assertTrue(report['light_diff']['admitted'], report['light_diff'])
-            self.assertEqual(report['status'], 'pass', report['checks'])
+            self.assertEqual(report['status'], 'fail', report['checks'])
+            self.assertEqual(next(item for item in report['checks'] if item['name'] == 'quality-gate')['status'], 'fail')
             self.assertEqual(get_active_route(root)['required_evidence'], ['verification', 'code_review'])
             self.assertFalse((root / '.getzilla/runtime/active-change.json').exists())
             self.assertNotEqual(next(item for item in report['checks'] if item['name'] == 'change-spec')['status'], 'fail')

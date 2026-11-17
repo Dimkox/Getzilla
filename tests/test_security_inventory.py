@@ -362,23 +362,26 @@ class StructuralYamlInventoryTests(unittest.TestCase):
         self.assertNotEqual(first['digest'], second['digest'])
         self.assertNotEqual(first['manifests'], second['manifests'])
 
-    def test_isolated_cli_and_checker_obligations_keep_flow_image_required_and_blocked(self):
+    def test_isolated_cli_and_required_plan_keep_flow_image_required_and_blocked(self):
         from getzilla.expanded_security import security_obligations
         from getzilla.security_cli import evaluate
+        from getzilla.verification_plan import build_required_plan
         inventory = self.fixture('compose.yaml', f'services: {{db: {{image: "{IMAGE}"}}}}\n')
         source = {'head_sha': 'a' * 40, 'tree_sha': 'b' * 40, 'checker_sha': 'c' * 40,
                   'checker_tree_sha': 'd' * 40, 'candidate_clean': True, 'checker_clean': True,
                   'same_project': True}
         runtime = self.root / '.getzilla/runtime'
-        # Only native Git identities are fixture inputs. All inventory,
+        # Only native Git identities are fixture inputs. All inventory, planning,
         # local security producers and final CLI aggregation run normally.
         with mock.patch('getzilla.security_cli.source_binding', return_value=source):
             report = evaluate(self.root, runtime / 'db', runtime / 'artifacts', runtime / 'tools', now=NOW)
         self.assertEqual(report['status'], 'fail')
         images = next(item for item in report['checks'] if item['name'] == 'security-container-images')
         self.assertEqual(images['details'][0]['outcome'], 'blocked')
-        obligations = security_obligations(self.root, inventory=inventory, environ={}, now=NOW)
-        image_obligation = next(item for item in obligations if item['check_id'] == 'security-container-images')
+        plan = build_required_plan(self.root, mode='fast', context={}, source=source, inventory=inventory,
+                                   risk={'risk': 'high'}, selection={'mode': 'fast'},
+                                   extra_obligations=security_obligations(self.root, environ={}, now=NOW))
+        image_obligation = next(item for item in plan['obligations'] if item['check_id'] == 'security-container-images')
         self.assertEqual(image_obligation['applicability'], 'required')
         self.assertEqual(image_obligation['evidence']['inventory_sha256'], inventory['digest'])
 

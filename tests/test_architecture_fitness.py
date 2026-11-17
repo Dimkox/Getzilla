@@ -5714,9 +5714,11 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
     def test_each_vulnerability_scanner_destination_has_its_own_declared_edge(self) -> None:
         """#73: the OSV query and the OSV mirror are separate destinations; dropping either edge is caught."""
-        known = (ROOT / '.getzilla/getzilla/known_vulns.py').read_text(encoding='utf-8')
-        self.assertIn("OSV_API = 'https://api.osv.dev/v1'", known)
-        self.assertIn("OSV_BUCKET = 'https://osv-vulnerabilities.storage.googleapis.com'", known)
+        known = importlib.import_module('getzilla.known_vulns')
+        snapshots = importlib.import_module('getzilla.security_data')
+        self.assertEqual(known.OSV_API, 'https://api.osv.dev/v1')
+        self.assertEqual(known.OSV_BUCKET, 'https://osv-vulnerabilities.storage.googleapis.com')
+        self.assertEqual(known.OSV_BUCKET, snapshots.OSV_BUCKET)
         destinations = {'EDGE-SCANNER-OSV-QUERY': 'NODE-OSV-API',
                         'EDGE-SCANNER-OSV-MIRROR-DOWNLOAD': 'NODE-OSV-ADVISORY-BUCKET'}
 
@@ -6167,11 +6169,19 @@ class ArchitectureFitnessTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'path')
 
     def test_public_worker_source_membership_is_exact_and_envelope_preserving(self) -> None:
-        approved = ("public_models.py", "public_admission.py", "public_policy.py", "source_safety.py",
+        approved = ("public_models.py", "public_policy.py", "source_safety.py",
                     "public_storage.py", "public_checkout.py", "public_runner.py")
+        rejected = ("public_admission.py", "public_extra.py")
         repo, base, common_system = self._public_trust_binding_repo(())
+        # Freeze first registration, even when the real model already owns a source.
+        # Actual API ownership and forbidden transfers are checked separately below.
+        sources = {f"trust-ci/src/adaptive_trust_ci/{name}" for name in (*approved, *rejected)}
+        for node in common_system["nodes"]:
+            node["repository_paths"] = [path for path in node["repository_paths"] if path not in sources]
+        repo.write_json("architecture/system.yaml", common_system)
+        base = repo.commit("before public worker source registration")
         prepared = []
-        for filename in (*approved, "public_extra.py"):
+        for filename in (*approved, *rejected):
             with self.subTest(filename=filename):
                 repo.git("reset", "--hard", base)
                 system = copy.deepcopy(common_system)
@@ -6187,6 +6197,25 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 diff = self._frozen_fixture_diff(repo, base, head, snapshot)
                 self.assertEqual(FIT._change_separation(snapshot, diff).status,
                                  "pass" if filename in approved else "fail")
+
+    def test_public_admission_keeps_api_ownership_and_rejects_worker_transfer(self) -> None:
+        source = "trust-ci/src/adaptive_trust_ci/public_admission_legacy.py"
+        repo, base, baseline = self._public_trust_baseline()
+        self.assertEqual([node["id"] for node in baseline.system["nodes"]
+                          if source in node["repository_paths"]], ["NODE-TRUST-CI-API"])
+        system = copy.deepcopy(baseline.system)
+        nodes = {node["id"]: node for node in system["nodes"]}
+        nodes["NODE-TRUST-CI-WORKER"]["repository_paths"].append(source)
+        repo.write_json("architecture/system.yaml", system)
+        with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "repository path ownership tie"):
+            FIT.load_architecture(repo.root)
+        nodes["NODE-TRUST-CI-API"]["repository_paths"].remove(source)
+        repo.write_json("architecture/system.yaml", system)
+        repo.write_text(source, "VALUE = 'attempted ownership transfer'\n")
+        head = repo.commit("API admission cannot become worker metadata")
+        snapshot = FIT.load_architecture(repo.root)
+        diff = self._frozen_fixture_diff(repo, base, head, snapshot)
+        self.assertEqual(FIT._change_separation(snapshot, diff).status, "fail")
 
     def test_changed_code_budget_counts_bytes_lines_and_ast_complexity(self) -> None:
         metrics = (

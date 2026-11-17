@@ -295,6 +295,137 @@ class PublicationJournal:
         return row[0] if row else None
 
 
+class PublicWakeupQueue:
+    """Bounded durable wakeups, never admission evidence or automatic retry.
+
+    A running/unknown operation is never reclaimed by lease expiry. Recovery of
+    its original publisher allocation remains an explicit operator obligation.
+    """
+    def __init__(self, journal: PublicationJournal, scope: str):
+        if not isinstance(scope, str) or re.fullmatch('[0-9a-f]{64}', scope) is None:
+            raise ValueError('public-runtime-scope')
+        self.journal, self.scope = journal, scope
+
+    def initialize(self):
+        # Explicit operator CLI action only; never implicit API startup migration.
+        with closing(self.journal._connect()) as db, db:
+            db.execute('CREATE TABLE IF NOT EXISTS public_runtime (id INTEGER PRIMARY KEY CHECK(id=1), scope TEXT NOT NULL)')
+            db.execute("CREATE TABLE IF NOT EXISTS public_wakeups (id TEXT PRIMARY KEY, pr INTEGER NOT NULL CHECK(pr>0), "
+                       "state TEXT NOT NULL CHECK(state IN ('pending','running','published','blocked','unknown')), "
+                       "reason TEXT NOT NULL DEFAULT '')")
+            db.execute("CREATE TABLE IF NOT EXISTS public_dispatches (key TEXT PRIMARY KEY, pr INTEGER NOT NULL, "
+                       "state TEXT NOT NULL CHECK(state IN ('pending','requested','unknown')))")
+            db.execute('INSERT OR IGNORE INTO public_runtime VALUES (1, ?)', (self.scope,))
+            self._require(db)
+
+    def _require(self, db):
+        row = db.execute('SELECT scope FROM public_runtime WHERE id=1').fetchone()
+        if row != (self.scope,):
+            raise ValueError('public-journal-configuration-mismatch')
+
+    def ready(self):
+        with closing(self.journal._connect()) as db:
+            self._require(db)
+            db.execute('SELECT id, pr, state, reason FROM public_wakeups LIMIT 0')
+            db.execute('SELECT key, pr, state FROM public_dispatches LIMIT 0')
+        return True
+
+    def enqueue(self, delivery, targets):
+        if (not isinstance(delivery, str) or re.fullmatch('[A-Za-z0-9-]{1,128}', delivery) is None
+                or type(targets) is not tuple or not 1 <= len(targets) <= 100
+                or any(type(pr) is not int or not 0 < pr <= 2147483647 for pr in targets)):
+            raise ValueError('public-wakeup-shape')
+        delivery_key = hashlib.sha256(canonical_json([self.scope, delivery])).hexdigest()
+        with closing(self.journal._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            self._require(db)
+            if db.execute('SELECT 1 FROM deliveries WHERE id=?', (delivery_key,)).fetchone():
+                return []
+            if db.execute('SELECT (SELECT COUNT(*) FROM public_wakeups)+(SELECT COUNT(*) FROM public_dispatches)').fetchone()[0] + len(targets) > 4096:
+                raise ValueError('public-wakeup-capacity')
+            db.execute('INSERT INTO deliveries VALUES (?)', (delivery_key,))
+            ids = []
+            for pr in targets:
+                key = hashlib.sha256(canonical_json([self.scope, delivery, pr])).hexdigest()
+                db.execute("INSERT INTO public_wakeups VALUES (?, ?, 'pending', '')", (key, pr))
+                ids.append(key)
+            return ids
+
+    def require_refresh_safe(self, current=None):
+        # This durable pre-refresh fence survives a worker restart. A JSON
+        # record can never reconstruct or renew an unresolved allocation.
+        with closing(self.journal._connect()) as db:
+            self._require(db)
+            if (db.execute("SELECT 1 FROM public_wakeups WHERE state IN ('running','unknown') "
+                           "AND (? IS NULL OR id<>?) LIMIT 1", (current, current)).fetchone()
+                    or db.execute("SELECT 1 FROM publications WHERE mutation<>'' LIMIT 1").fetchone()
+                    or db.execute("SELECT 1 FROM public_dispatches WHERE state IN ('pending','unknown') LIMIT 1").fetchone()):
+                raise ValueError('prior-public-operation-unresolved')
+
+    def reserve_dispatch(self, key, pr):
+        if (not isinstance(key, str) or re.fullmatch('[0-9a-f]{64}', key) is None
+                or type(pr) is not int or not 0 < pr <= 2147483647):
+            raise ValueError('producer-dispatch-identity')
+        with closing(self.journal._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            self._require(db)
+            if db.execute('SELECT 1 FROM public_dispatches WHERE key=?', (key,)).fetchone():
+                return False
+            if (db.execute("SELECT 1 FROM public_dispatches WHERE state IN ('pending','unknown') LIMIT 1").fetchone()
+                    or db.execute("SELECT COUNT(*) FROM public_wakeups WHERE state IN ('running','unknown')").fetchone()[0] > 1):
+                raise ValueError('prior-public-operation-unresolved')
+            count = db.execute('SELECT (SELECT COUNT(*) FROM public_wakeups)+(SELECT COUNT(*) FROM public_dispatches)').fetchone()[0]
+            if count >= 4096:
+                raise ValueError('public-wakeup-capacity')
+            db.execute("INSERT INTO public_dispatches VALUES (?,?,'pending')", (key, pr))
+        return True
+
+    def finish_dispatch(self, key, state):
+        if state not in ('requested', 'unknown'):
+            raise ValueError('producer-dispatch-state')
+        with closing(self.journal._connect()) as db, db:
+            self._require(db)
+            if db.execute("UPDATE public_dispatches SET state=? WHERE key=? AND state='pending'", (state, key)).rowcount != 1:
+                raise ValueError('producer-dispatch-state-changed')
+
+    def blocked_targets(self):
+        with closing(self.journal._connect()) as db:
+            self._require(db)
+            rows = db.execute("SELECT w.pr FROM public_wakeups w WHERE w.state='blocked' "
+                "AND w.rowid=(SELECT MAX(v.rowid) FROM public_wakeups v WHERE v.pr=w.pr) "
+                "ORDER BY w.pr LIMIT 101").fetchall()
+        if len(rows) > 100:
+            raise ValueError('public-wakeup-target-capacity')
+        return tuple(row[0] for row in rows)
+
+    def claim(self):
+        with closing(self.journal._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            self._require(db)
+            row = db.execute("SELECT id, pr FROM public_wakeups WHERE state='pending' ORDER BY rowid LIMIT 1").fetchone()
+            if row is not None:
+                db.execute("UPDATE public_wakeups SET state='running' WHERE id=? AND state='pending'", (row[0],))
+            return row
+
+    def finish(self, key, state, reason):
+        if state not in ('published', 'blocked', 'unknown') or not isinstance(reason, str) or re.fullmatch('[a-z0-9-]{1,128}', reason) is None:
+            raise ValueError('public-wakeup-result')
+        with closing(self.journal._connect()) as db, db:
+            self._require(db)
+            if db.execute("UPDATE public_wakeups SET state=?, reason=? WHERE id=? AND state='running'", (state, reason, key)).rowcount != 1:
+                raise ValueError('public-wakeup-state-changed')
+
+    def get(self, key):
+        if not isinstance(key, str) or re.fullmatch('[0-9a-f]{64}', key) is None:
+            raise ValueError('public-wakeup-id')
+        with closing(self.journal._connect()) as db:
+            self._require(db)
+            row = db.execute('SELECT pr, state, reason FROM public_wakeups WHERE id=?', (key,)).fetchone()
+        if row is None:
+            raise KeyError(key)
+        return {'job_id': key, 'pr_number': row[0], 'state': row[1], 'reason': row[2]}
+
+
 def _check_identity(check: dict, config: PublisherConfig, selector: Selector, key: str) -> int:
     identity = check.get('id')
     if (type(identity) is not int or identity <= 0 or check.get('app', {}).get('id') != config.app_id
