@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+from importlib.machinery import ModuleSpec
 import json
+import os
 import re
+import sys
+from types import CellType, FunctionType, MemberDescriptorType, ModuleType
 
 from .process_limits import OUTPUT_LIMIT
 
@@ -43,6 +47,86 @@ def policy_exception_diagnostic(error):
         r'GETZILLA_POLICY_DIAGNOSTIC decision=(allow|deny|unavailable) '
         r'reason=(budget|grant|secret|root|degraded|other)', error.args[0])
     return dict(zip(('decision', 'reason'), match.groups())) if match else None
+
+
+_UPDATE_REASONS = {'target-index-mode', 'target-index-identity', 'target-root', 'dirty-target',
+                   'missing-manifest', 'generated-policy', 'reconciliation', 'ownership',
+                   'checkout', 'source-payload', 'git-command', 'branch-conflict',
+                   'ignored-target', 'legacy-dependency', 'concurrency', 'other', 'unknown'}
+_UPDATE_PHASES = {'preflight', 'plan', 'git', 'publish', 'checkout', 'unknown'}
+
+
+def valid_update_diagnostic(value):
+    return (type(value) is dict and set(value) == {'kind', 'version', 'reason', 'phase', 'via'}
+            and type(value['kind']) is str and value['kind'] == 'update'
+            and type(value['version']) is int and value['version'] == 1
+            and type(value['reason']) is str and value['reason'] in _UPDATE_REASONS
+            and type(value['phase']) is str and value['phase'] in _UPDATE_PHASES
+            and type(value['via']) is str and value['via'] in {'direct', 'cause', 'context'})
+
+
+def _owned_update_type():
+    # No imports, source reads or sidecar lookups in a failure callback. A fake
+    # same-name class/module is not an owned exception producer.
+    module = sys.modules.get('getzilla.adapter_removal')
+    if type(module) is not ModuleType:
+        return None
+    namespace = vars(module)
+    spec = namespace.get('__spec__')
+    origin = namespace.get('__file__')
+    expected = os.path.join(os.path.dirname(__file__), 'adapter_removal.py')
+    if (type(origin) is not str or os.path.normcase(os.path.normpath(origin)) != os.path.normcase(os.path.normpath(expected))
+            or type(spec) is not ModuleSpec or type(spec.origin) is not str or type(spec.name) is not str
+            or spec.origin != origin or spec.name != 'getzilla.adapter_removal'
+            or namespace.get('__package__') != 'getzilla'):
+        return None
+    kind = namespace.get('UpdateError')
+    if (type(kind) is not type or kind.__bases__ != (RuntimeError,)
+            or kind.__module__ != 'getzilla.adapter_removal' or kind.__name__ != 'UpdateError'):
+        return None
+    initialize = vars(kind).get('__init__')
+    slot = vars(kind).get('_update_diagnostic')
+    if (type(initialize) is not FunctionType or initialize.__globals__ is not namespace
+            or initialize.__code__.co_filename != origin
+            or initialize.__module__ != 'getzilla.adapter_removal' or initialize.__qualname__ != 'UpdateError.__init__'
+            or initialize.__code__.co_freevars != ('__class__',)
+            or type(initialize.__closure__) is not tuple or len(initialize.__closure__) != 1
+            or type(initialize.__closure__[0]) is not CellType or initialize.__closure__[0].cell_contents is not kind
+            or type(slot) is not MemberDescriptorType or slot.__objclass__ is not kind):
+        return None
+    return kind, slot
+
+
+def update_exception_diagnostic(error):
+    """Observe closed native exception data, never messages or captured output.
+
+    This is a reason reported by an owned exception producer, not evidence of
+    execution/approval/PASS. At most four real exception objects are examined.
+    """
+    owned = _owned_update_type()
+    if owned is None:
+        return None
+    kind, slot = owned
+    seen, via = set(), 'direct'
+    for _ in range(4):
+        if id(error) in seen or type(error) not in (kind, AssertionError):
+            return None
+        seen.add(id(error))
+        # unittest.assertRaisesRegex clears its real caught exception's traceback
+        # before raising a builtin AssertionError on a mismatching regex. Require
+        # the live top-level assertion path, then inspect its native chain only.
+        if (via == 'direct' or type(error) is AssertionError) and BaseException.__traceback__.__get__(error) is None:
+            return None
+        if type(error) is kind:
+            value = slot.__get__(error, kind)
+            if type(value) is not tuple or len(value) != 2:
+                return None
+            result = {'kind': 'update', 'version': 1, 'reason': value[0], 'phase': value[1], 'via': via}
+            return result if valid_update_diagnostic(result) else None
+        cause = BaseException.__cause__.__get__(error)
+        context = BaseException.__context__.__get__(error)
+        error, via = (cause, 'cause') if cause is not None else (context, 'context')
+    return None
 
 
 MAX_FACTORY_DIAGNOSTIC_BYTES = 768

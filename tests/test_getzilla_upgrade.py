@@ -68,7 +68,7 @@ class ProjectSyncTests(unittest.TestCase):
         return manifest
 
     def test_legacy_report_does_not_invent_missing_archive_module(self):
-        installer = upgrade.load_installer(ROOT)
+        installer = upgrade.load_installer(self.source_home)
         prefix = '.grok-stack/adaptive_grok/'
         for name in ('present.py', 'absent.py'):
             path = self.project/prefix/name
@@ -154,11 +154,11 @@ class ProjectSyncTests(unittest.TestCase):
                     self.commit('generated policy ' + customized)
                     before = git(self.project, 'rev-parse', 'HEAD')
                     if customized == 'stock':
-                        plan = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                        plan = upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project)
                         self.assertNotIn(path, [p for p, _, _ in plan])
                     else:
                         with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
-                            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+                            upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project)
                     self.assertEqual(target.read_bytes(), content)
                     self.assertEqual(target.stat().st_mode & 0o777, observed_mode)
                     self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
@@ -187,7 +187,7 @@ class ProjectSyncTests(unittest.TestCase):
         record_owned(manifest, path, content, 0o644)
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         with self.assertRaisesRegex(upgrade.UpdateError, 'generated policy.*reconcil'):
-            upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+            upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project)
         self.assertEqual(target.read_bytes(), content)
 
     def test_codex_update_preserves_canonical_overlay_and_custom_enabled_configuration(self) -> None:
@@ -230,7 +230,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('legacy common sources with proof')
         original = git(self.project, 'rev-parse', 'HEAD')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
         migrated = read_state(self.project).manifest['components']['core']
         self.assertIn('.getzilla/config/codex-hooks.json', migrated['files'])
@@ -244,9 +244,9 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertNotIn('.grok/hooks/pre_tool_use.py', read_state(self.project).manifest['components']['core']['files'])
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD^'), original)
         current = git(self.project, 'rev-parse', 'HEAD')
-        planned = upgrade.planned_changes(upgrade.load_installer(ROOT), ROOT, self.project)
+        planned = upgrade.planned_changes(upgrade.load_installer(self.source_home), self.source_home, self.project)
         self.assertEqual([path for path, _, _ in planned], [])
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), current)
         git(self.project, 'switch', '--quiet', 'main')
         self.assertEqual((self.project / '.grok/hooks/pre_tool_use.py').read_bytes(), sources['.grok/hooks/pre_tool_use.py'])
@@ -275,7 +275,7 @@ class ProjectSyncTests(unittest.TestCase):
                 self.commit('custom legacy guard ' + scenario)
                 original = git(self.project, 'rev-parse', 'HEAD')
                 with self.assertRaisesRegex(upgrade.UpdateError, 'legacy hook.*reconciled'):
-                    upgrade.sync_project(ROOT, self.project)
+                    upgrade.sync_project(self.source_home, self.project)
                 self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
                 self.assertEqual(git(self.project, 'branch', '--show-current'), 'main')
                 self.assertEqual(target.read_bytes(), current)
@@ -298,7 +298,7 @@ class ProjectSyncTests(unittest.TestCase):
         config.write_bytes(custom)
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('custom adapter depends on legacy hook')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(config.read_bytes(), custom)
         self.assertEqual(hook.read_bytes(), content)
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
@@ -328,13 +328,13 @@ class ProjectSyncTests(unittest.TestCase):
                                       'kept_local_sha256': {kept: hashlib.sha256(custom).hexdigest()}}))
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('selected kept adapter depends on legacy hook')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(config.read_bytes(), custom)
         self.assertTrue(hook.is_file(), 'a kept selected adapter still references this guard')
         self.assertEqual(hook.read_bytes(), content)
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
         before = git(self.project, 'rev-parse', 'HEAD')
-        self.assertIn('up to date', upgrade.sync_project(ROOT, self.project))
+        self.assertIn('up to date', upgrade.sync_project(self.source_home, self.project))
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
 
     def test_selected_kept_claude_retains_legacy_guard_dependency(self) -> None:
@@ -364,7 +364,7 @@ class ProjectSyncTests(unittest.TestCase):
                         git(original_project, 'clone', '--quiet', str(original_project), str(target))
                         self.project = target
                         if alias is not None:
-                            installer = upgrade.load_installer(ROOT)
+                            installer = upgrade.load_installer(self.source_home)
                             stack.enter_context(mock.patch.object(upgrade, 'load_installer', return_value=installer))
                             stack.enter_context(mock.patch.object(upgrade, 'match_kept_local', side_effect=windows_match))
                             stack.enter_context(mock.patch.object(installer, 'match_kept_local', side_effect=windows_match))
@@ -430,7 +430,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.grok/codex-hooks.json').write_bytes(overlay)
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('custom overlay for a currently unselected client')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual((self.project / '.getzilla/config/codex-hooks.json').read_bytes(), overlay)
         self.assertEqual(hook.read_bytes(), content)
         self.assertFalse((self.project / '.codex/hooks.json').exists())
@@ -453,7 +453,7 @@ class ProjectSyncTests(unittest.TestCase):
             'kept_local_sha256': {'.claude/settings.json': hashlib.sha256(canonical).hexdigest()}}))
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('exact generated neutral configuration')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(config.read_bytes(), canonical)
         self.assertFalse(hook.exists())
         self.assertTrue((self.project / '.getzilla/hooks/pre_tool_use.py').exists())
@@ -485,7 +485,7 @@ class ProjectSyncTests(unittest.TestCase):
         before = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
         self.assertEqual(before.returncode, 0, before.stderr)
         self.assertEqual(json.loads(before.stdout), {'decision': 'deny'})
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         after = subprocess.run(shlex.split(decoded), cwd=self.project, capture_output=True, text=True)
         self.assertEqual(after.returncode, 0, after.stderr)
         self.assertEqual(json.loads(after.stdout), {'decision': 'deny'})
@@ -507,7 +507,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / '.grok/codex-hooks.json').write_text(json.dumps(overlay))
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('overlay still calls a legacy guard')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(target.read_bytes(), content)
         hooks = json.loads((self.project / '.codex/hooks.json').read_bytes())['hooks']['Stop']
         self.assertIn('.getzilla/hooks/stop_gate.py', hooks[0]['hooks'][0]['command'])
@@ -553,7 +553,7 @@ class ProjectSyncTests(unittest.TestCase):
                         if scenario != 'mode-only':
                             self.assertEqual(permissions, 'read-only')
                         with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
-                            upgrade.sync_project(ROOT, self.project)
+                            upgrade.sync_project(self.source_home, self.project)
                         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
                         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
                         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
@@ -591,7 +591,7 @@ class ProjectSyncTests(unittest.TestCase):
                         self.commit('custom Cursor canonical policy')
                         before = git(self.project, 'rev-parse', 'HEAD')
                         with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/cursor-rules/00-core\.toml'):
-                            upgrade.sync_project(ROOT, self.project)
+                            upgrade.sync_project(self.source_home, self.project)
                         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
                         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
                         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
@@ -619,7 +619,7 @@ class ProjectSyncTests(unittest.TestCase):
         (self.project / MANIFEST).write_bytes(encode_manifest(manifest))
         self.commit('ordinary canonical input and independent Grok brief')
         original = git(self.project, 'rev-parse', 'HEAD')
-        upgrade.sync_project(ROOT, self.project)
+        upgrade.sync_project(self.source_home, self.project)
         self.assertFalse(old.exists())
         self.assertEqual((self.project / '.getzilla/agents/general_implementer.toml').read_bytes(), content)
         self.assertEqual(extension.read_bytes(), b'# Local Grok-only adapter extension\n')
@@ -648,7 +648,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.commit('unchanged previous managed role baseline')
         original = git(self.project, 'rev-parse', 'HEAD')
         with self.assertRaisesRegex(upgrade.UpdateError, r'canonical.*\.grok/agents/general_implementer\.toml'):
-            upgrade.sync_project(ROOT, self.project)
+            upgrade.sync_project(self.source_home, self.project)
         self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), original)
         self.assertEqual(git(self.project, 'branch', '--list'), '* main')
         self.assertEqual(git(self.project, 'status', '--porcelain'), '')
@@ -750,7 +750,7 @@ class ProjectSyncTests(unittest.TestCase):
         leaf = source / 'scripts/public_fixture.py'
         leaf.write_bytes(b'# current working source\n')
         leaf.chmod(mode)
-        installer = upgrade.load_installer(ROOT)
+        installer = upgrade.load_installer(self.source_home)
         for patcher in (mock.patch.object(installer, 'MANAGED_FILES', tuple(files)),
                         mock.patch.object(installer, 'MANAGED_DIRS', ()),
                         mock.patch.object(upgrade, 'load_installer', return_value=installer)):

@@ -17,8 +17,9 @@ from . import verification_failure_excerpt as _failure_excerpt
 def _valid_failure_diagnostic(value):
     if valid_policy_diagnostic(value):
         return True
-    validate = getattr(_failure_excerpt, 'valid_factory_diagnostic', None)
-    return callable(validate) and validate(value) is True
+    return any(callable(validate) and validate(value) is True for validate in
+               (getattr(_failure_excerpt, 'valid_factory_diagnostic', None),
+                getattr(_failure_excerpt, 'valid_update_diagnostic', None)))
 
 
 def _pytest_source_metadata(source: str) -> tuple[int, set[str]]:
