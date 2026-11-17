@@ -570,8 +570,10 @@ def _in_ranges(version: str, affected: dict[str, Any], *, ecosystem: str | None 
         raise VulnerabilityError('malformed OSV package')
     ecosystem = ecosystem if ecosystem is not None else package.get('ecosystem', '')
     ranges = affected.get('ranges', [])
-    if not isinstance(ranges, list) or (not ranges and not versions):
-        raise VulnerabilityError('malformed OSV affected entry: versions or ranges required')
+    if not isinstance(ranges, list):
+        raise VulnerabilityError('malformed OSV ranges')
+    if not ranges and not versions:
+        raise VulnerabilityError('OSV affected version coverage is unknown for matched package')
     errors = []
     if versions:
         try:

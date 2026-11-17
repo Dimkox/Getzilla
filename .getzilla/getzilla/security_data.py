@@ -271,8 +271,9 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
                         raise ValueError('malformed OSV versions')
                     if not isinstance(ranges, list) or not all(isinstance(value, dict) for value in ranges):
                         raise ValueError('malformed OSV ranges')
-                    if not versions and not ranges and not record.get('withdrawn'):
-                        raise ValueError('OSV affected package has neither versions nor ranges')
+                    # OSV permits named rows without version bounds. Retain
+                    # them as unknown coverage; a matching query must refuse
+                    # rather than interpreting missing bounds as all or none.
                     exact = package['ecosystem'] == ecosystem
                     family = exact or (ecosystem == 'Packagist' and qualified_packagist(package['ecosystem']))
                     if package['ecosystem'].startswith('Packagist:') and not qualified_packagist(package['ecosystem']):
