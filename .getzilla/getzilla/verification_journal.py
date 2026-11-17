@@ -20,6 +20,7 @@ from types import FunctionType, MethodType
 import uuid
 
 from . import fsx
+from .queue_provenance import QueueRefusalCapture, queue_refusal_text
 
 EVENT_BYTES = 2048
 SEGMENT_BYTES = 128 * 1024
@@ -222,6 +223,57 @@ def _validate_first_failure(value):
     return _decode(_json(value))
 
 
+def _validate_queue_refusal(value):
+    fields = {'version', 'kind', 'side', 'category', 'limit', 'observed', 'site', 'witness_scope',
+              'active', 'cached', 'active_omitted', 'cached_omitted', 'cached_witness_unavailable', 'capture_sha256'}
+    if (type(value) is not dict or set(value) != fields or type(value['version']) is not int
+            or value['version'] != 1 or value['kind'] != 'queue-analysis-refusal'
+            or value['side'] not in {'head', 'base', 'unknown'}
+            or value['category'] not in {'depth', 'work', 'bytes', 'nodes', 'modules', 'other'}
+            or value['site'] not in {'budget', 'cached', 'active', 'declaration', 'resolver'}
+            or value['witness_scope'] != 'ordered-module-request-frames'
+            or type(value['cached_witness_unavailable']) is not bool
+            or type(value['capture_sha256']) is not str or not _DIGEST.fullmatch(value['capture_sha256'])
+            or len(_json(value)) > 640):
+        raise ValueError('journal-queue-refusal-shape')
+    for key in ('limit', 'observed', 'active_omitted', 'cached_omitted'):
+        if value[key] is None and key in {'limit', 'observed'}:
+            continue
+        if type(value[key]) is not int or value[key] < 0:
+            raise ValueError('journal-queue-refusal-counter')
+    for key in ('active', 'cached'):
+        if type(value[key]) is not list or any(type(item) is not str or not re.fullmatch(
+                r'(?:[A-Za-z_][A-Za-z0-9_.]{0,255}|sha256:[0-9a-f]{64})', item) for item in value[key]):
+            raise ValueError('journal-queue-refusal-witness')
+    return _decode(_json(value))
+
+
+def queue_refusal(error):
+    """Observe only an internal owner-bound capture; no inactive-context work or I/O."""
+    writer, node = action_sink()
+    if writer is None:
+        return
+    capture = getattr(error, '_queue_refusal_capture', None)
+    if (type(capture) is not QueueRefusalCapture or capture.owner is not error
+            or type(capture.message) is not str or type(capture.payload) is not str
+            or queue_refusal_text(error) != capture.message + '; ' + capture.payload):
+        return
+    try:
+        detail = json.loads(capture.payload)
+        detail['capture_sha256'] = hashlib.sha256(capture.payload.encode('utf-8')).hexdigest()
+        while len(_json(detail)) > 640:
+            key = 'cached' if detail['cached'] else 'active'
+            if not detail[key]:
+                return
+            detail[key].pop()
+            detail[key + '_omitted'] += 1
+        detail = _validate_queue_refusal(detail)
+    except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+        return
+    writer._queue_refusal = detail
+    _emit(writer, 'action', 'error', step='arch-queue-refusal', nodeid=node, queue_refusal=detail)
+
+
 def _validated_active_span(value):
     fields = {'stage', 'step', 'invocation'}
     if (type(value) is not dict or set(value) not in (fields, fields | {'location'})
@@ -236,6 +288,8 @@ def _validated_active_span(value):
 
 
 def _retained_health(health):
+    if 'queue_refusal' in health:
+        _validate_queue_refusal(health['queue_refusal'])
     if 'active_span' in health:
         active = _validated_active_span(health['active_span'])
         if (type(health.get('open_spans')) is not int or health['open_spans'] <= 0
@@ -532,6 +586,7 @@ class Writer:
         self._ownership_counts = {}
         self._first_failure = self._pending = self._action = self._frame = None
         self._core_stop = None
+        self._queue_refusal = None
         self._test_phase = (None, 'unknown')
         self._omissions = dict.fromkeys(_OMISSIONS, False)
         try:
@@ -553,6 +608,7 @@ class Writer:
                 self.attempt = prior['attempt'] + 1
                 self._ownership, self._first_failure, self._omissions = _retained_health(prior)
                 self._core_stop = _health_stop(prior)
+                self._queue_refusal = _validate_queue_refusal(prior['queue_refusal']) if 'queue_refusal' in prior else None
                 self._ownership_blocked = self._ownership is not None
             except FileNotFoundError:
                 pass
@@ -591,6 +647,8 @@ class Writer:
             if number in self._active_locations:
                 active['location'] = self._active_locations[number]
             value['active_span'] = _validated_active_span(active)
+        if self._queue_refusal is not None:
+            value['queue_refusal'] = _validate_queue_refusal(self._queue_refusal)
         value['observation_omissions'] = dict(self._omissions)
         if self._core_stop is not None:
             value['core_stop'] = _health_stop({'actor': self.actor, 'core_stop': self._core_stop})
@@ -684,7 +742,7 @@ class Writer:
         if not overflow:
             self.emit('action', 'unknown', step='own-' + form + '-' + row['phase'], nodeid=_OWNERSHIP_CASE)
 
-    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None):
+    def emit(self, stage, state, *, step=None, nodeid=None, outcome=None, code=None, error=None, skip=None, location=None, process=None, stop=None, queue_refusal=None):
         if error is not None:
             self._frame = None
         if self.disabled:
@@ -700,6 +758,8 @@ class Writer:
                 raise ValueError('journal-clock-or-sequence')
             if step is not None:
                 row['step'] = step
+            if queue_refusal is not None:
+                row['queue_refusal'] = _validate_queue_refusal(queue_refusal)
             if process is not None:
                 if type(process) is not int or not 1 <= process <= 2**31 - 1:
                     raise ValueError('journal-process')
@@ -1342,7 +1402,7 @@ def unittest_runner(writer):
 def _validated_events(raw, run_id, actor):
     allowed = {'version', 'run_id', 'actor', 'actor_attempt', 'sequence', 'stage', 'state', 'pid', 'elapsed_ns', 'utc',
                'step', 'path', 'key', 'invocation', 'unmatched_end', 'outcome', 'exit', 'error_class',
-               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop'}
+               'frames', 'skip_class', 'location_status', 'location', 'process', 'identity_status', 'stop', 'queue_refusal'}
     def closed(pairs):
         result = {}
         for key, value in pairs:
@@ -1364,6 +1424,8 @@ def _validated_events(raw, run_id, actor):
             raise ValueError('journal-record-schema')
         if 'step' in row and (type(row['step']) is not str or not _ID.fullmatch(row['step'])):
             raise ValueError('journal-record-step')
+        if 'queue_refusal' in row:
+            _validate_queue_refusal(row['queue_refusal'])
         if 'stop' in row:
             _validate_stop(row['stop'])
         if 'path' in row:
@@ -1448,7 +1510,7 @@ def export_entries(root, *, binding=None):
             for actor in ['controller', *('worker-' + str(i) for i in range(64))]:
                 try:
                     health = _decode(_read(handle, actor + '.json', 2048))
-                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop', 'active_span'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
+                    if (set(health) - {'ownership', 'first_failure', 'observation_omissions', 'core_stop', 'active_span', 'queue_refusal'} != {'version', 'run_id', 'nonce', 'actor', 'attempt', 'sequence', 'generation', 'rotated', 'dropped', 'open_spans', 'status', 'segment'}
                             or health['run_id'] != row['run_id'] or health['nonce'] != row['nonce'] or health['actor'] != actor
                             or health['status'] not in {'active', 'closed', 'unavailable'}
                             or any(type(health[k]) is not int or not 0 <= health[k] <= 2**63 - 1

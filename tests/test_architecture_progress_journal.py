@@ -186,14 +186,85 @@ class ArchitectureProgressTests(unittest.TestCase):
                     journal._retained_health({'sequence':sequence, 'open_spans':opened,
                         'active_span':{'stage':'action','step':'arch-queue','invocation':1}})
 
+    def test_caught_refusal_uses_internal_capture_and_survives_later_progress(self):
+        root = self.fixture()
+        with journal.activate(None), redirect_stderr(io.StringIO()), journal.session(root, 'owned-architecture') as run:
+            budget = fitness._QueueBudget('head')
+            budget.enter('owned-request', module='owned.adapter')
+            try:
+                budget.check_depth(9, site='active')
+            except fitness.ArchitectureError as error:
+                captured = error._queue_refusal_capture
+                error.queue_refusal.update(category='bytes', observed=0, active=['forged'])
+                journal.queue_refusal(error)
+            with journal.span('arch-later-progress', stage='action'):
+                health = json.loads((run.path/'controller.json').read_bytes())
+                self.assertIn('queue_refusal', health)
+                detail = health['queue_refusal']
+                self.assertEqual((detail['category'], detail['limit'], detail['observed']), ('depth', 8, 9))
+                self.assertEqual(detail['active'], ['owned.adapter'])
+                self.assertEqual(detail['capture_sha256'], hashlib.sha256(captured.payload.encode()).hexdigest())
+                self.assertLessEqual(len(json.dumps(detail, separators=(',', ':')).encode()), 640)
+            rows = [json.loads(line) for line in (run.path/run.writer.name).read_bytes().splitlines()]
+            self.assertTrue(any(row.get('queue_refusal') == detail for row in rows))
+            entries = journal.export_entries(root)
+            summary = json.loads(dict(entries)['journal/index.json'])
+            self.assertEqual(summary['actors'][0]['queue_refusal'], detail)
+
+    def test_refusal_unknown_counts_and_witness_omission_are_explicit(self):
+        root = self.fixture()
+        with journal.activate(None), redirect_stderr(io.StringIO()), journal.session(root, 'owned-architecture') as run:
+            budget = fitness._QueueBudget('base')
+            for number in range(12):
+                budget.enter('request-'+str(number), module='owned.'+str(number)+'x'*180)
+            error = budget.refusal('owned unknown refusal', 'other', None, None, site='resolver')
+            detail = json.loads((run.path/'controller.json').read_bytes())['queue_refusal']
+            self.assertIsNone(detail['limit'])
+            self.assertIsNone(detail['observed'])
+            self.assertGreater(detail['active_omitted'], 0)
+            self.assertEqual(len(detail['active'])+detail['active_omitted'], 12)
+            self.assertEqual(detail['capture_sha256'], hashlib.sha256(error._queue_refusal_capture.payload.encode()).hexdigest())
+            forged = dict(detail, observed=True)
+            with self.assertRaises(ValueError):
+                journal._validate_queue_refusal(forged)
+
+    def test_public_or_wrong_owner_refusal_sidecar_is_not_provenance(self):
+        root = self.fixture()
+        with journal.activate(None), redirect_stderr(io.StringIO()), journal.session(root, 'owned-architecture') as run:
+            budget = fitness._QueueBudget('head')
+            genuine = budget.refusal('owned refusal', 'nodes', 10, 11)
+            expected = json.loads((run.path/'controller.json').read_bytes())['queue_refusal']
+            forged = fitness.ArchitectureError('owned refusal', code='limit')
+            forged.queue_refusal = genuine.queue_refusal
+            journal.queue_refusal(forged)
+            forged._queue_refusal_capture = genuine._queue_refusal_capture
+            journal.queue_refusal(forged)
+            for field in ('message', 'payload'):
+                genuine._queue_refusal_capture = genuine._queue_refusal_capture._replace(**{field:1})
+                journal.queue_refusal(genuine)
+            self.assertEqual(json.loads((run.path/'controller.json').read_bytes())['queue_refusal'], expected)
+        with journal.activate(None), mock.patch.object(journal, 'Run', side_effect=AssertionError('inactive I/O')), pure():
+            self.assertIsNone(journal.queue_refusal(genuine))
+
     def test_owned_child_abrupt_stop_retains_active_checkpoint_without_pass(self):
         root = self.fixture()
         source = '''import sys,time
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from getzilla import verification_journal as journal
+from getzilla import architecture_fitness as fitness
 root=Path(sys.argv[2])
 with journal.session(root,'owned-architecture') as run:
+ budget=fitness._QueueBudget('head')
+ budget.enter('owned-request',module='owned.adapter')
+ try:
+  budget.check_depth(9,site='active')
+ except fitness.ArchitectureError:
+  pass
+ for number in range(4096):
+  run.writer.emit('action','unknown',step='owned-later-progress')
+  if run.writer.generation>journal.SEGMENTS:
+   break
  with journal.span('arch-demand-head-owned',stage='action',location=('tests/owned.py',1)):
   (root/'ready').write_text(run.relative_index)
   time.sleep(30)
@@ -209,6 +280,11 @@ with journal.session(root,'owned-architecture') as run:
             process.terminate()
             process.communicate(timeout=5)
             health = json.loads((index.parent/'controller.json').read_bytes())
+            self.assertEqual((health['queue_refusal']['category'],health['queue_refusal']['limit'],health['queue_refusal']['observed']), ('depth',8,9))
+            self.assertEqual(health['queue_refusal']['active'], ['owned.adapter'])
+            self.assertGreater(health['rotated'], 0)
+            self.assertLessEqual(len(list(index.parent.glob('controller-*.jsonl'))), 4)
+            self.assertLessEqual(len((index.parent/'controller.json').read_bytes()), 2048)
             self.assertEqual(health['active_span']['step'], 'arch-demand-head-owned')
             self.assertGreater(health['open_spans'], 0)
             self.assertEqual(json.loads(index.read_bytes())['status'], 'active')

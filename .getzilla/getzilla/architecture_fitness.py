@@ -325,6 +325,7 @@ class _QueueBudget:
         # compatibility sidecar. Its subsequent mutation is not provenance.
         error._queue_refusal_capture = _QueueRefusalCapture(
             error, message, json.dumps(detail, separators=(',', ':')))
+        diagnostics.queue_refusal(error)
         return error
 
     def check_depth(self, depth: int, *, site: str, cached: tuple[str, ...] = ()) -> None:

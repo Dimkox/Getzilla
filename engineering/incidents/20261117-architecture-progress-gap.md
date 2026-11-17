@@ -17,3 +17,10 @@ a useful last active pointer. Missing terminal results never establish success.
 Owned controls cover inactive library calls, clean JSON stdout, actual phase
 wiring, privacy, rotation and an abruptly stopped child. Analyzer limits and
 qualification requirements are unchanged.
+
+A caught queue refusal can precede later progress and disappear from the rotated
+event tail. Retain the latest bounded typed refusal in existing actor health at
+occurrence, using only the internal owner-bound immutable capture. Preserve null
+unknown counters and a hash of the original capture when witnesses are trimmed;
+never treat the mutable public sidecar as provenance. The owned child control
+now covers refusal, catch, later progress, rotation and abrupt termination.
