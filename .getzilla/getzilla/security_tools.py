@@ -8,6 +8,7 @@ These observations prove local integrity; the CI provider supplies authority.
 from __future__ import annotations
 
 import codecs
+from contextlib import nullcontext
 import hashlib
 import io
 import json
@@ -212,12 +213,17 @@ def _process_report(output: Path, result) -> dict:
         raise _process_error(result, 'report-invalid') from exc
 
 
-def image_report(report: dict, reference: str, *, expected_image_id: str | None = None) -> dict:
+def image_report(report: dict, reference: str, *, expected_image_id: str | None = None, verified_oci=None) -> dict:
     if not _DIGEST_IMAGE.fullmatch(reference):
         raise SecurityDataError('image must be resolved to an immutable digest')
     metadata = report.get('Metadata', {})
+    if verified_oci is not None:
+        from .security_oci import scanner_identity
+        scanner_identity(report, verified_oci)
+        if verified_oci.reference != reference:
+            raise SecurityDataError('OCI report source reference differs')
     if (report.get('SchemaVersion') != 2 or report.get('ArtifactType') != 'container_image'
-            or reference not in metadata.get('RepoDigests', [])
+            or verified_oci is None and reference not in metadata.get('RepoDigests', [])
             or not re.fullmatch(r'sha256:[a-f0-9]{64}', str(metadata.get('ImageID', '')))
             or (expected_image_id is not None and metadata['ImageID'] != expected_image_id)):
         raise SecurityDataError('image report is missing or bound to another image')
@@ -267,15 +273,30 @@ def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
     return profile
 
 
-def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None) -> list[dict]:
+def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, image_artifacts=None) -> list[dict]:
     """Explicit acquisition for the isolated runner; never starts an image."""
     if not isinstance(inventory.get('images'), list):
         raise SecurityDataError('image acquisition requires a complete declared image list')
     if inventory.get('images'):
         image_acquisition_profile(inventory, profile)
+        if image_artifacts is not None:
+            from .security_oci import import_layouts
+            catalog = _json(Path(image_artifacts), limit=16 * 1024 * 1024)
+            tools.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with import_layouts(catalog, inventory, profile, tools) as images:
+                return [{'kind': 'oci-local-import', 'status': 'pass',
+                         'assurance': 'local-byte-integrity-only-not-scan-or-authority',
+                         'images': [{'reference': image.reference, 'manifest_sha256': image.manifest_digest,
+                                     'config_sha256': image.config_digest, 'platform': image.platform}
+                                    for image in images]}]
         # The daemon writes outside this process's byte budget. Descriptor
         # estimates do not enforce compressed/unpacked/storage ceilings.
         raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
+    return refresh_image_database(tools, now=now)
+
+
+def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
+    """Explicit DB-only refresh; separate from local OCI import and image pulls."""
     trivy = pinned_tool('trivy', tools)
     results = []
     tools.mkdir(parents=True, exist_ok=True)
@@ -294,37 +315,55 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None) -> l
 
 
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
-    if any(item.get('selection_assurance') == 'declaration-only-unverified'
-           for item in inventory.get('images', []) if isinstance(item, dict)):
-        return {'outcome': 'blocked', 'summary': 'selected image declarations lack qualified artifact/platform provenance',
-                'findings': [], 'gaps': [{'code': 'unqualified-image-selection',
-                                        'message': 'explicit choices are not measured image or platform evidence'}],
-                'images': [], 'data_sources': []}
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
+    if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and any(
+            row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
+        return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
+                'findings':[], 'gaps':[{'code':'unqualified-image-selection'}], 'images':[], 'data_sources':[]}
     results, gaps, findings = [], [], []
     try:
         trivy = pinned_tool('trivy', tools)
         source = trivy_database_source(tools, now=now)
         with tempfile.TemporaryDirectory(prefix='image-', dir=tools) as directory:
             scratch = Path(directory)
-            for index, item in enumerate(inventory['images']):
-                reference = item['reference']
-                if not _DIGEST_IMAGE.fullmatch(reference):
-                    gaps.append({'code': 'unresolved-image', 'reference': reference})
-                    continue
-                report_path = scratch / f'image-{index}.json'
-                command = [str(trivy), 'image', '--scanners', 'vuln', '--image-src', 'docker',
-                           '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
-                           '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
-                           '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
-                           '--max-image-size', '2GB', '--format', 'json', '--output', str(report_path), reference]
-                result = _process(command, scratch, scratch)
-                if result.returncode != 0:
-                    raise SecurityDataError('Trivy image process did not complete successfully')
-                parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'))
-                findings.extend(parsed['findings'])
-                results.append({'image': reference, **parsed})
+            selected = env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS')
+            if selected:
+                from .security_oci import import_layouts
+                catalog = _json(Path(selected), limit=16 * 1024 * 1024)
+                profile = json.loads(env.get('GETZILLA_SECURITY_IMAGE_PROFILE', ''), object_pairs_hook=_closed)
+                image_acquisition_profile(inventory, profile)
+                imported = import_layouts(catalog, inventory, profile, scratch)
+            else:
+                if any(row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
+                    raise SecurityDataError('Declared public images require verified local OCI graph; no daemon fallback')
+                imported = nullcontext([])
+            with imported as images:
+                verified = {image.reference: image for image in images}
+                for index, item in enumerate(inventory['images']):
+                    reference = item['reference']
+                    if not _DIGEST_IMAGE.fullmatch(reference):
+                        gaps.append({'code': 'unresolved-image', 'reference': reference})
+                        continue
+                    report_path = scratch / f'image-{index}.json'
+                    image = verified.get(reference)
+                    if selected and image is None:
+                        raise SecurityDataError('Selected offline OCI identity is unavailable; no daemon fallback')
+                    input_args = (['--input', str(image.layout) + '@' + image.manifest_digest] if image is not None
+                                  else ['--image-src', 'docker'])
+                    command = [str(trivy), 'image', '--scanners', 'vuln', *input_args,
+                               '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                               '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
+                               '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
+                               '--max-image-size', '2GB', '--format', 'json', '--output', str(report_path),
+                               *([] if image is not None else [reference])]
+                    result = _process(command, scratch, scratch,
+                                      timeout=image.remaining_seconds() if image is not None else 900)
+                    if result.returncode != 0:
+                        raise SecurityDataError('Trivy image process did not complete successfully')
+                    parsed = image_report(_process_report(report_path, result), reference, expected_image_id=item.get('image_id'), verified_oci=image)
+                    findings.extend(parsed['findings'])
+                    results.append({'image': reference, **parsed})
         if trivy_database_source(tools, now=now) != source:
             raise SecurityDataError('Trivy database changed during scanning')
     except (OSError, ValueError, RuntimeError) as exc:
