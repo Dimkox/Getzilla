@@ -3134,12 +3134,12 @@
         "timeout_ms": 20000
       },
       "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-PUBLIC-PRODUCER-VALIDATION",
       "network_policy": "no_network",
       "protocol": "python",
       "sync_or_async": "synchronous",
       "to": "NODE-LOCAL-SECURITY-BUNDLE",
-      "type": "dependency",
-      "id": "EDGE-PUBLIC-PRODUCER-VALIDATION"
+      "type": "dependency"
     },
     {
       "allowed_data": [
@@ -3157,12 +3157,12 @@
         "timeout_ms": 20000
       },
       "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-PUBLIC-PRODUCER-DISPATCH",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
-      "type": "control",
-      "id": "EDGE-PUBLIC-PRODUCER-DISPATCH"
+      "type": "control"
     },
     {
       "allowed_data": [
@@ -3180,12 +3180,12 @@
         "timeout_ms": 20000
       },
       "from": "NODE-TRUST-CI-WORKER",
+      "id": "EDGE-PUBLIC-PRODUCER-SOURCE",
       "network_policy": "allowlisted_egress",
       "protocol": "https",
       "sync_or_async": "synchronous",
       "to": "NODE-GITHUB",
-      "type": "data_flow",
-      "id": "EDGE-PUBLIC-PRODUCER-SOURCE"
+      "type": "data_flow"
     }
   ],
   "nodes": [
