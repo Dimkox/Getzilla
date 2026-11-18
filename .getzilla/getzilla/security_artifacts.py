@@ -505,6 +505,9 @@ def family_evidence(root: Path, record: dict) -> dict:
     payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
     if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
         raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')
+    if record['kind'] == 'tool' and record['origin'].get('kind') == 'go-checker-release/v1':
+        from .security_go_tool_inputs import verify_family
+        return verify_family(root, record, payload)
     if record['kind'] == 'action':
         members, files, evidence = _action_source(root, record, payload)
     elif record['kind'] == 'tool':
