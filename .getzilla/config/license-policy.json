@@ -1,7 +1,14 @@
 {
   "schema_version": 1,
   "project_repository": "github.com/Dimkox/Getzilla",
-  "auto_allow": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD"],
+  "auto_allow": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD"
+  ],
   "usage_distribution": {
     "build-ci": "internal",
     "manifest:trust-ci/requirements-test.txt#runtime-and-development": "internal"
@@ -12,5 +19,169 @@
     "lock_sha256": "95e088718f76ad545b03c3e11bf62f765beb1f75a6955a61c13d7bfe77115bab",
     "wheel_inventory_sha256": "8acc42767b397a7e1728fc3809c9ff6a49d47a3e741a43e717035071ff7adeba",
     "builder_sha256": "b8ae53c162b800b57cdf233df101f0ea6e4fcabf9715dde0431535d8b4f4cdfd"
-  }
+  },
+  "dependency_exceptions": [
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "cffi",
+        "version": "2.1.1",
+        "artifact_sha256": "a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2",
+        "filename": "cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/95/95/86342356ff5953b3fb06f7ef7c5bee212d45e770abc7218d451b9148313c/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "manifest": "trust-ci/requirements.txt",
+        "manifest_sha256": "154304576d4fff1c7fce6919da80121d9ddc65e02b0cca26cea7ee474d7d8f3d",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.api:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "cffi-2.1.1-cp313-mit0-inline-mit-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": "trust-ci/requirements.txt",
+        "manifest_sha256": "154304576d4fff1c7fce6919da80121d9ddc65e02b0cca26cea7ee474d7d8f3d",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.api:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "cffi",
+        "version": "2.1.1",
+        "artifact_sha256": "a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2",
+        "filename": "cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/95/95/86342356ff5953b3fb06f7ef7c5bee212d45e770abc7218d451b9148313c/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "manifest": "trust-ci/requirements.txt",
+        "manifest_sha256": "154304576d4fff1c7fce6919da80121d9ddc65e02b0cca26cea7ee474d7d8f3d",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.worker:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "cffi-2.1.1-cp313-mit0-inline-mit-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": "trust-ci/requirements.txt",
+        "manifest_sha256": "154304576d4fff1c7fce6919da80121d9ddc65e02b0cca26cea7ee474d7d8f3d",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.worker:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "cffi",
+        "version": "2.1.1",
+        "artifact_sha256": "a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2",
+        "filename": "cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/95/95/86342356ff5953b3fb06f7ef7c5bee212d45e770abc7218d451b9148313c/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "manifest": "trust-ci/requirements-test.txt",
+        "manifest_sha256": "b58897f33738bc1073448ad19abc2fbdadd8e0cb88ab5cfdc17a2da5d519a29a",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.test:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "cffi-2.1.1-cp313-mit0-inline-mit-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": "trust-ci/requirements-test.txt",
+        "manifest_sha256": "b58897f33738bc1073448ad19abc2fbdadd8e0cb88ab5cfdc17a2da5d519a29a",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "installed-package",
+        "profile": "ci:trust-ci/Dockerfile.test:python:cpython:3.13:linux-x86_64",
+        "abi": "cpython-313-x86_64-linux-gnu"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": ".getzilla/config/python-test-requirements.txt",
+        "manifest_sha256": "3422e84bcac3a542b23cb6d2fe13b83069eb740ec8d673b45e5a40f385c7dd77",
+        "usage": "build-ci",
+        "distribution": "internal",
+        "delivery_kind": "source-use",
+        "profile": "python:cpython:3.12:linux-x86_64",
+        "abi": "cpython-312-x86_64-linux-gnu"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": "trust-ci/requirements-test.txt",
+        "manifest_sha256": "b58897f33738bc1073448ad19abc2fbdadd8e0cb88ab5cfdc17a2da5d519a29a",
+        "usage": "runtime-and-development",
+        "distribution": "internal",
+        "delivery_kind": "source-use",
+        "profile": "python:cpython:3.12:linux-x86_64",
+        "abi": "cpython-312-x86_64-linux-gnu"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    },
+    {
+      "subject": {
+        "ecosystem": "PyPI",
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "artifact_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "manifest": "factory/uv.lock",
+        "manifest_sha256": "95e088718f76ad545b03c3e11bf62f765beb1f75a6955a61c13d7bfe77115bab",
+        "usage": "runtime",
+        "distribution": "redistributed",
+        "delivery_kind": "factory-offline-archive",
+        "profile": "ubuntu-24.04-x86_64-cpython312",
+        "abi": "cp312-cp312-manylinux_2_17_x86_64"
+      },
+      "condition_profile": "typing-extensions-4.16.0-history-unchanged-v1"
+    }
+  ]
 }
