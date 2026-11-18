@@ -2105,12 +2105,9 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report_gaps(root, report), [])
             previous_receipt = receipt.read_bytes()
             fast = verify(root, mode='fast', record=False)
-            self.assertEqual(fast['status'], 'fail', 'a full task cannot qualify with fast evidence')
             self.assertIsInstance(fast['required_plan'], dict)
-            self.assertEqual({item['code'] for item in _check(fast, 'quality-gate')['details']},
-                             {'required-plan-unavailable'})
-            # Receipt qualification owns the explicit full-lane mode rule;
-            # the dispatch gate separately requires a matching final binding.
+            self.assertEqual(fast['mode'], 'fast')
+            # A fast observation can pass; it cannot qualify this full task.
             self.assertEqual({item['code'] for item in report_gaps(root, fast)}, {'required-qualifying-mode'})
             self.assertEqual(receipt.read_bytes(), previous_receipt)
 

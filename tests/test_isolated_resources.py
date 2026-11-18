@@ -848,6 +848,18 @@ class IsolatedResourceTests(unittest.TestCase):
         # These controls exercise the Docker decision boundary, not the host's
         # procfs capability. ProcessIdentityTests separately enforce that boundary.
         module = self.module()
+        from getzilla import live_acceptance
+        from factory.tests import run_disposable_exit
+
+        def owned_image(root, pin):
+            self.assertEqual(root, Path(__file__).resolve().parents[1])
+            self.assertEqual(pin, {'reference': PIN, 'image_id': IMAGE_ID})
+            return IMAGE_ID
+
+        # Comparator controls own only the image observation, independently of
+        # the candidate container. Real raw-content proof has separate controls.
+        for source in (live_acceptance, run_disposable_exit):
+            self.enterContext(patch.object(source, 'runtime_image_id', side_effect=owned_image))
         identity = {"pid": os.getpid(), "start": "unit-start", "boot": "unit-boot"}
         patcher = patch.object(module, "_process_identity", return_value=identity)
         patcher.start()

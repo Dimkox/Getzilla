@@ -32,12 +32,56 @@ sys.addaudithook(_audit)
 @contextlib.contextmanager
 def pure():
     global _PURE
-    _PURE = True
+    # Subtest reports reach the optional pytest observer directly, outside its
+    # context sink. Defer only that publication until the I/O audit is inactive.
+    from getzilla import pytest_progress
+    queued = []
+    origin = Path(pytest_progress.__file__).resolve()
+    modules = [module for name, module in tuple(sys.modules.items())
+               if name.rsplit('.', 1)[-1] == 'pytest_progress'
+               and getattr(module, '__file__', None)
+               and Path(module.__file__).resolve() == origin]
+
+    def defer(original):
+        def report(writer, event):
+            if len(queued) >= 64:
+                raise AssertionError('owned pure fixture report bound exceeded')
+            queued.append((original, writer, event))
+        return report
+
     try:
-        with verification_journal.bind_sink(None, None):
-            yield
+        with contextlib.ExitStack() as patches:
+            for module in modules:
+                patches.enter_context(mock.patch.object(module, '_journal_report', defer(module._journal_report)))
+            with verification_journal.bind_sink(None, None):
+                _PURE = True
+                try:
+                    yield
+                finally:
+                    _PURE = False
     finally:
         _PURE = False
+        for original, writer, event in queued:
+            original(writer, event)
+
+
+class PureBoundaryTests(unittest.TestCase):
+    def test_direct_observer_reports_flush_after_audit_and_keep_outcome(self):
+        from getzilla import pytest_progress
+        emitted = []
+
+        def emit(*args, **kwargs):
+            self.assertFalse(_PURE)
+            emitted.append((args, kwargs))
+
+        writer = SimpleNamespace(emit=emit)
+        report = SimpleNamespace(when='call', failed=False, skipped=False, nodeid='tests/test_owned.py::test_one')
+        with pure():
+            pytest_progress._journal_report(writer, report)
+            self.assertEqual(emitted, [])
+            with self.assertRaisesRegex(AssertionError, 'denied an external effect'):
+                open('/owned-denied-effect', 'rb')
+        self.assertEqual(emitted, [(('call', 'end'), dict(nodeid=report.nodeid, outcome='pass'))])
 
 
 class _Registry:

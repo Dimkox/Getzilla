@@ -249,8 +249,11 @@ class RequiredDispatchTests(unittest.TestCase):
             path.write_text('import unittest\nclass Owned(unittest.TestCase):\n def test_owned(self): pass\n')
             value = {'name': 'criterion-tests', 'status': 'pass', 'summary': 'owned', 'details': []}
             with mock.patch('getzilla.criterion_tests.run_required_tests', return_value=value) as driver:
-                result = verification._focused_landing_contract(root, {'focused_tests': ['test_owned.py']}, required_plan={})
-            driver.assert_called_once_with(root, ['test_owned.py'], timeout=300)
+                plan = {'obligations': [{'check_id': 'static-seo-landing-contract',
+                                         'expected_tests': ['test_owned.py::Owned::test_owned']}]}
+                result = verification._focused_landing_contract(root, {'focused_tests': ['test_owned.py']},
+                                                                 required_plan=plan)
+            driver.assert_called_once_with(root, ['test_owned.py::Owned::test_owned'], timeout=300)
             self.assertEqual((result.name, result.status), ('static-seo-landing-contract', 'pass'))
 
     def test_explicit_frontend_missing_manifest_remains_a_named_refusal(self):

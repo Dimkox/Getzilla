@@ -246,6 +246,13 @@ class FactorySuiteGuardTests(unittest.TestCase):
         from unittest.mock import MagicMock
         from urllib.parse import urlsplit
         import os
+
+        def owned_image(root, pin):
+            self.assertEqual(root, ROOT)
+            self.assertEqual(pin, {'reference': PIN, 'image_id': IMAGE_ID})
+            return IMAGE_ID
+
+        self.enterContext(patch('getzilla.live_acceptance.runtime_image_id', side_effect=owned_image))
         cases = ('valid','missing-journal','wrong-endpoint','wrong-birth','wrong-cluster','same-container','same-cluster')
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as raw:

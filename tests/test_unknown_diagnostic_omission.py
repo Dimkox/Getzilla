@@ -57,7 +57,9 @@ class UnknownDiagnosticOmissionTests(unittest.TestCase):
         self.assertEqual(len(failure['events']), 1, 'strict schema must accept this closed refusal')
         event = failure['events'][0]
         self.assertIsNone(event['identity'])
-        self.assertEqual(event['source'], source)
+        self.assertNotIn('source', event)
+        self.assertNotIn(source['path'], json.dumps(unknown))
+        self.assertNotIn(source['key'], json.dumps(unknown))
         self.assertNotIn('diagnostic', event, 'unknown source gets no trusted diagnostic projection')
         self.assertIs(event.get('diagnostic_omitted'), True)
         self.assertIs(failure.get('diagnostics_omitted'), True)

@@ -58,6 +58,7 @@ class OCIInputHandoffTests(unittest.TestCase):
         consumer.mkdir()
         (engine / "config").mkdir()
         (engine / "config/stacks.json").write_text("{}")
+        (engine / "config/toolchain.json").write_text("{}", encoding="utf-8", newline="\n")
         marker = consumer / "owned-source.txt"
         marker.write_text("unchanged consumer")
         modules = {}

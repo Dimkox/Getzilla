@@ -21,6 +21,38 @@ DIAGNOSTIC_SENTINEL = "test-only-diagnostic-payload"
 
 
 class LiveProducerSourceTests(unittest.TestCase):
+    def test_live_commands_use_the_running_controller_interpreter(self):
+        binding = dict(head='a'*40, tree='b'*40, run_id='owned', attempt='1', cell='factory',
+                       namespace='gz-owned', nonce='c'*32, producer_sha256='d'*64)
+        owner = unittest.mock.Mock()
+        owner.nonce, owner.namespace = binding['nonce'], binding['namespace']
+        owner.network.return_value = {'identity': {'Id': 'e'*64}}
+        commands = []
+        with tempfile.TemporaryDirectory() as raw:
+            output = Path(raw)
+            environment = output / 'factory-live-venv-owned'
+            environment.mkdir(mode=0o700)
+            owner.manifest = output / 'factory-resources.json'
+            with patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': 'owned',
+                    'GETZILLA_LIVE_ARTIFACTS': raw, 'UV_PROJECT_ENVIRONMENT': str(environment)}), \
+                    patch.object(runner, 'read_document', return_value=binding), \
+                    patch.object(runner, 'OwnedDocker', return_value=owner), \
+                    patch.object(runner, '_postgres', side_effect=[
+                        ({'id': '1'*64, 'name': 'owned-primary'}, 'postgresql://owned/primary'),
+                        ({'id': '2'*64, 'name': 'owned-fresh'}, 'postgresql://owned/fresh')]), \
+                    patch.object(runner, '_internal_endpoint'), \
+                    patch.object(runner, 'acknowledge_cleanup'), patch.object(runner, 'seal_component'), \
+                    patch.object(runner, '_run', side_effect=lambda command, **kwargs: commands.append((command, kwargs))), \
+                    patch('subprocess.Popen', side_effect=AssertionError('unexpected native effect')):
+                self.assertEqual(runner._live_main(), 0)
+            self.assertEqual(len(commands), 4)
+            for command, options in commands:
+                self.assertEqual(command[:7], ['uv', 'run', '--python', runner.sys.executable,
+                                               '--project', str(runner.ROOT/'factory'), 'python'])
+                self.assertEqual(options['environment']['UV_PROJECT_ENVIRONMENT'], str(environment))
+            self.assertEqual(commands[2][1]['timeout'], runner._FULL_SUITE_TIMEOUT_SECONDS)
+            owner.cleanup.assert_called_once()
+
     def test_bound_live_failure_keeps_primary_when_owned_cleanup_fails(self):
         import tempfile
         primary = RuntimeError('owned primary')
@@ -62,6 +94,14 @@ class DisposableExitTests(unittest.TestCase):
                 self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
         detail = runner._error_detail(subprocess.CalledProcessError(1, ["docker", DIAGNOSTIC_SENTINEL]))
         self.assertNotIn(DIAGNOSTIC_SENTINEL, detail)
+
+    def test_locked_commands_use_the_running_controller_interpreter(self):
+        with self.harness() as run:
+            self.assertEqual(runner.main(), 0)
+        self.assertEqual(len(run.commands), 4)
+        for command, _options in run.commands:
+            self.assertEqual(command[:7], ['uv', 'run', '--locked', '--python', runner.sys.executable,
+                                           '--project', 'factory'])
 
     @contextmanager
     def harness(self, *, primary=None, venv_error=None, container_error=None):

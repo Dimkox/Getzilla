@@ -1043,7 +1043,7 @@ class StructureTests(unittest.TestCase):
         }
         self.assertEqual(
             sorted(path.name for path in (ROOT / ".github/workflows").iterdir()),
-            ["getzilla.yml", "windows-full-suite.yml"],
+            ["getzilla-public-producer.yml", "getzilla.yml", "windows-full-suite.yml"],
         )
         self.assertFalse((ROOT / ".github/dependabot.yml").exists())
         for rel, source in sources.items():
@@ -1056,6 +1056,22 @@ class StructureTests(unittest.TestCase):
                 self.assertTrue(references)
                 for reference in references:
                     self.assertRegex(reference, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+
+        # This separate protected control workflow has an explicit dispatch and
+        # read-only API token; candidate verification never receives this port.
+        producer = (ROOT / '.github/workflows/getzilla-public-producer.yml').read_text(encoding='utf-8')
+        self.assertIn('workflow_dispatch:', producer)
+        self.assertIn('types: [public-ci-refresh]', producer)
+        self.assertIn('permissions:\n  contents: read\n  actions: read\n  pull-requests: read\n', producer)
+        self.assertIn('runs-on: [self-hosted, linux, x64, getzilla-public-producer]', producer)
+        self.assertIn('timeout-minutes: 10', producer)
+        self.assertIn('GITHUB_TOKEN: ${{ github.token }}', producer)
+        self.assertIn('"$PUBLIC_PRODUCER_IMAGE" public-prepare', producer)
+        self.assertIn('@sha256:[0-9a-f]{64}', producer)
+        self.assertIn('--read-only --user 10001:10001', producer)
+        self.assertIn('--cap-drop ALL --security-opt no-new-privileges --pids-limit 128', producer)
+        for forbidden in ('pull_request_target', ': write', 'secrets.', 'actions/checkout', 'candidate repository commands\n        run:'):
+            self.assertNotIn(forbidden, producer)
 
     def test_pr_workflow_gates_quickly_and_the_windows_full_suite_runs_nightly(self) -> None:
         # The informational module-by-module Windows suite took ~36 of the ~37 minutes every PR

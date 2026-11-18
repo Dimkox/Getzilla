@@ -233,7 +233,7 @@ def _live_main() -> int:
             PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT/'factory/src'), str(ROOT/'.getzilla'))))
         phase = 'venv-use'
         environment['UV_PROJECT_ENVIRONMENT'] = str(venv_path)
-        uv = ['uv', 'run', '--project', str(ROOT/'factory'), 'python']
+        uv = ['uv', 'run', '--python', sys.executable, '--project', str(ROOT/'factory'), 'python']
         phase = 'preflight'
         _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only'], environment=environment)
         _run([*uv, str(ROOT/'factory/tests/postgres_restart_probe.py'), '--preflight-only',
@@ -322,7 +322,7 @@ def main() -> int:
         phase = "venv-create"
         venv = tempfile.TemporaryDirectory(prefix="adaptive-factory-exit-venv-", dir=owner.manifest.parent)
         environment["UV_PROJECT_ENVIRONMENT"] = venv.name
-        uv = ["uv", "run", "--locked", "--project", "factory"]
+        uv = ["uv", "run", "--locked", "--python", sys.executable, "--project", "factory"]
         phase = "preflight"
         _run(
             [
