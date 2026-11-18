@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -128,6 +129,7 @@ class LocalGrantTests(unittest.TestCase):
         self.assertNotEqual(linked['repository'], grant['repository'])
         self.assertTrue(self.valid(other, 'external-write'))
         registration = other/'.git'
+        registration.chmod(registration.stat().st_mode | stat.S_IWRITE)
         registration.write_text('gitdir: ../missing\n', encoding='utf-8')
         self.assertFalse(self.valid(other, 'external-write'))
         original = root/'.git'
