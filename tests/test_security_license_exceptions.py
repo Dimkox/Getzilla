@@ -307,5 +307,43 @@ class FamilyFindingConsistencyTests(unittest.TestCase):
                         self.assertFalse(security_cli._findings_consistent('security-licenses',dict(findings=[altered]),fixtures.NOW))
 
 
+class FamilyAncillaryConsistencyTests(unittest.TestCase):
+    def test_complete_reviewed_ancillary_families_keep_term_reference_joins(self):
+        import tempfile,io,zipfile
+        from tests import test_public_security_inputs as fixture
+        from tests.test_security_license_ancillary_consumer import AncillaryConsumerTests
+        from getzilla import security_cli
+        for case,files,metadata,_,_ in AncillaryConsumerTests().actual_cases():
+            with self.subTest(package=case['package']),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);inv,record,bundle=fixture.release_fixture(root)
+                stream=io.BytesIO()
+                with zipfile.ZipFile(stream,'w') as archive:
+                    for path,body in files.items():archive.writestr(path,body)
+                payload=stream.getvalue();record['sha256']=fixture.sha(payload);record['bytes']=len(payload)
+                record['subject']['artifact_sha256']=record['sha256'];(root/record['path']).write_bytes(payload)
+                proof=dict(schema_version=1,kind='artifact-component-inventory',artifact_sha256=record['sha256'],complete=True,unresolved=[],components=[
+                    dict(id='owned',expression=metadata['expression'],requires=[],license_paths=list(files),notice_paths=[],
+                        files=[dict(path=path,sha256=fixture.sha(body),bytes=len(body)) for path,body in files.items()])])
+                raw=fixture.encoded(proof);record['components']['sha256']=fixture.sha(raw);(root/record['components']['path']).write_bytes(raw)
+                release=json.loads((root/record['origin']['index_path']).read_bytes());release['assets'][0].update(size=len(payload),digest='sha256:'+record['sha256'])
+                raw=fixture.encoded(release);record['origin']['index_sha256']=fixture.sha(raw);(root/record['origin']['index_path']).write_bytes(raw)
+                inv['digest']=fixture.sha(fixture.encoded({k:v for k,v in inv.items() if k!='digest'}));bundle['inventory_digest']=inv['digest']
+                (root/'manifest.json').write_bytes(fixture.encoded(bundle))
+                for selected_policy in (fixture.POLICY,dict(fixture.POLICY,auto_allow=['BSD-3-Clause']) if case['package']=='cryptography' else fixture.POLICY):
+                    result=licenses.evaluate_artifacts(inv,root,selected_policy,now=fixture.NOW)
+                    self.assertEqual(result['status'],'pass',result['gaps'])
+                    self.assertTrue(security_cli._findings_consistent('security-licenses',dict(findings=result['details']),fixture.NOW))
+                finding=result['details'][0]
+                for change in ('missing-term','wrong-reference','wrong-kind','wrong-expression'):
+                    altered=copy.deepcopy(finding)
+                    if change=='missing-term':altered['license_files'].pop()
+                    if change=='wrong-reference':altered['notice_files'][0]['required_files'][0]['sha256']='0'*64
+                    if change=='wrong-kind':altered['notice_files'][0]['ancillary_kind']='complete'
+                    if change=='wrong-expression':altered['notice_files'][0]['expression']='MIT'
+                    if change=='wrong-expression' and metadata['expression']=='MIT':continue
+                    with self.subTest(change=change):
+                        self.assertFalse(security_cli._findings_consistent('security-licenses',dict(findings=[altered]),fixture.NOW))
+
+
 if __name__ == '__main__':
     unittest.main()
