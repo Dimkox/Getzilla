@@ -160,6 +160,20 @@ class PythonArtifactTargetTests(unittest.TestCase):
         with zipfile.ZipFile(output_path,'w') as output:
             for name,raw in entries.items():
                 output.writestr(name,raw)
+        # Rehash all caller-controlled output metadata. Only the independently
+        # observed current-source app map distinguishes this old app composition.
+        manifest_path=result['root']/'factory-output.manifest.json'
+        manifest=json.loads(manifest_path.read_bytes())
+        members=archive_inventory(output_path.read_bytes(),output_path.name)
+        manifest['files']=[dict(path=k,**v,mode=0o644) for k,v in members.items()]
+        manifest_path.write_text(json.dumps(manifest))
+        ah=hashlib.sha256(output_path.read_bytes()).hexdigest()
+        mh=hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        (result['root']/'factory-output.sha256').write_text(f'{ah}  {output_path.name}\n{mh}  {manifest_path.name}\n')
+        catalog_path=result['root']/'manifest.json'
+        catalog=json.loads(catalog_path.read_bytes())
+        catalog['deliveries'][0].update(sha256=ah,manifest_sha256=mh)
+        catalog_path.write_text(json.dumps(catalog))
         with self.assertRaises(artifacts.ArtifactError) as error:
             factory.verify(artifacts_root,binding,policy,now=NOW,checker=checker)
         self.assertEqual(error.exception.code,'artifact-factory-source-output')
@@ -183,6 +197,7 @@ class PythonArtifactTargetTests(unittest.TestCase):
             artifact_sha256=hashlib.sha256(payload).hexdigest(),artifact_source=index['urls'][0]['url'])
         self.assertEqual(factory.verify_wheel(selected,payload), ['cp312-cp312-manylinux_2_17_x86_64'])
         _,_,bad=self.fixture(tag='cp312-cp312-manylinux_2_17_x86_64',wheel_tag='cp313-cp313-manylinux_2_17_x86_64')
+        selected['artifact_sha256']=hashlib.sha256(bad).hexdigest()
         with self.assertRaises(artifacts.ArtifactError):
             factory.verify_wheel(selected,bad)
         dep,index,payload=self.fixture(tag='cp313-cp313-manylinux_2_17_x86_64')
