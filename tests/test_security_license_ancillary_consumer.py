@@ -3,7 +3,7 @@
 import copy
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 import unittest
 from unittest import mock
@@ -25,7 +25,7 @@ class AncillaryConsumerTests(unittest.TestCase):
         by_sha = {item["sha256"]: item["text"].encode() for item in full}
         for item in ancillary:
             files = {item["member"]: item["text"].encode()}
-            parent = Path(item["member"]).parent
+            parent = PurePosixPath(item["member"]).parent
             for relative, sha in item["expected"]["required_files"].items():
                 self.assertEqual(hashlib.sha256(by_sha[sha]).hexdigest(), sha)
                 files[str(parent / relative)] = by_sha[sha]
