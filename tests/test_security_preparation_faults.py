@@ -30,11 +30,13 @@ class PreparationFaultControls(unittest.TestCase):
     def marked(self, error=None, stage='package-artifacts'):
         self.assertTrue(callable(getattr(cli, '_preparation_step', None)), 'missing closed preparation boundary')
         error = error or ArtifactError('artifact-size', 'PRIVATE_MARKER /private https://private.invalid')
+        caught_error = None
         try:
             with cli._preparation_step(stage):
                 raise error
         except Exception as caught:
-            self.assertIs(caught, error, 'diagnostics must preserve original exception')
+            caught_error = caught
+        self.assertIs(caught_error, error, 'diagnostics must preserve original exception')
         return error
 
     def test_fixed_stage_kind_code_without_exception_text_or_replacement(self):
@@ -54,8 +56,15 @@ class PreparationFaultControls(unittest.TestCase):
         forged = ArtifactError('artifact-size', 'PRIVATE_MARKER')
         forged._getzilla_preparation = dict(stage='package-artifacts', error_kind='artifact', error_code='artifact-size', errno=None)
         self.assertEqual(cli._preparation_fault(forged), {})
+        forged._getzilla_preparation = (None, dict(forged._getzilla_preparation))
+        self.assertEqual(cli._preparation_fault(forged), {})
         with mock.patch.object(producer.os, 'write') as write:
             producer._fault(forged)
+        self.assertNotIn('preparation', json.loads(write.call_args.args[1])['fault'])
+        native_forged = native.BackendUnavailable('owned', detail={'preparation': dict(
+            stage='package-artifacts', error_kind='artifact', error_code='artifact-size', errno=None)})
+        with mock.patch.object(producer.os, 'write') as write:
+            producer._fault(native_forged)
         self.assertNotIn('preparation', json.loads(write.call_args.args[1])['fault'])
         for changes in (dict(secret='PRIVATE_MARKER'), dict(stage='PRIVATE_MARKER'),
                         dict(error_kind='PRIVATE_MARKER'), dict(error_code='PRIVATE_MARKER'),
