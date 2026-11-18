@@ -7056,7 +7056,7 @@
         },
         "factory/tests/run_disposable_exit.py": {
           "mode": 420,
-          "sha256": "817080b2da1e12f526d0ffc2c7e316c2cd87ee27dc4eebb9c0be6e2e55f5d1b1"
+          "sha256": "026f426e358e4dbc4e7a944cd74278e7c8431cfcc37f125069f496ad2f174e44"
         },
         "factory/tests/run_live_suite.py": {
           "mode": 420,
@@ -7104,7 +7104,7 @@
         },
         "factory/tests/test_disposable_exit.py": {
           "mode": 420,
-          "sha256": "cefe6d946309db710613f732dd65d32b1743130df2a3c92ee257d48e642efde1"
+          "sha256": "b49c1c9a667758e9c61d721863be3f67bb30bca6ac15535b571560a634285909"
         },
         "factory/tests/test_execution_contracts.py": {
           "mode": 420,
