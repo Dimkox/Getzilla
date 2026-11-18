@@ -172,7 +172,7 @@ class Scope:
         selected['checked_at_utc']=report.get('source_evidence',{}).get('checked_at_utc')
         selected['raw_diagnostics_sha256']=digest(report['gaps'])
         raw_coverage=dict(status=report['status'],complete=False,raw_declarations=len(self.inventory['dependencies']),
-            inactive_subjects=self.inactive,unconsumed_python_subjects=[digest(_subject(dep)) for dep in self.inventory['dependencies']
+            inactive_subjects=self.inactive,outside_host_subjects=[digest(_subject(dep)) for dep in self.inventory['dependencies']
                 if dep.get('ecosystem')=='PyPI' and not self.dependency_required(dep)])
         selected['raw_coverage_sha256']=digest(raw_coverage)
         records=self.state.setdefault('license_results',{})
