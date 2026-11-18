@@ -352,10 +352,12 @@ class PythonArtifactTargetTests(unittest.TestCase):
                 mock.patch.object(producer,'_pipeline_tools',return_value=self.root/'tools'), \
                 mock.patch.object(cli,'source_binding',return_value={}), \
                 mock.patch.object(cli,'validate_selection_authority'), \
+                mock.patch('getzilla.security_license_scope.activate',return_value={}) as activate, \
                 mock.patch.object(cli,'prepare_inputs',side_effect=[{}, {'status':'prepared'}]) as prepare, \
                 mock.patch.object(cli,'evaluate',return_value={'status':'fail'}) as evaluate, \
                 mock.patch.object(cli,'_atomic'), redirect_stdout(io.StringIO()):
             producer._pipeline(request,self.root,object())
+            activate.assert_called_once_with(self.root/'source',{},_entry=producer._LICENSE_ENTRY)
             self.assertEqual([call.kwargs['package_target'] for call in prepare.call_args_list],[descriptor,descriptor])
             self.assertEqual(evaluate.call_args.kwargs['package_target'],descriptor)
             expected=self.binding(dict(digest='a'*64))
