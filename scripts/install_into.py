@@ -96,6 +96,7 @@ MANAGED_FILES = (
     "scripts/getzilla_ci_evidence.py",
     "scripts/getzilla_platform_install.py",
     "scripts/getzilla_update.py",
+    "scripts/getzilla_baseline.py",
     "scripts/getzilla_git.py",
     "scripts/getzilla_entire.py",
     "session_start.py",
