@@ -508,11 +508,24 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
             if 'include' in document:
                 gap('unsupported-compose-composition', relative, 'Compose include needs qualified referenced-source coverage')
             services = _yaml_map(document.get('services'), 'Compose services')
-            for service in services.values():
+            for service_name, service in services.items():
                 fields = _yaml_map(service, 'Compose service')
-                for indirect in ('build', 'extends', 'provider'):
+                for indirect in ('extends', 'provider'):
                     if indirect in fields:
                         gap('unsupported-compose-composition', relative, f'Compose {indirect} needs qualified build/composition coverage')
+                if 'build' in fields:
+                    from .security_build_inputs import describe_build
+                    try:
+                        build = describe_build(root, relative, service_name, fields, files, bindings)
+                    except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
+                        gap('unsupported-compose-composition', relative, str(exc)[:300])
+                    else:
+                        result.setdefault('builds', []).append(build)
+                        for item in build['context_files']:
+                            if item['path'] not in result['files']:
+                                result['files'].append(item['path'])
+                        image(build['source_reference'], relative, build['line'], require_digest=True,
+                              platform=build['platform'])
                 if 'image' in fields:
                     yaml_image(fields['image'], relative, 'Compose image', platform=compose_image_platform(fields))
                 elif not set(fields) & {'build', 'extends', 'provider'}:
@@ -745,6 +758,7 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                     continue
             if reference is not None:
                 image(reference, relative, line_number, platform=platform)
+    result['files'] = sorted(set(result['files']))
     result['dependencies'] = sorted(dependencies.values(), key=lambda item: (item['ecosystem'], item['name'], item['version'], item['manifest'], item['usage']))
     if isinstance(bindings, list) and used_image_bindings != {canonical_digest(row) for row in bindings}:
         gap('unused-image-source-selection', '<image-selection>', 'selected image use is absent or differs from current source')

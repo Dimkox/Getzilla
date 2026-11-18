@@ -1,6 +1,7 @@
 """Bounded local OCI image inputs. No registry, daemon, extraction or execution.
 
-Only OCI indexes/manifests/configs and tar or gzip-tar layers are supported.
+OCI and standard Docker2 graph bytes retain their original media and digests.
+Only OCI tar/gzip and Docker2 gzip layers are supported; foreign layers refuse.
 Selected index graphs must be locally complete. A private singleton layout
 prevents the pinned scanner's nested-index first-child selection behavior.
 The private staging directory is a trusted workflow boundary, not isolation
@@ -24,6 +25,13 @@ MANIFEST = 'application/vnd.oci.image.manifest.v1+json'
 CONFIG = 'application/vnd.oci.image.config.v1+json'
 TAR = 'application/vnd.oci.image.layer.v1.tar'
 GZIP = TAR + '+gzip'
+DOCKER_INDEX = 'application/vnd.docker.distribution.manifest.list.v2+json'
+DOCKER_MANIFEST = 'application/vnd.docker.distribution.manifest.v2+json'
+DOCKER_CONFIG = 'application/vnd.docker.container.image.v1+json'
+DOCKER_GZIP = 'application/vnd.docker.image.rootfs.diff.tar.gzip'
+INDEX_MEDIA = frozenset({INDEX, DOCKER_INDEX})
+MANIFEST_MEDIA = frozenset({MANIFEST, DOCKER_MANIFEST})
+LAYER_MEDIA = frozenset({TAR, GZIP, DOCKER_GZIP})
 LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
@@ -159,7 +167,7 @@ def _layer(path, media, expected, budget):
     budget.charge('layers', 1)
     declared = 0
     with path.open('rb') as raw:
-        with (gzip.GzipFile(fileobj=raw) if media == GZIP else raw) as decoded:
+        with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else raw) as decoded:
             stream = _Decoded(decoded, budget)
             with tarfile.open(fileobj=stream, mode='r|') as archive:
                 for member in archive:
@@ -236,7 +244,7 @@ def scanner_identity(report, image):
 
 def _descriptor(value):
     if (not isinstance(value, dict) or not {'mediaType', 'digest', 'size'} <= value.keys()
-            or value['mediaType'] not in {INDEX, MANIFEST, CONFIG, TAR, GZIP}
+            or value['mediaType'] not in INDEX_MEDIA | MANIFEST_MEDIA | LAYER_MEDIA | {CONFIG, DOCKER_CONFIG}
             or not isinstance(value['digest'], str) or not HEX.fullmatch(value['digest'])
             or type(value['size']) is not int or value['size'] < 0 or value.get('urls')
             or value.get('data') is not None):
@@ -267,7 +275,7 @@ def _import_one(record, profile, stage, budget):
                 if old != (media, size):
                     raise OCIError('Conflicting OCI descriptor identity')
                 return stage / 'blobs/sha256' / digest[7:]
-            if size > profile['max_storage_bytes'] or media not in {TAR, GZIP} and size > profile['max_manifest_bytes']:
+            if size > profile['max_storage_bytes'] or media not in LAYER_MEDIA and size > profile['max_manifest_bytes']:
                 raise OCIError('OCI descriptor exceeds selected bound')
             budget.charge('storage', size)
             budget.charge('compressed', size)
@@ -300,13 +308,13 @@ def _import_one(record, profile, stage, budget):
             if depth > 32 or len(seen) > 10000 or digest in active:
                 raise OCIError('OCI graph depth, nodes or cycle unsupported')
             path = blob(desc)
-            if media not in {INDEX, MANIFEST}:
+            if media not in INDEX_MEDIA | MANIFEST_MEDIA:
                 raise OCIError('OCI entry is not an image/index')
             active.add(digest)
             value = document(path.read_bytes())
             if value.get('schemaVersion') != 2 or value.get('mediaType', media) != media or value.get('subject'):
                 raise OCIError('Unsupported OCI image document')
-            if media == INDEX:
+            if media in INDEX_MEDIA:
                 children = value.get('manifests')
                 if not isinstance(children, list) or not 1 <= len(children) <= 512:
                     raise OCIError('OCI nested index is incomplete or excessive')
@@ -314,7 +322,7 @@ def _import_one(record, profile, stage, budget):
                     walk(child, depth + 1)
             else:
                 config_desc = value.get('config')
-                if _descriptor(config_desc)[0] != CONFIG:
+                if _descriptor(config_desc)[0] != (CONFIG if media == MANIFEST else DOCKER_CONFIG):
                     raise OCIError('OCI image config is unsupported')
                 config_path = blob(config_desc)
                 config = document(config_path.read_bytes())
@@ -333,7 +341,8 @@ def _import_one(record, profile, stage, budget):
                     raise OCIError('OCI rootfs/layer accounting missing')
                 for layer, diff_id in zip(layers, rootfs['diff_ids']):
                     layer_media = _descriptor(layer)[0]
-                    if layer_media not in {TAR, GZIP} or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
+                    allowed_layers = {TAR, GZIP} if media == MANIFEST else {DOCKER_GZIP}
+                    if layer_media not in allowed_layers or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
                         raise OCIError('Unsupported OCI layer or diff ID')
                     _layer(blob(layer), layer_media, diff_id, budget)
                 if platform == profile['platform']:
