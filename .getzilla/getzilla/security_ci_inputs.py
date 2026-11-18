@@ -333,7 +333,7 @@ def prepare(artifacts, parent, *, now=None, fetch=None, byte_budget=512 * 1024 *
     if type(byte_budget) is not int or not 0 < byte_budget <= 512 * 1024 * 1024:
         raise ArtifactError("artifact-size", "invalid shared CI package budget")
     policy = load_policy(TRUSTED_ROOT)
-    used = _catalog_bytes(artifacts)
+    used = _catalog_bytes(artifacts, now=now)
     if "factory_inputs" in parent:
         from .security_factory_inputs import verify as factory_verify
 
