@@ -7,10 +7,10 @@
 # downloads Getzilla, reports provider setup and runs the final health check.
 # Portable runtimes install for the current user without administrator rights. Nothing is changed in your projects unless you ask for it below.
 #
-# Minimum versions: Windows PowerShell 5.1 can run this installer; Getzilla itself needs
-# PowerShell 7.4 or newer (pwsh), which this installer resolves and stages per user,
-# Native hook launchers support Windows PowerShell 5.1. Installing pwsh does not
-# change the parent shell of an already running client.
+# Runtime compatibility: Windows PowerShell 5.1 can run this installer and the
+# generated Windows hook launchers. The managed tool profile separately requires
+# PowerShell 7.4 or newer (pwsh), resolved and staged for the current user.
+# Installing pwsh does not change the parent shell of an already running client.
 #
 # Optional environment variables (set them before the command above):
 #   $env:GETZILLA_HOME = 'D:\Tools\Getzilla'   where Getzilla is kept (default: $HOME\Getzilla)
