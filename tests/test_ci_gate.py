@@ -432,7 +432,8 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
                     'tests.test_ci_gate', 'tests.test_review_source', 'tests.test_neutral_hooks'}
         native = {'tests.test_windows_snapshot_store', 'tests.test_windows_hook_launchers',
                   'tests.test_installer_cache_cleanup', 'tests.test_installer_windows_current',
-                  'tests.test_installer_windows_nonadmin', 'tests.test_managed_pyyaml'}
+                  'tests.test_installer_windows_nonadmin', 'tests.test_managed_pyyaml',
+                  'tests.test_local_grants', 'tests.test_workflow_baseline_fresh_install'}
         self.assertTrue(existing <= modules)
         self.assertTrue(native <= modules, sorted(native-modules))
 

@@ -599,7 +599,7 @@ jobs:
       - name: Doctor
         run: python scripts/getzilla_doctor.py
       - name: Windows-ported tests
-        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks tests.test_windows_snapshot_store tests.test_windows_hook_launchers tests.test_installer_cache_cleanup tests.test_installer_windows_current tests.test_installer_windows_nonadmin tests.test_managed_pyyaml
+        run: python -m unittest tests.test_fsx tests.test_install_scripts tests.test_workflow_sources tests.test_ci_gate tests.test_review_source tests.test_neutral_hooks tests.test_windows_snapshot_store tests.test_windows_hook_launchers tests.test_installer_cache_cleanup tests.test_installer_windows_current tests.test_installer_windows_nonadmin tests.test_managed_pyyaml tests.test_local_grants tests.test_workflow_baseline_fresh_install
       - name: Hooks and CLI smoke
         env:
           GETZILLA_SESSION_ID: ci
