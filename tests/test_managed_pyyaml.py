@@ -19,6 +19,7 @@ from getzilla import managed_pyyaml
 class PyYamlBuildTests(unittest.TestCase):
     def setUp(self):
         scratch = Path(__file__).resolve().parents[1]/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.owned = tempfile.TemporaryDirectory(prefix='owned-pyyaml-', dir=scratch)
         self.addCleanup(self.owned.cleanup)
         self.root = Path(self.owned.name)

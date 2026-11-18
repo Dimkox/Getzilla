@@ -14,6 +14,7 @@ from getzilla import security_image_backend as backend
 from getzilla.architecture_diff import _run_capped
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'Linux held handles and private socket aliases required')
 class DaemonHandoffControl(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, 'pidfd_open') and hasattr(os, 'fork'), 'Linux held process handles required')
     def test_client_child_observes_held_daemon_without_waiting_foreign_child(self):
@@ -61,8 +62,8 @@ class DaemonHandoffControl(unittest.TestCase):
     def test_long_runtime_uses_only_same_volume_short_socket_alias(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
             volume = Path(directory) / ('long-canonical-image-volume-' * 3)
-            volume.mkdir()
-            (volume / 'tmp').mkdir()
+            volume.mkdir(mode=0o700)
+            (volume / 'tmp').mkdir(mode=0o700)
             held = os.open(volume / 'tmp', os.O_RDONLY | os.O_DIRECTORY)
             def extract(_archive, target):
                 target.mkdir()
@@ -88,8 +89,8 @@ class DaemonHandoffControl(unittest.TestCase):
     def test_foreign_short_alias_inode_is_refused(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
             root = Path(directory)
-            (root / 'tmp').mkdir()
-            (root / 'foreign').mkdir()
+            (root / 'tmp').mkdir(mode=0o700)
+            (root / 'foreign').mkdir(mode=0o700)
             a = os.open(root / 'tmp', os.O_RDONLY | os.O_DIRECTORY)
             b = os.open(root / 'foreign', os.O_RDONLY | os.O_DIRECTORY)
             try:

@@ -13,6 +13,7 @@ from getzilla import security_image_job as job
 from getzilla.security_image_backend import BackendUnavailable
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'Linux systemd and cgroup allocation model required')
 class JobControls(unittest.TestCase):
     def test_only_explicit_owned_scope_gets_fixed_budget(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory, ExitStack() as stack:

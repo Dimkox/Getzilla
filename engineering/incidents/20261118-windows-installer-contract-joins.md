@@ -40,3 +40,10 @@ helper import, preserving original arguments, standard streams and exit status.
 An unavailable or identical old interpreter remains incomplete; current runtimes
 keep the direct path. A missing-tomllib control proves the selected runtime can
 import the helper without running an installer or build.
+
+Fresh review snapshots exposed ignored fixture parents and a positive socket
+fixture relying on the caller's umask. Each runtime fixture now creates its own
+scratch parent; socket fixture directories declare private0700 explicitly under
+umask022. Linux handle/cgroup models declare their platform, while portable
+grammar, HTTP and managed-runtime controls remain enabled. Verify fixture setup
+from a fresh native snapshot without externally preparing ignored directories.

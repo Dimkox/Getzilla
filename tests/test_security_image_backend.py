@@ -63,6 +63,7 @@ class OwnedControls(unittest.TestCase):
             with self.assertRaises(backend.BackendUnavailable):
                 producer._copy_context(root, recipe, root / 'sealed-context')
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux namespace and cgroup model required')
     def test_kernel_model_refuses_measured_wrong_volume_capacity(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory, ExitStack() as stack:
             volume = Path(directory)
@@ -94,6 +95,7 @@ class OwnedControls(unittest.TestCase):
                 with backend.namespace_volume(volume, cgroup):
                     pass
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux cgroup CPU affinity model required')
     def test_owned_control_files_keep_lower_inherited_cpu_quota(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
             root = Path(directory)

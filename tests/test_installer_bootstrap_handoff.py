@@ -26,7 +26,9 @@ class BootstrapHandoffTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('owned_bootstrap_cli', ROOT/'scripts/getzilla_install_managed.py')
         self.cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.cli)
-        temporary = tempfile.TemporaryDirectory(prefix='owned-bootstrap-', dir=ROOT/'.getzilla/runtime/scratch')
+        scratch = ROOT/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = tempfile.TemporaryDirectory(prefix='owned-bootstrap-', dir=scratch)
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
         self.bootstrap = self.home/'bootstrap-python'
