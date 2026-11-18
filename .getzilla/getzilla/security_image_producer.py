@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 import tarfile
 import tempfile
@@ -273,6 +274,79 @@ def _pipeline_tools(request, volume):
     return Path(request['tools'])
 
 
+def _postdrop_preflight(request, volume, builder):
+    """Check fixed prerequisite roles as the actual controller UID, not root."""
+    import ssl
+    import sysconfig
+    import _ssl
+    import _socket
+    import zlib
+    from . import security_image_backend as native
+    from .security_image_registry import BoundedHTTP, RegistryError
+    check = 'postdrop-volume'
+    try:
+        volume = Path(volume)
+        if native._GUARD is None or native._GUARD[0] != volume or os.geteuid() == 0:
+            raise ValueError('owned dropped controller required')
+        tools = _pipeline_tools(request, volume)
+        check = 'postdrop-resolver'
+        with open('/etc/resolv.conf', 'rb') as stream:
+            if len(stream.read(65537)) > 65536:
+                raise ValueError('resolver exceeds existing bound')
+        check = 'postdrop-python'
+        if not os.access(sys.executable, os.R_OK | os.X_OK):
+            raise ValueError('interpreter inaccessible')
+        check = 'postdrop-bootstrap-files'
+        modules = [Path(__file__), Path(__file__).with_name('security_image_registry.py'),
+                   Path(__file__).with_name('security_oci.py'), Path(__file__).with_name('__init__.py'),
+                   Path(sysconfig.get_path('stdlib')) / 'ssl.py']
+        for module in (_ssl, _socket, zlib):
+            filename = getattr(module, '__file__', None)
+            if filename is not None:
+                modules.append(Path(filename))
+            elif module.__spec__.origin not in {'built-in', 'frozen'}:
+                raise ValueError('native module origin unavailable')
+        for path in modules:
+            with path.open('rb') as stream:
+                stream.read(1)
+        check = 'postdrop-ca'
+        ssl.create_default_context()
+        check = 'postdrop-client'
+        if not os.access(builder.client, os.R_OK | os.X_OK):
+            raise ValueError('owned client inaccessible')
+        check = 'postdrop-socket'
+        if not stat.S_ISSOCK(builder.socket.stat().st_mode) or not os.access(builder.socket, os.W_OK):
+            raise ValueError('owned socket inaccessible')
+        check = 'postdrop-temp'
+        with tempfile.TemporaryFile() as temporary:
+            temporary.write(b'owned prerequisite')
+            temporary.flush()
+            if os.fstat(temporary.fileno()).st_dev != volume.stat().st_dev:
+                raise ValueError('temporary leaves owned store')
+        outputs = {'database': Path(request['database']), 'artifacts': Path(request['artifacts']), 'tools': tools,
+                   'profile': Path(request['profile']).parent, 'preparation': Path(request['preparation']).parent,
+                   'report': Path(request['report']).parent}
+        for role, path in outputs.items():
+            check = 'postdrop-output-' + role
+            for _ in range(64):
+                if path.exists():
+                    break
+                path = path.parent
+            else:
+                raise ValueError('output ancestry exceeds bound')
+            if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
+                raise ValueError('output parent inaccessible')
+        check = 'postdrop-python-worker'
+        BoundedHTTP(deadline=builder.deadline).bootstrap()
+    except RegistryError as error:
+        error.detail['prerequisite'] = check
+        raise
+    except (OSError, ValueError, ImportError, AttributeError, TypeError) as error:
+        raise BackendUnavailable('postdrop prerequisite refused', detail={
+            'phase': 'postdrop-preflight', 'command_id': check,
+            'errno': getattr(error, 'errno', None)}) from None
+
+
 def _pipeline(request, volume, builder):
     global _PHASE
     _PHASE = 'producer'
@@ -354,6 +428,7 @@ def _worker():
                     os.setuid(uid)
                     os.environ.clear()
                     os.environ.update(PATH=os.defpath, LANG='C.UTF-8', PYTHONDONTWRITEBYTECODE='1')
+                    _postdrop_preflight(request, volume, builder)
                     report = _pipeline(request, volume, builder)
                     _result(report)
                     os._exit(0)
@@ -489,7 +564,7 @@ def _offline_tool_control(request, volume):
 
 def _fault(error):
     kind = type(error)
-    detail = dict(error.detail) if kind is BackendUnavailable else {}
+    detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else {}
     detail.setdefault('phase', _PHASE)
     detail.setdefault('command_id', 'worker')
     number = getattr(error, 'errno', None)

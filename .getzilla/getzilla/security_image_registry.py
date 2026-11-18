@@ -9,6 +9,8 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -25,7 +27,61 @@ _BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
 
 
 class RegistryError(ValueError):
-    pass
+    def __init__(self, message, *, detail=None, category='protocol'):
+        super().__init__(message)
+        self.detail = dict(detail or {})
+        self.category = category
+
+
+_FAULT_KEYS = {'version', 'category', 'phase', 'request_kind', 'origin', 'errno', 'http_status', 'command_id'}
+_FAULT_HOSTS = _ORIGINS | _BLOB_CDN | {'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'unknown'}
+_FAULT_CATEGORIES = {'request', 'dns', 'tls', 'http', 'timeout', 'os', 'protocol', 'bound', 'worker'}
+_FAULT_PHASES = {'registry-request', 'registry-connect', 'registry-headers', 'registry-body', 'registry-worker', 'registry-reply'}
+
+
+def _request_fault(url, category, phase, *, errno=None, status=None):
+    category = category if isinstance(category, str) and category in _FAULT_CATEGORIES else 'protocol'
+    phase = phase if isinstance(phase, str) and phase in _FAULT_PHASES else 'registry-request'
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        origin = parsed.hostname if parsed.hostname in _FAULT_HOSTS else 'unknown'
+        kind = ('auth' if origin == 'auth.docker.io' else 'tool' if origin == 'github.com' else
+                'manifest' if '/manifests/' in parsed.path else 'blob' if '/blobs/' in parsed.path else 'unknown')
+    except (ValueError, TypeError, AttributeError):
+        origin, kind = 'unknown', 'unknown'
+    return dict(version=1, category=category, phase=phase, request_kind=kind, origin=origin,
+                errno=errno if type(errno) is int and abs(errno) <= 65535 else None,
+                http_status=status if type(status) is int and 100 <= status <= 599 else None,
+                command_id='registry-http')
+
+
+def _closed_fault(value):
+    if (not isinstance(value, dict) or set(value) != _FAULT_KEYS or type(value['version']) is not int
+            or value['version'] != 1 or value['category'] not in _FAULT_CATEGORIES
+            or value['phase'] not in _FAULT_PHASES
+            or value['request_kind'] not in {'auth', 'manifest', 'blob', 'tool', 'unknown'}
+            or value['origin'] not in _FAULT_HOSTS or value['command_id'] != 'registry-http'
+            or value['errno'] is not None and (type(value['errno']) is not int or abs(value['errno']) > 65535)
+            or value['http_status'] is not None and (type(value['http_status']) is not int or not 100 <= value['http_status'] <= 599)):
+        raise ValueError('unqualified registry fault protocol')
+    return value
+
+
+def _exception_fault(request, error, phase):
+    if isinstance(error, RegistryError) and error.detail:
+        try:
+            return _closed_fault(error.detail)
+        except (ValueError, TypeError):
+            pass
+    status = error.code if isinstance(error, urllib.error.HTTPError) else None
+    cause = error.reason if isinstance(error, urllib.error.URLError) and not isinstance(error, urllib.error.HTTPError) else error
+    category = ('http' if status is not None else 'dns' if isinstance(cause, socket.gaierror) else
+                'tls' if isinstance(cause, ssl.SSLError) else 'timeout' if isinstance(cause, TimeoutError) else
+                'os' if isinstance(cause, OSError) else error.category if isinstance(error, RegistryError) else 'protocol')
+    if status is not None:
+        phase = 'registry-headers'
+    return _request_fault(request.get('url') if isinstance(request, dict) else None, category, phase,
+                          errno=getattr(cause, 'errno', None), status=status)
 
 
 def _url(url, hosts):
@@ -65,54 +121,81 @@ def _http(request, *, opener=None, clock=time.monotonic):
             or not _url(request['url'], _ORIGINS) or type(request['maximum']) is not int
             or not 0 < request['maximum'] <= LIMITS['max_storage_bytes']
             or not isinstance(request['seconds'], (int, float)) or not 0 < request['seconds'] <= 30):
-        raise RegistryError('invalid bounded registry request')
+        raise RegistryError('invalid bounded registry request', category='request')
     deadline = clock() + request['seconds']
     selected = urllib.request.Request(request['url'], headers={**request['headers'], 'Accept-Encoding': 'identity'})
     port = opener or urllib.request.build_opener(_Redirect(request['url'])).open
-    with port(selected, timeout=min(10, request['seconds'])) as response:
-        if response.status != 200 or response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
-            raise RegistryError('registry response status/encoding refused')
-        length = response.headers.get('Content-Length')
-        if length is not None and (not re.fullmatch('[0-9]+', length) or int(length) > request['maximum']):
-            raise RegistryError('registry declared response exceeds byte budget')
-        header = {'type': response.headers.get('Content-Type', '').split(';')[0],
-                  'digest': response.headers.get('Docker-Content-Digest', '')}
-        if any(not isinstance(v, str) or len(v) > 256 for v in header.values()):
-            raise RegistryError('registry response metadata exceeds bound')
-        yield canonical(header) + b'\n'
-        total = 0
-        while True:
-            if clock() >= deadline:
-                raise RegistryError('registry response deadline exceeded')
-            requested = min(65536, request['maximum'] + 1 - total)
-            part = response.read1(requested)
-            if clock() >= deadline or not isinstance(part, bytes) or len(part) > requested:
-                raise RegistryError('registry response deadline/type refused')
-            total += len(part)
-            if total > request['maximum']:
-                raise RegistryError('registry response exceeds byte budget')
-            if not part:
-                break
-            yield part
-        if length is not None and total != int(length):
-            raise RegistryError('registry body is truncated')
+    phase = 'registry-connect'
+    try:
+        with port(selected, timeout=min(10, request['seconds'])) as response:
+            phase = 'registry-headers'
+            if response.status != 200:
+                raise RegistryError('registry response status refused', detail=_request_fault(request['url'], 'http', phase, status=response.status))
+            if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                raise RegistryError('registry response encoding refused')
+            length = response.headers.get('Content-Length')
+            if length is not None and (not re.fullmatch('[0-9]+', length) or int(length) > request['maximum']):
+                raise RegistryError('registry declared response exceeds byte budget', category='bound')
+            header = {'type': response.headers.get('Content-Type', '').split(';')[0],
+                      'digest': response.headers.get('Docker-Content-Digest', '')}
+            if any(not isinstance(v, str) or len(v) > 256 for v in header.values()):
+                raise RegistryError('registry response metadata exceeds bound', category='bound')
+            yield canonical(header) + b'\n'
+            phase = 'registry-body'
+            total = 0
+            while True:
+                if clock() >= deadline:
+                    raise RegistryError('registry response deadline exceeded', category='timeout')
+                requested = min(65536, request['maximum'] + 1 - total)
+                part = response.read1(requested)
+                if clock() >= deadline:
+                    raise RegistryError('registry response deadline exceeded', category='timeout')
+                if not isinstance(part, bytes):
+                    raise RegistryError('registry response type refused')
+                if len(part) > requested:
+                    raise RegistryError('registry response chunk exceeds bound', category='bound')
+                total += len(part)
+                if total > request['maximum']:
+                    raise RegistryError('registry response exceeds byte budget', category='bound')
+                if not part:
+                    break
+                yield part
+            if length is not None and total != int(length):
+                raise RegistryError('registry body is truncated')
+    except Exception as error:
+        raise RegistryError('bounded registry exchange refused', detail=_exception_fault(request, error, phase)) from None
 
 
 def _worker():
+    request = None
     try:
         request = document(sys.stdin.buffer.read(65537))
         for part in _http(request):
             sys.stdout.buffer.write(part)
         return 0
-    except Exception:
-        # Anonymous bearer tokens and signed CDN URLs never enter diagnostics.
-        sys.stderr.write('bounded registry exchange refused\n')
+    except Exception as error:
+        # Only closed observations survive. Never serialize exception text,
+        # request headers, response bodies, or signed redirect queries.
+        detail = _exception_fault(request, error, 'registry-request')
+        sys.stderr.write(canonical(detail).decode() + '\n')
         return 1
 
 
 class BoundedHTTP:
     def __init__(self, *, deadline):
         self.deadline = deadline
+
+    def bootstrap(self):
+        """Exercise the exact isolated worker/import path without any egress."""
+        try:
+            self.get('invalid://bootstrap', {}, 1)
+        except RegistryError as error:
+            detail = error.detail
+            if (detail.get('category') == 'request' and detail.get('phase') == 'registry-request'
+                    and detail.get('origin') == 'unknown' and detail.get('exit_code') == 1):
+                return
+            raise
+        raise RegistryError('registry bootstrap protocol refused')
 
     def get(self, url, headers, maximum):
         from .architecture_diff import _run_capped, ArchitectureError
@@ -123,16 +206,31 @@ class BoundedHTTP:
         if len(payload) > 65536:
             raise RegistryError('registry request metadata exceeds bound')
         try:
-            code, raw, _ = _run_capped(
+            code, raw, stderr = _run_capped(
                 [sys.executable, '-I', '-S', '-B', '-c', _BOOTSTRAP, str(Path(__file__).resolve().parents[1])],
                 cwd=Path(__file__).resolve().parents[2], env={'PATH': os.defpath, 'LANG': 'C.UTF-8'},
                 stdin_data=payload, stdout_limit=maximum + 1024, stderr_limit=2048, timeout=remaining)
-        except (OSError, ArchitectureError):
-            raise RegistryError('bounded registry worker incomplete') from None
+        except (OSError, ArchitectureError) as error:
+            detail = _request_fault(url, 'worker', 'registry-worker', errno=getattr(error, 'errno', None))
+            detail.update(exit_code=None, command_id='registry-worker')
+            raise RegistryError('bounded registry worker incomplete', detail=detail) from None
         header, separator, body = raw.partition(b'\n')
         if code != 0 or not separator or len(header) > 1024 or len(body) > maximum:
-            raise RegistryError('registry bounded reply refused')
-        return document(header), body
+            try:
+                if len(stderr) > 2048:
+                    raise ValueError('fault exceeds bound')
+                detail = dict(_closed_fault(document(stderr)))
+            except (ValueError, TypeError):
+                detail = _request_fault(url, 'worker', 'registry-worker')
+                detail['command_id'] = 'registry-worker'
+            detail.update(exit_code=code, stderr_bytes=len(stderr), stderr_sha256=hashlib.sha256(stderr).hexdigest())
+            raise RegistryError('registry bounded reply refused', detail=detail)
+        try:
+            return document(header), body
+        except ValueError:
+            detail = _request_fault(url, 'protocol', 'registry-reply')
+            detail.update(exit_code=code, command_id='registry-worker')
+            raise RegistryError('registry bounded reply metadata refused', detail=detail) from None
 
 
 def split_reference(reference):

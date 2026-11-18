@@ -519,6 +519,35 @@ def measured_ci_profile():
             'cause': 'os-error' if isinstance(error, OSError) else 'identity-or-value'}) from error
 
 
+def _install_resolver(path, resolver):
+    """Only resolver ancestors become searchable; daemon state stays private."""
+    if not isinstance(resolver, bytes) or len(resolver) > 65536:
+        raise BackendUnavailable('resolver copy exceeds existing bound')
+    held = _Root(path)
+    fd = None
+    try:
+        fd = os.dup(held.fd)
+        for name in ('run', 'systemd', 'resolve'):
+            try:
+                os.mkdir(name, mode=0o711, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            os.fchmod(fd, 0o711)  # nosec B103: traversal only, root ownership remains unchanged
+        for name in ('resolv.conf', 'stub-resolv.conf'):
+            output = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o644, dir_fd=fd)
+            with os.fdopen(output, 'wb') as stream:
+                stream.write(resolver)
+                os.fchmod(stream.fileno(), 0o644)  # nosec B103: public resolver copy inside private job
+    finally:
+        if fd is not None:
+            os.close(fd)
+        held.close()
+
+
 @contextmanager
 def namespace_volume(path, cgroup, *, ci_corpus=False):
     """Called only by the fixed worker after unshare; mount proof is measured."""
@@ -577,10 +606,7 @@ def namespace_volume(path, cgroup, *, ci_corpus=False):
             raise BackendUnavailable('runner resolver configuration exceeds bound')
         for name in ('run', 'tmp', 'var-tmp'):
             (path / name).mkdir(mode=0o700)
-        for name in ('resolv.conf', 'stub-resolv.conf'):
-            target = path / 'run/systemd/resolve' / name
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            target.write_bytes(resolver)
+        _install_resolver(path, resolver)
         mounted = []
         # Private mount destinations mask host temporaries with measured 0700 tmpfs directories.
         for name, target in (('run', '/run'), ('tmp', '/tmp'), ('var-tmp', '/var/tmp')):  # nosec B108
