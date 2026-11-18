@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from urllib.parse import urlsplit
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,7 +54,7 @@ class OpenGrepLatestTests(unittest.TestCase):
             result = updater.update_opengrep(self.fetch, self.root, ('windows', 'amd64'), run=self.run_inert)
             self.assertEqual(result[0].status, 'ok', result)
             self.assertEqual((self.root / 'bin/support.dll').read_bytes(), b'owned inert DLL')
-        self.assertEqual(sum('api.github.com' in url for url in self.urls), 4)
+        self.assertEqual(sum(urlsplit(url).hostname == 'api.github.com' for url in self.urls), 4)
 
     def test_verifier_rederives_official_integrity_not_forged_manifest(self):
         binary = self.root / 'opengrep.exe'

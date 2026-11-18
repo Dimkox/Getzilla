@@ -470,7 +470,7 @@ class NativePlanIntegrationTests(unittest.TestCase):
         from getzilla.verification import verify
         from tests.test_package_status import PackageStatusTests
         from tests.test_task_intent import TaskIntentTests
-        with project_copy(git=True, minimal_runtime=True, source_only_runtime=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             PackageStatusTests().prepare(root, complete=True)
             (root / 'feature.txt').write_text('recoverable fixture work\n')
             prepare_review_source(root)

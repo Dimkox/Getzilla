@@ -251,7 +251,7 @@ jobs:
           version: "0.13.4"
           enable-cache: false
       - name: Full Factory unit discovery without database authority
-        if: success() || failure()
+        if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         timeout-minutes: 15
         shell: bash
         env:

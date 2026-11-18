@@ -92,8 +92,15 @@ class CiAdmissionTests(unittest.TestCase):
         self.assertIn("getzilla_ci_admission.py", jobs["linux"])
         self.assertIn("fail-fast: false", jobs["live-acceptance"])
         self.assertIn("GETZILLA_SECURITY_CHECKER_SHA", jobs["security-expanded"])
-        self.assertIn("--provision-tools", jobs["security-expanded"])
-        self.assertIn("python -I trusted-checker/scripts/getzilla_security.py", jobs["security-expanded"])
+        producer = jobs['security-expanded']
+        self.assertIn('trusted-checker/.getzilla/getzilla/security_image_provision.py', producer)
+        self.assertIn('from getzilla.security_image_provision import provision;provision(sys.argv[2])', producer)
+        self.assertIn('from getzilla.security_cli import main;raise SystemExit(main())', producer)
+        self.assertIn('\"$selected_python\" -I -S -B', producer)
+        self.assertIn('--produce-images --ci-image-corpus', producer)
+        self.assertIn('--backend-tool-pins', producer)
+        self.assertIn('candidate HEAD is never selected automatically', producer)
+        self.assertNotIn('--provision-tools', producer)
         self.assertNotIn("continue-on-error", source)
 
     def module(self):

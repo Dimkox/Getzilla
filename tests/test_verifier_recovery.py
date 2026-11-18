@@ -395,7 +395,7 @@ class VerifierRecoveryTests(unittest.TestCase):
         for error in (OSError('disk full'), RuntimeError('invalid receipt binding'),
                       ValueError('malformed report'), TypeError('invalid report field')):
             for verdict in ('pass', 'fail'):
-                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict) as (root, _):
+                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict, verification_fixture=True) as (root, _):
                     observed_checks = []
 
                     def publication_fault(*args, **kwargs):
@@ -1203,7 +1203,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
 
     def test_parent_contract_large_scope_metadata_roundtrips_through_bounded_report(self):
-        with routed_fixture(legacy=True) as (root, route):
+        with routed_fixture(legacy=True, verification_fixture=True) as (root, route):
             verification_only_legacy_route(root, route)
             report = write_current_verification(root)
             fingerprint = report['tree_fingerprint']
@@ -1227,7 +1227,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
 
 
     def test_parent_contract_large_verification_report_preserves_complete_logs_and_scope(self):
-        with routed_fixture(legacy=True) as (root, route):
+        with routed_fixture(legacy=True, verification_fixture=True) as (root, route):
             verification_only_legacy_route(root, route)
             report = write_current_verification(root)
             fingerprint = report['tree_fingerprint']

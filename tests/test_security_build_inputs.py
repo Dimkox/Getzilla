@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from urllib.parse import urlsplit
 from pathlib import Path
 from unittest import mock
 
@@ -93,7 +94,7 @@ class RegistryReaderTests(GuardedFixture):
         class Port:
             corrupt = False
             def get(self, url, _headers, _maximum):
-                if 'auth.docker.io' in url:
+                if urlsplit(url).hostname == 'auth.docker.io':
                     return {}, b'{"token":"owned-anonymous-fixture"}'
                 if '/blobs/' in url:
                     return {'digest': ''}, config + (b'x' if self.corrupt else b'')
