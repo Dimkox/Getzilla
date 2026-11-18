@@ -42,6 +42,7 @@ _POLICY_PATHS = (
     '.getzilla-verification.json', '.getzilla-test-runner.json', '.getzilla-evals.json',
     'architecture/system.yaml', 'architecture/rules.yaml',
     'scripts/getzilla_cli.py', 'scripts/getzilla_hook.py',
+    'scripts/getzilla_security.py', 'scripts/getzilla_startup_cpu.py',
 )
 
 
@@ -115,6 +116,9 @@ def policy_binding(root: Path) -> dict:
                  'verification_scope.py', 'verification_tool_workspace.py',
                  'expanded_security.py', 'security_cli.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
                  'public_security_context.py', 'security_oci.py',
+                 'security_build_inputs.py', 'security_image_registry.py', 'security_image_backend.py',
+                 'security_image_producer.py', 'security_image_provision.py', 'security_image_job.py',
+                 'security_acquisition.py', 'startup_cpu.py', '_cpu_capacity.py',
                  'security_intelligence.py', 'security_data.py', 'security_data_windows.py', 'security_osv_snapshot.py',
                  'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
                  'cost_guard.py',

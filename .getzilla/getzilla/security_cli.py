@@ -76,6 +76,9 @@ def validate_selection_authority(source: dict, run: dict, selection=None, *, now
 def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     validate_selection_authority(source, run, image_selection, now=now)
+    if isinstance(inventory, dict) and inventory.get('builds'):
+        from .security_image_producer import require_builds
+        require_builds(inventory, source, run)
     if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not _digest(inventory.get('digest')) or not _digest(policy)):
         raise SecurityDataError('input profile needs complete source declarations and policy identity')
@@ -787,6 +790,8 @@ def main(argv=None) -> int:
     preparation = parser.add_mutually_exclusive_group()
     preparation.add_argument('--write-input-profile', type=Path, help='write a current source/run declaration without acquisition or scans')
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
+    preparation.add_argument('--produce-images', action='store_true', help='owned Linux OCI builds and all three input stages; needs qualified ephemeral root backend')
+    parser.add_argument('--backend-tool-pins', type=Path, help='bounded source-pinned BuildKit distribution selector; never resource or build-completion authority')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
     parser.add_argument('--image-selection', type=Path, help='bounded source/run/currentness declarations; never image execution credit')
@@ -794,6 +799,25 @@ def main(argv=None) -> int:
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.produce_images:
+        if (args.backend_tool_pins is None or args.input_profile is None or args.image_artifacts is not None
+                or args.image_selection is not None or args.family_records is not None or args.input_worker is not None
+                or args.refresh or args.provision_tools):
+            parser.error('--produce-images requires backend tool pins and profile output; it owns preparation and image inputs')
+        from .security_image_producer import run_pipeline
+        try:
+            report = run_pipeline(args, ci_run_context(os.environ))
+        except (OSError, ValueError, RuntimeError) as error:
+            report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
+                      'gaps': ['bounded-image-producer-unavailable'], 'reason': 'owned image producer or ordinary security stage refused'}
+            if isinstance(getattr(error, 'detail', None), dict):
+                report['fault'] = error.detail
+        _atomic(args.json_out, (json.dumps(report, sort_keys=True) + '\n').encode())
+        if os.geteuid() == 0 and os.environ.get('SUDO_UID', '').isdecimal() and os.environ.get('SUDO_GID', '').isdecimal():
+            os.chown(args.json_out, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']), follow_symlinks=False)
+        return 0 if report.get('status') == 'pass' else 1
+    if args.backend_tool_pins is not None:
+        parser.error('--backend-tool-pins requires --produce-images')
     if args.image_artifacts is not None:
         args.image_artifacts = args.image_artifacts.absolute()
     if args.image_selection is not None:

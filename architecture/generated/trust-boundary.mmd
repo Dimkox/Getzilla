@@ -53,6 +53,7 @@ flowchart LR
     node_2b4705308adeeb3e["NODE-OPTIONAL-SEARCH-GATEWAY | local_component | repository engineering"]
     node_e7341f770368182e["NODE-OPTIONAL-SECURITY-ACQUISITION | local_component | repository engineering"]
     node_b546ff724489580d["NODE-SECURITY-ACQUISITION | local_component | repository engineering"]
+    node_c34615bfcff3f67f["NODE-SECURITY-IMAGE-EXECUTOR | local_component | repository engineering / explicitly allocated ephemeral job"]
     node_e0e0b3eab2228878["NODE-SECURITY-SCANNER-TOOLS | local_component | repository engineering"]
     node_e5ccf49808562648["NODE-SECURITY-SNAPSHOT-EVALUATOR | local_component | repository engineering"]
     node_d4421144c1dd4abe["NODE-SEO-SHOWCASE-LAB | local_component | repository engineering"]
@@ -146,6 +147,8 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https"| node_d0e570b2fbe52f98
+  node_c34615bfcff3f67f -->|"EDGE-IMAGE-BUILD-HTTP-INPUTS | dependency | http"| node_ff513e24cb7ef2d8
+  node_c34615bfcff3f67f -->|"EDGE-IMAGE-BUILD-HTTPS-INPUTS | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-INPUT-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
   node_a02e5f5306abe637 -->|"EDGE-ISOLATED-RESOURCE-CONTROL | dependency | docker_api"| node_29363a281e26c870
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api"| node_4e78270f61d78ed8
@@ -202,7 +205,9 @@ flowchart LR
   node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-INTELLIGENCE | dependency | https"| node_ce3cdb090a7e25d9
   node_b546ff724489580d -->|"EDGE-SECURITY-ACQUIRE-OSV | dependency | https"| node_7b13ed12e8efab1c
   node_e0e0b3eab2228878 -->|"EDGE-SECURITY-DB-ACQUIRE | dependency | https"| node_ff513e24cb7ef2d8
+  node_b546ff724489580d -->|"EDGE-SECURITY-IMAGE-GRAPHS | dependency | https"| node_ff513e24cb7ef2d8
   node_e0e0b3eab2228878 -->|"EDGE-SECURITY-IMAGE-READ | dependency | docker_api"| node_29363a281e26c870
+  node_b546ff724489580d -->|"EDGE-SECURITY-OWNED-IMAGE-JOB | dependency | local_subprocess"| node_c34615bfcff3f67f
   node_b546ff724489580d -->|"EDGE-SECURITY-SCANNER-DISPATCH | dependency | filesystem"| node_e0e0b3eab2228878
   node_b546ff724489580d -->|"EDGE-SECURITY-SNAPSHOT-READ | dependency | filesystem"| node_e5ccf49808562648
   node_e1da543fa66b0086 -->|"EDGE-STAGED-DELIVERY-EARNED-AUTONOMY | dependency | python_import"| node_379217d10ea012c3
