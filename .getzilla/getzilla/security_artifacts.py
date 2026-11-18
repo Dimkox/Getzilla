@@ -383,6 +383,13 @@ def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict
 
 
 def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    if record.get('origin', {}).get('kind') == 'github-release-native-v1':
+        from .security_release_tool_inputs import read_source
+        read_source(root, record, payload)
+        # Nuitka file ownership is not ownership of compiled Python/OCaml/C
+        # components. Do not accept a caller's whole-binary LGPL partition.
+        raise ArtifactError('release-component-sbom-missing',
+                            'raw OpenGrep source/container verified; compiled component mapping and terms remain unavailable')
     subject, origin = record['subject'], record['origin']
     match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', subject['reference'])
     if (not match or subject.get('kind') != 'release-tool' or subject.get('artifact_sha256') != record['sha256']
