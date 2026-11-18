@@ -2539,7 +2539,7 @@
         },
         ".getzilla/getzilla/quality_gates.py": {
           "mode": 420,
-          "sha256": "a83ec949d97041986feecd792a738944da4f4184e2bb421167340ff5d31734cb"
+          "sha256": "59c2d9281f9040ba8be5cc7d4bf67ed06f572db9eced10f3268ab3ba8694c2ef"
         },
         ".getzilla/getzilla/queue_provenance.py": {
           "mode": 420,
