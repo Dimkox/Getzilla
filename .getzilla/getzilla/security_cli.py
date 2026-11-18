@@ -389,6 +389,9 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                     if python_binding is not None and 'factory_inputs' in python_binding:
                         from .security_factory_inputs import prepare
                         prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
+                    if python_binding is not None and 'ci_uses' in python_binding:
+                        from .security_ci_inputs import prepare as prepare_ci
+                        prepare_ci(artifacts,python_binding,now=now)
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
                 with _preparation_step('image-artifacts'):
@@ -838,6 +841,9 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                         if python_binding is not None and 'factory_inputs' in python_binding:
                             from .security_factory_inputs import prepare
                             prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
+                        if python_binding is not None and 'ci_uses' in python_binding:
+                            from .security_ci_inputs import prepare as prepare_ci
+                            prepare_ci(artifacts,python_binding,now=now)
                         return [{'kind': 'artifact-acquisition', 'status': 'fail' if bundle.get('gaps') else 'pass',
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)

@@ -301,7 +301,7 @@ def _layer(path, media, expected, budget):
         budget._layer_facts[key] = complete
 
 
-def _parse_layer(raw, media, expected, budget):
+def _parse_layer(raw, media, expected, budget, *, visit=None):
     declared, entries = 0, 0
     with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else nullcontext(raw)) as decoded:
         stream = _Decoded(decoded, budget)
@@ -325,6 +325,8 @@ def _parse_layer(raw, media, expected, budget):
                     raise OCIError('OCI logical layer size exceeds bound')
                 budget.charge('expanded', member.size, phase='tar-expanded')
                 declared += member.size
+                if visit is not None:
+                    visit(member, archive)
         while stream.read(65536):
             pass
         if 'sha256:' + stream.digest.hexdigest() != expected:
@@ -349,6 +351,94 @@ class VerifiedOCIImage:
             raise OCIError('OCI import lifetime ended')
         self._budget.tick()
         return self._budget.deadline - time.monotonic()
+
+
+def read_members(image, paths, *, member_limit=2 * 1024 * 1024, total_limit=16 * 1024 * 1024):
+    """Read only requested regular installation evidence from a live verified image.
+
+    No root filesystem is extracted. Selected links refuse instead of resolving
+    arbitrary image paths. Every additional layer read retains the same ledger.
+    """
+    if (type(image) is not VerifiedOCIImage or image._proof is not _PROOF
+            or type(paths) is not list or not 1 <= len(paths) <= 1024
+            or any(type(p) is not str or not p or p.startswith('/') or '\\' in p
+                   or any(v in {'', '.', '..'} for v in p.split('/')) for p in paths)
+            or len(set(paths)) != len(paths)
+            or type(member_limit) is not int or not 0 < member_limit <= 2 * 1024 * 1024
+            or type(total_limit) is not int or not 0 < total_limit <= 16 * 1024 * 1024):
+        raise OCIError('Invalid requested OCI installation evidence')
+    image._budget.tick()
+    selected, retained = {}, 0
+    root = _Root(image.layout)
+    @contextmanager
+    def verified(digest):
+        name = 'blobs/sha256/' + digest[7:]
+        expected, size = image._files[name]
+        with root.file(name, size) as (stream, actual):
+            measured, count = hashlib.sha256(), 0
+            while chunk := stream.read(65536):
+                image._budget.tick()
+                count += len(chunk)
+                measured.update(chunk)
+            if count != actual or actual != size or measured.hexdigest() != expected:
+                raise OCIError('Verified OCI evidence blob changed')
+            stream.seek(0)
+            yield stream, size
+    def blob(digest):
+        with verified(digest) as (stream, size):
+            if size > image._budget.profile['max_manifest_bytes']:
+                raise OCIError('Requested OCI metadata exceeds bound')
+            return stream.read(size + 1)
+    try:
+        manifest = document(blob(image.manifest_digest))
+        config = document(blob(image.config_digest))
+        for layer, diff in zip(manifest['layers'], config['rootfs']['diff_ids']):
+            changes, removed, seen = {}, set(), set()
+            def visit(member, archive):
+                nonlocal retained
+                name = member.name.removeprefix('./').rstrip('/')
+                parent, _, leaf = name.rpartition('/')
+                if leaf.startswith('.wh.'):
+                    if not member.isfile() or member.size:
+                        raise OCIError('Invalid OCI evidence whiteout')
+                    target = parent if leaf == '.wh..wh..opq' else (parent + '/' if parent else '') + leaf[4:]
+                    removed.update(p for p in paths if p == target or p.startswith(target + '/') or not target)
+                    return
+                relevant = [p for p in paths if p == name or p.startswith(name + '/')]
+                if not relevant:
+                    return
+                if member.issym() or member.islnk():
+                    raise OCIError('Selected OCI installation evidence has a link')
+                if member.isdir():
+                    return
+                if name not in paths:
+                    raise OCIError('Requested OCI evidence ancestor is not a directory')
+                removed.update(p for p in relevant if p != name)
+                if name in seen or not member.isfile() or member.size > member_limit:
+                    raise OCIError('Duplicate or oversized requested OCI member')
+                seen.add(name)
+                retained += member.size
+                if retained > total_limit:
+                    raise OCIError('Requested OCI evidence exceeds aggregate bound')
+                stream = archive.extractfile(member)
+                body = stream.read(member_limit + 1) if stream is not None else None
+                if body is None or len(body) != member.size:
+                    raise OCIError('Requested OCI evidence is truncated')
+                changes[name] = body
+            with verified(layer['digest']) as (stream, size):
+                image._budget.charge('compressed', size)
+                _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
+            for path in removed:
+                selected.pop(path, None)
+            selected.update(changes)
+        if set(selected) != set(paths):
+            raise OCIError('Requested OCI installation evidence is missing')
+        image._budget.tick()
+        return selected
+    except (OSError, KeyError, TypeError, EOFError, tarfile.TarError, gzip.BadGzipFile):
+        raise OCIError('Requested OCI installation evidence unavailable') from None
+    finally:
+        root.close()
 
 
 def scanner_identity(report, image):
@@ -640,13 +730,16 @@ def validate_selection(catalog, inventory, profile):
 
 
 @contextmanager
-def import_layouts(catalog, inventory, profile, workspace):
+def import_layouts(catalog, inventory, profile, workspace, *, _budget=None):
     """Import every selected image under ONE shared aggregate ledger.
 
     All returned paths exist only during this context. Inputs are revalidated
     per consumption; a retained JSON declaration never grants scan credit.
     """
-    budget = _Budget(profile)
+    if _budget is not None and (type(_budget) is not _Budget or any(
+            _budget.profile[key] != profile[key] for key in (*LIMITS, 'platform'))):
+        raise OCIError('Shared OCI ledger differs from selected profile')
+    budget = _Budget(profile) if _budget is None else _budget
     if budget._guard is not None:
         # The caller's tools/scratch directory can be outside the namespace
         # volume. CI image copies must share the measured physical store.
