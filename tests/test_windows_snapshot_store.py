@@ -287,12 +287,12 @@ class AclDiagnosticTests(unittest.TestCase):
 
     def test_untrusted_diagnostic_fields_cannot_escape_shape_or_output_bound(self):
         native = self.native()
-        secret = 'username=fixture; HOME=C:\\private\\tree\n' + 'x' * 100000
-        native.trusted = {secret}
-        native.ancestors = {secret}
-        native.service_owner = secret
-        aces = [(999, -1, 2**80, secret)] * 4096
-        error, found = self.refusal(native, (secret, aces, 'raw descriptor'))
+        untrusted_text = 'username=fixture; HOME=C:\\private\\tree\n' + 'x' * 100000
+        native.trusted = {untrusted_text}
+        native.ancestors = {untrusted_text}
+        native.service_owner = untrusted_text
+        aces = [(999, -1, 2**80, untrusted_text)] * 4096
+        error, found = self.refusal(native, (untrusted_text, aces, 'raw descriptor'))
         self.assertIsNone(found['owner_sid'])
         self.assertIsNone(found['dacl_protected'])
         self.assertEqual((found['ace_count'], len(found['aces']), found['aces_omitted']), (4096, 32, 4064))
