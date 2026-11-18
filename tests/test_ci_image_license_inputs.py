@@ -446,7 +446,9 @@ class CIImageTargetBindingTests(unittest.TestCase):
             build(*args, **kwargs)
             return object()
 
-        with patch.object(builder, "build", side_effect=foreign_completion):
+        with patch.object(builder, "build", side_effect=foreign_completion), patch(
+            "uuid.uuid4", return_value=SimpleNamespace(hex=nonce)
+        ):
             with self.assertRaises(ValueError):
                 api.observe_base(builder, consumer["base"], fixture.root, budget)
         with self.assertRaises(ValueError):
