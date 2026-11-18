@@ -6,7 +6,7 @@ BuildKit distribution. Missing kernel capabilities are prerequisites, not PASS.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import ctypes
 from fractions import Fraction
 import hashlib
@@ -28,6 +28,7 @@ from .security_oci import LIMITS, CI_BYTES, CI_MEMORY, _Root
 
 _ACTIVE = object()
 _GUARD = None
+_CI_CONTROLS = ('memory.max', 'memory.swap.max', 'pids.max', 'cgroup.procs', 'cpu.max')
 _ROOT = Path(__file__).resolve().parents[1]
 _BOOT = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
          'import sysconfig;sys.path.extend(sorted(set(sysconfig.get_paths()[k] for k in ("purelib","platlib"))));'
@@ -399,11 +400,84 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus
         library.prctl(36, previous.value, 0, 0, 0)
 
 
+def _ci_control_identity(info):
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink
+
+
+def _readonly_control(fd):
+    import fcntl
+    if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY or os.get_inheritable(fd):
+        raise ValueError('control descriptor is not read-only close-on-exec')
+
+
+def _close_ci_controls(controls):
+    failure = None
+    for name in _CI_CONTROLS:
+        if name not in controls:
+            continue
+        fd, identity = controls[name]
+        try:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != identity[:2]:
+                raise ValueError('control cleanup identity differs')
+            os.close(fd)
+        except (OSError, ValueError) as error:
+            if not isinstance(error, OSError) or error.errno != 9:
+                failure = {'phase': 'ci-control-cleanup', 'command_id': 'ci-control-' + name,
+                           'errno': getattr(error, 'errno', None)}
+    controls.clear()
+    if failure is not None:
+        raise BackendUnavailable('CI control cleanup refused', detail=failure)
+
+
+def _open_ci_controls(cgroup):
+    """Open the closed control set while root can search the owned0700 cgroup."""
+    controls = {}
+    name = _CI_CONTROLS[0]
+    try:
+        device = os.fstat(cgroup).st_dev
+        for name in _CI_CONTROLS:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cgroup)
+            try:
+                info = os.fstat(fd)
+                _readonly_control(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_dev != device:
+                    raise ValueError('control is not on the held cgroup filesystem')
+                controls[name] = (fd, _ci_control_identity(info))
+            except BaseException:
+                os.close(fd)
+                raise
+        return controls
+    except BaseException as error:
+        try:
+            _close_ci_controls(controls)
+        finally:
+            if isinstance(error, (OSError, ValueError)):
+                raise BackendUnavailable('CI control opening refused', detail={
+                    'phase': 'ci-control-open', 'command_id': 'ci-control-' + name,
+                    'errno': getattr(error, 'errno', None)}) from error
+        raise
+
+
+def _read_ci_control(controls, name):
+    if name not in _CI_CONTROLS:
+        raise ValueError('unknown CI control')
+    fd, identity = controls[name]
+    if type(fd) is not int or _ci_control_identity(os.fstat(fd)) != identity:
+        raise ValueError('held control identity differs')
+    _readonly_control(fd)
+    raw = os.pread(fd, 4097, 0)
+    if len(raw) > 4096:
+        raise ValueError('kernel control exceeds bound')
+    return raw.decode('ascii').strip()
+
+
 def measured_ci_profile():
     """Recheck inherited held kernel proof; a dictionary or environment is insufficient."""
     if (_GUARD is None or len(_GUARD) != 4 or not isinstance(_GUARD[3], dict)
             or _GUARD[3].get('ci_corpus') is not True):
         return False
+    check = 'ci-proof-identities'
     try:
         path, _nonce, _mounted, proof = _GUARD
         volume, cgroup = proof['volume_fd'], proof['cgroup_fd']
@@ -419,27 +493,30 @@ def measured_ci_profile():
                 or (mounted.st_dev, mounted.st_ino) != (group.st_dev, group.st_ino)
                 or _filesystem(path) != 0x01021994 or _filesystem('/sys/fs/cgroup') != 0x63677270):
             raise ValueError('held kernel identity differs')
+        check = 'ci-proof-volume'
         size = os.fstatvfs(volume)
         if size.f_blocks * size.f_frsize != CI_BYTES or size.f_flag & (os.ST_NOSUID | os.ST_NODEV) != os.ST_NOSUID | os.ST_NODEV:
             raise ValueError('held volume bound differs')
+        check = 'ci-proof-controls'
+        controls = proof['controls']
+        if set(controls) != set(_CI_CONTROLS):
+            raise ValueError('closed control set differs')
         def control(name):
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cgroup)
-            try:
-                raw = os.read(fd, 4097)
-                if len(raw) > 4096:
-                    raise ValueError('kernel control exceeds bound')
-                return raw.decode('ascii').strip()
-            finally:
-                os.close(fd)
+            nonlocal check
+            check = 'ci-control-' + name
+            return _read_ci_control(controls, name)
         if (control('memory.max') != str(CI_MEMORY) or control('memory.swap.max') != '0'
                 or control('pids.max') != '256' or str(os.getpid()) not in control('cgroup.procs').split()):
             raise ValueError('held resource controls differ')
         quota, period = control('cpu.max').split()
+        check = 'ci-proof-cpu'
         if not 0 < int(quota) <= 6 * int(period) or not 0 < len(os.sched_getaffinity(0)) <= 6:
             raise ValueError('held CPU controls differ')
         return True
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
-        raise BackendUnavailable('live CI image kernel proof unavailable') from error
+        raise BackendUnavailable('live CI image kernel proof unavailable', detail={
+            'phase': 'ci-kernel-proof', 'command_id': check, 'errno': getattr(error, 'errno', None),
+            'cause': 'os-error' if isinstance(error, OSError) else 'identity-or-value'}) from error
 
 
 @contextmanager
@@ -510,31 +587,37 @@ def namespace_volume(path, cgroup, *, ci_corpus=False):
             _fixed(['/usr/bin/mount', '--bind', str(path / name), target])
             mounted.append(target)
         proof_volume = proof_cgroup = None
+        controls = {}
+        proof_cleanup = ExitStack()
         try:
             if ci_corpus:
                 proof_volume = _Root(path)
+                proof_cleanup.callback(proof_volume.close)
                 proof_cgroup = _Root('/sys/fs/cgroup')
+                proof_cleanup.callback(proof_cgroup.close)
+                controls = _open_ci_controls(proof_cgroup.fd)
+                proof_cleanup.callback(_close_ci_controls, controls)
             _GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
                         'cgroup_root_inode': expected.st_ino, 'cgroup_mount_flags': flags})
             if ci_corpus:
                 _GUARD[3].update(ci_corpus=True, volume_fd=proof_volume.fd, cgroup_fd=proof_cgroup.fd,
-                    volume_identity=(os.fstat(proof_volume.fd).st_dev, os.fstat(proof_volume.fd).st_ino))
+                    volume_identity=(os.fstat(proof_volume.fd).st_dev, os.fstat(proof_volume.fd).st_ino),
+                    controls=controls)
             yield path
         finally:
             _GUARD = None
-            if proof_cgroup is not None:
-                proof_cgroup.close()
-            if proof_volume is not None:
-                proof_volume.close()
-            # The fixed unshare child is PID 1 in its new PID namespace. This
-            # signal cannot address host processes; reap all adopted workers.
             try:
-                os.kill(-1, 9)
-            except ProcessLookupError:
-                pass
-            _reap_children()
-            for target in reversed(mounted):
-                _fixed(['/usr/bin/umount', target])
+                proof_cleanup.close()
+            finally:
+                # PID1's fork copies disappear when owned workers are reaped;
+                # closing a parent FD alone does not revoke a child's copy.
+                try:
+                    os.kill(-1, 9)
+                except ProcessLookupError:
+                    pass
+                _reap_children()
+                for target in reversed(mounted):
+                    _fixed(['/usr/bin/umount', target])
     finally:
         # No lazy/forced unmount: remaining users are a real cleanup failure.
         try:

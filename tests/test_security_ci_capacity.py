@@ -46,6 +46,8 @@ class CapacityControls(unittest.TestCase):
             cfd = os.open(group, os.O_RDONLY | os.O_DIRECTORY)
             stack.callback(os.close, vfd)
             stack.callback(os.close, cfd)
+            controls = backend._open_ci_controls(cfd)
+            stack.callback(backend._close_ci_controls, controls)
             vi, gi = os.fstat(vfd), os.fstat(cfd)
             guard = (
                 volume,
@@ -58,6 +60,7 @@ class CapacityControls(unittest.TestCase):
                     volume_identity=(vi.st_dev, vi.st_ino),
                     cgroup_root_device=gi.st_dev,
                     cgroup_root_inode=gi.st_ino,
+                    controls=controls,
                 ),
             )
             stack.enter_context(mock.patch.object(backend, "_GUARD", guard))
