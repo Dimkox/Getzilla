@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
 from getzilla import security_image_backend as backend, security_image_job as job, security_oci as oci
 from getzilla import security_cli as cli, security_tools as tools, security_image_registry as registry
+from getzilla import security_image_producer as producer
 
 GIB = 1024**3
 
@@ -252,3 +253,57 @@ class CapacityControls(unittest.TestCase):
             self.assertIn("--property=CPUQuota=200%", command)
             self.assertEqual(command[-1], "ci-corpus")
             self.assertEqual(memory.call_count, 3)
+
+    def test_large_import_stages_inside_held_volume_despite_external_workspace(self):
+        reference = "owned@sha256:" + "5" * 64
+        inventory = dict(
+            complete=True, gaps=[], digest="4" * 64, images=[dict(reference=reference, platform="linux/amd64")]
+        )
+        catalog = dict(
+            schema_version=1,
+            inventory_sha256=inventory["digest"],
+            records=[dict(reference=reference, platform="linux/amd64", layout="/never-read-model")],
+        )
+        with (
+            self.physical_model() as (volume, _group, _capacity),
+            tempfile.TemporaryDirectory(dir=ROOT / ".getzilla/runtime") as outside,
+        ):
+            stages = []
+
+            def imported(record, profile, stage, budget):
+                stages.append(stage)
+                return SimpleNamespace(reference=record["reference"], config_digest="6" * 64, _proof=object())
+
+            profile = dict(oci.active_limits(), images=[reference], platform="linux/amd64")
+            with (
+                mock.patch.object(oci, "_import_one", side_effect=imported),
+                oci.import_layouts(catalog, inventory, profile, Path(outside)),
+            ):
+                self.assertEqual(len(stages), 1)
+                self.assertTrue(stages[0].is_relative_to(volume), "large OCI bytes cannot spill to caller workspace")
+
+    def test_ci_tools_use_same_owned_volume_and_leave_requested_path_untouched(self):
+        self.assertTrue(callable(getattr(producer, "_pipeline_tools", None)), "need contained effective tools root")
+        requested = Path("/never-created-requested-tools")
+        with self.physical_model() as (volume, _group, _capacity):
+            self.assertEqual(producer._pipeline_tools({"tools": str(requested)}, volume), volume / "tools")
+            with self.assertRaises(backend.BackendUnavailable):
+                producer._pipeline_tools({"tools": str(requested)}, volume / "foreign")
+            with mock.patch.object(backend, "_GUARD", None):
+                self.assertEqual(producer._pipeline_tools({"tools": str(requested)}, volume), requested)
+
+    def test_ci_image_writer_refuses_external_root_and_parent_link_without_spill(self):
+        with (
+            self.physical_model() as (volume, _group, _capacity),
+            tempfile.TemporaryDirectory(dir=ROOT / ".getzilla/runtime") as outside,
+        ):
+            external = Path(outside)
+            producer._write(volume, "owned/data", b"owned image bytes")
+            self.assertEqual((volume / "owned/data").read_bytes(), b"owned image bytes")
+            with self.assertRaises(backend.BackendUnavailable):
+                producer._write(external, "no-write", b"outside forbidden")
+            self.assertFalse((external / "no-write").exists())
+            (volume / "linked").symlink_to(external, target_is_directory=True)
+            with self.assertRaises(OSError):
+                producer._write(volume, "linked/escaped", b"outside forbidden")
+            self.assertFalse((external / "escaped").exists())

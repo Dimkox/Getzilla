@@ -45,6 +45,8 @@ def require_builds(inventory, source, run):
 
 
 def _write(root, relative, raw):
+    if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
+        return _ci_write(root, relative, raw)
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists():
@@ -54,6 +56,45 @@ def _write(root, relative, raw):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(raw)
+
+
+def _ci_write(root, relative, raw):
+    """Image outputs stay below held native volume, including through parents."""
+    from . import security_image_backend as native
+    from .security_oci import _Root
+    root, relative = Path(root), Path(relative)
+    if (not root.is_relative_to(native._GUARD[0]) or relative.is_absolute()
+            or not relative.parts or '..' in relative.parts or len(relative.parts) > 64):
+        raise BackendUnavailable('CI image output leaves its held volume')
+    held = _Root(root)
+    fd = None
+    try:
+        fd = os.dup(held.fd)
+        if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+            raise BackendUnavailable('CI image output filesystem differs')
+        for name in relative.parts[:-1]:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+                raise BackendUnavailable('CI image output parent leaves its bounded filesystem')
+        try:
+            output = os.open(relative.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=fd)
+        except FileExistsError:
+            if read_file(root, str(relative), active_limits()['max_storage_bytes']) != raw:
+                raise BackendUnavailable('conflicting immutable producer artifact')
+            return
+        with os.fdopen(output, 'wb') as stream:
+            stream.write(raw)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        held.close()
 
 
 def _unpack_export(archive, layout):
@@ -223,12 +264,22 @@ def _event(stage):
     sys.stdout.flush()
 
 
+def _pipeline_tools(request, volume):
+    if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
+        from . import security_image_backend as native
+        if Path(volume) != native._GUARD[0]:
+            raise BackendUnavailable('CI tools root differs from held image volume')
+        return Path(volume) / 'tools'
+    return Path(request['tools'])
+
+
 def _pipeline(request, volume, builder):
     global _PHASE
     _PHASE = 'producer'
     from . import security_cli as cli
     root = Path(request['root'])
-    database, artifacts, tools = (Path(request[key]) for key in ('database', 'artifacts', 'tools'))
+    database, artifacts = (Path(request[key]) for key in ('database', 'artifacts'))
+    tools = _pipeline_tools(request, volume)
     with tempfile.TemporaryDirectory(prefix='source-', dir=volume) as directory:
         source = cli.source_binding(root, cli.TRUSTED_ROOT, Path(directory))
         cli.validate_selection_authority(source, request['run'])

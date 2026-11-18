@@ -516,6 +516,10 @@ def import_layouts(catalog, inventory, profile, workspace):
     per consumption; a retained JSON declaration never grants scan credit.
     """
     budget = _Budget(profile)
+    if budget._guard is not None:
+        # The caller's tools/scratch directory can be outside the namespace
+        # volume. CI image copies must share the measured physical store.
+        workspace = budget._guard[0]
     try:
         records = validate_selection(catalog, inventory, profile)
         with tempfile.TemporaryDirectory(prefix='verified-oci-', dir=workspace) as owned:

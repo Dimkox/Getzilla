@@ -88,7 +88,7 @@ def _observe_memory(parent):
                 # root control, including a finite namespaced root, is read.
                 maximum = None
             if maximum is None:
-                used, maximum = 0, 'kernel-root-unlimited'
+                used, maximum = None, 'kernel-root-unlimited'
             else:
                 used = read('memory.current')
                 used_after = read('memory.current')
