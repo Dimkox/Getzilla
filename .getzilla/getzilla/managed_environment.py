@@ -199,7 +199,7 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
              *[name+'=='+version for name, version in targets.items()], *local], 'resolve exact wheel closure')
     if report.stat().st_size > 2*1024*1024:
         raise ValueError('quality dependency report exceeds byte bound')
-    graph = json.loads(report.read_text())
+    graph = json.loads(report.read_text(encoding='utf-8'))
     rows = graph.get('install')
     if type(rows) is not list or not 0 < len(rows) <= 512:
         raise ValueError('quality dependency graph is incomplete or exceeds bound')
@@ -222,7 +222,7 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
     if any(exact.get(name) != version for name, version in targets.items()):
         raise ValueError('resolver selected an older/different direct target')
     requirements = stage/'verified-requirements.txt'
-    requirements.write_text('\n'.join(lock)+'\n')
+    requirements.write_text('\n'.join(lock)+'\n', encoding='utf-8', newline='\n')
     checked([*prefix, 'install', '--no-index', '--find-links', str(wheelhouse), '--only-binary=:all:',
              '--require-hashes', '--no-input', '-r', str(requirements)], 'install verified exact wheel closure')
     checked([*prefix, 'check'], 'check dependency compatibility')

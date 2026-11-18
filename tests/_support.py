@@ -471,13 +471,21 @@ def offline_mirror(base: Path) -> Path:
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
     from getzilla import baseline, updater
+    from getzilla.security_osv_snapshot import download_database
 
     mirror = base / 'update-mirror'
+    archives = {}
     for ecosystem in updater.OSV_ECOSYSTEMS:
         archive = mirror / 'osv' / ecosystem / 'all.zip'
         archive.parent.mkdir(parents=True)
         with zipfile.ZipFile(archive, 'w') as bundle:
             bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+        archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
+    def fetch_owned_archive(url, body=None):
+        if body is not None or url not in archives:
+            raise AssertionError('offline fixture permits only its own archive bytes')
+        return archives[url]
+    download_database(mirror / 'osv', fetch=fetch_owned_archive)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

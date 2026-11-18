@@ -281,8 +281,8 @@ def _worker():
                 _event(stage)
             return _result(dict(kind='image-kernel-control', qualification='UNVERIFIED',
                 storage_bytes=os.statvfs(volume).f_blocks * os.statvfs(volume).f_frsize,
-                namespace_cgroup=Path('/proc/self/cgroup').read_text().strip(),
-                control_readback={name: (Path('/sys/fs/cgroup') / name).read_text().strip()
+                namespace_cgroup=Path('/proc/self/cgroup').read_text(encoding='utf-8').strip(),
+                control_readback={name: (Path('/sys/fs/cgroup') / name).read_text(encoding='utf-8').strip()
                                   for name in ('memory.max', 'memory.swap.max', 'pids.max', 'cpu.max')},
                 owned_child_created=child > 1,
                 cgroup_root_identity=native._GUARD[3],

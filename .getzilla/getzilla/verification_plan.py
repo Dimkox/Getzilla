@@ -397,6 +397,22 @@ def _plan_documents(root: Path, route: dict) -> dict | None:
             'spec_digest': canonical_spec_digest(spec), 'requirements_digest': requirements_digest}
 
 
+def node_checks_required(root: Path, requested_profiles=None) -> bool:
+    """Task-domain inference is not a Node requirement; real markers still are."""
+    if (root / 'package.json').is_file() or (requested_profiles is not None and 'frontend' in requested_profiles):
+        return True
+    from .stacks import tree_files
+    return any(Path(name).name == 'package.json' for name in tree_files(root))
+
+
+def requested_profiles_from_report(report):
+    """Keep invocation provenance separate from effective inferred profiles."""
+    requested = report.get('requested_profiles', report.get('profiles'))
+    if requested is not None and (type(requested) is not list or any(type(item) is not str for item in requested)):
+        raise ValueError('invalid requested profile provenance')
+    return requested
+
+
 def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *, files=None, profiles=None,
                         bases=None, documents=_UNREAD_DOCUMENTS) -> list[dict]:
     from .quality_gates import MANDATORY_PR_CHECKS, MANDATORY_PYTHON_PR_CHECKS
@@ -405,6 +421,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
     from .verification_tools import load_checks
     names = {'required-plan', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
     files = files or []
+    requested_profiles = profiles
     profiles = profiles or route.get('quality_profiles', ['base'])
     if mode == FOCUSED_MODE:
         names.update({'git-diff-check', 'scope-selection', 'static-seo-landing-contract'})
@@ -484,7 +501,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
                 names.update(name for name, _args in composer_check_selection(root))
         if 'bitrix' in profiles:
             names.add('bitrix')
-        if 'frontend' in profiles and not (root / 'package.json').is_file():
+        if node_checks_required(root, requested_profiles) and not (root / 'package.json').is_file():
             names.add('package-json')
         if (root / 'package.json').is_file():
             try:
@@ -634,10 +651,11 @@ def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route
             range_base_count=len(ranges.bases), file_statuses=statuses, status_inventory_trusted=trusted,
             route_present=bool(route), available_test_targets=[name for name in FOCUSED_TEST_TARGETS if (root / name).is_file()])
     selection = {'delivery_lane': route.get('delivery_lane', 'full'), 'profiles': profiles or route.get('quality_profiles', ['base']),
+                 'requested_profiles': profiles,
                  'delivery_expected': route.get('delivery_expected', False),
                  'light_diff': route.get('light_diff'), 'mode': mode, 'docs_scope': docs_scope}
     obligations = _native_obligations(root, mode, route, docs_scope, files=files,
-                                     profiles=selection['profiles'], bases=source['base'], documents=documents)
+                                     profiles=profiles, bases=source['base'], documents=documents)
     security = security_obligations(root)
     if (not isinstance(security, list) or len(security) != len(SECURITY_IDS) or
             {item.get('check_id') for item in security if isinstance(item, dict)} != SECURITY_IDS or
@@ -672,9 +690,10 @@ def report_gaps(root: Path, report: Any, *, now: datetime | None = None) -> list
     try:
         if not isinstance(report, dict) or not isinstance(report.get('required_plan'), dict):
             raise ValueError('qualifying verification requires an embedded required_plan')
-        current = current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'))
+        profiles = requested_profiles_from_report(report)
+        current = current_required_plan(root, mode=report.get('mode'), profiles=profiles)
         gaps = _report_plan_gaps(root, report, current, now=now)
-        if not gaps and current_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles')) != current:
+        if not gaps and current_required_plan(root, mode=report.get('mode'), profiles=profiles) != current:
             return [_finding('required-plan-changed', 'required_plan',
                              'current complete binding changed during result validation')]
         return gaps

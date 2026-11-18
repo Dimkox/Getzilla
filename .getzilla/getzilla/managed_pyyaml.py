@@ -148,7 +148,7 @@ def prepare(stage, executable, targets, *, fetch, checked, environment, nonce):
     compatibility = stage/'pyyaml-compatibility.json'
     compatibility.write_text(json.dumps(dict(filenames=filenames, version=version,
         requires_python=release.get('info', {}).get('requires_python'),
-        requires_dist=catalog['info']['requires_dist'])))
+        requires_dist=catalog['info']['requires_dist'])), encoding='utf-8', newline='\n')
     code = ("import json,sys;from pip._vendor.packaging.tags import sys_tags;"
             "from pip._vendor.packaging.utils import parse_wheel_filename,canonicalize_name;"
             "from pip._vendor.packaging.requirements import Requirement;"
@@ -185,7 +185,7 @@ def prepare(stage, executable, targets, *, fetch, checked, environment, nonce):
              'setuptools', 'Cython>=3.0', 'wheel'], 'resolve PyYAML binary build-tool closure')
     if report.stat().st_size > 2*1024*1024:
         raise ValueError('PyYAML build-tool report byte bound')
-    rows = json.loads(report.read_text()).get('install')
+    rows = json.loads(report.read_text(encoding='utf-8')).get('install')
     if type(rows) is not list or not 0 < len(rows) <= 512:
         raise ValueError('PyYAML build-tool graph bound')
     from .managed_environment import _wheel
@@ -206,7 +206,7 @@ def prepare(stage, executable, targets, *, fetch, checked, environment, nonce):
     if not {'setuptools', 'cython', 'wheel'} <= names or not names <= {'setuptools', 'cython', 'wheel', 'packaging'}:
         raise ValueError('unsupported current PyYAML build-tool closure')
     requirements = build/'verified-build-tools.txt'
-    requirements.write_text('\n'.join(lock)+'\n')
+    requirements.write_text('\n'.join(lock)+'\n', encoding='utf-8', newline='\n')
     checked([*prefix, 'install', '--no-index', '--find-links', str(wheelhouse), '--only-binary=:all:',
              '--require-hashes', '--no-input', '-r', str(requirements)], 'install verified PyYAML build tools offline')
     output = build/'wheels'
@@ -245,7 +245,7 @@ def prepare(stage, executable, targets, *, fetch, checked, environment, nonce):
     # Observation only. This JSON is never read to authorize a local wheel.
     (build/'build-custody.json').write_text(json.dumps(dict(source=dict(url=target.url, version=version,
         sha256=target.sha256), build_tools=tools, wheel=dict(filename=path.name, sha256=sha),
-        pure=True, actual_runtime_probe=True), sort_keys=True)+'\n')
+        pure=True, actual_runtime_probe=True), sort_keys=True)+'\n', encoding='utf-8', newline='\n')
     return capability
 
 

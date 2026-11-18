@@ -76,10 +76,12 @@ def _fixed(command, *, timeout=10):
         command_id = 'mount-image-volume'
     elif command[0] == '/usr/bin/umount':
         command_id = 'unmount-' + {'/sys/fs/cgroup': 'cgroup-view', '/run': 'run',
-            '/tmp': 'tmp', '/var/tmp': 'var-tmp'}.get(command[-1], 'owned-volume')
+            # Fixed unmount arguments map to diagnostic labels; no temporary file is created.
+            '/tmp': 'tmp', '/var/tmp': 'var-tmp'}.get(command[-1], 'owned-volume')  # nosec B108
     elif command[-1] == '/sys/fs/cgroup':
         command_id = 'bind-owned-cgroup-root'
-    elif command[-1] in {'/run', '/tmp', '/var/tmp'}:
+    # Fixed path comparison selects a diagnostic label, not a temporary file.
+    elif command[-1] in {'/run', '/tmp', '/var/tmp'}:  # nosec B108
         command_id = 'mask-' + command[-1].lstrip('/').replace('/', '-')
     else:
         command_id = 'bind-owned-volume'
@@ -98,9 +100,9 @@ def _fixed(command, *, timeout=10):
 
 def _kill(cgroup):
     """Kill and observe empty owned cgroup before its directory can be removed."""
-    (cgroup / 'cgroup.kill').write_text('1')
+    (cgroup / 'cgroup.kill').write_text('1', encoding='utf-8', newline='\n')
     deadline = time.monotonic() + 10
-    while 'populated 1' in (cgroup / 'cgroup.events').read_text():
+    while 'populated 1' in (cgroup / 'cgroup.events').read_text(encoding='utf-8'):
         if time.monotonic() >= deadline:
             raise BackendUnavailable('owned image cgroup did not become empty')
         time.sleep(.02)
@@ -161,17 +163,17 @@ def _configure_cgroup(cgroup, bounds):
         if not path.is_file():
             raise BackendUnavailable('delegated finite image cgroup controls unavailable',
                 detail={'phase': 'admission', 'command_id': 'cgroup-' + name})
-        path.write_text(value)
-        if path.read_text().strip() != value:
+        path.write_text(value, encoding='utf-8', newline='\n')
+        if path.read_text(encoding='utf-8').strip() != value:
             raise BackendUnavailable('image cgroup control readback differs',
                 detail={'phase': 'admission', 'command_id': 'cgroup-' + name})
     if (cgroup / 'cpuset.cpus').is_file():
-        memory_nodes = (cgroup.parent / 'cpuset.mems.effective').read_text().strip()
+        memory_nodes = (cgroup.parent / 'cpuset.mems.effective').read_text(encoding='utf-8').strip()
         if not memory_nodes:
             raise BackendUnavailable('delegated image cpuset memory nodes are unknown')
-        (cgroup / 'cpuset.mems').write_text(memory_nodes)
-        (cgroup / 'cpuset.cpus').write_text(format_cpu_list(cpus))
-        effective = parse_cpu_list((cgroup / 'cpuset.cpus.effective').read_text().strip())
+        (cgroup / 'cpuset.mems').write_text(memory_nodes, encoding='utf-8', newline='\n')
+        (cgroup / 'cpuset.cpus').write_text(format_cpu_list(cpus), encoding='utf-8', newline='\n')
+        effective = parse_cpu_list((cgroup / 'cpuset.cpus.effective').read_text(encoding='utf-8').strip())
         if effective != cpus:
             raise BackendUnavailable('delegated image cpuset readback differs')
     return sorted(cpus)
@@ -323,9 +325,9 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
                 or Path(bounds['levels'][1]['path']) != owned_root):
             raise BackendUnavailable('image supervisor differs from its explicit owned job')
         for name in ('memory.max', 'memory.swap.max', 'pids.max'):
-            if (parent / name).read_text().strip() != 'max':
+            if (parent / name).read_text(encoding='utf-8').strip() != 'max':
                 raise BackendUnavailable('finite supervisor subgroup bound cannot be bypassed')
-        if (parent / 'cpu.max').read_text().split()[0] != 'max':
+        if (parent / 'cpu.max').read_text(encoding='utf-8').split()[0] != 'max':
             raise BackendUnavailable('finite supervisor CPU bound cannot be bypassed')
         parent = owned_root
     if _filesystem(parent) != 0x63677270:
@@ -393,15 +395,16 @@ def namespace_volume(path, cgroup):
     path, cgroup = Path(path), Path(cgroup)
     if _GUARD is not None:
         raise BackendUnavailable('nested image namespace is forbidden')
-    if any(path.is_relative_to(base) for base in map(Path, ('/run', '/tmp', '/var/tmp'))):
+    # Refuse system temporary roots; the owned volume must be elsewhere.
+    if any(path.is_relative_to(base) for base in map(Path, ('/run', '/tmp', '/var/tmp'))):  # nosec B108
         raise BackendUnavailable('image volume must use canonical runtime outside masked system temporaries')
     if (os.geteuid() != 0 or os.getpid() != 1
             or not re.fullmatch(r'getzilla-images-[0-9a-f]{32}', cgroup.name)
             or not cgroup.is_absolute() or '..' in cgroup.parts):
         raise BackendUnavailable('invalid image namespace owner')
-    if str(os.getpid()) not in (cgroup / 'cgroup.procs').read_text().split():
+    if str(os.getpid()) not in (cgroup / 'cgroup.procs').read_text(encoding='utf-8').split():
         raise BackendUnavailable('image worker is outside its owned cgroup')
-    if Path('/proc/self/cgroup').read_text().strip() != '0::/':
+    if Path('/proc/self/cgroup').read_text(encoding='utf-8').strip() != '0::/':
         raise BackendUnavailable('image worker lacks its dedicated cgroup namespace')
     _fixed(['/usr/bin/mount', '--make-rprivate', '/'])
     held = _Root(cgroup)
@@ -420,7 +423,7 @@ def namespace_volume(path, cgroup):
             actual.close()
     finally:
         held.close()
-    controls = {name: (Path('/sys/fs/cgroup') / name).read_text().strip()
+    controls = {name: (Path('/sys/fs/cgroup') / name).read_text(encoding='utf-8').strip()
                 for name in ('memory.max', 'memory.swap.max', 'pids.max', 'cpu.max')}
     quota, period = controls['cpu.max'].split()
     if (controls['memory.max'] != str(2 * 1024 * 1024 * 1024) or controls['memory.swap.max'] != '0'
@@ -446,7 +449,8 @@ def namespace_volume(path, cgroup):
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             target.write_bytes(resolver)
         mounted = []
-        for name, target in (('run', '/run'), ('tmp', '/tmp'), ('var-tmp', '/var/tmp')):
+        # Private mount destinations mask host temporaries with measured 0700 tmpfs directories.
+        for name, target in (('run', '/run'), ('tmp', '/tmp'), ('var-tmp', '/var/tmp')):  # nosec B108
             _fixed(['/usr/bin/mount', '--bind', str(path / name), target])
             mounted.append(target)
         _GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
@@ -486,8 +490,10 @@ class BuildKit:
         directory = self.volume / 'pinned-bin'
         tools = extract_tools(io.BytesIO(raw), directory)
         for tool in tools.values():
-            os.chmod(tool['path'], 0o555)
-        os.chmod(directory, 0o555)
+            # Digest-verified sealed tools permit dropped-UID execution without granting write access.
+            os.chmod(tool['path'], 0o555)  # nosec B103
+        # Client traversal only beneath the private volume; immediate read-only bind prevents replacement.
+        os.chmod(directory, 0o555)  # nosec B103
         # A held read-only bind mount prevents leaf replacement or changing the
         # executable through its name between verification and exec.
         _fixed(['/usr/bin/mount', '--bind', str(directory), str(directory)])
@@ -506,7 +512,7 @@ class BuildKit:
         for name in ('home', 'cache'):
             (self.volume / name).mkdir(mode=0o700)
         config = self.volume / 'buildkit.toml'
-        config.write_text('[worker.oci]\ndefaultCgroupParent = "/"\n')
+        config.write_text('[worker.oci]\ndefaultCgroupParent = "/"\n', encoding='utf-8', newline='\n')
         log_fd = os.open(self.volume / 'buildkit-startup.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         self.log = os.fdopen(log_fd, 'wb')
         try:
@@ -591,13 +597,16 @@ class BuildKit:
 def _socket_alias(volume):
     expected = _Root(Path(volume) / 'tmp')
     try:
-        alias = _Root('/tmp')
+        # Open the already-private mount alias through held no-follow directory handles.
+        alias = _Root('/tmp')  # nosec B108
         try:
             a, b = os.fstat(expected.fd), os.fstat(alias.fd)
             if ((a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) or b.st_mode & 0o077
-                    or _filesystem('/tmp') != 0x01021994):
+                    # Filesystem identity rejects non-tmpfs aliases; this creates nothing.
+                    or _filesystem('/tmp') != 0x01021994):  # nosec B108
                 raise BackendUnavailable('short socket alias differs from owned private volume')
-            return Path('/tmp/getzilla-buildkit.sock')
+            # Fixed socket alias is returned only after held inode/device, 0700 and tmpfs proof.
+            return Path('/tmp/getzilla-buildkit.sock')  # nosec B108
         finally:
             alias.close()
     finally:

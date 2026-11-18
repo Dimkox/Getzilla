@@ -2011,7 +2011,11 @@ def _trivy_config_present(root: Path) -> bool:
 
 
 @diagnostics.observed('node')
-def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None) -> list[CheckResult]:
+def _node(root: Path, mode: str, *, keep_going=False, blocked_by=None, required_plan=None,
+          requested_profiles=('frontend',)) -> list[CheckResult]:
+    from .verification_plan import node_checks_required
+    if not node_checks_required(root, requested_profiles):
+        return []
     results: list[CheckResult] = []
     with _retain_checks(results):
         return _node_checks(root, mode, results, _CheckDispatch(results, mode, keep_going=keep_going,
@@ -2040,7 +2044,7 @@ def _node_checks(root: Path, mode: str, results: list[CheckResult], dispatch: _C
     package = root / 'package.json'
     if not package.is_file():
         if dispatch.required_plan is not None:
-            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'explicit frontend profile has no package.json'))
+            dispatch.run('package-json', lambda: CheckResult('package-json', 'fail', 'selected Node workspace or explicit frontend profile has no root package.json'))
             return results
         return []
     try:
@@ -2531,6 +2535,7 @@ def _verify_focused_static_seo_landing(
     *,
     record: bool,
     state: _RunState | None = None,
+    requested_profiles=None,
 ) -> dict[str, object]:
     active_change = get_active_change(root) or {}
     change_package = active_change.get('path')
@@ -2554,7 +2559,7 @@ def _verify_focused_static_seo_landing(
     )
     scope['mode'] = FOCUSED_STATIC_SEO_LANDING_MODE
     state = state or _RunState({})
-    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, state, scope)
+    required_plan = _capture_required_plan(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, state, scope)
     results: list[CheckResult] = state.results if state else []
     if state:
         state.report['verification_scope'] = scope
@@ -2592,7 +2597,7 @@ def _verify_focused_static_seo_landing(
         from .verification_plan import bind_result
         for item in results:
             bind_result(required_plan, item)
-    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, active_profiles, results, required_plan, scope)
+    gate = _required_quality_gate(root, FOCUSED_STATIC_SEO_LANDING_MODE, requested_profiles, results, required_plan, scope)
     results.append(CheckResult('quality-gate', gate.status, gate.summary, details=gate.details))
     failures = [result for result in results if result.status == 'fail']
     not_run = {
@@ -2853,6 +2858,7 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
     report = {
         'schema_version': 1, 'created_at': now_utc(), 'mode': mode,
         'profiles': profiles or ['base'], 'route_id': None, 'tree_fingerprint': None,
+        'requested_profiles': None if profiles is None else list(profiles),
         'changed_files': [], 'changed_file_inventory': {}, 'checks': [],
         'spec': {}, 'architecture': {}, 'governance': {}, 'workflow_artifacts': {},
         'status': 'fail', 'terminal_state': 'interrupted', 'evidence_status': 'not_recorded',
@@ -2978,6 +2984,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             checked_fingerprint,
             record=record,
             state=state,
+            requested_profiles=profiles,
         )
 
     # Admission precedes package checks: the prompt lane is provisional until source is measured.
@@ -3018,7 +3025,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
             target for target in FOCUSED_TEST_TARGETS if (root / target).is_file()
         ],
     )
-    required_plan = _capture_required_plan(root, mode, active_profiles, state, docs_scope)
+    required_plan = _capture_required_plan(root, mode, profiles, state, docs_scope)
     state.stage = 'architecture-inputs'
     architecture_inputs = _architecture_preflight_check(root)
     preflight_failed = architecture_inputs.status == 'fail'
@@ -3125,10 +3132,12 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         state.stage = 'bitrix'
         cancellation.check()
         dispatch.run('bitrix', lambda: _bitrix(root, files))
-    if 'frontend' in active_profiles or (root / 'package.json').is_file():
+    from .verification_plan import node_checks_required
+    if node_checks_required(root, profiles):
         state.stage = 'node'
         cancellation.check()
-        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by, required_plan=required_plan):
+        for check in _node(root, mode, keep_going=keep_going, blocked_by=dispatch.blocked_by,
+                           required_plan=required_plan, requested_profiles=profiles):
             dispatch.add(check)
     state.stage = 'stacks'
     cancellation.check()
@@ -3200,7 +3209,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
         from .verification_plan import bind_result
         for item in results:
             bind_result(required_plan, item)
-    quality_gate = _required_quality_gate(root, mode, active_profiles, results, required_plan, docs_scope)
+    quality_gate = _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope)
     results.append(
         CheckResult(
             "quality-gate",

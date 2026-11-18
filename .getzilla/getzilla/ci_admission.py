@@ -278,7 +278,7 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
                 phase_inputs[phase] = closed_phase_report(observed, raw)
             else:
                 continue
-            (output / filename).write_text(json.dumps(phase_inputs[phase], sort_keys=True))
+            (output / filename).write_text(json.dumps(phase_inputs[phase], sort_keys=True), encoding='utf-8', newline='\n')
     phase, report = primary_report(_read(report_path) if report_path.is_file() else None,
                                    phase_inputs.get('declaration'), phase_inputs.get('preparation'))
     source = {"head": _git(root, "rev-parse", "HEAD"), "tree": _git(root, "rev-parse", "HEAD^{tree}")}

@@ -47,7 +47,7 @@ def _run_job(payload, workspace, *, slice_name):
     parent = Path('/sys/fs/cgroup')
     parent = parent / 'user.slice' / slice_name if slice_name.startswith('user-') else parent / slice_name
     required = {'cpu', 'memory', 'pids'}
-    if not required <= set((parent / 'cgroup.subtree_control').read_text().split()):
+    if not required <= set((parent / 'cgroup.subtree_control').read_text(encoding='utf-8').split()):
         raise BackendUnavailable('selected existing job slice does not delegate required controllers')
     bounds = cgroup_bounds()
     selected = document(payload)
@@ -163,13 +163,13 @@ def _entry():
         if (not re.fullmatch(r'getzilla-image-job-[0-9a-f]{32}\.scope', owned.name)
                 or Path(bounds['levels'][0]['path']) != owned):
             raise BackendUnavailable('owned job differs from actual systemd membership')
-        if (owned / 'cgroup.procs').read_text().split() != [str(os.getpid())]:
+        if (owned / 'cgroup.procs').read_text(encoding='utf-8').split() != [str(os.getpid())]:
             raise BackendUnavailable('new image scope has unexpected supervisor processes')
         os.sched_setaffinity(0, cpus)
         supervisor = owned / 'supervisor'
         supervisor.mkdir(mode=0o700)
-        (supervisor / 'cgroup.procs').write_text(str(os.getpid()))
-        (owned / 'cgroup.subtree_control').write_text('+cpu +memory +pids')
+        (supervisor / 'cgroup.procs').write_text(str(os.getpid()), encoding='utf-8', newline='\n')
+        (owned / 'cgroup.subtree_control').write_text('+cpu +memory +pids', encoding='utf-8', newline='\n')
         payload = sys.stdin.buffer.read(65537)
         result = run_guarded(payload, workspace, owned_root=owned, started=started)
         sys.stdout.write(json.dumps({'result': result}, sort_keys=True) + '\n')

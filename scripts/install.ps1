@@ -767,7 +767,9 @@ function Get-CurrentRuntimeTarget([string]$Key) {
             $metadataUrl = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest'
             $release = Get-CurrentGithubRelease 'PowerShell/PowerShell'
             if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'PowerShell current stable identity is invalid.' }
-            $version = $Matches[1]; $name = "PowerShell-$version-win-$arch.zip"
+            $version = $Matches[1]
+            if ([version]$version -lt $MinimumPowerShell) { throw "Current PowerShell $version is below required $MinimumPowerShell; no download or older fallback." }
+            $name = "PowerShell-$version-win-$arch.zip"
             $asset = @($release.assets | Where-Object { $_.name -ceq $name })
             if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:([a-f0-9]{64})$') { throw "PowerShell $version has no verified $name asset." }
             $sha = $Matches[1]; $url = "https://github.com/PowerShell/PowerShell/releases/download/v$version/$name"

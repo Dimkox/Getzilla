@@ -20,6 +20,7 @@ from getzilla import security_inventory as inventory
 from getzilla import security_cli as cli
 from getzilla import security_tools as tools
 from getzilla import expanded_security as expanded
+from getzilla import verification_journal
 
 ACTIVE = False
 OWNED_ROOT = None
@@ -45,7 +46,8 @@ class Closed393InputTests(unittest.TestCase):
         global ACTIVE
         ACTIVE = True
         try:
-            return function()
+            with verification_journal.bind_sink(None, None):
+                return function()
         finally:
             ACTIVE = False
 

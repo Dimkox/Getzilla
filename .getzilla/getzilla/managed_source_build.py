@@ -62,7 +62,7 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
     if hint.exists():
         if hint.is_symlink() or hint.stat().st_size > 1024:
             raise ValueError('invalid local source-build locator')
-        locator = json.loads(hint.read_text())
+        locator = json.loads(hint.read_text(encoding='utf-8'))
         name = locator.get('stage', '')
         if not re.fullmatch(re.escape(target.component+'-'+target.version+'-')+r'[A-Za-z0-9_-]+', name):
             raise ValueError('local source-build locator leaves exact target namespace')
@@ -71,7 +71,7 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
         record_path = stage/'build-custody.json'
         if record_path.is_symlink() or record_path.stat().st_size > 2*1024*1024:
             raise ValueError('local source-build custody unavailable/exceeds bounds')
-        record = json.loads(record_path.read_text())
+        record = json.loads(record_path.read_text(encoding='utf-8'))
         if record.get('source') != dict(component=target.component, version=target.version, sha256=target.sha256, url=target.url):
             raise ValueError('local build source differs from fresh official target')
         prefix = stage/'installed'

@@ -57,3 +57,14 @@ The owned failure regression uses a real tail beyond4097bytes and mocked effects
 Preserve sanitized literal causes for exact registry/OCI refusal types too;
 unknown exception messages, subclasses, arguments and detail sidecars do not gain
 diagnostic authority. Reasons and nested worker payloads keep their existing caps.
+
+The first combined full run set `GETZILLA_MAX_WORKERS`, which is not the Core
+selector: it used the default six workers despite observing26CPU capacity.
+The next run must use existing `GETZILLA_TEST_WORKERS=26` and the revalidated live
+wheelhouse; the900second deadline and all code caps remain unchanged.
+
+The same run exposed stale fixture contracts and platform-default text I/O.
+Use native qualified owned OSV snapshots, isolate frozen-source CLI execution,
+keep observer I/O outside strict pure controls, and select the exact loader loop.
+Keep explicit profile provenance distinct from inferred task domains while real
+Node markers still require checks; preserve explicit missing-manifest refusals.

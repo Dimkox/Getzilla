@@ -25,7 +25,9 @@ class PolicyCliClosure(unittest.TestCase):
         try:
             tree = ast.parse(raw)
             function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'policy_binding')
-            loops = [node for node in function.body if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple)]
+            loops = [node for node in function.body if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                     and isinstance(node.iter, ast.Tuple) and all(isinstance(item, ast.Constant)
+                     and isinstance(item.value, str) for item in node.iter.elts)]
             self.assertEqual(len(loops), 1)
             loop = loops[0]
             names = ast.literal_eval(loop.iter)

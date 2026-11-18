@@ -41,7 +41,8 @@ def main(argv=None):
                 selected = selected.resolve(strict=True)
                 if selected.samefile(sys.executable):
                     raise ValueError('fresh selected Python still has the old bootstrap identity')
-                os.execv(str(selected), [str(selected), '-I', '-B', str(Path(__file__).resolve()), *original_argv])
+                # Fresh verified absolute distinct interpreter replaces this process with its own fixed CLI and exact argv; no shell.
+                os.execv(str(selected), [str(selected), '-I', '-B', str(Path(__file__).resolve()), *original_argv])  # nosec B606
                 raise ValueError('selected Python process replacement did not complete')
             executable = install_environment(args.home, str(python), fetch=_release_fetch)
             result = dict(status='complete', python=str(executable), detail='exact current quality wheel closure verified')

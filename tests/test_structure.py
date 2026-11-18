@@ -5,6 +5,8 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+import shutil
 import unittest
 from pathlib import Path
 
@@ -194,20 +196,14 @@ class StructureTests(unittest.TestCase):
         self.assertTrue(
             all(re.fullmatch(r'[0-9a-f]{64}', value) for value in expected_digests.values())
         )
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / 'scripts/getzilla_architecture.py'),
-                '--root',
-                str(frozen),
-                'summary',
-                '--json',
-            ],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        with tempfile.TemporaryDirectory(prefix='owned-frozen-summary-') as directory:
+            project = Path(directory) / 'project'
+            shutil.copytree(frozen, project)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / 'scripts/getzilla_architecture.py'),
+                 '--root', str(project), 'summary', '--json'],
+                cwd=ROOT, text=True, capture_output=True, check=True,
+            )
         summary = json.loads(result.stdout)
         self.assertEqual(
             {field: summary[field] for field in expected_digests},

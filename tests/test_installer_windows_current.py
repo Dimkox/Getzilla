@@ -10,6 +10,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(shutil.which('pwsh'), 'PowerShell interpreter unavailable; Windows evidence pending')
 class WindowsCurrentRuntimeTests(unittest.TestCase):
+    def test_current_powershell_below_floor_refuses_before_asset_selection(self):
+        scratch = ROOT / '.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='owned-pwsh-floor-', dir=scratch) as directory:
+            root = Path(directory)
+            library = root/'bootstrap.ps1'
+            library.write_text((ROOT/'scripts/install.ps1').read_text(encoding='utf-8').split('\ntry {\n    Install-Getzilla')[0],
+                               encoding='utf-8', newline='\n')
+            harness = root/'floor.ps1'
+            harness.write_text('''param([string]$Library)
+$ErrorActionPreference='Stop'
+. $Library
+function Get-CurrentGithubRelease {
+ param($Repository)
+ $v=$script:OwnedVersion
+ $name="PowerShell-$v-win-x64.zip"
+ return @{tag_name="v$v";draft=$false;prerelease=$false;assets=@(@{
+  name=$name;digest=('sha256:'+('a'*64));browser_download_url="https://github.com/PowerShell/PowerShell/releases/download/v$v/$name"})}
+}
+function Invoke-WebRequest { throw 'download forbidden in floor control' }
+$script:OwnedVersion='7.3.99';$script:ResolvedRuntimeTargets=@{}
+try { Get-CurrentRuntimeTarget 'pwsh-x64'; throw 'below-floor target was accepted' }
+catch { if ($_.Exception.Message -notlike '*below required*') { throw } }
+foreach ($v in @('7.4.0','9.0.0')) {
+ $script:OwnedVersion=$v;$script:ResolvedRuntimeTargets=@{}
+ $target=Get-CurrentRuntimeTarget 'pwsh-x64'
+ if ($target.Version -cne $v) { throw 'wrong current target' }
+}
+'owned-pwsh-floor:PASS'
+''', encoding='utf-8', newline='\n')
+            result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File', str(harness), str(library)],
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            self.assertIn('owned-pwsh-floor:PASS', result.stdout)
+
     def test_actual_powershell_node_and_git_resolvers_include_new_major_build(self):
         scratch = ROOT / '.getzilla/runtime/scratch'
         scratch.mkdir(parents=True, exist_ok=True)

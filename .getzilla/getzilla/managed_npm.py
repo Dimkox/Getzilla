@@ -49,7 +49,7 @@ def publish_command(root: Path, command: str, arguments: list[str]) -> Path:
     ledger_path = root/'managed-command-hashes.json'
     if ledger_path.is_symlink() or path.is_symlink():
         raise ValueError(f'user command link conflict: {path}')
-    ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
+    ledger = json.loads(ledger_path.read_text(encoding='utf-8')) if ledger_path.exists() else {}
     if type(ledger) is not dict:
         raise ValueError('invalid managed command custody')
     if os.name == 'nt':
@@ -75,7 +75,7 @@ def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command:
         raise ValueError('linked managed agent root')
     stage = Path(tempfile.mkdtemp(prefix=target.version+'-', dir=stage_parent))
     package = dict(name='getzilla-owned-agent', version='1.0.0', private=True, dependencies={target.component: target.version})
-    (stage/'package.json').write_text(json.dumps(package)+'\n')
+    (stage/'package.json').write_text(json.dumps(package)+'\n', encoding='utf-8', newline='\n')
     private = stage/'private-home'
     private.mkdir(mode=0o700)
     env = {k: v for k, v in os.environ.items() if k in ('SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT')}
@@ -97,7 +97,7 @@ def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command:
     lock_path = stage/'package-lock.json'
     if lock_path.stat().st_size > 2*1024*1024:
         raise ValueError('agent dependency lock exceeds byte bound')
-    lock = json.loads(lock_path.read_text())
+    lock = json.loads(lock_path.read_text(encoding='utf-8'))
     validate_npm_lock(lock)
     if lock['packages'].get('', {}).get('dependencies') != package['dependencies']:
         raise ValueError('agent lock selected a different direct target')
@@ -129,7 +129,7 @@ def install_agent(target: Target, root: Path, node: Path, npm: Path, *, command:
         checked(['rebuild', '@github/copilot', '--offline', '--ignore-scripts=false', '--no-audit', '--no-fund', *common],
                 'run qualified Copilot lifecycle')
     directory = stage/'node_modules'/target.component
-    installed = json.loads((directory/'package.json').read_text())
+    installed = json.loads((directory/'package.json').read_text(encoding='utf-8'))
     if installed.get('name') != target.component or installed.get('version') != target.version:
         raise ValueError('installed agent identity differs from fresh target')
     bins = installed.get('bin', {})
