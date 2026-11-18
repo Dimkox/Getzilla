@@ -179,11 +179,16 @@ def _command(command,stage):
         return _json(result.stdout.encode())
 
 
-def _catalog_bytes(root):
+def _catalog_bytes(root,*,now=None):
     from .security_artifacts import family_evidence
     raw=read_file(root,'manifest.json',MAX_INDEX_BYTES)
     bundle=_json(raw)
     total=len(raw)
+    from .security_family_inputs import validate_frontiers
+    total+=validate_frontiers(root,bundle.get('family_frontiers',[]),now=now,
+        inventory_digest=bundle.get('inventory_digest'),records=bundle['records'])['bound_bytes']
+    if total>MAX_TOTAL:
+        _refuse('artifact-size')
     for record in bundle['records']:
         if 'kind' in record:
             total+=family_evidence(root,record)['bound_bytes']
@@ -205,7 +210,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
     from .security_cli import _preparation_step
     declared=validate_declaration(binding['factory_inputs'])
     # The caller has independently rederived the declaration and exact source binding.
-    main_bytes=_catalog_bytes(artifacts)
+    main_bytes=_catalog_bytes(artifacts,now=now)
     auxiliary=artifacts/'factory-output'
     auxiliary.mkdir(mode=0o700,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='factory-output-',dir=tools) as directory:
@@ -234,7 +239,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
             raw=read_file(auxiliary,record['path'],MAX_ARTIFACT_BYTES)
             verify_wheel(dep,raw)
             (wheelhouse/dep['artifact_filename']).write_bytes(raw)
-        if main_bytes+_catalog_bytes(auxiliary)>MAX_TOTAL:
+        if main_bytes+_catalog_bytes(auxiliary,now=now)>MAX_TOTAL:
             _refuse('artifact-size')
         stem=stage/'factory-output'
         built=_command([*command,'--repository',str(root),'--expected-head',binding['source']['head_sha'],
@@ -245,7 +250,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
                 or built['host_enforced'] is not True or _environment(built['target_environment'])!=environment):
             _refuse('artifact-factory-output')
         descriptor=None
-        published_bytes=main_bytes+_catalog_bytes(auxiliary)
+        published_bytes=main_bytes+_catalog_bytes(auxiliary,now=now)
         try:
             _,descriptor=_open_root(auxiliary)
             for kind,suffix in [('archive','.zip'),('manifest','.manifest.json'),('sidecar','.sha256')]:

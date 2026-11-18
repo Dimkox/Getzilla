@@ -187,7 +187,8 @@ def _select(index: dict, dep: dict) -> dict:
 
 def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_digest: str,
                  fetch=bounded_default, now: datetime | None = None, families: list[dict] | None = None,
-                 target_binding: dict | None = None, byte_budget: int | None = None) -> dict:
+                 target_binding: dict | None = None, byte_budget: int | None = None,
+                 family_preparation: dict | None = None) -> dict:
     """Save fixed-origin artifacts and commit manifest last; no dependency resolution.
 
     Failure before pointer replacement leaves an existing manifest unchanged.
@@ -220,6 +221,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
         records, gaps, seen = [], [], set()
         total = 0
         retained = []
+        retained_frontiers = []
         try:
             named = os.stat('manifest.json', dir_fd=descriptor, follow_symlinks=False)
         except FileNotFoundError:
@@ -229,12 +231,25 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             if not isinstance(previous, dict) or not isinstance(previous.get('records'), list):
                 raise ArtifactError('artifact-manifest', 'prior artifact catalog is malformed')
             retained = [record for record in previous['records'] if isinstance(record, dict) and 'kind' in record]
-            if retained and previous.get('inventory_digest') != inventory_digest:
+            retained_frontiers = previous.get('family_frontiers', [])
+            if (retained or retained_frontiers) and previous.get('inventory_digest') != inventory_digest:
                 raise ArtifactError('artifact-inventory-binding', 'cannot carry family evidence into another source inventory')
+        if family_preparation is not None:
+            from .security_family_inputs import publish
+            frontier = publish(destination, descriptor, family_preparation, inventory_digest=inventory_digest,
+                               now=current, byte_budget=byte_budget, records=[*retained, *(families or [])])
+        else:
+            from .security_family_inputs import validate_frontiers
+            frontier = validate_frontiers(destination, retained_frontiers, now=current, byte_budget=byte_budget,
+                                          inventory_digest=inventory_digest, records=[*retained, *(families or [])])
+        total += frontier['bound_bytes']
+        if total > byte_budget:
+            raise ArtifactError('artifact-size', 'release source frontiers exceed the shared catalog byte budget')
+        gaps.extend(frontier['gaps'])
         if families is not None and (not isinstance(families, list) or len(families) > MAX_PACKAGES
                                      or not all(isinstance(record, dict) and 'kind' in record for record in families)):
             raise ArtifactError('artifact-manifest', 'selected family records are malformed or unbounded')
-        for record in [*retained, *(families or [])]:
+        for record in [*retained, *(families or []), *frontier['records']]:
             key = artifact_identity(record)
             if key in seen:
                 if next(old for old in records if artifact_identity(old) == key) != record:
@@ -312,6 +327,8 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                   'last_verified_sync_utc': acquired.isoformat(),
                   'producer': 'getzilla-security-license-acquisition-v1', 'records': records, 'gaps': gaps,
                   'assurance': 'artifact-integrity-only'}
+        if frontier['frontiers']:
+            bundle['family_frontiers'] = frontier['frontiers']
         if target_binding is not None:
             bundle['python_target'] = target_binding['target']
         body = json.dumps(bundle, sort_keys=True, separators=(',', ':')).encode()

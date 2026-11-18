@@ -383,6 +383,13 @@ def _action_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict
 
 
 def _release_source(root: Path, record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]:
+    if record.get('origin', {}).get('kind') == 'github-release-native-v1':
+        from .security_release_tool_inputs import read_source
+        read_source(root, record, payload)
+        # Nuitka file ownership is not ownership of compiled Python/OCaml/C
+        # components. Do not accept a caller's whole-binary LGPL partition.
+        raise ArtifactError('release-component-sbom-missing',
+                            'raw OpenGrep source/container verified; compiled component mapping and terms remain unavailable')
     subject, origin = record['subject'], record['origin']
     match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/releases/download/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', subject['reference'])
     if (not match or subject.get('kind') != 'release-tool' or subject.get('artifact_sha256') != record['sha256']
@@ -495,6 +502,9 @@ def _image_source(record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]
 def family_evidence(root: Path, record: dict) -> dict:
     """One byte-bound reader shared by license evaluation and receipt projection."""
     identity = family_identity(record)
+    if record['kind'] == 'action' and record['origin'].get('kind') == 'github-action-source/v1':
+        from .security_action_inputs import verify_family
+        return verify_family(root, record)
     payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
     if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
         raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')
