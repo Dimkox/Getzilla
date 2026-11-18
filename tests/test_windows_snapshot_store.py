@@ -366,6 +366,29 @@ class AclDiagnosticTests(unittest.TestCase):
 
 
 class StoreModelTests(unittest.TestCase):
+    def test_exact_b2_networkservice_owner_refuses_and_supported_owner_model_roundtrips(self):
+        aces = ((0, 3, 2032127, 'S-1-5-32-544'), (0, 3, 2032127, 'S-1-5-18'),
+                (0, 11, 268435456, 'S-1-3-0'), (0, 3, 1179817, 'S-1-5-32-545'),
+                (0, 2, 4, 'S-1-5-32-545'), (0, 10, 2, 'S-1-5-32-545'),
+                (0, 0, 1179817, 'S-1-1-0'))
+        for owner in ('S-1-5-20', 'S-1-5-18'):
+            native = MemoryNative()
+            native.trusted = {'S-1-5-18', 'S-1-5-32-544', 'S-1-5-21-1-2-3-500'}
+            native.ancestors = native.trusted.copy()
+            native.nodes[native.root_id]['security'] = (owner, aces, False)
+            if owner == 'S-1-5-20':
+                with self.assertRaisesRegex(SD.SecurityDataError, 'owner is not trusted'):
+                    W.SnapshotStore('C:\\database', create=True, _native=native).__enter__()
+                self.assertEqual(native.nodes[native.root_id]['children'], {})
+            else:
+                original_node = native.node
+                native.node = lambda directory, **kwargs: original_node(directory, security=(owner, (), True))
+                with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+                    store.write(('snapshot.json',), b'owned')
+                    self.assertEqual(store.read(('snapshot.json',), 5), b'owned')
+            self.assertNotIn('S-1-5-20', native.trusted)
+            self.assertEqual(native.handles, {})
+
     def test_ancestor_depth_zero_is_not_volume_root_proof(self):
         native = MemoryNative()
         ordinary = native.node(True, security=('user', ((0, 0, 0x10000, 'Everyone'),)))
@@ -513,13 +536,125 @@ class StoreModelTests(unittest.TestCase):
         self.assertEqual(native.handles, {})
 
 
+def _known_profile_parent(*, _shell=None, _ole=None):
+    """The real application-default profile, independent of checkout/temp env."""
+    import ctypes as C
+    import re
+    import uuid
+    from pathlib import PureWindowsPath
+
+    class Guid(C.Structure):
+        _fields_ = [('data1', W.U32), ('data2', W.U16), ('data3', W.U16), ('data4', W.U8 * 8)]
+
+    shell = _shell if _shell is not None else C.WinDLL('shell32', use_last_error=True)
+    ole = _ole if _ole is not None else C.WinDLL('ole32', use_last_error=True)
+    query = shell.SHGetKnownFolderPath
+    query.argtypes, query.restype = [C.POINTER(Guid), W.U32, W.HANDLE, C.POINTER(W.HANDLE)], C.c_int32
+    ole.CoTaskMemFree.argtypes, ole.CoTaskMemFree.restype = [W.HANDLE], None
+    identifier = Guid.from_buffer_copy(uuid.UUID('5e6c858f-0e22-4760-9afe-ea3317b67173').bytes_le)
+    result = W.HANDLE()
+    try:
+        if query(C.byref(identifier), 0, None, C.byref(result)) != 0 or not result.value:
+            raise OSError('native user-profile Known Folder is unavailable')
+        raw = C.wstring_at(result)
+        profile = PureWindowsPath(raw)
+        if (not raw or len(raw) > 4096 or re.search(r'[\x00-\x1f\ud800-\udfff]', raw)
+                or not re.fullmatch(r'[A-Za-z]:', profile.drive) or not profile.is_absolute()
+                or len(profile.parts) < 2 or '..' in profile.parts):
+            raise OSError('native user-profile Known Folder is not a supported physical path')
+        for part in profile.parts[1:]:
+            W._component(part)
+        return raw
+    finally:
+        if result.value:
+            ole.CoTaskMemFree(result)
+
+
+def _native_fixture_directory():
+    import tempfile
+    profile = _known_profile_parent()
+    # Match updater.home_dir()'s user-profile ancestry. An unsafe real profile
+    # is a failure, never a reason to skip, repair its ACL or try another drive.
+    with W.SnapshotStore(Path(profile), create=False):
+        pass
+    return tempfile.TemporaryDirectory(prefix='getzilla-snapshot-native-', dir=profile)
+
+
+class KnownFolderFixtureTests(unittest.TestCase):
+    def api(self, value, status=0):
+        import ctypes as C
+        import uuid
+        buffer = C.create_unicode_buffer(value) if value is not None else None
+        freed = []
+        def query(identifier, flags, token, output):
+            self.assertEqual(C.string_at(identifier, 16), uuid.UUID('5e6c858f-0e22-4760-9afe-ea3317b67173').bytes_le)
+            self.assertEqual(flags, 0)
+            self.assertIsNone(token)
+            if buffer is not None:
+                C.cast(output, C.POINTER(W.HANDLE))[0] = C.addressof(buffer)
+            return status
+        shell = SimpleNamespace(SHGetKnownFolderPath=query)
+        ole = SimpleNamespace(CoTaskMemFree=lambda pointer: freed.append(pointer.value))
+        return shell, ole, freed
+
+    def test_known_profile_api_uses_real_current_user_identifier_and_frees_result(self):
+        import ctypes as C
+        shell, ole, freed = self.api(r'C:\Users\native-fixture')
+        with mock.patch.dict(os.environ, {'USERPROFILE': r'D:\untrusted', 'LOCALAPPDATA': r'D:\untrusted'}):
+            self.assertEqual(_known_profile_parent(_shell=shell, _ole=ole), r'C:\Users\native-fixture')
+        self.assertEqual(len(freed), 1)
+        self.assertIs(shell.SHGetKnownFolderPath.restype, C.c_int32)
+
+    def test_known_profile_api_failure_and_unsafe_names_refuse_without_fallback(self):
+        for value, status in ((None, 0), (r'C:\Users\unused', -2147467259),
+                              ('C:\\', 0), (r'\\server\profile', 0), ('relative', 0),
+                              (r'C:\Users\..\escape', 0), ('C:\\bad\nname', 0),
+                              (r'\\?\C:\Users\profile', 0), ('C:\\'+'x'*4096, 0)):
+            with self.subTest(status=status, length=len(value or '')):
+                shell, ole, freed = self.api(value, status)
+                with self.assertRaises(OSError):
+                    _known_profile_parent(_shell=shell, _ole=ole)
+                self.assertEqual(len(freed), int(value is not None))
+
+    def test_native_fixture_preflights_unchanged_store_before_temporary_creation(self):
+        import tempfile
+        events = []
+        class Guard:
+            def __init__(self, parent, *, create):
+                self.test_parent, self.create = parent, create
+            def __enter__(self):
+                events.append(('guard', str(self.test_parent), self.create))
+            def __exit__(self, *args):
+                events.append('confirmed')
+        def temporary(**kwargs):
+            events.append(('temporary', kwargs))
+            return 'owned-fixture'
+        with mock.patch.object(sys.modules[__name__], '_known_profile_parent', return_value=r'C:\Users\fixture'), \
+             mock.patch.object(W, 'SnapshotStore', Guard), mock.patch.object(tempfile, 'TemporaryDirectory', side_effect=temporary):
+            self.assertEqual(_native_fixture_directory(), 'owned-fixture')
+        self.assertEqual(events[:2], [('guard', r'C:\Users\fixture', False), 'confirmed'])
+        self.assertEqual(events[2][1]['dir'], r'C:\Users\fixture')
+
+    def test_unsafe_actual_profile_ancestry_refuses_before_any_temporary_creation(self):
+        import tempfile
+        class Unsafe:
+            def __init__(self, *args, **kwargs):
+                pass
+            def __enter__(self):
+                raise SD.SecurityDataError('snapshot native owner is not trusted')
+            def __exit__(self, *args):
+                pass
+        with mock.patch.object(sys.modules[__name__], '_known_profile_parent', return_value=r'C:\Users\fixture'), \
+             mock.patch.object(W, 'SnapshotStore', Unsafe), mock.patch.object(tempfile, 'TemporaryDirectory') as temporary:
+            with self.assertRaisesRegex(SD.SecurityDataError, 'owner is not trusted'):
+                _native_fixture_directory()
+            temporary.assert_not_called()
+
+
 @unittest.skipUnless(os.name == 'nt', 'native Windows NTFS handle/ACL execution required')
 class NativeWindowsTests(unittest.TestCase):
     def setUp(self):
-        import tempfile
-        runtime = ROOT / '.getzilla/runtime'
-        runtime.mkdir(parents=True, exist_ok=True)
-        self.temporary = tempfile.TemporaryDirectory(dir=runtime)
+        self.temporary = _native_fixture_directory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.database = self.root / 'database'
