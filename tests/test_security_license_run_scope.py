@@ -246,6 +246,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             inv, self.root, POLICY, now=NOW, target_binding=binding, run_context=context
         )
         self.assertEqual(failed["selected_run"]["status"], "fail-for-selected-run")
+        self.assertFalse(self.module().validate_result(result["selected_run"]))
 
     def test_missing_actual_family_and_unobserved_build_consumer_stay_mandatory(self):
         host, future, inactive, inv, source, run, binding = self.fixture()

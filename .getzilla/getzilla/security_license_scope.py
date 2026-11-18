@@ -111,6 +111,7 @@ class Scope:
             _refuse()
 
     def begin(self):
+        self.state['license_results']={}
         self.passed={}
         self.gaps=[]
         self.details=[]
