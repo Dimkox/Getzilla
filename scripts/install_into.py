@@ -53,6 +53,7 @@ MANAGED_FILES = (
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
     "docs/isolated-ci-acceptance.md",
+    "docs/security-license-exceptions.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
