@@ -314,6 +314,32 @@ class ScratchPipPolicyTest(unittest.TestCase):
         allowed, reason = self.check(self.command + ' -r .getzilla/config/python-quality-requirements.txt')
         self.assertTrue(allowed, reason)
 
+    def test_bounded_markers_are_requirement_data_without_new_shell_authority(self):
+        self.requirements.write_text('pytest-cov==7.1.0\ncoverage[toml]==7.15.4\n')
+        allowed, reason = self.check(self.command)
+        self.assertTrue(allowed, reason)
+        for marker in ('python_version < "3.13"', 'python_version >= "3.11"', 'sys_platform == "win32"',
+                       'platform_system == "Windows"', 'python_version < "3.11" or python_full_version <= "3.11.0a6"'):
+            with self.subTest(marker=marker):
+                self.requirements.write_text('pytest==9.1.1\ntyping-extensions==4.16.0; ' + marker + '\n')
+                allowed, reason = self.check(self.command)
+                self.assertTrue(allowed, reason)
+        for invalid in ('typing-extensions==4.16.0;', 'typing-extensions==4.16.0; custom_setting == "yes"',
+                        'typing-extensions==4.16.0; python_version < "3.13" --index-url https://example.invalid',
+                        'typing-extensions[extra]==4.16.0; python_version < "3.13"',
+                        'coverage[other]==7.15.4', 'coverage[toml,other]==7.15.4',
+                        'typing-extensions>=4.16.0; python_version < "3.13"',
+                        'typing-extensions==4.16.0; python_version == "' + 'x' * 256 + '"'):
+            with self.subTest(invalid=invalid):
+                self.requirements.write_text(invalid + '\n')
+                allowed, reason = self.check(self.command)
+                self.assertFalse(allowed, reason)
+        self.requirements.write_text('pytest==9.1.1; python_version >= "3.10"\n')
+        for extra in (' --index-url https://example.invalid', ' ; echo done', ' --target .getzilla/config'):
+            with self.subTest(extra=extra):
+                allowed, reason = self.check(self.command + extra)
+                self.assertFalse(allowed, reason)
+
     def test_fixture_does_not_depend_on_the_test_runner_python_location(self):
         case = ScratchPipPolicyTest()
         try:
@@ -345,7 +371,7 @@ class ScratchPipPolicyTest(unittest.TestCase):
 
     def test_nested_requirements_and_non_pins_are_refused(self):
         for content in ('-r other.txt\n', '--target .grok\n', '-e .\n', 'pytest>=9\n',
-                        'pkg @ https://example.invalid/pkg.whl\n', 'pytest==9.1.1; python_version>="3"\n'):
+                        'pkg @ https://example.invalid/pkg.whl\n', 'pytest==9.1.1; unknown_environment>="3"\n'):
             with self.subTest(content=content):
                 self.requirements.write_text(content)
                 self.assertFalse(self.check(self.command)[0])
