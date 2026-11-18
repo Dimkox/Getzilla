@@ -30,6 +30,38 @@ TARGET_MARKERS = {"sys_platform": "linux", "os_name": "posix", "platform_system"
                   "platform_python_implementation": "CPython", "python_version": "3.12"}
 
 
+# Exact source/term delivery catalog. This supplies bytes, not a license approval.
+_LEGAL_ROOT = Path('.getzilla/config/license-exception-inputs/factory-source-delivery-v1')
+_LEGAL_SUBJECTS = {'certifi': ('2026.10.19',
+             'certifi-2026.10.19-py3-none-any.whl',
+             '42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b'),
+ 'psycopg': ('3.3.4',
+             'psycopg-3.3.4-py3-none-any.whl',
+             'b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a')}
+_LEGAL_FILES = {'certifi': (('certifi-2026.10.19.tar.gz',
+              'legal/sources/certifi-2026.10.19.tar.gz',
+              '035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae'),
+             ('certifi-2026.10.19-notice.txt',
+              'legal/notices/certifi-2026.10.19.txt',
+              '2b6af2ff07dd35c0c2528571b5c594e96b79f87579ab8a31a862d79a5cda1caa'),
+             ('MPL-2.0.txt',
+              'legal/licenses/MPL-2.0.txt',
+              '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04')),
+ 'psycopg': (('psycopg-3.3.4.tar.gz',
+              'legal/sources/psycopg-3.3.4.tar.gz',
+              'e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc'),
+             ('psycopg-3.3.4-notice.txt',
+              'legal/notices/psycopg-3.3.4.txt',
+              'e083ff3d6141f6bea11dfb70ff32545ecbcbc4389f9f015e7b6a9fed6d67adb2'),
+             ('GPL-3.0.txt',
+              'legal/licenses/GPL-3.0.txt',
+              '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986'))}
+_LEGAL_PROVENANCE = {'certifi': ('certifi-2026.10.19-source-map.json',
+             '86f354df63b43e34abe6d1dce0b18d0715ebd5a178a8987523707cf8d65d1686'),
+ 'psycopg': ('psycopg-3.3.4-source-map.json',
+             '50d8fd448b8f5dd2c512c7b52f448ae39194dad5c46f8db7233d650932b65725')}
+
+
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -269,6 +301,76 @@ def _git(repository: Path, *arguments: str) -> str:
     return result.stdout
 
 
+def _read_legal_input(repository: Path, filename: str, expected_sha256: str) -> bytes:
+    """Read one fixed, bounded, unchanged regular input without following links."""
+    descriptors = []
+    try:
+        directory = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(directory)
+        for part in _LEGAL_ROOT.parts:
+            directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            descriptors.append(directory)
+        descriptor = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 2 * 1024 * 1024:
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        pieces = []
+        total = 0
+        while True:
+            piece = os.read(descriptor, min(65536, 2 * 1024 * 1024 + 1 - total))
+            if not piece:
+                break
+            pieces.append(piece)
+            total += len(piece)
+            if total > 2 * 1024 * 1024:
+                raise InstallerError("LEGAL_INPUT_MISMATCH")
+        after = os.fstat(descriptor)
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_nlink')
+        payload = b''.join(pieces)
+        if any(getattr(before, field) != getattr(after, field) for field in fields) or _digest(payload) != expected_sha256:
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        return payload
+    except OSError as exc:
+        raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _legal_files(repository: Path, wheels: list[dict]) -> dict[str, bytes]:
+    """Select only fixed exact publisher-source payloads for the actual wheel set."""
+    result = {}
+    packages = []
+    for wheel in wheels:
+        name = wheel['name']
+        if name not in _LEGAL_SUBJECTS:
+            continue
+        if (wheel['version'], wheel['filename'], wheel['sha256']) != _LEGAL_SUBJECTS[name]:
+            raise InstallerError("LEGAL_DEPENDENCY_MISMATCH")
+        retained = []
+        for filename, target, digest in _LEGAL_FILES[name]:
+            if target in result:
+                raise InstallerError("LEGAL_FILE_COLLISION")
+            result[target] = _read_legal_input(repository, filename, digest)
+            retained.append({'path': target, 'sha256': digest, 'bytes': len(result[target])})
+        filename, digest = _LEGAL_PROVENANCE[name]
+        raw = _read_legal_input(repository, filename, digest)
+        try:
+            provenance = json.loads(raw)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+        if (provenance['package'] != name or provenance['version'] != wheel['version']
+                or provenance['wheel'] != {'filename': wheel['filename'], 'sha256': wheel['sha256']}):
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        packages.append({**provenance, 'retained_files': retained})
+    if packages:
+        result['legal/source-map.json'] = json.dumps(
+            {'schema_version': 1, 'packages': sorted(packages, key=lambda item: item['package'])},
+            sort_keys=True, separators=(',', ':')).encode()
+    return result
+
+
 def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inventory: Path,
                   output: Path, product_version: str, enforce_host: bool = True,
                   target_environment: dict[str, str] | None = None) -> dict:
@@ -306,6 +408,10 @@ def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inv
             if target in files:
                 raise InstallerError("WHEEL_FILE_COLLISION")
             files[target] = (payload, 0o644)
+    for target, payload in _legal_files(repository, wheels).items():
+        if target in files:
+            raise InstallerError("LEGAL_FILE_COLLISION")
+        files[target] = (payload, 0o644)
     tracked = _git(repository, "ls-files", "factory/src/getzilla_factory").splitlines()
     if not tracked:
         raise InstallerError("INVALID_SOURCE")
