@@ -324,3 +324,22 @@ class QualifiedFamilyTests(unittest.TestCase):
             with patch.object(go, "PIN_SPECS", specs), self.assertRaises(ArtifactError) as error:
                 go.verify_family(artifacts, record, checker=checker)
             self.assertEqual(error.exception.code, "go-cgo-native-unresolved")
+
+
+class GoMemberEnvelopeTests(unittest.TestCase):
+    def test_go_specific_16384_members_admit_and_16385_refuse(self):
+        prefix = "example.org/lib@v1.0.0/"
+        for count in (16384, 16385):
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+                for index in range(count):
+                    archive.writestr(prefix + f"f{index:05}.txt", b"")
+            if count == 16384:
+                inventory, _ = go._go_zip(output.getvalue(), prefix)
+                self.assertEqual(len(inventory), count)
+            else:
+                with self.assertRaises(ArtifactError):
+                    go._go_zip(output.getvalue(), prefix)
+        from getzilla.security_artifacts import MAX_MEMBERS
+
+        self.assertEqual(MAX_MEMBERS, 10000)
