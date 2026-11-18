@@ -103,6 +103,48 @@ class LayerReuseControls(unittest.TestCase):
         oci._layer(forged[0], oci.GZIP, forged[1], self.ledger)
         self.assertEqual(self.ledger.totals["entries"], before + 1)
 
+    def test_uncompressed_owner_miss_hit_and_stability(self):
+        from contextlib import contextmanager
+
+        path, expected, _key, _decoded = self.layer()
+        raw = gzip.decompress(path.read_bytes())
+        path.write_bytes(raw)
+        real_file, real_parse, real_tar = oci._Root.file, oci._parse_layer, tarfile.open
+        active = []
+
+        @contextmanager
+        def owner(root, *args, **kwargs):
+            with real_file(root, *args, **kwargs) as value:
+                active.append(value[0])
+                yield value
+                self.assertFalse(value[0].closed, "parser must not close borrowed uncompressed FD")
+
+        def parse(stream, *args):
+            self.assertIs(stream, active[-1], "hash and parser must share held FD")
+            self.assertEqual(stream.tell(), 0)
+            return real_parse(stream, *args)
+
+        with (
+            mock.patch.object(oci._Root, "file", owner),
+            mock.patch.object(oci, "_parse_layer", side_effect=parse),
+            mock.patch.object(oci.tarfile, "open", wraps=real_tar) as parser,
+        ):
+            oci._layer(path, oci.TAR, expected, self.ledger)
+            oci._layer(path, oci.TAR, expected, self.ledger)
+            self.assertEqual(parser.call_count, 1)
+        self.assertEqual(self.ledger.totals["entries"], 1)
+        fresh = oci._Budget(self.profile)
+
+        @contextmanager
+        def unstable(root, *args, **kwargs):
+            with real_file(root, *args, **kwargs) as value:
+                yield value
+                path.write_bytes(raw + b"owned-change")
+
+        with mock.patch.object(oci._Root, "file", unstable), self.assertRaises(oci.OCIError):
+            oci._layer(path, oci.TAR, expected, fresh)
+        self.assertFalse(fresh._layer_facts)
+
     def test_full_cache_falls_back_to_actual_parse_without_truncation(self):
         self.assertTrue(hasattr(oci, "_LAYER_CACHE_MAX"))
         first = self.layer("first")

@@ -7,7 +7,7 @@ prevents the pinned scanner's nested-index first-child selection behavior.
 The private staging directory is a trusted workflow boundary, not isolation
 from a hostile process with the same operating-system identity.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import gzip
 import hashlib
 import json
@@ -303,7 +303,7 @@ def _layer(path, media, expected, budget):
 
 def _parse_layer(raw, media, expected, budget):
     declared, entries = 0, 0
-    with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else raw) as decoded:
+    with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else nullcontext(raw)) as decoded:
         stream = _Decoded(decoded, budget)
         with tarfile.open(fileobj=stream, mode='r|') as archive:
             for member in archive:
