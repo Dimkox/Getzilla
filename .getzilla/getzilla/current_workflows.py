@@ -46,43 +46,114 @@ def _payload(component, agent, files, identity):
     return baseline_assets.AssetPayload(component, agent, fingerprint, inventory)
 
 
+_SPEC_COMMANDS = frozenset({'analyze', 'checklist', 'clarify', 'constitution', 'converge',
+                            'implement', 'plan', 'specify', 'tasks'})
+_SPEC_SKILL_DIRS = {'claude': '.claude/skills', 'codex': '.agents/skills',
+                    'grok': '.grok/skills', 'copilot': '.github/skills'}
+
+
+def _spec_script(header, source, script):
+    text = header + '\n'
+    blocks = list(re.finditer(r'(?m)^scripts:\n((?:[ \t]+[^\n]*(?:\n|$))*)', text))
+    if len(blocks) != 1 or len(re.findall(r'(?m)^scripts:', text)) != 1:
+        raise ValueError('unsupported Spec Kit script binding')
+    bindings, indents = {}, set()
+    lanes = {'sh': ('bash', 'sh'), 'ps': ('powershell', 'ps1'), 'py': ('python', 'py')}
+    for line in blocks[0][1].splitlines():
+        row = re.fullmatch(r'( {2,3})(sh|ps|py): (scripts/[A-Za-z0-9_./-]+(?: [A-Za-z0-9_.-]+)*)', line)
+        if not row or row[2] in bindings:
+            raise ValueError('unsupported Spec Kit script binding')
+        indent, kind, command = row.groups()
+        lane, suffix = lanes[kind]
+        path = command.split()[0]
+        if not re.fullmatch(r'scripts/'+lane+r'/[A-Za-z0-9_-]+\.'+suffix, path) or path not in source:
+            raise ValueError('Spec Kit command references absent or unsupported source script')
+        indents.add(len(indent))
+        bindings[kind] = command
+    if len(indents) != 1 or not {'sh', 'ps'} <= bindings.keys() or script not in bindings:
+        raise ValueError('unsupported Spec Kit script binding')
+    return bindings[script], (text[:blocks[0].start()] + text[blocks[0].end():]).strip()
+
+
+def _spec_workflow_version(raw):
+    text = raw.decode('utf-8') + '\n'
+    blocks = list(re.finditer(r'(?m)^workflow:\n((?:(?: +[^\n]*)?\n)*)', text))
+    roots = re.findall(r'(?m)^version: ([^\n]+)$', text)
+    if blocks:
+        if (len(blocks) != 1 or len(re.findall(r'(?m)^workflow:', text)) != 1
+                or re.search(r'(?m)^version:', text)):
+            raise ValueError('unsupported Spec Kit workflow version')
+        rows = re.findall(r'(?m)^  version: ([^\n]+)$', blocks[0][1])
+        if len(re.findall(r'(?m)^  version:', blocks[0][1])) != 1:
+            raise ValueError('unsupported Spec Kit workflow version')
+    else:
+        if re.search(r'(?m)^workflow:', text) or len(re.findall(r'(?m)^version:', text)) != 1:
+            raise ValueError('unsupported Spec Kit workflow version')
+        rows = roots
+    if len(rows) != 1:
+        raise ValueError('unsupported Spec Kit workflow version')
+    value = rows[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+', value):
+        raise ValueError('unsupported Spec Kit workflow version')
+    return value
+
+
 def spec_payload(source, agent, version, commit, *, windows):
     """Closed source-data adapter; refuse unknown command/template layouts."""
     script, directory = ('ps', 'powershell') if windows else ('sh', 'bash')
+    present = {name.removeprefix('templates/commands/')[:-3] for name in source
+               if name.startswith('templates/commands/') and name.endswith('.md')}
+    if agent not in AGENTS or not present <= _SPEC_COMMANDS:
+        raise ValueError('unsupported Spec Kit command mapping')
     files, commands = {}, {}
     for name, raw in source.items():
         if name.startswith('templates/commands/') and name.endswith('.md'):
             stem = name.removeprefix('templates/commands/')[:-3]
-            if not re.fullmatch('[a-z][a-z0-9-]*', stem):
+            if stem not in _SPEC_COMMANDS:
                 raise ValueError('unsupported Spec Kit command name')
             text = raw.decode('utf-8')
+            if '\0' in text:
+                raise ValueError('unsupported Spec Kit command frontmatter')
             front = re.fullmatch(r'---\n(.*?)\n---\n(.*)', text, re.S)
             if not front:
                 raise ValueError('unsupported Spec Kit command frontmatter')
             header, body = front.groups()
-            selected = re.search(r'(?m)^  '+script+r': (scripts/'+directory+r'/[^\n]+)$', header)
-            if '{SCRIPT}' in body and not selected:
-                raise ValueError('unsupported Spec Kit script binding')
-            if selected:
-                command = selected[1]
-                source_script = command.split()[0]
-                if source_script not in source:
-                    raise ValueError('Spec Kit command references absent source script')
-                body = body.replace('{SCRIPT}', '.specify/'+command)
+            command, header = _spec_script(header, source, script)
+            body = body.replace('{SCRIPT}', '.specify/'+command)
+            skill = agent in _SPEC_SKILL_DIRS
+            invocation = '$speckit-' if agent == 'codex' else '/speckit-' if skill else '/speckit.'
+
+            def dispatch(match):
+                target = match[1].lower()
+                if target not in _SPEC_COMMANDS or target not in present:
+                    raise ValueError('unsupported Spec Kit command mapping')
+                return invocation + target
+
+            body = re.sub(r'__SPECKIT_COMMAND_([A-Z][A-Z_]*)__', dispatch, body)
+            if '__SPECKIT_COMMAND_' in body:
+                raise ValueError('unsupported Spec Kit command mapping')
+            body = body.replace('{ARGS}', '$ARGUMENTS')
+            if '{ARGS' in body:
+                raise ValueError('unsupported Spec Kit argument mapping')
             body = body.replace('`/memory/', '`.specify/memory/')
             # Keep human-facing handoffs as prose. Remove only platform dispatch
             # fields that this adapter has resolved, never evaluate source YAML.
-            header = re.sub(r'(?m)^scripts:\n(?:[ \t]+[^\n]*\n?)*', '', header).strip()
-            if agent == 'codex':
-                description = re.search(r'(?m)^description: (.+)$', header)
-                if not description:
-                    raise ValueError('unsupported Spec Kit command description')
-                header = 'name: speckit-'+stem+'\ndescription: '+json.dumps(description[1])
-                output = '.agents/skills/speckit-'+stem+'/SKILL.md'
+            descriptions = re.findall(r'(?m)^description: (.+)$', header)
+            if len(descriptions) != 1:
+                raise ValueError('unsupported Spec Kit command description')
+            if skill:
+                header = 'name: speckit-'+stem+'\ndescription: '+json.dumps(descriptions[0])
+                output = _SPEC_SKILL_DIRS[agent]+'/speckit-'+stem+'/SKILL.md'
+            elif agent == 'gemini':
+                body = body.replace('$ARGUMENTS', '{{args}}')
+                output = '.gemini/commands/speckit.'+stem+'.toml'
+                commands[output] = (('description = '+json.dumps(descriptions[0], ensure_ascii=False)
+                                     +'\n\nprompt = '+json.dumps(body, ensure_ascii=False)+'\n').encode(), 0o644)
+                continue
             else:
-                prefix = { 'claude': '.claude/commands', 'qwen': '.qwen/commands', 'gemini': '.gemini/commands',
-                           'grok': '.grok/commands', 'copilot': '.github/prompts'}[agent]
-                output = prefix+'/speckit.'+stem+('.prompt.md' if agent == 'copilot' else '.md')
+                output = '.qwen/commands/speckit.'+stem+'.md'
             commands[output] = (('---\n'+header+'\n---\n'+body).encode(), 0o644)
         elif name.startswith('templates/') and '/' not in name.removeprefix('templates/'):
             files['.specify/'+name] = (raw, 0o644)
@@ -91,7 +162,6 @@ def spec_payload(source, agent, version, commit, *, windows):
         elif name.startswith('workflows/speckit/'):
             files['.specify/'+name] = (raw, 0o644)
     required = {'plan', 'specify', 'tasks', 'implement', 'constitution'}
-    present = {name.removeprefix('templates/commands/')[:-3] for name in source if name.startswith('templates/commands/') and name.endswith('.md')}
     constitution = source.get('templates/constitution-template.md')
     if not required <= present or not constitution or '.specify/workflows/speckit/workflow.yml' not in files:
         raise ValueError('unsupported Spec Kit complete source layout')
@@ -100,16 +170,13 @@ def spec_payload(source, agent, version, commit, *, windows):
     files['.specify/init-options.json'] = (canonical(dict(ai=agent, allow_symlinks=False, feature_numbering='sequential',
                                                         here=True, integration=agent, script=script, speckit_version=version)), 0o644)
     files['.specify/integration.json'] = (canonical(dict(version=version, integration_state_schema=1,
-        installed_integrations=[agent], integration_settings={agent: dict(script=script, invoke_separator='.')},
+        installed_integrations=[agent], integration_settings={agent: dict(script=script, invoke_separator='-' if agent in _SPEC_SKILL_DIRS else '.')},
         integration=agent, default_integration=agent)), 0o644)
     files['.specify/integrations/'+agent+'.manifest.json'] = (canonical(dict(integration=agent, version=version,
         files={n: digest(b) for n, (b, _) in commands.items()})), 0o644)
-    workflow = files['.specify/workflows/speckit/workflow.yml'][0].decode('utf-8')
-    workflow_version = re.search(r'(?m)^version: [\"\']?([0-9]+(?:\.[0-9]+)+)', workflow)
-    if not workflow_version:
-        raise ValueError('unsupported Spec Kit workflow version')
+    workflow_version = _spec_workflow_version(files['.specify/workflows/speckit/workflow.yml'][0])
     files['.specify/workflows/workflow-registry.json'] = (canonical(dict(schema_version='1.0', workflows={
-        'speckit': dict(name='Full SDD Cycle', version=workflow_version[1], source='bundled')})), 0o644)
+        'speckit': dict(name='Full SDD Cycle', version=workflow_version, source='bundled')})), 0o644)
     files['.specify/integrations/speckit.manifest.json'] = (canonical(dict(integration='speckit', version=version,
         files={n.removeprefix('.specify/'): digest(b) for n, (b, _) in files.items()})), 0o644)
     files.update(commands)
