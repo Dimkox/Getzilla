@@ -59,6 +59,61 @@ class DispatchTests(unittest.TestCase):
 
 
 class AclPolicyTests(unittest.TestCase):
+    def test_proven_root_keeps_child_security_generic_owner_and_owned_guards(self):
+        for mask in (0x40, 0x40000, 0x80000, 0x40000000, 0x10000000):
+            with self.subTest(mask=mask), self.assertRaises(SD.SecurityDataError):
+                W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=False, volume_root=True)
+        for mask in (0x10000, 0x10, 0x100):
+            W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=False, volume_root=True)
+            with self.assertRaises(SD.SecurityDataError):
+                W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=False)
+            with self.assertRaises(SD.SecurityDataError):
+                W.check_acl('user', [(0, 0, mask, 'Everyone')], {'user'}, owned=True)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'owner'):
+            W.check_acl('Everyone', [], {'user'}, owned=False, volume_root=True)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'ACE'):
+            W.check_acl('user', [(9, 8, 0, 'user')], {'user'}, owned=False, volume_root=True)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'role'):
+            W.check_acl('user', [], {'user'}, owned=True, volume_root=True)
+
+    def test_root_api_requires_exact_actual_handle_name_and_closes_failures(self):
+        import ctypes as C
+        for name, success in ((b'\\\x00', True), (b'A\x00', True), (b'', True),
+                              ('\\ordinary'.encode('utf-16le'), True), (b'\\\x00', False)):
+            closed, queried = [], []
+
+            def device(drive, buffer, length):
+                buffer.value = r'\Device\HarddiskVolume4'
+                return len(buffer.value) + 1
+
+            def volume(handle, unused, size, serial, maximum, flags, filesystem, length):
+                C.cast(flags, C.POINTER(W.U32))[0] = 8
+                filesystem.value = 'NTFS'
+                return 1
+
+            def filename(handle, kind, buffer, length):
+                queried.append((handle, kind))
+                body = len(name).to_bytes(4, 'little') + name
+                C.memmove(buffer, body, min(length, len(body)))
+                return int(success)
+
+            native = W.Native.__new__(W.Native)
+            native.k = SimpleNamespace(GetDriveTypeW=lambda drive: 3, QueryDosDeviceW=device,
+                                       GetVolumeInformationByHandleW=volume,
+                                       GetFileInformationByHandleEx=filename)
+            native.open = lambda parent, path, **kwargs: 17
+            native.close = closed.append
+            native._ok = lambda value: None if value else (_ for _ in ()).throw(OSError('query failed'))
+            with self.subTest(name=name, success=success):
+                if name == b'\\\x00' and success:
+                    self.assertEqual(native.root('C:\\'), 17)
+                    self.assertEqual(queried, [(17, 2)])
+                    self.assertEqual(closed, [])
+                else:
+                    with self.assertRaises((SD.SecurityDataError, OSError)):
+                        native.root('C:\\')
+                    self.assertEqual(closed, [17])
+
     def test_substituted_drive_refuses_before_native_open(self):
         class Kernel:
             def GetDriveTypeW(self, drive):
@@ -119,6 +174,10 @@ class MemoryNative:
 
     def root(self, drive):
         return self.handle(self.root_id)
+
+    def verify_root(self, handle):
+        if self.handles[handle][0] != self.root_id:
+            raise SD.SecurityDataError('native volume root proof failed')
 
     def open(self, parent, name, *, directory, create=False, **kwargs):
         entry = self.nodes[self.handles[parent][0]]
@@ -221,7 +280,7 @@ class AclDiagnosticTests(unittest.TestCase):
     def test_dacl_refusal_keeps_original_reason_and_service_unavailable_fact(self):
         native = self.native()
         native.service_owner = None
-        error, found = self.refusal(native, (self.USER, ((0, 0, 0x10000, self.OTHER),), False))
+        error, found = self.refusal(native, (self.USER, ((0, 0, 0x40, self.OTHER),), False))
         self.assertTrue(str(error).startswith('snapshot native DACL permits untrusted writes or path replacement;'))
         self.assertEqual(found['trustedinstaller_lookup'], 'unavailable')
         self.assertFalse(found['dacl_protected'])
@@ -307,6 +366,79 @@ class AclDiagnosticTests(unittest.TestCase):
 
 
 class StoreModelTests(unittest.TestCase):
+    def test_ancestor_depth_zero_is_not_volume_root_proof(self):
+        native = MemoryNative()
+        ordinary = native.node(True, security=('user', ((0, 0, 0x10000, 'Everyone'),)))
+        handle = native.handle(ordinary)
+        store = W.SnapshotStore('C:\\database', _native=native)
+        try:
+            with self.assertRaisesRegex(SD.SecurityDataError, 'untrusted'):
+                store._metadata(handle, owned=False, directory=True, ancestor_depth=0)
+        finally:
+            native.close(handle)
+
+    def test_unproven_or_changed_root_fails_before_publication(self):
+        for change in ('nonroot', 'name', 'reparse', 'identity'):
+            native = MemoryNative()
+            verified = native.verify_root
+            calls = []
+            def proof(handle):
+                calls.append(handle)
+                if change == 'nonroot' or change == 'name' and len(calls) > 1:
+                    raise SD.SecurityDataError('native volume root proof failed')
+                return verified(handle)
+            native.verify_root = proof
+            if change == 'nonroot':
+                with self.assertRaisesRegex(SD.SecurityDataError, 'root proof'):
+                    W.SnapshotStore('C:\\database', create=True, _native=native).__enter__()
+            else:
+                store = W.SnapshotStore('C:\\database', create=True, _native=native)
+                if change == 'name':
+                    with self.assertRaisesRegex(SD.SecurityDataError, 'root proof'):
+                        store.__enter__()
+                else:
+                    with store:
+                        root = native.nodes[native.root_id]
+                        if change == 'reparse':
+                            root['reparse'] = True
+                        else:
+                            from dataclasses import replace
+                            original_metadata = native.metadata
+                            native.metadata = lambda handle: replace(original_metadata(handle),
+                                file_id=(1, b'changed-root-id!')) if native.handles[handle][0] == native.root_id else original_metadata(handle)
+                        with self.assertRaises(SD.SecurityDataError):
+                            store.write(('snapshot.json',), b'never published')
+                        self.assertFalse(store.files)
+                        root['reparse'] = False
+                        root['security'] = ('TrustedInstaller', ((0, 0, 4, 'Everyone'),))
+                        if change == 'identity':
+                            native.metadata = original_metadata
+            self.assertEqual(native.handles, {})
+
+    def test_observed_7dda_volume_root_acl_allows_store_without_trusting_authusers(self):
+        native = MemoryNative()
+        native.trusted = {'S-1-5-18', 'S-1-5-32-544', 'S-1-5-21-1-2-3-500'}
+        native.ancestors = native.trusted.copy()
+        aces = ((0, 0, 2032127, 'S-1-5-32-544'), (0, 11, 268435456, 'S-1-5-32-544'),
+                (0, 0, 2032127, 'S-1-5-18'), (0, 11, 268435456, 'S-1-5-18'),
+                (0, 0, 1245631, 'S-1-5-11'), (0, 11, 3758161920, 'S-1-5-11'),
+                (0, 0, 1179817, 'S-1-5-32-545'), (0, 11, 2684354560, 'S-1-5-32-545'))
+        native.nodes[native.root_id]['security'] = ('S-1-5-18', aces, False)
+        original_node = native.node
+
+        def owned_node(directory, **kwargs):
+            return original_node(directory, security=('S-1-5-18', (), True))
+
+        native.node = owned_node
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            store.write(('snapshot.json',), b'owned')
+            self.assertEqual(store.read(('snapshot.json',), 5), b'owned')
+        self.assertNotIn('S-1-5-11', native.trusted)
+        self.assertNotIn('S-1-5-32-545', native.trusted)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'untrusted'):
+            W.check_acl('S-1-5-18', aces, native.ancestors, owned=False)
+        self.assertEqual(native.handles, {})
+
     def test_held_model_roundtrip_update_and_bounded_read(self):
         native = MemoryNative()
         with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
