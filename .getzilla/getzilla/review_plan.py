@@ -40,6 +40,50 @@ def _document(root: Path, ref: str, path: str) -> bytes | None:
     return value
 
 
+def _engine_source(root: Path, ref: str) -> tuple[dict, dict]:
+    """Read the complete managed source container from immutable regular Git blobs."""
+    from .baseline_assets import ARCHIVE_LIMIT, ENGINE_ARCHIVE, archive_entries, validate_resources
+    from .skill_sandbox import MAX_FILE_BYTES
+
+    def read(path: str, limit: int = MAX_FILE_BYTES) -> bytes | None:
+        listing = _git(root, 'ls-tree', '-z', ref, '--', path).stdout
+        if not listing:
+            return None
+        rows = listing.rstrip(b'\0').split(b'\0')
+        meta, actual = rows[0].split(b'\t', 1)
+        mode, kind, oid = meta.split()
+        if len(rows) != 1 or actual != path.encode() or mode != b'100644' or kind != b'blob':
+            raise ValueError('UNSAFE_ENGINE_SOURCE_MODE')
+        size = int(_git(root, 'cat-file', '-s', oid.decode('ascii')).stdout)
+        if not 0 <= size <= limit:
+            raise ValueError('ENGINE_SOURCE_BOUNDS')
+        body = _git(root, 'cat-file', 'blob', oid.decode('ascii')).stdout
+        if len(body) != size:
+            raise ValueError('ENGINE_SOURCE_CHANGED')
+        return body
+
+    raw = read(ENGINE_ARCHIVE, ARCHIVE_LIMIT)
+    if raw is None:
+        return {'ref': ref, 'sha256': None, 'bytes': 0, 'mode': None, 'members': []}, {}
+    entries = archive_entries(raw, canonical=True)
+
+    def required(path: str) -> bytes:
+        value = read(path)
+        if value is None:
+            raise ValueError('MISSING_ENGINE_RESOURCE')
+        return value
+
+    validate_resources(entries, required)
+    for path, (body, _mode) in entries.items():
+        loose = read(path)
+        if loose is not None and loose != body:
+            raise ValueError('ENGINE_LOOSE_SOURCE_CONFLICT')
+    members = [{'path': path, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body), 'mode': '100644'}
+               for path, (body, _mode) in sorted(entries.items())]
+    return {'ref': ref, 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw),
+            'mode': '100644', 'members': members}, {item['path']: item for item in members}
+
+
 def _model(root: Path, ref: str) -> dict:
     system = _document(root, ref, 'architecture/system.yaml')
     rules = _document(root, ref, 'architecture/rules.yaml')
@@ -104,6 +148,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     gaps = [str(item.get('code', 'untrusted_base')) for item in selection.findings]
     reasons, policies, risks, audit_categories = [], [], [], set()
     floor_reviewers: list[str] = []
+    engine_sources, engine_members, engine_comparisons = {}, {}, []
     fingerprint = fingerprint or tree_fingerprint(root)
     tree = None
     try:
@@ -119,10 +164,11 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
             stats = _git(root, 'diff', '--numstat', '-z', '--no-renames', '--no-textconv', '--no-ext-diff', base, head, '--').stdout
             if len(stats) > 4_194_304:
                 raise ValueError('changed inventory exceeds byte bound')
-            binaries = []
+            binaries, changed_paths = [], set()
             for row in stats.split(b'\0'):
                 if row:
                     added, removed, name = row.split(b'\t', 2)
+                    changed_paths.add(name.decode('utf-8', 'strict'))
                     if added == removed == b'-':
                         binaries.append(name.decode('utf-8', 'strict'))
                     elif not added.isdigit() or not removed.isdigit():
@@ -133,11 +179,28 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                     if row:
                         meta, name = row.split(b'\t', 1)
                         modes.setdefault(name.decode('utf-8', 'strict'), set()).add(meta.split()[0])
+            engine_valid = False
+            if '.getzilla/getzilla.zip' in changed_paths:
+                try:
+                    for ref in (base, head):
+                        if ref not in engine_sources:
+                            engine_sources[ref], engine_members[ref] = _engine_source(root, ref)
+                    before, after = engine_members[base], engine_members[head]
+                    deltas = [{'path': path, 'status': 'A' if path not in before else 'D' if path not in after else 'M'}
+                              for path in sorted(before.keys() | after.keys()) if before.get(path) != after.get(path)]
+                    engine_comparisons.append({'base': base, 'head': head, 'changed_members': deltas})
+                    reasons.append({'rule': 'MANAGED_ENGINE_SOURCE', 'path': '.getzilla/getzilla.zip', 'risk': 'high'})
+                    audit_categories.update(DEFAULT_AUDITS)
+                    engine_valid = True
+                except (ValueError, OSError, KeyError, TypeError):
+                    gaps.extend(['BINARY_OR_UNKNOWN_INVENTORY', 'INVALID_MANAGED_ENGINE_SOURCE'])
             # A file Git itself calls binary (a PDF, an image) cannot be read line by line, so it takes
             # the full review profile; it no longer blocks delivery outright (#209). Any other
             # unreadable row, an executable or archive binary, or a binary that is not a regular
             # file stays an incomplete inventory.
             for name in binaries:
+                if name == '.getzilla/getzilla.zip' and engine_valid:
+                    continue
                 # A binary with no extension is a program as often as not, whatever its mode (#215).
                 extensionless = '.' not in name.rsplit('/', 1)[-1].lstrip('.')
                 executable = (name.lower().endswith(_EXECUTABLE_BINARY) or extensionless
@@ -203,6 +266,9 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     assessment = {'schema_version': 1, 'status': status, 'bases': bases, 'head': head, 'tree': tree,
                   'tree_fingerprint': fingerprint, 'risk': risk_level, 'rules_digest': _digest(policies),
                   'reasons': reasons, 'gaps': sorted(set(gaps)), 'categories': sorted(audit_categories), 'profile_candidate': profile}
+    if engine_comparisons:
+        assessment['engine_sources'] = {'containers': [engine_sources[ref] for ref in sorted(engine_sources)],
+                                        'comparisons': engine_comparisons}
     plan = {'schema_version': 1, 'assessment_digest': _digest(assessment), 'review_agents': reviewers, 'required_evidence': evidence}
     plan['digest'] = _digest(plan)
     return {'risk': risk_level, 'risk_assessment': assessment, 'review_plan': plan, 'explicit_review_agents': explicit,
@@ -220,6 +286,13 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
     route = get_active_route(root)
     if not route:
         raise ValueError('no active route to reconcile')
+    if route.get('status') == 'cancelled':
+        from .continuity import assert_finishable
+        with task_transition(root):
+            if get_active_route(root) != route:
+                raise ValueError('route changed during reconciliation')
+            assert_finishable(root, route, cancel=True)
+            return route
     from .router import REVIEW_EVIDENCE
     if any(name not in REVIEW_EVIDENCE for name in additional_reviewers):
         raise ValueError('unknown explicit reviewer')
@@ -229,10 +302,22 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
             *(route.get('review_agents', []) if 'risk_assessment' not in route else []), *additional_reviewers])
     selection = selection if selection is not None else _git_range_selection(root, route, 'pr')
     updates = assess(root, selected, selection, fingerprint)
+    # Preserve the complete catalogue, and refuse before package accounting can change.
+    prospective = {**route, **updates, 'updated_at': '9999-12-31T23:59:59+00:00',
+                   'state_revision': route.get('state_revision', 0) + 1}
+    if len((json.dumps(prospective, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode()) > 1_048_576:
+        raise ValueError('complete source review plan exceeds route byte bound')
     with task_transition(root):
         current = get_active_route(root)
         if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
             raise ValueError('route or source changed during reconciliation')
+        from .state import _route_document, get_active_change, open_change_binding
+        # Validate the closed state binding without requiring a cancelled draft
+        # to have completed its spec or earned review receipts.
+        open_change_binding(root)
+        package = get_active_change(root)
+        if package and _route_document(root, root / package['path'] / 'state.json').get('status') == 'cancelled':
+            raise ValueError('attached package is cancelled; use route --cancel, then --new-task to retry; cancellation is terminal')
         synchronize_accounting(root, route, updates['required_evidence'])
         if (tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
                 or git_head(root) != updates['risk_assessment']['head']):

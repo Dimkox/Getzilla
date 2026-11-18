@@ -758,6 +758,8 @@ def assert_finishable(root: Path, route: dict[str, Any], *, cancel: bool = False
     if state.open_change_binding(root):
         raise ValueError('finish or cancel the attached package before closing its task')
     if not cancel:
+        if route.get('status') == 'cancelled':
+            raise ValueError('cancelled task is terminal; use --new-task to retry with fresh evidence')
         from .receipts import validate_evidence
         gaps = [*scope_gaps(root, route), *validate_evidence(root, route)]
         if gaps:
