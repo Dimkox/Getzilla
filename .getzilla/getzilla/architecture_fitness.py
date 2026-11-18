@@ -1976,8 +1976,131 @@ def _shutdown_constant_socket_imports(tree: ast.AST) -> set[str]:
     return {'socket'} if used else set()
 
 
+def _constructor_only_urllib_imports(tree: ast.AST) -> set[str]:
+    """Prove stdlib request/error data construction, never arbitrary client use."""
+    if not namespace_is_closed(tree, allow_instrumentation=True):
+        return set()
+    nodes = tuple(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    events = binding_events(tree)
+    bindings = defaultdict(list)
+    for event in events:
+        bindings[(binding_owner(event.node, parents), event.name)].append(event.node)
+
+    def resolve(name):
+        scope = binding_owner(name, parents)
+        while True:
+            found = bindings.get((scope, name.id), ())
+            if found:
+                return found[0] if len(found) == 1 else None
+            if scope is None:
+                return None
+            scope = binding_owner(scope, parents)
+            while isinstance(scope, ast.ClassDef):
+                scope = binding_owner(scope, parents)
+
+    def imported(value):
+        parts = []
+        while isinstance(value, ast.Attribute) and isinstance(value.ctx, ast.Load):
+            parts.append(value.attr)
+            value = value.value
+        if not isinstance(value, ast.Name):
+            return None
+        declaration = resolve(value)
+        if isinstance(declaration, ast.Import):
+            matches = [a for a in declaration.names if (a.asname or a.name.split('.')[0]) == value.id]
+            prefix = matches[0].name if matches and matches[0].asname else value.id
+        elif isinstance(declaration, ast.ImportFrom) and declaration.level == 0:
+            matches = [a for a in declaration.names if (a.asname or a.name) == value.id]
+            prefix = declaration.module + '.' + matches[0].name if matches else ''
+        else:
+            return None
+        return '.'.join((prefix, *reversed(parts)))
+
+    declarations = {}
+    imported_modules = set()
+    for event in events:
+        if isinstance(event.node, ast.Import):
+            imported_modules.update(alias.name for alias in event.node.names)
+        elif isinstance(event.node, ast.ImportFrom) and event.node.level == 0 and event.node.module:
+            imported_modules.add(event.node.module)
+    for event in events:
+        declaration = event.node
+        if isinstance(declaration, ast.ImportFrom) and (declaration.module or '').split('.')[0] == 'urllib':
+            return set()
+        if isinstance(declaration, ast.Import):
+            for alias in declaration.names:
+                if alias.name.split('.')[0] == 'urllib':
+                    if alias.name not in {'urllib.request', 'urllib.error'} or alias.asname is not None:
+                        return set()
+                    declarations[declaration] = alias.name
+        if event.name == 'urllib' and declaration not in declarations:
+            return set()
+    if not declarations:
+        return set()
+    used = set()
+    instrumentor_names = {e.name for e in events if isinstance(e.node, (ast.Import, ast.ImportFrom))
+                         and ((isinstance(e.node, ast.ImportFrom) and (e.node.module or '').split('.')[0] in {'unittest', 'mock', 'pytest', '_pytest'})
+                              or (isinstance(e.node, ast.Import) and any(a.name.split('.')[0] in {'unittest', 'mock', 'pytest', '_pytest'} for a in e.node.names)))}
+    for node in nodes:
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and 'urllib' in node.names:
+            return set()
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+            continue
+        if node.id != 'urllib' and node.id not in instrumentor_names:
+            continue
+        member = node
+        while isinstance(parents.get(member), ast.Attribute) and parents[member].value is member:
+            member = parents[member]
+        call = parents.get(member)
+        canonical = imported(member)
+        if node.id == 'urllib':
+            declaration = resolve(node)
+            if (declaration not in declarations or canonical not in {'urllib.request.Request', 'urllib.error.HTTPError'}
+                    or canonical.rsplit('.', 1)[0] != declarations[declaration]
+                    or not isinstance(call, ast.Call) or call.func is not member):
+                return set()
+            used.add(declaration)
+            continue
+        if canonical == 'unittest.TestCase' and isinstance(call, ast.ClassDef) and member in call.bases:
+            continue
+        if not isinstance(call, ast.Call) or call.func is not member:
+            return set()
+        if canonical in {'unittest.main', 'unittest.mock.Mock', 'unittest.mock.MagicMock'}:
+            continue
+        if any(k.arg is None for k in call.keywords) or not call.args:
+            return set()
+        if canonical == 'unittest.mock.patch':
+            target = call.args[0]
+            if (not isinstance(target, ast.Constant) or type(target.value) is not str
+                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]{0,4095}', target.value)
+                    or any(p in {'urllib', 'Request', 'HTTPError', 'builtins', 'sys', 'importlib',
+                                 'namespace_is_closed', 'binding_events', 'binding_owner'} or p.startswith('__')
+                           for p in target.value.split('.'))):
+                return set()
+            parts = target.value.split('.')
+            # A declared module member, or its imported stdlib dependency member.
+            # Unknown target factories and unrelated policy globals are not proof.
+            direct = '.'.join(parts[:-1]) in imported_modules
+            stdlib_member = (len(parts) > 2 and '.'.join(parts[:-2]) in imported_modules
+                             and parts[-2] in sys.stdlib_module_names)
+            if not (direct or stdlib_member):
+                return set()
+        elif canonical == 'unittest.mock.patch.object':
+            if (len(call.args) < 2 or imported(call.args[0]) != 'sys'
+                    or not isinstance(call.args[1], ast.Constant) or call.args[1].value not in {'stdin', 'stdout'}):
+                return set()
+        elif canonical == 'unittest.mock.patch.dict':
+            if imported(call.args[0]) != 'os.environ':
+                return set()
+        else:
+            return set()
+    return set(declarations.values()) if used == set(declarations) else set()
+
+
 def _non_client_imports(tree: ast.AST) -> set[str]:
-    return _byte_only_http_imports(tree) | _shutdown_constant_socket_imports(tree)
+    return (_byte_only_http_imports(tree) | _shutdown_constant_socket_imports(tree)
+            | _constructor_only_urllib_imports(tree))
 
 
 def _network_clients(

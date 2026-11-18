@@ -1,43 +1,42 @@
-"""Real HTTPResponse framing over owned memory; no network or external process."""
-import errno
-import http.client
-import io
+"""Production exchange framing against a bounded owned HTTP/1.0 loopback server."""
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 import time
 import unittest
-from types import SimpleNamespace
+import urllib.request
 
-from adaptive_trust_ci.http_response import ResponseLimitError, read_response
-
-
-class MemorySocket:
-    def __init__(self, wire):
-        self.closed = False
-        owner = self
-        class Stream(io.BytesIO):
-            raw = SimpleNamespace(_sock=owner)
-            def close(self):
-                owner.closed = True
-                super().close()
-        self.stream = Stream(wire)
-
-    def makefile(self, *args, **kwargs):
-        return self.stream
-
-    def settimeout(self, value):
-        if self.closed:
-            raise OSError(errno.EBADF, 'owned closed socket')
-
-    def shutdown(self, how):
-        self.closed = True
+from adaptive_trust_ci.http_response import ResponseLimitError, exchange
 
 
 class ResponseCompletionTests(unittest.TestCase):
     def read(self, body, advertised):
-        length = b'' if advertised is None else b'Content-Length: '+str(advertised).encode()+b'\r\n'
-        sock = MemorySocket(b'HTTP/1.0 200 OK\r\n'+length+b'\r\n'+body)
-        with http.client.HTTPResponse(sock) as response:
-            response.begin()
-            return read_response(response, deadline=time.monotonic()+2)
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.0'
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                if advertised is not None:
+                    self.send_header('Content-Length', str(advertised))
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+                self.close_connection = True
+
+        with HTTPServer(('127.0.0.1', 0), Handler) as server:
+            server.timeout = 2
+            worker = threading.Thread(target=server.handle_request)
+            worker.start()
+            try:
+                request = urllib.request.Request('http://127.0.0.1:'+str(server.server_port)+'/owned')
+                status, result = exchange(request, deadline=time.monotonic()+2)
+                self.assertEqual(status, 200)
+                return result
+            finally:
+                worker.join(3)
+                self.assertFalse(worker.is_alive(), 'owned one-request server did not stop')
 
     def test_completed_length_closes_socket_before_the_final_eof_read(self):
         body = b'{"owned":true}'
