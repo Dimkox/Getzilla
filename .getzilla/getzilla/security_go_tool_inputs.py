@@ -1052,6 +1052,9 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
             "subject": subject,
             "context": record["context"],
             "proofs": evidence,
+            "go_module_sources": [
+                {"module": key, "h1": module["h1"], "uses": module["uses"]} for key, module in sorted(required.items())
+            ],
             "go_module_assurance": "actual embedded/source-lock module identities; standard Go runtime included; no reproducible compiler or host OS/kernel claim",
         },
         "bound_bytes": len(payload) + sum(item["bytes"] for item in evidence),
