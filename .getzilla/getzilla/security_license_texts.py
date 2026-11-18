@@ -8,6 +8,9 @@ lines vary. Unknown variants and additional terms require human review.
 Reference texts: https://github.com/spdx/license-list-data/tree/main/text
 Retained source hashes and positive fixtures live in
 tests/fixtures/security-license-texts.json. Updating this table needs review.
+Four complete observed file variants are qualified by exact UTF-8 bytes only;
+their full attribution, terms and artifact provenance are retained in
+tests/fixtures/security-license-observed-variants.json.
 """
 from __future__ import annotations
 
@@ -24,10 +27,19 @@ _TERMS = {
 }
 _TITLES = {'mit license', 'the mit license (mit)', 'isc license', 'bsd 2-clause license',
            'bsd 3-clause license', 'bsd zero clause license', 'zero-clause bsd', '0bsd'}
+_REVIEWED_FILES = {
+    '37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361': 'MIT',
+    'a97ac230e5f33ef10a5367a850eb01f91f1a0b064e34742c7794d2294557f524': 'BSD-3-Clause',
+    '804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3': 'MIT',
+    'efe1acf3e62fb99c288b0ec73e5a773b7268ef4320fe757ea994214e4b63c371': 'BSD-3-Clause',
+}
 
 
 def recognized_license(text: str) -> str | None:
     """Return one qualified standard ID, or None for unknown/incomplete terms."""
+    exact = _REVIEWED_FILES.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
+    if exact is not None:
+        return exact
     lines = [line.strip() for line in text.splitlines()
              if re.fullmatch(r'\s*SPDX-License-Identifier:\s*[A-Za-z0-9][A-Za-z0-9.+:\- ()]*\s*', line) is None]
     copyrighted = False

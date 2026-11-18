@@ -45,6 +45,67 @@ def require_builds(inventory, source, run):
             raise BackendUnavailable('current build output differs from actual completed graph')
 
 
+def ci_use_observations(root,inventory,source,run,graphs):
+    """Current owned CI consumers only; no restored JSON or host-to-image target credit."""
+    if _LIVE is None:
+        return None
+    from . import security_image_backend as native
+    from .security_cli import validate_selection_authority
+    from .security_python_target import digest,_subject
+    if native._GUARD is None or _LIVE.get('native_guard') is not native._GUARD:
+        raise BackendUnavailable('CI use observation needs the live owned namespace')
+    validate_selection_authority(source,run)
+    require_builds(inventory,source,run)
+    if inventory.get('builds')!=_LIVE.get('build_inputs'):
+        raise BackendUnavailable('CI consumer graph differs from actual completed build inputs')
+    consumers=[]
+    for row in sorted(inventory.get('builds',[]),key=lambda item:(item['dockerfile'],item['build_sha256'])):
+        recipe=row['dockerfile']
+        requirements={'trust-ci/Dockerfile.api':'trust-ci/requirements.txt',
+            'trust-ci/Dockerfile.worker':'trust-ci/requirements.txt',
+            'trust-ci/Dockerfile.test':'trust-ci/requirements-test.txt'}.get(recipe)
+        if requirements is None:
+            continue
+        proof=graphs.get('evidence',{})
+        expected=graphs.get('graphs',{}).get('trust-ci/pyproject.toml#runtime',[])
+        if [requirements] not in expected or recipe not in proof or requirements not in proof:
+            continue
+        if hashlib.sha256(read_file(root,recipe,4*1024*1024)).hexdigest()!=proof[recipe]:
+            raise BackendUnavailable('current CI consumer source changed')
+        consumers.append(dict(recipe=recipe,recipe_sha256=row['recipe_sha256'],build_sha256=row['build_sha256'],
+            image=_LIVE['builds'][row['build_sha256']],requirements=requirements,
+            requirements_sha256=proof[requirements],distribution='internal',purpose='isolated-public-ci',
+            image_target_observed=False))
+    subjects={}
+    for dep in inventory['dependencies']:
+        if dep.get('ecosystem')!='PyPI':
+            continue
+        indexes=[]
+        for index,consumer in enumerate(consumers):
+            manifest=dep['manifest']
+            direct=manifest==consumer['requirements']
+            project=manifest=='trust-ci/pyproject.toml' and (
+                dep['usage'] in {'runtime','build'} or dep['usage']=='optional'
+                and consumer['requirements']=='trust-ci/requirements-test.txt')
+            if direct or project:
+                indexes.append(index)
+        if indexes:
+            subjects[digest(_subject(dep))]=indexes
+    value=dict(schema_version=1,source=source,run=run,inventory_sha256=inventory['digest'],
+        closure_graphs_sha256=digest(graphs),subjects=subjects,consumers=consumers,
+        assurance='observed CI use only; original production/customer uses and image targets remain separate')
+    _LIVE['ci_uses']=json.loads(json.dumps(value))
+    return json.loads(json.dumps(value))
+
+
+def validate_ci_uses(value,source,run):
+    from . import security_image_backend as native
+    if (_LIVE is None or native._GUARD is None or _LIVE.get('native_guard') is not native._GUARD
+            or _LIVE['source']!=source or _LIVE['run']!=run or _LIVE.get('ci_uses')!=value):
+        raise BackendUnavailable('current CI use observation cannot be restored from declarations')
+    return json.loads(json.dumps(value))
+
+
 def _write(root, relative, raw):
     if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
         return _ci_write(root, relative, raw)
@@ -280,7 +341,9 @@ def produce(root, source, run, volume, builder):
     selection = selection_document(inventory, source, run, _clock().isoformat())
     declared = declared_inventory(root, selection)
     catalog = project_catalog(catalog, declared['digest'])
-    _LIVE = dict(source=source, run=run, builds=completed)
+    from . import security_image_backend as native
+    _LIVE = dict(source=source, run=run, builds=completed,native_guard=native._GUARD,
+        build_inputs=json.loads(json.dumps(declared['builds'])))
     try:
         require_builds(declared, source, run)
         yield selection, catalog
@@ -384,6 +447,9 @@ def _pipeline(request, volume, builder):
     root = Path(request['root'])
     database, artifacts = (Path(request[key]) for key in ('database', 'artifacts'))
     tools = _pipeline_tools(request, volume)
+    with cli._preparation_step('package-target'):
+        from .security_python_target import observe_target
+        package_target = observe_target()
     with tempfile.TemporaryDirectory(prefix='source-', dir=volume) as directory:
         source = cli.source_binding(root, cli.TRUSTED_ROOT, Path(directory))
         cli.validate_selection_authority(source, request['run'])
@@ -391,7 +457,8 @@ def _pipeline(request, volume, builder):
             selection_path, catalog_path = volume / 'selection.json', volume / 'catalog.json'
             _write(volume, selection_path.name, canonical(selection))
             _write(volume, catalog_path.name, canonical(catalog))
-            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path)
+            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path,
+                           package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
             cli._atomic(Path(request['profile']), canonical(profile))
