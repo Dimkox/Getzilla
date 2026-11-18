@@ -42,7 +42,7 @@ class ActionInputsTests(unittest.TestCase):
         from getzilla import security_action_inputs
         return security_action_inputs
 
-    def world(self, uses=1, *, link=False, term_change=None):
+    def world(self, uses=1, *, link=False, term_change=None, npm_lock=None):
         module = self.adapter()
         mit = json.loads((ROOT / 'tests/fixtures/security-license-texts.json').read_text())['MIT']['text'].encode()
         metadata = FIXTURE['action']['text'].encode()
@@ -59,6 +59,8 @@ class ActionInputsTests(unittest.TestCase):
                  'LICENSE': mit, '.licenses/npm/@actions/core.dep.yml': cache,
                  'package.json': encoded(dict(name='checkout', version='7.0.1', license='MIT', dependencies={'@actions/core': '3.0.1'})),
                  'package-lock.json': encoded(dict(lockfileVersion=3, packages={'': {}, 'node_modules/@actions/core': {'version': '3.0.1'}}))}
+        if npm_lock is not None:
+            files['package-lock.json'] = encoded(dict(lockfileVersion=3, packages={'': {}, 'node_modules/@actions/core': npm_lock}))
         modes = {name: '100644' for name in files}
         if link:
             files['escape'] = b'/tmp/foreign'
@@ -122,7 +124,7 @@ class ActionInputsTests(unittest.TestCase):
         report = module.prepare_actions(inventory, self.root, fetch=fetch, now=NOW)
         self.assertEqual(report['records'], [])
         self.assertEqual(len(report['gaps']), 3)
-        self.assertEqual(report['gaps'][0]['code'], 'action-bundle-map-missing')
+        self.assertEqual(report['gaps'][0]['code'], 'license-transitive-coverage')
         self.assertEqual(len(report['source_facts']), 1)
         self.assertEqual(len(calls), 3)
 
