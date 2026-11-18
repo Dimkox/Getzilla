@@ -221,4 +221,3 @@ class GitHTTPSControls(unittest.TestCase):
                 self.assertEqual(report['status'], 'incomplete')
                 self.assertIn('HTTPS', report['components'][0]['error'])
                 publish.assert_not_called()
-
