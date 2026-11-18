@@ -2551,7 +2551,7 @@
         },
         ".getzilla/getzilla/receipts.py": {
           "mode": 420,
-          "sha256": "441800d5a1732f4718124bfc43aaa4e835554a6e37eb691b4b34eaa0ded1a164"
+          "sha256": "3b2c4e9fffc83d3d066ea33e78bcb33a95c07e35b894e7ba47fdfaac82e47d76"
         },
         ".getzilla/getzilla/release_state.py": {
           "mode": 420,
