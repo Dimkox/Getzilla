@@ -63,7 +63,8 @@ class EntrypointBytecodeTests(unittest.TestCase):
 
     def test_cli_dispatch_and_direct_hook_leave_no_bytecode(self):
         self.route('scripts/getzilla_cli.py')
-        if os.name!='nt':self.route('bin/getzilla')
+        if os.name!='nt':
+            self.route('bin/getzilla')
         self.command('.getzilla/hooks/user_prompt_submit.py',stdin='{}')
         self.assertFalse(list((self.root/'.getzilla').rglob('*.pyc')))
         self.assertEqual(self.git('status','--porcelain=v1','--untracked-files=all'),'')
@@ -91,7 +92,8 @@ class EntrypointBytecodeTests(unittest.TestCase):
 
     def test_real_untracked_source_and_existing_caller_cache_file_stay_visible(self):
         for path in ('new_feature.py','.getzilla/getzilla/__pycache__/caller-owned.txt'):
-            target=self.root/path;target.parent.mkdir(parents=True,exist_ok=True)
+            target=self.root/path
+            target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes(b'owned source must remain unchanged\n')
         result=self.route()
         self.assertIn('UNCOMMITTED_INVENTORY',result['risk_assessment']['gaps'])
@@ -106,7 +108,8 @@ class EntrypointCoverageTests(unittest.TestCase):
         scripts=[]
         for path in (ROOT/'scripts').glob('*.py'):
             text=path.read_text()
-            if path.name.startswith('getzilla_') or 'from getzilla' in text or 'import getzilla' in text:scripts.append(path)
+            if path.name.startswith('getzilla_') or 'from getzilla' in text or 'import getzilla' in text:
+                scripts.append(path)
         hooks=[path for path in (ROOT/'.getzilla/hooks').glob('*.py') if path.name!='_lib.py']
         self.assertGreater(len(scripts),50)
         self.assertGreater(len(hooks),5)
