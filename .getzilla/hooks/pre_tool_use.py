@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sys
+sys.dont_write_bytecode = True
 import time
 from pathlib import Path
 from typing import Any

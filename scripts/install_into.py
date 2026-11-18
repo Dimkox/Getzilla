@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import sys
+sys.dont_write_bytecode = True
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -53,6 +54,7 @@ MANAGED_FILES = (
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
     "docs/isolated-ci-acceptance.md",
+    "docs/security-license-exceptions.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),

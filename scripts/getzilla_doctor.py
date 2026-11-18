@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

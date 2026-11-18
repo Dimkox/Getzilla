@@ -7,6 +7,7 @@ import secrets
 import stat
 import subprocess
 import sys
+sys.dont_write_bytecode = True
 import zipfile
 from pathlib import Path
 from typing import BinaryIO, NamedTuple

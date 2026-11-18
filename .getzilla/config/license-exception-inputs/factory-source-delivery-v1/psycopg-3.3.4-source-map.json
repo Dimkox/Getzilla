@@ -1,0 +1,1336 @@
+{
+  "acquisition": [
+    {
+      "bytes": 5932,
+      "final_url": "https://pypi.org/pypi/psycopg/3.3.4/json",
+      "request": 5,
+      "response_headers": {
+        "Content-Type": "application/json",
+        "ETag": "\"fnjiekRQRhDfmzHYbN1lNA\"",
+        "Last-Modified": null
+      },
+      "sha256": "e0ef24082afbcfb633fec28e08d23ff6fcd4fd7e9fdb07735d68aaea2e778958",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:29.326186+00:00",
+      "url": "https://pypi.org/pypi/psycopg/3.3.4/json"
+    },
+    {
+      "bytes": 165799,
+      "final_url": "https://files.pythonhosted.org/packages/db/2f/cb91e5502ec9de1de6f1b76cfbf69531932725361168bb06963620c77e2e/psycopg-3.3.4.tar.gz",
+      "request": 6,
+      "response_headers": {
+        "Content-Type": "application/octet-stream",
+        "ETag": "\"9b1b1d41c1789d394cb4128036ff3a7a\"",
+        "Last-Modified": "Fri, 01 May 2026 23:31:56 GMT"
+      },
+      "sha256": "e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:29.834176+00:00",
+      "url": "https://files.pythonhosted.org/packages/db/2f/cb91e5502ec9de1de6f1b76cfbf69531932725361168bb06963620c77e2e/psycopg-3.3.4.tar.gz"
+    }
+  ],
+  "assurance": "All source content and file modes match the identified publisher archive; delivery container is a canonical repack, not original publisher gzip bytes. No legal compliance or original upstream-generation provenance claim.",
+  "legal_text_origins": [
+    {
+      "bytes": 35149,
+      "final_url": "https://www.gnu.org/licenses/gpl-3.0.txt",
+      "request": 2,
+      "response_headers": {
+        "Content-Type": "text/plain",
+        "ETag": "\"894d-55a62eb645dcd\"",
+        "Last-Modified": "Sat, 30 Sep 2017 07:16:26 GMT"
+      },
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "status": 200,
+      "timestamp_utc": "2026-11-18T21:40:07.898373+00:00",
+      "url": "https://www.gnu.org/licenses/gpl-3.0.txt"
+    }
+  ],
+  "package": "psycopg",
+  "schema_version": 1,
+  "source": {
+    "filename": "psycopg-3.3.4.tar.gz",
+    "original_archive_sha256": "e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc",
+    "original_archive_url": "https://files.pythonhosted.org/packages/db/2f/cb91e5502ec9de1de6f1b76cfbf69531932725361168bb06963620c77e2e/psycopg-3.3.4.tar.gz",
+    "original_index_sha256": "e0ef24082afbcfb633fec28e08d23ff6fcd4fd7e9fdb07735d68aaea2e778958",
+    "representation": "canonical-repack-of-unchanged-source",
+    "snapshot_manifest": "psycopg-3.3.4-snapshot.json",
+    "snapshot_manifest_sha256": "e32cc7ce2af142492b171ae53e8b2606675dc49de8355fb9f5c37d44c4ff47a4"
+  },
+  "source_members": [
+    {
+      "bytes": 7652,
+      "mode": 420,
+      "path": "psycopg-3.3.4/LICENSE.txt",
+      "relative_path": "LICENSE.txt",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "bytes": 4313,
+      "mode": 420,
+      "path": "psycopg-3.3.4/PKG-INFO",
+      "relative_path": "PKG-INFO",
+      "sha256": "daef30765d48b6c646bffb62457da8e1e969f0ff3bacf563c14da60f185c253d"
+    },
+    {
+      "bytes": 1177,
+      "mode": 420,
+      "path": "psycopg-3.3.4/README.rst",
+      "relative_path": "README.rst",
+      "sha256": "a2a147191339a67f9e743f7719a520610feca13751a9609d7f402e83b966de5c"
+    },
+    {
+      "bytes": 3423,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/__init__.py",
+      "relative_path": "psycopg/__init__.py",
+      "sha256": "5f1607a193cb63e60a0c5687209d2bd0e3029760b9559e9968f31d6b5d82c778"
+    },
+    {
+      "bytes": 2238,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_acompat.py",
+      "relative_path": "psycopg/_acompat.py",
+      "sha256": "68e10b300b9182d2ee8cb9634e249efd0555c7784e2daafb4151b214ca38951e"
+    },
+    {
+      "bytes": 11007,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_adapters_map.py",
+      "relative_path": "psycopg/_adapters_map.py",
+      "sha256": "d0e206962da1729e95c21b152222a6525b7e309cc35245ce5a7a99248e4f6ed4"
+    },
+    {
+      "bytes": 5387,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_capabilities.py",
+      "relative_path": "psycopg/_capabilities.py",
+      "sha256": "00dc9a63cc9ac76a20494f95f478b69c6aa775728b195574358bc634b7cb70c5"
+    },
+    {
+      "bytes": 872,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_cmodule.py",
+      "relative_path": "psycopg/_cmodule.py",
+      "sha256": "d7bb5516799ff9ace28653ae3b4ff51dd3c3b578d435fedbf56a27cda7b40011"
+    },
+    {
+      "bytes": 3004,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_column.py",
+      "relative_path": "psycopg/_column.py",
+      "sha256": "9ba6a71e0b2bc220a1b7cc594b136d3d65a8024f03687839337632ca26c71571"
+    },
+    {
+      "bytes": 1398,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_compat.py",
+      "relative_path": "psycopg/_compat.py",
+      "sha256": "69dd27b744a96c908a50e23934c0d3f6737c4f50ac7ec8c1a37a11cb2d3dedca"
+    },
+    {
+      "bytes": 24130,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_connection_base.py",
+      "relative_path": "psycopg/_connection_base.py",
+      "sha256": "7add2044e037e5042f582c2a1436fbb5d00d41db2cea20980d6f270e5469d5e0"
+    },
+    {
+      "bytes": 6680,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_connection_info.py",
+      "relative_path": "psycopg/_connection_info.py",
+      "sha256": "40bfda115d97ffaff560c8a0ce5426447f8b525f9bd241459c93cc2797546b83"
+    },
+    {
+      "bytes": 3501,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_conninfo_attempts.py",
+      "relative_path": "psycopg/_conninfo_attempts.py",
+      "sha256": "9e081d1fe49a639f4cf0f2d54bce359ac6b7524acc2ed9b170cc0dd004fec7d3"
+    },
+    {
+      "bytes": 3590,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_conninfo_attempts_async.py",
+      "relative_path": "psycopg/_conninfo_attempts_async.py",
+      "sha256": "7fe10d9b648df37f6f89689c7389cda6abac077eac5cfc58e5320c0c8002eb54"
+    },
+    {
+      "bytes": 3164,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_conninfo_utils.py",
+      "relative_path": "psycopg/_conninfo_utils.py",
+      "sha256": "008bda02cdd0a7c7b029fcfced01ba9fdbbd67da0e862f1089306c799b013575"
+    },
+    {
+      "bytes": 9735,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_copy.py",
+      "relative_path": "psycopg/_copy.py",
+      "sha256": "63d3768d0b84fcc2b933e9ee9c9ed9ad1dc6a4b7ce9d49ff2d10b2637e2f70e2"
+    },
+    {
+      "bytes": 9974,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_copy_async.py",
+      "relative_path": "psycopg/_copy_async.py",
+      "sha256": "8cbdbf6f70a00eacefd1691695db72a087be0241b0a1c00f335f179b502b34ae"
+    },
+    {
+      "bytes": 13879,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_copy_base.py",
+      "relative_path": "psycopg/_copy_base.py",
+      "sha256": "20b3dec8f11cb98fb29f388874f1a6440c4ddbeac0e321de28e45895e11bc7fb"
+    },
+    {
+      "bytes": 23103,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_cursor_base.py",
+      "relative_path": "psycopg/_cursor_base.py",
+      "sha256": "6aa7e17b57fe37f343809ead45ebba3764666afebfee1517fe930a9ea74186e7"
+    },
+    {
+      "bytes": 7852,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_dns.py",
+      "relative_path": "psycopg/_dns.py",
+      "sha256": "cb875217ac94b534ce620630150cae25872851f0625d94a419e691ab07464625"
+    },
+    {
+      "bytes": 4074,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_encodings.py",
+      "relative_path": "psycopg/_encodings.py",
+      "sha256": "3078ce9bfef5b9b06f50cf00a78585d5d4d37383ca46f85014874806e260c449"
+    },
+    {
+      "bytes": 1691,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_enums.py",
+      "relative_path": "psycopg/_enums.py",
+      "sha256": "e6009e7ffb187bd51d684e27fd198359e1784df40ec1015e8a48eb933f588af2"
+    },
+    {
+      "bytes": 1875,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_oids.py",
+      "relative_path": "psycopg/_oids.py",
+      "sha256": "98923c1db46b4ec6cad0b2209e71b9c4f1fede1c4d51c968b6a52eae6ca8dacd"
+    },
+    {
+      "bytes": 2165,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_pipeline.py",
+      "relative_path": "psycopg/_pipeline.py",
+      "sha256": "1448864658cefa7aee20a61bb7255f6fc49b832c1c377b520789e46cb70e9f1a"
+    },
+    {
+      "bytes": 2108,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_pipeline_async.py",
+      "relative_path": "psycopg/_pipeline_async.py",
+      "sha256": "af9c9a8670382419329b1f5352ac1af75994959ca7c0b32a5385fdfa5037c25f"
+    },
+    {
+      "bytes": 6669,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_pipeline_base.py",
+      "relative_path": "psycopg/_pipeline_base.py",
+      "sha256": "29130f212fd29dbe20271f9f5aab031c21c0af3cb3d82c93e54d8dc86e1e4d48"
+    },
+    {
+      "bytes": 6282,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_preparing.py",
+      "relative_path": "psycopg/_preparing.py",
+      "sha256": "d71fba3416f3b95fc1d35a3e6cab454be6e98067c2f16801d91dd06b441c404a"
+    },
+    {
+      "bytes": 11903,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_py_transformer.py",
+      "relative_path": "psycopg/_py_transformer.py",
+      "sha256": "1c4c15a30262578fd6ebfbee782d08089103a79d73359d1e1e27d7c719772b78"
+    },
+    {
+      "bytes": 15724,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_queries.py",
+      "relative_path": "psycopg/_queries.py",
+      "sha256": "c217b09decc0c1ca1e6577847f029e8b96a99a5ac4315a81ba026121d4886410"
+    },
+    {
+      "bytes": 4662,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_server_cursor.py",
+      "relative_path": "psycopg/_server_cursor.py",
+      "sha256": "d755e04f921482e123a25012c49df4d5d3ba3581d0b7f85307b6ea51aacfb82b"
+    },
+    {
+      "bytes": 4711,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_server_cursor_async.py",
+      "relative_path": "psycopg/_server_cursor_async.py",
+      "sha256": "00aa44fa3b06443373730acefa3a43311babdd5c0858f36db11691fd864e3c24"
+    },
+    {
+      "bytes": 7537,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_server_cursor_base.py",
+      "relative_path": "psycopg/_server_cursor_base.py",
+      "sha256": "6514d1e38e8899aaf52353949c8db2a43dccb0445d885986433d5ba0dce19cde"
+    },
+    {
+      "bytes": 2000,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_struct.py",
+      "relative_path": "psycopg/_struct.py",
+      "sha256": "c9adfa9064ebd2e1e55f2b53a3b427ff4732d0f951d89f8157ed27a8c51732b7"
+    },
+    {
+      "bytes": 3529,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_tpc.py",
+      "relative_path": "psycopg/_tpc.py",
+      "sha256": "34b89f229756a6121bc1a04fbcb3d2699ffe0e8b5eebbc94ebb7bd53402891e4"
+    },
+    {
+      "bytes": 451,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_transformer.py",
+      "relative_path": "psycopg/_transformer.py",
+      "sha256": "9839012ee4b16d70c6d537243e0232649c74d329f951753c0e5b8e1a61d68c06"
+    },
+    {
+      "bytes": 5597,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_tstrings.py",
+      "relative_path": "psycopg/_tstrings.py",
+      "sha256": "006deaea53336af81fee9d11a090b54b51c277c3d9c8085a57d55f51e9bd6402"
+    },
+    {
+      "bytes": 10643,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_typeinfo.py",
+      "relative_path": "psycopg/_typeinfo.py",
+      "sha256": "561535866953c59f90f809054dbf427f5a8f127231e74867b2b83e76e40e076c"
+    },
+    {
+      "bytes": 2498,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_typemod.py",
+      "relative_path": "psycopg/_typemod.py",
+      "sha256": "519c0715f9d66d7ab167d508541ac9877eb9f7da686406998fae6ff04b1b209b"
+    },
+    {
+      "bytes": 1186,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_tz.py",
+      "relative_path": "psycopg/_tz.py",
+      "sha256": "ffe5b4233b3ce1462b6c06372350a2706524d2783e6e808c668e47e61d23f6e8"
+    },
+    {
+      "bytes": 3126,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/_wrappers.py",
+      "relative_path": "psycopg/_wrappers.py",
+      "sha256": "c0a66dfdaafc42e46010a0bab6ec1a9985c2c01d4fec8650b268187553a50215"
+    },
+    {
+      "bytes": 7694,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/abc.py",
+      "relative_path": "psycopg/abc.py",
+      "sha256": "f12a65c660a801eac16d39c0d9d7ef8a94f0ea68add91b4361636a7e78d77e66"
+    },
+    {
+      "bytes": 5195,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/adapt.py",
+      "relative_path": "psycopg/adapt.py",
+      "sha256": "7d957b9c6a6a57650ac22c4bbb9d24d5f6ffb20d2e9ba4ae575ac21959f5dfa3"
+    },
+    {
+      "bytes": 2681,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/client_cursor.py",
+      "relative_path": "psycopg/client_cursor.py",
+      "sha256": "9d1a376dc91c2a3de764601c5f3aec3cfe3984431f6b195e8159def7031d6b3f"
+    },
+    {
+      "bytes": 19666,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/connection.py",
+      "relative_path": "psycopg/connection.py",
+      "sha256": "5dfacd2ef35f748c5a60c07c8bf5d6e6a2fa25438ee1794591b4a4e4e70afd7e"
+    },
+    {
+      "bytes": 21914,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/connection_async.py",
+      "relative_path": "psycopg/connection_async.py",
+      "sha256": "24c8119d6f1b1dce6cfdf24d304760d3d798d9faffade3f379a2ba88ed44ae5d"
+    },
+    {
+      "bytes": 4471,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/conninfo.py",
+      "relative_path": "psycopg/conninfo.py",
+      "sha256": "bcaab336f7f44e19efe3bdbbf875032a0a771358c34dd8bee9209262ee7f12ec"
+    },
+    {
+      "bytes": 806,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/copy.py",
+      "relative_path": "psycopg/copy.py",
+      "sha256": "fd5ef68e9d835ebd931ecaa8f52e9c6a1bde328d10b819777e78a0b74ac699b7"
+    },
+    {
+      "bytes": 439,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/crdb/__init__.py",
+      "relative_path": "psycopg/crdb/__init__.py",
+      "sha256": "674c11bec482fc2a5a38159f5828a5c0fd2c37a037f88561403e5c95d826fdd1"
+    },
+    {
+      "bytes": 7270,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/crdb/_types.py",
+      "relative_path": "psycopg/crdb/_types.py",
+      "sha256": "113a0c8556624f6e8ade6d46552e6bd0510c3bcf2d0cb8c0ad94421b2382577a"
+    },
+    {
+      "bytes": 2758,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/crdb/connection.py",
+      "relative_path": "psycopg/crdb/connection.py",
+      "sha256": "32cfafe6e10e7d23962af75c671edddd54d75df8b9a13cbf1a14c22350a0d704"
+    },
+    {
+      "bytes": 11116,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/cursor.py",
+      "relative_path": "psycopg/cursor.py",
+      "sha256": "9fedba5e8322628df838d749a7f48a7b9082601ab3b4d552ce594c5487f13e0f"
+    },
+    {
+      "bytes": 11426,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/cursor_async.py",
+      "relative_path": "psycopg/cursor_async.py",
+      "sha256": "871ee328c590531f6247031d5db0aa6080b0778c76bfe0665ee4816eebf9a300"
+    },
+    {
+      "bytes": 3309,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/dbapi20.py",
+      "relative_path": "psycopg/dbapi20.py",
+      "sha256": "650c28c7130ee0e1eeb8b674ea9d7d556809b6615b2d7e58b8b1dbca3345d982"
+    },
+    {
+      "bytes": 46355,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/errors.py",
+      "relative_path": "psycopg/errors.py",
+      "sha256": "1ffb960395cc66eb6e5f4702fbaf8f58f48db8c6a84b810c6577a8de1489f2bb"
+    },
+    {
+      "bytes": 12702,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/generators.py",
+      "relative_path": "psycopg/generators.py",
+      "sha256": "6edac492cd964b7ffa01220d78ede036b9f2b7715935857b0b06f2602da31c75"
+    },
+    {
+      "bytes": 6413,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/postgres.py",
+      "relative_path": "psycopg/postgres.py",
+      "sha256": "133982b2b02c0dfc6e0b28f6d28f870d8c39d6de7707fcce96439ca46c0a9137"
+    },
+    {
+      "bytes": 3976,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/__init__.py",
+      "relative_path": "psycopg/pq/__init__.py",
+      "sha256": "6d3f05b1b5a02896fb0a4fb690c8ae810928f459c355d70426ec1be7448f50e5"
+    },
+    {
+      "bytes": 3099,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/_debug.py",
+      "relative_path": "psycopg/pq/_debug.py",
+      "sha256": "348ac8fbb809d8efba4a2b71518d07ab5c6ea63c8f248b2a1946e5ce1581586c"
+    },
+    {
+      "bytes": 6004,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/_enums.py",
+      "relative_path": "psycopg/pq/_enums.py",
+      "sha256": "fa1a16d893690911b3dfc89a2fd0f44eb740b541c869fb96170252b264722216"
+    },
+    {
+      "bytes": 22497,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/_pq_ctypes.py",
+      "relative_path": "psycopg/pq/_pq_ctypes.py",
+      "sha256": "4d69fb3e81431671a930e8193522b32c22fd8ea597da83961e577dbb7701f12f"
+    },
+    {
+      "bytes": 10320,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/_pq_ctypes.pyi",
+      "relative_path": "psycopg/pq/_pq_ctypes.pyi",
+      "sha256": "491623e63ab6804dedc2baabda09ec38bce0a1e92e0349a848a68356395e3baf"
+    },
+    {
+      "bytes": 8095,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/abc.py",
+      "relative_path": "psycopg/pq/abc.py",
+      "sha256": "55d9619e21dbc7d550f352290326633c38a6cd278f5c68c35022a2f2e979939b"
+    },
+    {
+      "bytes": 6727,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/misc.py",
+      "relative_path": "psycopg/pq/misc.py",
+      "sha256": "429e8247e5b9400b203373b926052b6580cd82fa596c5ca582e94d4a58a365e9"
+    },
+    {
+      "bytes": 42415,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/pq/pq_ctypes.py",
+      "relative_path": "psycopg/pq/pq_ctypes.py",
+      "sha256": "c0698c4e9298fb8a5bc5eb340d6a061457d01fe657a63b1be4b67eb52de3ea72"
+    },
+    {
+      "bytes": 0,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/py.typed",
+      "relative_path": "psycopg/py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 1159,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/raw_cursor.py",
+      "relative_path": "psycopg/raw_cursor.py",
+      "sha256": "b647435931002abf5374de517078483dd01d62c9e0b39a199a642dfb6850c264"
+    },
+    {
+      "bytes": 7841,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/rows.py",
+      "relative_path": "psycopg/rows.py",
+      "sha256": "17169a44f5064eacbdebbb528161850f30cac9a7d13b3efb6618eccbed188222"
+    },
+    {
+      "bytes": 19109,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/sql.py",
+      "relative_path": "psycopg/sql.py",
+      "sha256": "bc8899d917741f75680957f87091a7bbbbbd31688c9e4451bc346ca5c0794486"
+    },
+    {
+      "bytes": 10060,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/transaction.py",
+      "relative_path": "psycopg/transaction.py",
+      "sha256": "f89cce45506110593f930bc6d5111bced43b122b70266b6b4eb279bba014c8b4"
+    },
+    {
+      "bytes": 181,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/__init__.py",
+      "relative_path": "psycopg/types/__init__.py",
+      "sha256": "24f02457811f917c1db2befafd4d43b10575f5cf1a40d481ea482e7786e15de3"
+    },
+    {
+      "bytes": 15331,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/array.py",
+      "relative_path": "psycopg/types/array.py",
+      "sha256": "782f02632086aaf86fdb8b4344a8e4d00a415b896fcb33c564e0526707a13acd"
+    },
+    {
+      "bytes": 1163,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/bool.py",
+      "relative_path": "psycopg/types/bool.py",
+      "sha256": "d062501be0a6e4fe4d807f137cb363f67fdee5c930e365e7b110629d7d24e39c"
+    },
+    {
+      "bytes": 18316,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/composite.py",
+      "relative_path": "psycopg/types/composite.py",
+      "sha256": "30baa7be61267ef6999efb70bb33a894bfc3cc3b205225de7a95583a37d3a496"
+    },
+    {
+      "bytes": 25475,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/datetime.py",
+      "relative_path": "psycopg/types/datetime.py",
+      "sha256": "995763ea19337c146a6260d83317f1b91cedd250e8357b4a657fa5fde101c78b"
+    },
+    {
+      "bytes": 7479,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/enum.py",
+      "relative_path": "psycopg/types/enum.py",
+      "sha256": "8886f50774cc27175ba6da9a46fcdbf764b9214e5247463c76f54e922c2ca2e4"
+    },
+    {
+      "bytes": 7076,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/hstore.py",
+      "relative_path": "psycopg/types/hstore.py",
+      "sha256": "0ad1386aafc27396d5ce3411387ecd1d5e433b12bcf675d3559a253e646b2fb1"
+    },
+    {
+      "bytes": 9711,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/json.py",
+      "relative_path": "psycopg/types/json.py",
+      "sha256": "c7d429e702d634ba472246f9e510364276e940d7b9579d4ce641dafe82a78daa"
+    },
+    {
+      "bytes": 17607,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/multirange.py",
+      "relative_path": "psycopg/types/multirange.py",
+      "sha256": "68f454985649bcd358ad6a3c425976403aa7461c729634816e8c451f86a15cdf"
+    },
+    {
+      "bytes": 6856,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/net.py",
+      "relative_path": "psycopg/types/net.py",
+      "sha256": "5e47c666650afd023a9f9afe2b7c9bc5bd4305d78b08a29248b99cf04272f8e4"
+    },
+    {
+      "bytes": 666,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/none.py",
+      "relative_path": "psycopg/types/none.py",
+      "sha256": "832fce26a13562c949d91222c7412adf1d01f083dfa07f8671cdac40c20ed12c"
+    },
+    {
+      "bytes": 15490,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/numeric.py",
+      "relative_path": "psycopg/types/numeric.py",
+      "sha256": "7c22180b0eda4b6cc1e6b64e757a9d85126d5472b20eeb18179b5a61787df9fe"
+    },
+    {
+      "bytes": 3273,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/numpy.py",
+      "relative_path": "psycopg/types/numpy.py",
+      "sha256": "34f2d46c31723632af3533fa761a14bb5abcd2ddde41d1ebae77ad28083c95b8"
+    },
+    {
+      "bytes": 21447,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/range.py",
+      "relative_path": "psycopg/types/range.py",
+      "sha256": "9f393c0e2e8b61340594134fa2cb6cad9707ecc5ab6440dd2379031b35e47bdd"
+    },
+    {
+      "bytes": 2594,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/shapely.py",
+      "relative_path": "psycopg/types/shapely.py",
+      "sha256": "9efde4ecd69211befd6937417d788d55195bae0a65721ba1b2100bd270a59d29"
+    },
+    {
+      "bytes": 7629,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/string.py",
+      "relative_path": "psycopg/types/string.py",
+      "sha256": "911acad422939a9e2574720ca638e897fda4b1801bfa9c0cbdc6fafd9677fc00"
+    },
+    {
+      "bytes": 1635,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/types/uuid.py",
+      "relative_path": "psycopg/types/uuid.py",
+      "sha256": "64e5e3d1bfe2ef25e9f90121dc324b058cd124db2ee33866513064ba551024c2"
+    },
+    {
+      "bytes": 232,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/version.py",
+      "relative_path": "psycopg/version.py",
+      "sha256": "24b5a8a6b22c0b91d5725ca19fb2f355f56936d65853e5282d0c0018c1019587"
+    },
+    {
+      "bytes": 13978,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg/waiting.py",
+      "relative_path": "psycopg/waiting.py",
+      "sha256": "a674db1c59f05f48f3865b7dfb51a34ee9e5f595e3011fba1ba1ed4063bbe748"
+    },
+    {
+      "bytes": 4313,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/PKG-INFO",
+      "relative_path": "psycopg.egg-info/PKG-INFO",
+      "sha256": "daef30765d48b6c646bffb62457da8e1e969f0ff3bacf563c14da60f185c253d"
+    },
+    {
+      "bytes": 2118,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/SOURCES.txt",
+      "relative_path": "psycopg.egg-info/SOURCES.txt",
+      "sha256": "75b138b25ab5cd8defc4ac751849b8be3e8f0fa308725546b0000b09a2d3ff59"
+    },
+    {
+      "bytes": 1,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/dependency_links.txt",
+      "relative_path": "psycopg.egg-info/dependency_links.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "bytes": 1,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/not-zip-safe",
+      "relative_path": "psycopg.egg-info/not-zip-safe",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "bytes": 686,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/requires.txt",
+      "relative_path": "psycopg.egg-info/requires.txt",
+      "sha256": "f5056b7e1d79b7d3caf3f88de1e0d826748789c8faeca22b5aa02bcdcd3bcbbd"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "psycopg-3.3.4/psycopg.egg-info/top_level.txt",
+      "relative_path": "psycopg.egg-info/top_level.txt",
+      "sha256": "9e9b612b1dbf384a1a86db58a9db083e54548234bf6d00667e90c257141c3c6a"
+    },
+    {
+      "bytes": 3118,
+      "mode": 420,
+      "path": "psycopg-3.3.4/pyproject.toml",
+      "relative_path": "pyproject.toml",
+      "sha256": "b2545084c8b482be63bbc49b7fff0c23cdb6c5e2b827f44c4b345b10785ca0a5"
+    },
+    {
+      "bytes": 38,
+      "mode": 420,
+      "path": "psycopg-3.3.4/setup.cfg",
+      "relative_path": "setup.cfg",
+      "sha256": "1c473cbaee8da5fc46e7f0158794af5cea4414c34a3cf3f180c2001f5e38bd3e"
+    }
+  ],
+  "version": "3.3.4",
+  "wheel": {
+    "filename": "psycopg-3.3.4-py3-none-any.whl",
+    "sha256": "b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a"
+  },
+  "wheel_source_comparison": [
+    {
+      "bytes": 3423,
+      "identical": true,
+      "sha256": "5f1607a193cb63e60a0c5687209d2bd0e3029760b9559e9968f31d6b5d82c778",
+      "source_member": "psycopg/__init__.py",
+      "wheel_member": "psycopg/__init__.py"
+    },
+    {
+      "bytes": 2238,
+      "identical": true,
+      "sha256": "68e10b300b9182d2ee8cb9634e249efd0555c7784e2daafb4151b214ca38951e",
+      "source_member": "psycopg/_acompat.py",
+      "wheel_member": "psycopg/_acompat.py"
+    },
+    {
+      "bytes": 11007,
+      "identical": true,
+      "sha256": "d0e206962da1729e95c21b152222a6525b7e309cc35245ce5a7a99248e4f6ed4",
+      "source_member": "psycopg/_adapters_map.py",
+      "wheel_member": "psycopg/_adapters_map.py"
+    },
+    {
+      "bytes": 5387,
+      "identical": true,
+      "sha256": "00dc9a63cc9ac76a20494f95f478b69c6aa775728b195574358bc634b7cb70c5",
+      "source_member": "psycopg/_capabilities.py",
+      "wheel_member": "psycopg/_capabilities.py"
+    },
+    {
+      "bytes": 872,
+      "identical": true,
+      "sha256": "d7bb5516799ff9ace28653ae3b4ff51dd3c3b578d435fedbf56a27cda7b40011",
+      "source_member": "psycopg/_cmodule.py",
+      "wheel_member": "psycopg/_cmodule.py"
+    },
+    {
+      "bytes": 3004,
+      "identical": true,
+      "sha256": "9ba6a71e0b2bc220a1b7cc594b136d3d65a8024f03687839337632ca26c71571",
+      "source_member": "psycopg/_column.py",
+      "wheel_member": "psycopg/_column.py"
+    },
+    {
+      "bytes": 1398,
+      "identical": true,
+      "sha256": "69dd27b744a96c908a50e23934c0d3f6737c4f50ac7ec8c1a37a11cb2d3dedca",
+      "source_member": "psycopg/_compat.py",
+      "wheel_member": "psycopg/_compat.py"
+    },
+    {
+      "bytes": 24130,
+      "identical": true,
+      "sha256": "7add2044e037e5042f582c2a1436fbb5d00d41db2cea20980d6f270e5469d5e0",
+      "source_member": "psycopg/_connection_base.py",
+      "wheel_member": "psycopg/_connection_base.py"
+    },
+    {
+      "bytes": 6680,
+      "identical": true,
+      "sha256": "40bfda115d97ffaff560c8a0ce5426447f8b525f9bd241459c93cc2797546b83",
+      "source_member": "psycopg/_connection_info.py",
+      "wheel_member": "psycopg/_connection_info.py"
+    },
+    {
+      "bytes": 3501,
+      "identical": true,
+      "sha256": "9e081d1fe49a639f4cf0f2d54bce359ac6b7524acc2ed9b170cc0dd004fec7d3",
+      "source_member": "psycopg/_conninfo_attempts.py",
+      "wheel_member": "psycopg/_conninfo_attempts.py"
+    },
+    {
+      "bytes": 3590,
+      "identical": true,
+      "sha256": "7fe10d9b648df37f6f89689c7389cda6abac077eac5cfc58e5320c0c8002eb54",
+      "source_member": "psycopg/_conninfo_attempts_async.py",
+      "wheel_member": "psycopg/_conninfo_attempts_async.py"
+    },
+    {
+      "bytes": 3164,
+      "identical": true,
+      "sha256": "008bda02cdd0a7c7b029fcfced01ba9fdbbd67da0e862f1089306c799b013575",
+      "source_member": "psycopg/_conninfo_utils.py",
+      "wheel_member": "psycopg/_conninfo_utils.py"
+    },
+    {
+      "bytes": 9735,
+      "identical": true,
+      "sha256": "63d3768d0b84fcc2b933e9ee9c9ed9ad1dc6a4b7ce9d49ff2d10b2637e2f70e2",
+      "source_member": "psycopg/_copy.py",
+      "wheel_member": "psycopg/_copy.py"
+    },
+    {
+      "bytes": 9974,
+      "identical": true,
+      "sha256": "8cbdbf6f70a00eacefd1691695db72a087be0241b0a1c00f335f179b502b34ae",
+      "source_member": "psycopg/_copy_async.py",
+      "wheel_member": "psycopg/_copy_async.py"
+    },
+    {
+      "bytes": 13879,
+      "identical": true,
+      "sha256": "20b3dec8f11cb98fb29f388874f1a6440c4ddbeac0e321de28e45895e11bc7fb",
+      "source_member": "psycopg/_copy_base.py",
+      "wheel_member": "psycopg/_copy_base.py"
+    },
+    {
+      "bytes": 23103,
+      "identical": true,
+      "sha256": "6aa7e17b57fe37f343809ead45ebba3764666afebfee1517fe930a9ea74186e7",
+      "source_member": "psycopg/_cursor_base.py",
+      "wheel_member": "psycopg/_cursor_base.py"
+    },
+    {
+      "bytes": 7852,
+      "identical": true,
+      "sha256": "cb875217ac94b534ce620630150cae25872851f0625d94a419e691ab07464625",
+      "source_member": "psycopg/_dns.py",
+      "wheel_member": "psycopg/_dns.py"
+    },
+    {
+      "bytes": 4074,
+      "identical": true,
+      "sha256": "3078ce9bfef5b9b06f50cf00a78585d5d4d37383ca46f85014874806e260c449",
+      "source_member": "psycopg/_encodings.py",
+      "wheel_member": "psycopg/_encodings.py"
+    },
+    {
+      "bytes": 1691,
+      "identical": true,
+      "sha256": "e6009e7ffb187bd51d684e27fd198359e1784df40ec1015e8a48eb933f588af2",
+      "source_member": "psycopg/_enums.py",
+      "wheel_member": "psycopg/_enums.py"
+    },
+    {
+      "bytes": 1875,
+      "identical": true,
+      "sha256": "98923c1db46b4ec6cad0b2209e71b9c4f1fede1c4d51c968b6a52eae6ca8dacd",
+      "source_member": "psycopg/_oids.py",
+      "wheel_member": "psycopg/_oids.py"
+    },
+    {
+      "bytes": 2165,
+      "identical": true,
+      "sha256": "1448864658cefa7aee20a61bb7255f6fc49b832c1c377b520789e46cb70e9f1a",
+      "source_member": "psycopg/_pipeline.py",
+      "wheel_member": "psycopg/_pipeline.py"
+    },
+    {
+      "bytes": 2108,
+      "identical": true,
+      "sha256": "af9c9a8670382419329b1f5352ac1af75994959ca7c0b32a5385fdfa5037c25f",
+      "source_member": "psycopg/_pipeline_async.py",
+      "wheel_member": "psycopg/_pipeline_async.py"
+    },
+    {
+      "bytes": 6669,
+      "identical": true,
+      "sha256": "29130f212fd29dbe20271f9f5aab031c21c0af3cb3d82c93e54d8dc86e1e4d48",
+      "source_member": "psycopg/_pipeline_base.py",
+      "wheel_member": "psycopg/_pipeline_base.py"
+    },
+    {
+      "bytes": 6282,
+      "identical": true,
+      "sha256": "d71fba3416f3b95fc1d35a3e6cab454be6e98067c2f16801d91dd06b441c404a",
+      "source_member": "psycopg/_preparing.py",
+      "wheel_member": "psycopg/_preparing.py"
+    },
+    {
+      "bytes": 11903,
+      "identical": true,
+      "sha256": "1c4c15a30262578fd6ebfbee782d08089103a79d73359d1e1e27d7c719772b78",
+      "source_member": "psycopg/_py_transformer.py",
+      "wheel_member": "psycopg/_py_transformer.py"
+    },
+    {
+      "bytes": 15724,
+      "identical": true,
+      "sha256": "c217b09decc0c1ca1e6577847f029e8b96a99a5ac4315a81ba026121d4886410",
+      "source_member": "psycopg/_queries.py",
+      "wheel_member": "psycopg/_queries.py"
+    },
+    {
+      "bytes": 4662,
+      "identical": true,
+      "sha256": "d755e04f921482e123a25012c49df4d5d3ba3581d0b7f85307b6ea51aacfb82b",
+      "source_member": "psycopg/_server_cursor.py",
+      "wheel_member": "psycopg/_server_cursor.py"
+    },
+    {
+      "bytes": 4711,
+      "identical": true,
+      "sha256": "00aa44fa3b06443373730acefa3a43311babdd5c0858f36db11691fd864e3c24",
+      "source_member": "psycopg/_server_cursor_async.py",
+      "wheel_member": "psycopg/_server_cursor_async.py"
+    },
+    {
+      "bytes": 7537,
+      "identical": true,
+      "sha256": "6514d1e38e8899aaf52353949c8db2a43dccb0445d885986433d5ba0dce19cde",
+      "source_member": "psycopg/_server_cursor_base.py",
+      "wheel_member": "psycopg/_server_cursor_base.py"
+    },
+    {
+      "bytes": 2000,
+      "identical": true,
+      "sha256": "c9adfa9064ebd2e1e55f2b53a3b427ff4732d0f951d89f8157ed27a8c51732b7",
+      "source_member": "psycopg/_struct.py",
+      "wheel_member": "psycopg/_struct.py"
+    },
+    {
+      "bytes": 3529,
+      "identical": true,
+      "sha256": "34b89f229756a6121bc1a04fbcb3d2699ffe0e8b5eebbc94ebb7bd53402891e4",
+      "source_member": "psycopg/_tpc.py",
+      "wheel_member": "psycopg/_tpc.py"
+    },
+    {
+      "bytes": 451,
+      "identical": true,
+      "sha256": "9839012ee4b16d70c6d537243e0232649c74d329f951753c0e5b8e1a61d68c06",
+      "source_member": "psycopg/_transformer.py",
+      "wheel_member": "psycopg/_transformer.py"
+    },
+    {
+      "bytes": 5597,
+      "identical": true,
+      "sha256": "006deaea53336af81fee9d11a090b54b51c277c3d9c8085a57d55f51e9bd6402",
+      "source_member": "psycopg/_tstrings.py",
+      "wheel_member": "psycopg/_tstrings.py"
+    },
+    {
+      "bytes": 10643,
+      "identical": true,
+      "sha256": "561535866953c59f90f809054dbf427f5a8f127231e74867b2b83e76e40e076c",
+      "source_member": "psycopg/_typeinfo.py",
+      "wheel_member": "psycopg/_typeinfo.py"
+    },
+    {
+      "bytes": 2498,
+      "identical": true,
+      "sha256": "519c0715f9d66d7ab167d508541ac9877eb9f7da686406998fae6ff04b1b209b",
+      "source_member": "psycopg/_typemod.py",
+      "wheel_member": "psycopg/_typemod.py"
+    },
+    {
+      "bytes": 1186,
+      "identical": true,
+      "sha256": "ffe5b4233b3ce1462b6c06372350a2706524d2783e6e808c668e47e61d23f6e8",
+      "source_member": "psycopg/_tz.py",
+      "wheel_member": "psycopg/_tz.py"
+    },
+    {
+      "bytes": 3126,
+      "identical": true,
+      "sha256": "c0a66dfdaafc42e46010a0bab6ec1a9985c2c01d4fec8650b268187553a50215",
+      "source_member": "psycopg/_wrappers.py",
+      "wheel_member": "psycopg/_wrappers.py"
+    },
+    {
+      "bytes": 7694,
+      "identical": true,
+      "sha256": "f12a65c660a801eac16d39c0d9d7ef8a94f0ea68add91b4361636a7e78d77e66",
+      "source_member": "psycopg/abc.py",
+      "wheel_member": "psycopg/abc.py"
+    },
+    {
+      "bytes": 5195,
+      "identical": true,
+      "sha256": "7d957b9c6a6a57650ac22c4bbb9d24d5f6ffb20d2e9ba4ae575ac21959f5dfa3",
+      "source_member": "psycopg/adapt.py",
+      "wheel_member": "psycopg/adapt.py"
+    },
+    {
+      "bytes": 2681,
+      "identical": true,
+      "sha256": "9d1a376dc91c2a3de764601c5f3aec3cfe3984431f6b195e8159def7031d6b3f",
+      "source_member": "psycopg/client_cursor.py",
+      "wheel_member": "psycopg/client_cursor.py"
+    },
+    {
+      "bytes": 19666,
+      "identical": true,
+      "sha256": "5dfacd2ef35f748c5a60c07c8bf5d6e6a2fa25438ee1794591b4a4e4e70afd7e",
+      "source_member": "psycopg/connection.py",
+      "wheel_member": "psycopg/connection.py"
+    },
+    {
+      "bytes": 21914,
+      "identical": true,
+      "sha256": "24c8119d6f1b1dce6cfdf24d304760d3d798d9faffade3f379a2ba88ed44ae5d",
+      "source_member": "psycopg/connection_async.py",
+      "wheel_member": "psycopg/connection_async.py"
+    },
+    {
+      "bytes": 4471,
+      "identical": true,
+      "sha256": "bcaab336f7f44e19efe3bdbbf875032a0a771358c34dd8bee9209262ee7f12ec",
+      "source_member": "psycopg/conninfo.py",
+      "wheel_member": "psycopg/conninfo.py"
+    },
+    {
+      "bytes": 806,
+      "identical": true,
+      "sha256": "fd5ef68e9d835ebd931ecaa8f52e9c6a1bde328d10b819777e78a0b74ac699b7",
+      "source_member": "psycopg/copy.py",
+      "wheel_member": "psycopg/copy.py"
+    },
+    {
+      "bytes": 11116,
+      "identical": true,
+      "sha256": "9fedba5e8322628df838d749a7f48a7b9082601ab3b4d552ce594c5487f13e0f",
+      "source_member": "psycopg/cursor.py",
+      "wheel_member": "psycopg/cursor.py"
+    },
+    {
+      "bytes": 11426,
+      "identical": true,
+      "sha256": "871ee328c590531f6247031d5db0aa6080b0778c76bfe0665ee4816eebf9a300",
+      "source_member": "psycopg/cursor_async.py",
+      "wheel_member": "psycopg/cursor_async.py"
+    },
+    {
+      "bytes": 3309,
+      "identical": true,
+      "sha256": "650c28c7130ee0e1eeb8b674ea9d7d556809b6615b2d7e58b8b1dbca3345d982",
+      "source_member": "psycopg/dbapi20.py",
+      "wheel_member": "psycopg/dbapi20.py"
+    },
+    {
+      "bytes": 46355,
+      "identical": true,
+      "sha256": "1ffb960395cc66eb6e5f4702fbaf8f58f48db8c6a84b810c6577a8de1489f2bb",
+      "source_member": "psycopg/errors.py",
+      "wheel_member": "psycopg/errors.py"
+    },
+    {
+      "bytes": 12702,
+      "identical": true,
+      "sha256": "6edac492cd964b7ffa01220d78ede036b9f2b7715935857b0b06f2602da31c75",
+      "source_member": "psycopg/generators.py",
+      "wheel_member": "psycopg/generators.py"
+    },
+    {
+      "bytes": 6413,
+      "identical": true,
+      "sha256": "133982b2b02c0dfc6e0b28f6d28f870d8c39d6de7707fcce96439ca46c0a9137",
+      "source_member": "psycopg/postgres.py",
+      "wheel_member": "psycopg/postgres.py"
+    },
+    {
+      "bytes": 0,
+      "identical": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_member": "psycopg/py.typed",
+      "wheel_member": "psycopg/py.typed"
+    },
+    {
+      "bytes": 1159,
+      "identical": true,
+      "sha256": "b647435931002abf5374de517078483dd01d62c9e0b39a199a642dfb6850c264",
+      "source_member": "psycopg/raw_cursor.py",
+      "wheel_member": "psycopg/raw_cursor.py"
+    },
+    {
+      "bytes": 7841,
+      "identical": true,
+      "sha256": "17169a44f5064eacbdebbb528161850f30cac9a7d13b3efb6618eccbed188222",
+      "source_member": "psycopg/rows.py",
+      "wheel_member": "psycopg/rows.py"
+    },
+    {
+      "bytes": 19109,
+      "identical": true,
+      "sha256": "bc8899d917741f75680957f87091a7bbbbbd31688c9e4451bc346ca5c0794486",
+      "source_member": "psycopg/sql.py",
+      "wheel_member": "psycopg/sql.py"
+    },
+    {
+      "bytes": 10060,
+      "identical": true,
+      "sha256": "f89cce45506110593f930bc6d5111bced43b122b70266b6b4eb279bba014c8b4",
+      "source_member": "psycopg/transaction.py",
+      "wheel_member": "psycopg/transaction.py"
+    },
+    {
+      "bytes": 232,
+      "identical": true,
+      "sha256": "24b5a8a6b22c0b91d5725ca19fb2f355f56936d65853e5282d0c0018c1019587",
+      "source_member": "psycopg/version.py",
+      "wheel_member": "psycopg/version.py"
+    },
+    {
+      "bytes": 13978,
+      "identical": true,
+      "sha256": "a674db1c59f05f48f3865b7dfb51a34ee9e5f595e3011fba1ba1ed4063bbe748",
+      "source_member": "psycopg/waiting.py",
+      "wheel_member": "psycopg/waiting.py"
+    },
+    {
+      "bytes": 439,
+      "identical": true,
+      "sha256": "674c11bec482fc2a5a38159f5828a5c0fd2c37a037f88561403e5c95d826fdd1",
+      "source_member": "psycopg/crdb/__init__.py",
+      "wheel_member": "psycopg/crdb/__init__.py"
+    },
+    {
+      "bytes": 7270,
+      "identical": true,
+      "sha256": "113a0c8556624f6e8ade6d46552e6bd0510c3bcf2d0cb8c0ad94421b2382577a",
+      "source_member": "psycopg/crdb/_types.py",
+      "wheel_member": "psycopg/crdb/_types.py"
+    },
+    {
+      "bytes": 2758,
+      "identical": true,
+      "sha256": "32cfafe6e10e7d23962af75c671edddd54d75df8b9a13cbf1a14c22350a0d704",
+      "source_member": "psycopg/crdb/connection.py",
+      "wheel_member": "psycopg/crdb/connection.py"
+    },
+    {
+      "bytes": 3976,
+      "identical": true,
+      "sha256": "6d3f05b1b5a02896fb0a4fb690c8ae810928f459c355d70426ec1be7448f50e5",
+      "source_member": "psycopg/pq/__init__.py",
+      "wheel_member": "psycopg/pq/__init__.py"
+    },
+    {
+      "bytes": 3099,
+      "identical": true,
+      "sha256": "348ac8fbb809d8efba4a2b71518d07ab5c6ea63c8f248b2a1946e5ce1581586c",
+      "source_member": "psycopg/pq/_debug.py",
+      "wheel_member": "psycopg/pq/_debug.py"
+    },
+    {
+      "bytes": 6004,
+      "identical": true,
+      "sha256": "fa1a16d893690911b3dfc89a2fd0f44eb740b541c869fb96170252b264722216",
+      "source_member": "psycopg/pq/_enums.py",
+      "wheel_member": "psycopg/pq/_enums.py"
+    },
+    {
+      "bytes": 22497,
+      "identical": true,
+      "sha256": "4d69fb3e81431671a930e8193522b32c22fd8ea597da83961e577dbb7701f12f",
+      "source_member": "psycopg/pq/_pq_ctypes.py",
+      "wheel_member": "psycopg/pq/_pq_ctypes.py"
+    },
+    {
+      "bytes": 10320,
+      "identical": true,
+      "sha256": "491623e63ab6804dedc2baabda09ec38bce0a1e92e0349a848a68356395e3baf",
+      "source_member": "psycopg/pq/_pq_ctypes.pyi",
+      "wheel_member": "psycopg/pq/_pq_ctypes.pyi"
+    },
+    {
+      "bytes": 8095,
+      "identical": true,
+      "sha256": "55d9619e21dbc7d550f352290326633c38a6cd278f5c68c35022a2f2e979939b",
+      "source_member": "psycopg/pq/abc.py",
+      "wheel_member": "psycopg/pq/abc.py"
+    },
+    {
+      "bytes": 6727,
+      "identical": true,
+      "sha256": "429e8247e5b9400b203373b926052b6580cd82fa596c5ca582e94d4a58a365e9",
+      "source_member": "psycopg/pq/misc.py",
+      "wheel_member": "psycopg/pq/misc.py"
+    },
+    {
+      "bytes": 42415,
+      "identical": true,
+      "sha256": "c0698c4e9298fb8a5bc5eb340d6a061457d01fe657a63b1be4b67eb52de3ea72",
+      "source_member": "psycopg/pq/pq_ctypes.py",
+      "wheel_member": "psycopg/pq/pq_ctypes.py"
+    },
+    {
+      "bytes": 181,
+      "identical": true,
+      "sha256": "24f02457811f917c1db2befafd4d43b10575f5cf1a40d481ea482e7786e15de3",
+      "source_member": "psycopg/types/__init__.py",
+      "wheel_member": "psycopg/types/__init__.py"
+    },
+    {
+      "bytes": 15331,
+      "identical": true,
+      "sha256": "782f02632086aaf86fdb8b4344a8e4d00a415b896fcb33c564e0526707a13acd",
+      "source_member": "psycopg/types/array.py",
+      "wheel_member": "psycopg/types/array.py"
+    },
+    {
+      "bytes": 1163,
+      "identical": true,
+      "sha256": "d062501be0a6e4fe4d807f137cb363f67fdee5c930e365e7b110629d7d24e39c",
+      "source_member": "psycopg/types/bool.py",
+      "wheel_member": "psycopg/types/bool.py"
+    },
+    {
+      "bytes": 18316,
+      "identical": true,
+      "sha256": "30baa7be61267ef6999efb70bb33a894bfc3cc3b205225de7a95583a37d3a496",
+      "source_member": "psycopg/types/composite.py",
+      "wheel_member": "psycopg/types/composite.py"
+    },
+    {
+      "bytes": 25475,
+      "identical": true,
+      "sha256": "995763ea19337c146a6260d83317f1b91cedd250e8357b4a657fa5fde101c78b",
+      "source_member": "psycopg/types/datetime.py",
+      "wheel_member": "psycopg/types/datetime.py"
+    },
+    {
+      "bytes": 7479,
+      "identical": true,
+      "sha256": "8886f50774cc27175ba6da9a46fcdbf764b9214e5247463c76f54e922c2ca2e4",
+      "source_member": "psycopg/types/enum.py",
+      "wheel_member": "psycopg/types/enum.py"
+    },
+    {
+      "bytes": 7076,
+      "identical": true,
+      "sha256": "0ad1386aafc27396d5ce3411387ecd1d5e433b12bcf675d3559a253e646b2fb1",
+      "source_member": "psycopg/types/hstore.py",
+      "wheel_member": "psycopg/types/hstore.py"
+    },
+    {
+      "bytes": 9711,
+      "identical": true,
+      "sha256": "c7d429e702d634ba472246f9e510364276e940d7b9579d4ce641dafe82a78daa",
+      "source_member": "psycopg/types/json.py",
+      "wheel_member": "psycopg/types/json.py"
+    },
+    {
+      "bytes": 17607,
+      "identical": true,
+      "sha256": "68f454985649bcd358ad6a3c425976403aa7461c729634816e8c451f86a15cdf",
+      "source_member": "psycopg/types/multirange.py",
+      "wheel_member": "psycopg/types/multirange.py"
+    },
+    {
+      "bytes": 6856,
+      "identical": true,
+      "sha256": "5e47c666650afd023a9f9afe2b7c9bc5bd4305d78b08a29248b99cf04272f8e4",
+      "source_member": "psycopg/types/net.py",
+      "wheel_member": "psycopg/types/net.py"
+    },
+    {
+      "bytes": 666,
+      "identical": true,
+      "sha256": "832fce26a13562c949d91222c7412adf1d01f083dfa07f8671cdac40c20ed12c",
+      "source_member": "psycopg/types/none.py",
+      "wheel_member": "psycopg/types/none.py"
+    },
+    {
+      "bytes": 15490,
+      "identical": true,
+      "sha256": "7c22180b0eda4b6cc1e6b64e757a9d85126d5472b20eeb18179b5a61787df9fe",
+      "source_member": "psycopg/types/numeric.py",
+      "wheel_member": "psycopg/types/numeric.py"
+    },
+    {
+      "bytes": 3273,
+      "identical": true,
+      "sha256": "34f2d46c31723632af3533fa761a14bb5abcd2ddde41d1ebae77ad28083c95b8",
+      "source_member": "psycopg/types/numpy.py",
+      "wheel_member": "psycopg/types/numpy.py"
+    },
+    {
+      "bytes": 21447,
+      "identical": true,
+      "sha256": "9f393c0e2e8b61340594134fa2cb6cad9707ecc5ab6440dd2379031b35e47bdd",
+      "source_member": "psycopg/types/range.py",
+      "wheel_member": "psycopg/types/range.py"
+    },
+    {
+      "bytes": 2594,
+      "identical": true,
+      "sha256": "9efde4ecd69211befd6937417d788d55195bae0a65721ba1b2100bd270a59d29",
+      "source_member": "psycopg/types/shapely.py",
+      "wheel_member": "psycopg/types/shapely.py"
+    },
+    {
+      "bytes": 7629,
+      "identical": true,
+      "sha256": "911acad422939a9e2574720ca638e897fda4b1801bfa9c0cbdc6fafd9677fc00",
+      "source_member": "psycopg/types/string.py",
+      "wheel_member": "psycopg/types/string.py"
+    },
+    {
+      "bytes": 1635,
+      "identical": true,
+      "sha256": "64e5e3d1bfe2ef25e9f90121dc324b058cd124db2ee33866513064ba551024c2",
+      "source_member": "psycopg/types/uuid.py",
+      "wheel_member": "psycopg/types/uuid.py"
+    }
+  ]
+}

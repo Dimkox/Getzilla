@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+sys.dont_write_bytecode = True
 from dataclasses import replace
 from pathlib import Path
 

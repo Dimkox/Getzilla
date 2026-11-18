@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -15,6 +17,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tarfile
 import tomllib
 import zipfile
 
@@ -29,6 +32,36 @@ TARGET_MARKERS = {"sys_platform": "linux", "os_name": "posix", "platform_system"
                   "platform_machine": "x86_64", "implementation_name": "cpython",
                   "platform_python_implementation": "CPython", "python_version": "3.12"}
 
+
+# Exact source/term delivery catalog. This supplies bytes, not a license approval.
+_LEGAL_ROOT = Path('.getzilla/config/license-exception-inputs/factory-source-delivery-v1')
+_LEGAL_SUBJECTS = {'certifi': ('2026.10.19',
+             'certifi-2026.10.19-py3-none-any.whl',
+             '42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b'),
+ 'psycopg': ('3.3.4',
+             'psycopg-3.3.4-py3-none-any.whl',
+             'b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a')}
+_LEGAL_FILES = {'certifi': (('certifi-2026.10.19-notice.txt',
+              'legal/notices/certifi-2026.10.19.txt',
+              'c51aabdbd8f75029406cb74b07644deafe9822019bf85e4f5a4e201690e09f15'),
+             ('MPL-2.0.txt',
+              'legal/licenses/MPL-2.0.txt',
+              '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04')),
+ 'psycopg': (('psycopg-3.3.4-notice.txt',
+              'legal/notices/psycopg-3.3.4.txt',
+              'f595e1af82fd7f397b753a9ffa35a0d65f078d8ee2a9d7ea5ed1cdc67d4f755d'),
+             ('GPL-3.0.txt',
+              'legal/licenses/GPL-3.0.txt',
+              '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986'))}
+_LEGAL_PROVENANCE = {'certifi': ('certifi-2026.10.19-source-map.json',
+             '64baf557a90ab3f2061ecf1f002dd65df65d86ea93e4eaa6d7c603ec650f14e2'),
+ 'psycopg': ('psycopg-3.3.4-source-map.json',
+             '01ca95a944172ecabfb916a4a9180d9a27d16328256914952a3f8f994d6e10b8')}
+
+_LEGAL_SNAPSHOTS = {'certifi': ('certifi-2026.10.19-snapshot.json',
+             '55233d49508cbaedddaab023a20f446ec60616cf2b2923a17c75eb9fef44752d'),
+ 'psycopg': ('psycopg-3.3.4-snapshot.json',
+             'e32cc7ce2af142492b171ae53e8b2606675dc49de8355fb9f5c37d44c4ff47a4')}
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -269,6 +302,183 @@ def _git(repository: Path, *arguments: str) -> str:
     return result.stdout
 
 
+def _read_legal_input(repository: Path, filename: str, expected_sha256: str, *, expected_mode: int | None = None) -> bytes:
+    """Read one fixed, bounded, unchanged regular input without following links."""
+    descriptors = []
+    try:
+        directory = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(directory)
+        relative = PurePosixPath(filename)
+        if (relative.is_absolute() or not relative.parts or "\\" in filename
+                or any(part in {".", "..", ""} for part in relative.parts)):
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        for part in (*_LEGAL_ROOT.parts, *relative.parts[:-1]):
+            directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            descriptors.append(directory)
+        descriptor = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 2 * 1024 * 1024
+                or expected_mode is not None and stat.S_IMODE(before.st_mode) != expected_mode):
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        pieces = []
+        total = 0
+        while True:
+            piece = os.read(descriptor, min(65536, 2 * 1024 * 1024 + 1 - total))
+            if not piece:
+                break
+            pieces.append(piece)
+            total += len(piece)
+            if total > 2 * 1024 * 1024:
+                raise InstallerError("LEGAL_INPUT_MISMATCH")
+        after = os.fstat(descriptor)
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_nlink')
+        payload = b''.join(pieces)
+        if any(getattr(before, field) != getattr(after, field) for field in fields) or _digest(payload) != expected_sha256:
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        return payload
+    except OSError as exc:
+        raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _snapshot_inventory(repository: Path, archive_root: str, expected: set[str], directories: set[str]) -> None:
+    """Refuse links, extra files and extra directories in the selected fixed tree."""
+    descriptors = []
+    seen = set()
+    seen_directories = set()
+    try:
+        descriptor = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(descriptor)
+        for part in (*_LEGAL_ROOT.parts, 'vendor', archive_root):
+            descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            descriptors.append(descriptor)
+        def walk(parent: int, prefix: str, depth: int) -> None:
+            if depth > 16:
+                raise InstallerError("LEGAL_INPUT_MISMATCH")
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    relative = prefix + entry.name
+                    mode = entry.stat(follow_symlinks=False).st_mode
+                    if stat.S_ISDIR(mode) and relative in directories:
+                        seen_directories.add(relative)
+                        child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                        try:
+                            walk(child, relative + '/', depth + 1)
+                        finally:
+                            os.close(child)
+                    elif stat.S_ISREG(mode) and relative in expected:
+                        seen.add(relative)
+                    else:
+                        raise InstallerError("LEGAL_INPUT_MISMATCH")
+        walk(descriptor, '', 0)
+        if seen != expected or seen_directories != directories:
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+    except OSError as exc:
+        raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _repack_source(repository: Path, name: str) -> tuple[bytes, dict]:
+    filename, digest = _LEGAL_SNAPSHOTS[name]
+    try:
+        manifest = json.loads(_read_legal_input(repository, filename, digest))
+        root = name + '-' + _LEGAL_SUBJECTS[name][0]
+        members = manifest['members']
+        if (set(manifest) != {'schema_version', 'package', 'version', 'archive_root', 'original_publisher_archive', 'members'}
+                or manifest['schema_version'] != 1 or manifest['package'] != name
+                or manifest['version'] != _LEGAL_SUBJECTS[name][0] or manifest['archive_root'] != root
+                or not isinstance(members, list) or not 1 <= len(members) <= 128):
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        paths = []
+        total = 0
+        for member in members:
+            path = member['path']
+            if (set(member) != {'path', 'original_path', 'bytes', 'sha256', 'mode'}
+                    or not isinstance(path, str) or str(PurePosixPath(path)) != path
+                    or PurePosixPath(path).is_absolute() or '\\' in path
+                    or any(part in {'.', '..', ''} for part in PurePosixPath(path).parts)
+                    or member['original_path'] != root + '/' + path
+                    or type(member['bytes']) is not int or not 0 <= member['bytes'] <= 2 * 1024 * 1024
+                    or not HEX.fullmatch(member['sha256']) or type(member['mode']) is not int
+                    or member['mode'] not in {0o644, 0o755}):
+                raise InstallerError("LEGAL_INPUT_MISMATCH")
+            paths.append(path)
+            total += member['bytes']
+        if paths != sorted(set(paths)) or total > 4 * 1024 * 1024:
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        directories = {str(parent) for path in paths for parent in PurePosixPath(path).parents if str(parent) != '.'}
+        _snapshot_inventory(repository, root, set(paths), directories)
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+            for member in members:
+                payload = _read_legal_input(repository, 'vendor/' + root + '/' + member['path'],
+                    member['sha256'], expected_mode=member['mode'])
+                payload.decode('utf-8')
+                if len(payload) != member['bytes']:
+                    raise InstallerError("LEGAL_INPUT_MISMATCH")
+                info = tarfile.TarInfo(member['original_path'])
+                info.size, info.mode, info.mtime = len(payload), member['mode'], 0
+                info.uid = info.gid = 0
+                info.uname = info.gname = ''
+                archive.addfile(info, io.BytesIO(payload))
+        _snapshot_inventory(repository, root, set(paths), directories)
+        compressed = io.BytesIO()
+        with gzip.GzipFile(fileobj=compressed, filename='', mode='wb', compresslevel=9, mtime=0) as handle:
+            handle.write(output.getvalue())
+        payload = compressed.getvalue()
+        delivery = {'path': 'legal/sources/' + root + '.tar.gz', 'sha256': _digest(payload), 'bytes': len(payload),
+            'representation': 'canonical-repack-of-unchanged-source', 'snapshot_manifest_sha256': digest,
+            'original_publisher_archive_sha256': manifest['original_publisher_archive']['sha256']}
+        return payload, delivery
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, tarfile.TarError) as exc:
+        if isinstance(exc, InstallerError):
+            raise
+        raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+
+
+def _legal_files(repository: Path, wheels: list[dict]) -> dict[str, bytes]:
+    """Select only fixed exact publisher-source payloads for the actual wheel set."""
+    result = {}
+    packages = []
+    for wheel in wheels:
+        name = wheel['name']
+        if name not in _LEGAL_SUBJECTS:
+            continue
+        if (wheel['version'], wheel['filename'], wheel['sha256']) != _LEGAL_SUBJECTS[name]:
+            raise InstallerError("LEGAL_DEPENDENCY_MISMATCH")
+        payload, delivery = _repack_source(repository, name)
+        target = delivery['path']
+        if target in result:
+            raise InstallerError("LEGAL_FILE_COLLISION")
+        result[target] = payload
+        retained = [{key: delivery[key] for key in ('path', 'sha256', 'bytes')}]
+        for filename, target, digest in _LEGAL_FILES[name]:
+            if target in result:
+                raise InstallerError("LEGAL_FILE_COLLISION")
+            result[target] = _read_legal_input(repository, filename, digest)
+            retained.append({'path': target, 'sha256': digest, 'bytes': len(result[target])})
+        filename, digest = _LEGAL_PROVENANCE[name]
+        raw = _read_legal_input(repository, filename, digest)
+        try:
+            provenance = json.loads(raw)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise InstallerError("LEGAL_INPUT_MISMATCH") from exc
+        if (provenance['package'] != name or provenance['version'] != wheel['version']
+                or provenance['wheel'] != {'filename': wheel['filename'], 'sha256': wheel['sha256']}):
+            raise InstallerError("LEGAL_INPUT_MISMATCH")
+        packages.append({**provenance, 'source_delivery': delivery, 'retained_files': retained})
+    if packages:
+        result['legal/source-map.json'] = json.dumps(
+            {'schema_version': 1, 'packages': sorted(packages, key=lambda item: item['package'])},
+            sort_keys=True, separators=(',', ':')).encode()
+    return result
+
+
 def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inventory: Path,
                   output: Path, product_version: str, enforce_host: bool = True,
                   target_environment: dict[str, str] | None = None) -> dict:
@@ -306,6 +516,10 @@ def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inv
             if target in files:
                 raise InstallerError("WHEEL_FILE_COLLISION")
             files[target] = (payload, 0o644)
+    for target, payload in _legal_files(repository, wheels).items():
+        if target in files:
+            raise InstallerError("LEGAL_FILE_COLLISION")
+        files[target] = (payload, 0o644)
     tracked = _git(repository, "ls-files", "factory/src/getzilla_factory").splitlines()
     if not tracked:
         raise InstallerError("INVALID_SOURCE")

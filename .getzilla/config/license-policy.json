@@ -18,7 +18,7 @@
     "distribution": "redistributed",
     "lock_sha256": "95e088718f76ad545b03c3e11bf62f765beb1f75a6955a61c13d7bfe77115bab",
     "wheel_inventory_sha256": "8acc42767b397a7e1728fc3809c9ff6a49d47a3e741a43e717035071ff7adeba",
-    "builder_sha256": "b8ae53c162b800b57cdf233df101f0ea6e4fcabf9715dde0431535d8b4f4cdfd"
+    "builder_sha256": "4a21bb63045fb61d5dacaf30dd0a0e399594ee93d73de526f4d6dc48911f10ef"
   },
   "dependency_exceptions": [
     {
