@@ -52,6 +52,86 @@ class CurrentWorkflowTests(unittest.TestCase):
             self.module._publish(self.project, payload)
         self.assertEqual(list(self.project.iterdir()), [])
 
+    def test_source_failure_identifies_boundary_without_raw_git_output(self):
+        commit = 'a'*40
+        for phase, results, reason in (
+                ('init', [(128, b'', b'fatal: Permission denied secret-token /private/path')], 'permission'),
+                ('fetch', [(0, b'', b''), (128, b'', b'fatal: unable to find remote helper for https secret-token')], 'helper-unavailable'),
+                ('fetch', [(0, b'', b''), (1, b'', b'unknown private failure secret-token')], 'unclassified')):
+            with self.subTest(phase=phase, reason=reason), \
+                 patch.object(self.module, '_run_capped', side_effect=results) as run, \
+                 patch.object(self.module, 'read_pinned_tree') as read:
+                with self.assertRaises(ValueError) as caught:
+                    self.module._source(self.home, 'obra/superpowers', commit, ('skills/',), version='7.0.2')
+                text = str(caught.exception)
+                self.assertIn('component=superpowers version=7.0.2 commit='+commit, text)
+                self.assertIn('phase='+phase+' exit='+str(results[-1][0])+' reason='+reason, text)
+                self.assertNotIn('secret-token', text)
+                self.assertNotIn('/private/path', text)
+                self.assertNotIn('https', text)
+                self.assertEqual(run.call_count, len(results))
+                read.assert_not_called()
+                self.assertEqual(list((self.home/'workflow-sources').glob('current-*')), [])
+
+    def test_source_runner_bounds_and_exec_failures_stay_closed(self):
+        for error, reason in (
+                (self.module.ArchitectureError('secret-token', code='timeout'), 'timeout'),
+                (self.module.ArchitectureError('secret-token', code='limit'), 'output-limit'),
+                (self.module.ArchitectureError('secret-token', code='git'), 'git-unavailable'),
+                (self.module.ArchitectureError('secret-token', code='io'), 'runner-io'),
+                (FileNotFoundError('secret-token'), 'exec-unavailable'),
+                (OSError('secret-token'), 'exec-io')):
+            with self.subTest(reason=reason), \
+                 patch.object(self.module, '_run_capped', side_effect=[(0, b'', b''), error]) as run, \
+                 patch.object(self.module, 'read_pinned_tree') as read:
+                with self.assertRaises(ValueError) as caught:
+                    self.module._source(self.home, 'obra/superpowers', 'b'*40, ('skills/',), version='7.0.2')
+                text = str(caught.exception)
+                self.assertIn('phase=fetch exit=not-returned reason='+reason, text)
+                self.assertNotIn('secret-token', text)
+                read.assert_not_called()
+                self.assertEqual(run.call_count, 2)
+
+    def test_source_success_keeps_exact_fetch_policy_and_payload_reader(self):
+        from types import SimpleNamespace
+        commit = 'c'*40
+        with patch.object(self.module, '_run_capped', return_value=(0, b'', b'')) as run, \
+             patch.object(self.module, 'read_pinned_tree', return_value=SimpleNamespace(files={'skills/inert.md': b'inert'})) as read:
+            result = self.module._source(self.home, 'obra/superpowers', commit, ('skills/',), version='7.0.2')
+        self.assertEqual(result, {'skills/inert.md': b'inert'})
+        self.assertEqual(run.call_count, 2)
+        command = run.call_args.args[0]
+        self.assertEqual(command[-7:], ['protocol.https.allow=always', 'fetch', '-q', '--depth=1', '--no-tags', 'https://github.com/obra/superpowers.git', commit])
+        self.assertIn('protocol.allow=never', command)
+        env = run.call_args.kwargs['env']
+        self.assertEqual(env['GIT_CONFIG_GLOBAL'], self.module.os.devnull)
+        self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')
+        self.assertEqual(env['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(set(env)-{'PATH', 'SystemRoot', 'WINDIR'}, {'HOME', 'USERPROFILE', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT', 'GIT_ASKPASS', 'GIT_NO_REPLACE_OBJECTS'})
+        for call in run.call_args_list:
+            self.assertEqual((call.kwargs['stdout_limit'], call.kwargs['stderr_limit'], call.kwargs['timeout']), (4096, 4096, 60))
+        self.assertEqual(read.call_args.args[1], commit)
+        self.assertEqual(read.call_args.kwargs['prefixes'], ('skills/',))
+
+    def test_acquire_binds_resolved_version_to_source_diagnostic(self):
+        spec = {'repository': 'obra/superpowers', 'pinned_commit': 'd'*40}
+        release = {'version': '7.0.2', 'tag_name': 'v7.0.2', 'metadata_sha256': 'e'*64}
+        with patch.object(self.module, 'components', return_value={'superpowers': spec}), \
+             patch.object(self.module, 'github_release', return_value=release), \
+             patch.object(self.module, '_commit', return_value='f'*40), \
+             patch.object(self.module, '_source', return_value={'skills/inert/SKILL.md': b'inert'}) as source:
+            self.module._acquire(self.home, 'claude', lambda url: self.fail(url))
+        self.assertEqual(source.call_args.kwargs, {'version': '7.0.2'})
+
+    def test_source_diagnostic_does_not_echo_unvalidated_identity(self):
+        with patch.object(self.module, '_run_capped', return_value=(128, b'', b'secret-token')):
+            with self.assertRaises(ValueError) as caught:
+                self.module._source(self.home, 'secret-token', 'secret-token', ('skills/',), version='1'*1000+'.2')
+        text = str(caught.exception)
+        self.assertIn('component=unknown version=unknown commit=unknown', text)
+        self.assertNotIn('secret-token', text)
+        self.assertLess(len(text), 250)
+
     def test_unknown_new_source_format_refuses(self):
         with self.assertRaises(ValueError):
             self.module.spec_payload({'unknown.txt': b'inert'}, 'qwen', '9.0.0', 'a'*40, windows=False)

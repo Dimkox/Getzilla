@@ -131,7 +131,40 @@ def _commit(repo, tag, fetch):
     raise ValueError('unsupported/cyclic workflow annotated tag')
 
 
-def _source(home, repo, commit, prefixes):
+def _git_failure_reason(stderr):
+    # Never publish raw Git output: it can contain paths, URLs or credentials.
+    text = stderr.lower()
+    for marker, reason in (
+            (b'unable to find remote helper', 'helper-unavailable'),
+            (b'is not a git command', 'helper-unavailable'),
+            (b'could not resolve host', 'dns'),
+            (b'certificate', 'tls-certificate'),
+            (b'ssl', 'tls'), (b'tls', 'tls'),
+            (b'failed to connect', 'connection'),
+            (b'authentication failed', 'authentication'),
+            (b'could not read username', 'authentication'),
+            (b'not our ref', 'object-unavailable'),
+            (b'unadvertised object', 'object-unavailable'),
+            (b"couldn't find remote ref", 'object-unavailable'),
+            (b'permission denied', 'permission'),
+            (b'no space left', 'storage'),
+            (b'rpc failed', 'transport')):
+        if marker in text:
+            return reason
+    return 'unclassified'
+
+
+def _source(home, repo, commit, prefixes, *, version='unknown'):
+    component = next((name for name, spec in components().items()
+                      if name in {'superpowers', 'bmad', 'spec-kit'} and spec['repository'] == repo), 'unknown')
+    version = version if isinstance(version, str) and len(version) <= 64 and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', version) else 'unknown'
+    identity = commit if isinstance(commit, str) and re.fullmatch('[a-f0-9]{40}', commit) else 'unknown'
+
+    def failure(phase, code, reason):
+        return ValueError('current workflow exact Git object acquisition failed: '
+                          f'component={component} version={version} commit={identity} '
+                          f'phase={phase} exit={code} reason={reason}')
+
     parent = home/'workflow-sources'
     if home.is_symlink() or parent.is_symlink():
         raise ValueError('linked workflow source cache')
@@ -144,13 +177,21 @@ def _source(home, repo, commit, prefixes):
         env = {k: v for k, v in os.environ.items() if k in {'PATH', 'SystemRoot', 'WINDIR'}}
         env.update(HOME=str(private), USERPROFILE=str(private), GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='', GIT_NO_REPLACE_OBJECTS='1')
-        for args in (['init', '-q', str(root)], ['-C', str(root), '-c', 'credential.helper=', '-c', 'core.hooksPath='+str(private),
+        for phase, args in (('init', ['init', '-q', str(root)]), ('fetch', ['-C', str(root), '-c', 'credential.helper=', '-c', 'core.hooksPath='+str(private),
                      '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', 'fetch', '-q', '--depth=1', '--no-tags',
-                     'https://github.com/'+repo+'.git', commit]):
-            code, _out, _error = _run_capped(_git_command(args), cwd=root, env=env, stdout_limit=4096,
-                                            stderr_limit=4096, timeout=60)
+                     'https://github.com/'+repo+'.git', commit])):
+            try:
+                code, _out, error = _run_capped(_git_command(args), cwd=root, env=env, stdout_limit=4096,
+                                               stderr_limit=4096, timeout=60)
+            except ArchitectureError as exc:
+                reason = {'timeout': 'timeout', 'limit': 'output-limit', 'git': 'git-unavailable',
+                          'io': 'runner-io'}.get(exc.code, 'runner-error')
+                raise failure(phase, 'not-returned', reason) from None
+            except OSError as exc:
+                reason = 'exec-unavailable' if isinstance(exc, FileNotFoundError) else 'exec-io'
+                raise failure(phase, 'not-returned', reason) from None
             if code:
-                raise ValueError('current workflow exact Git object acquisition failed')
+                raise failure(phase, code, _git_failure_reason(error))
         return dict(read_pinned_tree(root, commit, prefixes=prefixes).files)
 
 
@@ -167,7 +208,7 @@ def _acquire(home, agent, fetch, *, windows=False):
         if commit == spec['pinned_commit']:
             payload = baseline_assets.load(component, agent, windows=windows)
         elif component == 'superpowers':
-            source = _source(home, spec['repository'], commit, ('skills/', 'LICENSE'))
+            source = _source(home, spec['repository'], commit, ('skills/', 'LICENSE'), version=release['version'])
             files = {}
             for name, body in source.items():
                 if name.startswith('skills/'):
@@ -175,7 +216,7 @@ def _acquire(home, agent, fetch, *, windows=False):
                         files[prefix+'/'+name.removeprefix('skills/')] = (body, 0o644)
             payload = _payload(component, agent, files, identity)
         elif component == 'spec-kit':
-            source = _source(home, spec['repository'], commit, ('templates/', 'scripts/', 'workflows/speckit/'))
+            source = _source(home, spec['repository'], commit, ('templates/', 'scripts/', 'workflows/speckit/'), version=release['version'])
             payload = spec_payload(source, agent, release['version'], commit, windows=windows)
         else:
             raise ValueError(f'{component} {release["version"]}: new native generator format has no qualified closed adapter; no old assets fallback')
