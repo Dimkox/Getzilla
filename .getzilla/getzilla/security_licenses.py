@@ -469,6 +469,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
             result['python_target_scope'] = {'target':target_binding['target'],
                 'assurance':'current-interpreter-only; no unobserved target or final-delivery credit'}
+            if 'ci_uses' in target_binding:
+                result['observed_ci_uses']=target_binding['ci_uses']
             if policy.get('factory_offline_profile') and 'factory_inputs' not in target_binding and any(
                     dep.get('manifest','').startswith('factory/') for dep in dependencies):
                 gap('artifact-target-scope-unobserved',
@@ -558,11 +560,19 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if dep.get('artifact_filename') and dep['artifact_filename'] != record['filename']:
                     raise ArtifactError('artifact-identity', 'artifact filename differs from the observed target')
                 observed = None
+                ci_image_target_gap=False
                 if dep['ecosystem'] == 'PyPI' and (target_binding is not None or 'python_target' in record):
                     from .security_python_target import verify_record
                     observed = verify_record(record,payload,target_binding,dependency=dep)
                     if target_binding and 'source_pins' in target_binding and not target_binding['source_pins'][observed['subject_sha256']]['marker_active']:
                         raise ArtifactError('artifact-target-use-unobserved', 'this source marker requires a separately observed target; current input bytes grant no other-target use credit')
+                    ci=target_binding.get('ci_uses',{})
+                    if observed.get('subject_sha256') in ci.get('subjects',{}):
+                        # Existing #323 internal CI decision applies to this actual consumer only.
+                        # The original production/customer source-use row remains separate above.
+                        ci_image_target_gap=True
+                        gap('artifact-target-use-unobserved',
+                            'actual isolated CI consumer has internal use; its image interpreter/libc target is not the host observation',dep)
                 if dep['ecosystem'] == 'PyPI' and observed is None and not (dep.get('artifact_filename') or dep.get('artifact_sha256')):
                     if not re.search(r'-(?:py3|py2\.py3)-none-any\.whl$', record['filename']):
                         raise ArtifactError('artifact-target-unknown', 'platform wheel or sdist requires an explicitly observed artifact target')
@@ -604,8 +614,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     if hashlib.sha256(delivered).hexdigest() != record['sha256']:
                         raise ArtifactError('license-obligation-missing', 'modified delivery needs separate notice, attribution and license review')
                 markers = (target_binding['target']['marker_environment'] if observed is not None else inventory.get('marker_environment', {}))
-                _closure(metadata, dep, dependencies, markers)
-                if not scope_known:
+                if observed is not None:
+                    from .security_python_target import closure_dependencies
+                    for graph in closure_dependencies(dep,dependencies,target_binding):
+                        _closure(metadata,dep,graph,markers)
+                else:
+                    _closure(metadata, dep, dependencies, markers)
+                if not scope_known or ci_image_target_gap:
                     continue
                 result['details'].append({'ecosystem': dep['ecosystem'], 'package': dep['name'], 'version': dep['version'],
                     'manifest': dep.get('manifest'), 'status': 'pass', 'expression': metadata['expression'],
@@ -738,6 +753,9 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             total+=auxiliary['projection']['payload_size']
             if total>512*1024*1024:
                 raise ArtifactError('artifact-size','catalog and Factory output exceed the shared aggregate byte budget')
+        if target_binding is not None and 'ci_uses' in target_binding:
+            from .security_python_target import digest as python_digest
+            binding['ci_use_observation_sha256']=python_digest(target_binding['ci_uses'])
         content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
                 'source_url': 'urn:getzilla:artifact-license-catalog:1',

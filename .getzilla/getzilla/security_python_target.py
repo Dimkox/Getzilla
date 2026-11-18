@@ -77,14 +77,28 @@ def binding(profile):
         value['source_pins'] = profile['python_source_pins']
     if 'factory_inputs' in profile:
         value['factory_inputs'] = profile['factory_inputs']
+    if 'python_closure_graphs' in profile:
+        value['closure_graphs'] = profile['python_closure_graphs']
+    if 'python_ci_uses' in profile:
+        value['ci_uses'] = profile['python_ci_uses']
     return _binding(value)
 
 
 def _binding(value):
-    if (type(value) is not dict or set(value)-{'source_pins','factory_inputs'} != {'target','source','run','inventory_sha256','profile_sha256'}):
+    if (type(value) is not dict or set(value)-{'source_pins','factory_inputs','closure_graphs','ci_uses'} != {'target','source','run','inventory_sha256','profile_sha256'}):
         _refuse()
     if 'source_pins' in value:
         validate_source_pins(value['source_pins'])
+    if 'closure_graphs' in value:
+        validate_closure_graphs(value['closure_graphs'])
+        if value['closure_graphs']['inventory_sha256']!=value['inventory_sha256']:
+            _refuse()
+    if 'ci_uses' in value:
+        from .security_image_producer import validate_ci_uses
+        validate_ci_uses(value['ci_uses'],value['source'],value['run'])
+        if (value['ci_uses']['inventory_sha256']!=value['inventory_sha256']
+                or value['ci_uses']['closure_graphs_sha256']!=digest(value.get('closure_graphs'))):
+            _refuse()
     if 'factory_inputs' in value:
         from .security_factory_inputs import validate_declaration
         declared=validate_declaration(value['factory_inputs'])
@@ -109,6 +123,87 @@ def _binding(value):
 
 def _subject(dep):
     return {key:dep[key] for key in ('ecosystem','name','version','manifest','usage','extras')}
+
+
+def validate_closure_graphs(value):
+    if (type(value) is not dict or set(value)!={'schema_version','inventory_sha256','graphs','evidence'}
+            or value['schema_version']!=1 or type(value['inventory_sha256']) is not str
+            or not re.fullmatch('[a-f0-9]{64}',value['inventory_sha256'])
+            or type(value['graphs']) is not dict or len(value['graphs'])>32
+            or type(value['evidence']) is not dict or len(value['evidence'])>64):
+        _refuse()
+    for key,graphs in value['graphs'].items():
+        if (type(key) is not str or len(key)>512 or type(graphs) is not list or not 1<=len(graphs)<=4
+                or any(type(graph) is not list or not 1<=len(graph)<=16
+                    or any(type(path) is not str or not 1<=len(path)<=256 or '..' in Path(path).parts or Path(path).is_absolute()
+                        for path in graph) for graph in graphs)):
+            _refuse()
+    for path,sha in value['evidence'].items():
+        if type(path) is not str or len(path)>256 or '..' in Path(path).parts or Path(path).is_absolute() or type(sha) is not str or not re.fullmatch('[a-f0-9]{64}',sha):
+            _refuse()
+    return json.loads(json.dumps(value))
+
+
+def closure_graphs(root,inventory):
+    """Observe only proved install joins; distinct consumers stay separate graphs."""
+    from .security_tools import TRUSTED_ROOT
+    graphs,evidence={},{}
+    paths={row['path'] for row in inventory['manifests']}
+    def observed(path):
+        raw=read_file(root,path,4*1024*1024)
+        evidence[path]=hashlib.sha256(raw).hexdigest()
+        return raw
+    if {'factory/pyproject.toml','factory/uv.lock'}<=paths:
+        project=tomllib.loads(observed('factory/pyproject.toml').decode())
+        lock=tomllib.loads(observed('factory/uv.lock').decode())
+        own=[row for row in lock.get('package',[]) if row.get('name')==project.get('project',{}).get('name')
+            and row.get('source')=={'editable':'.'}]
+        if len(own)==1:
+            # Every directly declared pin must also exist in this actual lock graph.
+            locked={(row['name'],row['version']) for row in inventory['dependencies'] if row['manifest']=='factory/uv.lock'}
+            for usage in ('runtime','development'):
+                direct=[row for row in inventory['dependencies'] if row['manifest']=='factory/pyproject.toml' and row['usage']==usage]
+                if direct and all((row['name'],row['version']) in locked for row in direct):
+                    graphs['factory/pyproject.toml#'+usage]=[['factory/uv.lock']]
+    if 'trust-ci/pyproject.toml' in paths:
+        observed('trust-ci/pyproject.toml')
+        consumers=[]
+        for recipe,requirements,install in [('trust-ci/Dockerfile.api','requirements.txt','.'),
+                ('trust-ci/Dockerfile.worker','requirements.txt','.'),('trust-ci/Dockerfile.test','requirements-test.txt','".[test]"')]:
+            try:
+                raw=observed(recipe)
+                trusted=read_file(TRUSTED_ROOT,recipe,4*1024*1024)
+                text=raw.decode()
+            except (OSError,ValueError):
+                continue
+            # This exact trusted recipe supplies an install-context fact, never image execution credit.
+            command=('RUN python -m pip install --no-cache-dir --require-hashes -r '+requirements+' \\\n'
+                '    && python -m pip install --no-cache-dir --no-deps '+install)
+            if raw==trusted and ('\n'+command+'\n' in '\n'+text) and 'trust-ci/'+requirements in paths:
+                observed('trust-ci/'+requirements)
+                graph=['trust-ci/'+requirements]
+                if graph not in consumers:
+                    consumers.append(graph)
+        if consumers:
+            graphs['trust-ci/pyproject.toml#runtime']=consumers
+        tests=[graph for graph in consumers if graph==['trust-ci/requirements-test.txt']]
+        if tests:
+            graphs['trust-ci/pyproject.toml#optional']=tests
+    return validate_closure_graphs(dict(schema_version=1,inventory_sha256=inventory['digest'],graphs=graphs,evidence=evidence))
+
+
+def closure_dependencies(dep,dependencies,binding):
+    if dep.get('delivery_context') is not None:
+        return [[row for row in dependencies if row.get('delivery_context')==dep['delivery_context']]]
+    descriptor=binding.get('closure_graphs')
+    if descriptor is not None:
+        validate_closure_graphs(descriptor)
+    graphs=(descriptor or {}).get('graphs',{}).get(dep.get('manifest','')+'#'+dep.get('usage',''))
+    if graphs is None:
+        return [[row for row in dependencies if row.get('manifest')==dep.get('manifest')
+            and row.get('usage')==dep.get('usage') and row.get('delivery_context') is None]]
+    return [[row for row in dependencies if row.get('manifest') in graph and row.get('delivery_context') is None]
+        for graph in graphs]
 
 
 def _context_key(dep):

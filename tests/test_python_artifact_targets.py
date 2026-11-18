@@ -25,6 +25,68 @@ MIT = json.loads((ROOT/'tests/fixtures/security-license-texts.json').read_bytes(
 
 
 class PythonArtifactTargetTests(unittest.TestCase):
+    def test_caller_ci_use_json_cannot_restore_live_build_or_image_target_credit(self):
+        self.assertTrue(hasattr(producer,'validate_ci_uses'),'missing live consumer/source/run use observation')
+        source={'head_sha':'a'*40}
+        run={'provider':'github-actions'}
+        claimed=dict(schema_version=1,source=source,run=run,subjects={'b'*64:[0]},consumers=[{'distribution':'internal'}])
+        with mock.patch.object(producer,'_LIVE',None),self.assertRaises(producer.BackendUnavailable):
+            producer.validate_ci_uses(claimed,source,run)
+
+    def test_ci_consumer_fact_requires_same_owned_guard_build_inputs_source_and_run(self):
+        from getzilla import security_image_backend as native,security_python_target as target
+        source=dict(head_sha='a'*40,tree_sha='b'*40,checker_sha='c'*40,checker_tree_sha='d'*40,
+            candidate_clean=True,checker_clean=True,same_project=True)
+        run=dict(provider='github-actions',repository='owned/project',run_id='42',run_attempt='1',head_sha='a'*40)
+        recipe='trust-ci/Dockerfile.api'
+        requirements='trust-ci/requirements.txt'
+        (self.root/'trust-ci').mkdir()
+        raw=b'owned exact completed recipe data'
+        (self.root/recipe).write_bytes(raw)
+        row=dict(dockerfile=recipe,recipe_sha256='1'*64,build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
+        dep=dict(ecosystem='PyPI',name='owned',version='1',manifest=requirements,usage='runtime-and-development',extras=[])
+        original=dict(dep,manifest='factory/uv.lock')
+        inventory=dict(digest='a'*64,builds=[row],dependencies=[dep,original],images=[dict(manifest='compose.yml',line=1,
+            source_reference='compose-build:api',reference='owned@sha256:'+'3'*64)])
+        graphs=dict(graphs={'trust-ci/pyproject.toml#runtime':[[requirements]]},
+            evidence={recipe:hashlib.sha256(raw).hexdigest(),requirements:'4'*64})
+        guard=object()
+        live=dict(source=source,run=run,builds={'2'*64:'owned@sha256:'+'3'*64},build_inputs=[row],native_guard=guard)
+        with mock.patch.object(native,'_GUARD',guard),mock.patch.object(producer,'_LIVE',live):
+            observed=producer.ci_use_observations(self.root,inventory,source,run,graphs)
+            self.assertEqual(observed['subjects'],{target.digest(target._subject(dep)):[0]})
+            self.assertEqual(observed['consumers'][0]['distribution'],'internal')
+            self.assertIs(observed['consumers'][0]['image_target_observed'],False)
+            self.assertNotIn(target.digest(target._subject(original)),observed['subjects'])
+            self.assertEqual(producer.validate_ci_uses(observed,source,run),observed)
+            bad=copy.deepcopy(observed)
+            bad['consumers'][0]['image_target_observed']=True
+            with self.assertRaises(producer.BackendUnavailable):
+                producer.validate_ci_uses(bad,source,run)
+            with self.assertRaises(producer.BackendUnavailable):
+                producer.validate_ci_uses(observed,source,{**run,'run_attempt':'2'})
+            with mock.patch.object(native,'_GUARD',object()),self.assertRaises(producer.BackendUnavailable):
+                producer.validate_ci_uses(observed,source,run)
+            substituted=copy.deepcopy(inventory)
+            substituted['builds'][0]['recipe_sha256']='5'*64
+            with self.assertRaises(producer.BackendUnavailable):
+                producer.ci_use_observations(self.root,substituted,source,run,graphs)
+
+    def test_current_target_closure_separates_committed_source_graphs(self):
+        target=self.target()
+        self.assertTrue(hasattr(target,'closure_dependencies'),'missing source install-context graph observation')
+        factory=dict(ecosystem='PyPI',name='owned',version='1',manifest='factory/uv.lock',usage='runtime-and-development',extras=[])
+        trust=dict(factory,version='2',manifest='trust-ci/requirements.txt')
+        self.assertEqual(target.closure_dependencies(factory,[factory,trust],{}),[[factory]])
+        project=dict(factory,manifest='trust-ci/pyproject.toml',usage='runtime')
+        binding={'closure_graphs':dict(schema_version=1,inventory_sha256='a'*64,evidence={},graphs={
+            'trust-ci/pyproject.toml#runtime':[['trust-ci/requirements.txt'],['trust-ci/requirements-test.txt']]})}
+        test=dict(trust,manifest='trust-ci/requirements-test.txt',version='3')
+        # Different actual consumers remain separate. No version union or nearest match.
+        self.assertEqual(target.closure_dependencies(project,[factory,trust,test],binding),[[trust],[test]])
+        named=dict(factory,delivery_context='owned-output')
+        self.assertEqual(target.closure_dependencies(named,[named,trust],binding),[[named]])
+
     def test_factory_fresh_output_uses_trusted_builder_and_rechecks_current_app_source(self):
         from getzilla import security_factory_inputs as factory
         from getzilla.security_artifacts import archive_inventory

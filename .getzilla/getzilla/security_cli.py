@@ -40,7 +40,8 @@ _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
 _PREPARATION_SEAL = object()
 _PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration', 'profile-validation',
     'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
-    'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target'))
+    'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target',
+    'factory-target','factory-acquisition','factory-output'))
 _PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory', 'os',
     'key', 'type', 'value', 'runtime', 'other'))
 _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'artifact-size',
@@ -147,7 +148,7 @@ def validate_selection_authority(source: dict, run: dict, selection=None, *, now
 
 
 def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                  package_target=None, package_pins=None, factory_inputs=None) -> dict:
+                  package_target=None, package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     validate_selection_authority(source, run, image_selection, now=now)
     if isinstance(inventory, dict) and inventory.get('builds'):
@@ -212,6 +213,14 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         body['factory_inputs']=validate_declaration(factory_inputs)
         if body['factory_inputs']['inventory_sha256']!=inventory['digest']:
             raise SecurityDataError('Factory input declaration belongs to another inventory')
+    if package_graphs is not None:
+        from .security_python_target import validate_closure_graphs
+        body['python_closure_graphs']=validate_closure_graphs(package_graphs)
+        if body['python_closure_graphs']['inventory_sha256']!=inventory['digest']:
+            raise SecurityDataError('Python closure graphs belong to another inventory')
+    if package_ci_uses is not None:
+        from .security_image_producer import validate_ci_uses
+        body['python_ci_uses']=validate_ci_uses(package_ci_uses,source,run)
     public = current_context()
     if public is not None:
         body['public_execution_sha256'] = canonical_digest(public)
@@ -220,7 +229,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
 
 
 def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                           package_pins=None, factory_inputs=None) -> dict:
+                           package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None) -> dict:
     if not isinstance(profile, dict) or not isinstance(profile.get('created_at'), str):
         raise SecurityDataError('explicit public input profile is missing')
     from .security_data import _timestamp
@@ -234,7 +243,7 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     if 'python_source_pins' in profile and package_pins is None:
         raise SecurityDataError('source artifact pins must be reobserved before profile consumption')
     if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts, image_selection=image_selection,
-                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs):
+                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -316,10 +325,12 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
         policy = _policy_digest(root)
         package_pins = None
+        package_graphs = None
         observed_target = package_target if package_target is not None else profile.get('python_target') if profile else None
         if observed_target is not None and any(dep['ecosystem']=='PyPI' for dep in inventory['dependencies']):
-            from .security_python_target import source_pins, validate_target
+            from .security_python_target import source_pins, validate_target, closure_graphs
             package_pins = source_pins(root,inventory,validate_target(observed_target))
+            package_graphs=closure_graphs(root,inventory)
         factory_inputs=None
         if observed_target is not None:
             from .security_factory_inputs import declaration
@@ -327,10 +338,14 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         with _preparation_step('source-binding'):
             before = source_binding(root, TRUSTED_ROOT, Path(temporary))
+        package_ci_uses=None
+        if package_graphs is not None:
+            from .security_image_producer import ci_use_observations
+            package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
         if write_profile:
             with _preparation_step('profile-declaration'):
                 declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs)
+                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
                 if source_bindings(catalog):
                     refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
                     if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
@@ -339,7 +354,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             return declared
         with _preparation_step('profile-validation'):
             validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                   package_pins=package_pins,factory_inputs=factory_inputs)
+                                   package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
             if package_target is not None and profile.get('python_target') != package_target:
                 raise SecurityDataError('Python target differs from the current input profile')
             from .security_python_target import binding
@@ -778,9 +793,11 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     python_options = {'target_binding':python_binding} if python_binding is not None else {}
     inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
     package_pins = None
+    package_graphs = None
     if profile is not None and 'python_source_pins' in profile:
-        from .security_python_target import source_pins,validate_target
+        from .security_python_target import source_pins,validate_target,closure_graphs
         package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+        package_graphs=closure_graphs(root,inventory)
     factory_inputs=None
     if profile is not None and 'factory_inputs' in profile:
         from .security_factory_inputs import declaration
@@ -794,10 +811,14 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
         scratch = Path(directory)
         try:
             before = source_binding(root, TRUSTED_ROOT, scratch)
+            package_ci_uses=None
+            if package_graphs is not None:
+                from .security_image_producer import ci_use_observations
+                package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
                                        'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                       package_pins=package_pins,factory_inputs=factory_inputs)
+                                       package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
             if refresh and inventory['images'] and image_artifacts is None:
                 raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations remain unqualified')
             def acquire(label, operation):

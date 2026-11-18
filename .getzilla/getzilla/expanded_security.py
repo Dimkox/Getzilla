@@ -149,16 +149,22 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
              'tools': str(Path(env.get('GETZILLA_SECURITY_TOOLS') or root / '.getzilla/runtime/security-tools').absolute())}
     from .security_tools import TRUSTED_ROOT
     package_pins=None
+    package_graphs=None
     if 'python_source_pins' in profile:
-        from .security_python_target import source_pins,validate_target
+        from .security_python_target import source_pins,validate_target,closure_graphs
         package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+        package_graphs=closure_graphs(root,inventory)
     factory_inputs=None
     if 'factory_inputs' in profile:
         from .security_factory_inputs import declaration as factory_declaration
         from .security_licenses import load_policy
         factory_inputs=factory_declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=Path(roots['tools']))
+    package_ci_uses=None
+    if 'python_ci_uses' in profile:
+        from .security_image_producer import ci_use_observations
+        package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
-                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs)
+                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
     if catalog is not None:
         validate_selection(catalog, inventory, profile['image_profile'])
     after, after_run = _selection_authority(root, env)

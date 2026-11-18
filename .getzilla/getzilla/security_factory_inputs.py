@@ -171,10 +171,12 @@ def _environment(value):
 def _command(command,stage):
     from .python_test_runner import execute
     from .security_tools import _environment as command_environment
-    result=execute(command,stage,command_environment(stage),timeout=120)
-    if result.returncode or result.terminal_state!='completed' or result.cleanup_error or len(result.stdout)>65536:
-        _refuse('artifact-factory-output')
-    return _json(result.stdout.encode())
+    from .security_cli import _preparation_step
+    with _preparation_step('factory-target' if command[-1]=='--describe-target' else 'factory-output'):
+        result=execute(command,stage,command_environment(stage),timeout=120)
+        if result.returncode or result.terminal_state!='completed' or result.cleanup_error or len(result.stdout)>65536:
+            _refuse('artifact-factory-output')
+        return _json(result.stdout.encode())
 
 
 def _catalog_bytes(root):
@@ -200,6 +202,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
     from .security_license_acquisition import acquire_pypi,_write
     from .manifest import _open_root
     from .security_licenses import load_policy
+    from .security_cli import _preparation_step
     declared=validate_declaration(binding['factory_inputs'])
     # The caller has independently rederived the declaration and exact source binding.
     main_bytes=_catalog_bytes(artifacts)
@@ -219,8 +222,9 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
             _refuse()
         environment=_environment(observed['environment'])
         inventory=output_inventory(declared,binding,environment)
-        bundle=acquire_pypi(inventory['dependencies'],auxiliary,inventory_digest=inventory['digest'],now=now,
-            byte_budget=MAX_TOTAL-main_bytes,**({'fetch':fetch} if fetch is not None else {}))
+        with _preparation_step('factory-acquisition'):
+            bundle=acquire_pypi(inventory['dependencies'],auxiliary,inventory_digest=inventory['digest'],now=now,
+                byte_budget=MAX_TOTAL-main_bytes,**({'fetch':fetch} if fetch is not None else {}))
         if bundle['gaps']:
             _refuse()
         wheelhouse=stage/'wheels'
