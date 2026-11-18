@@ -1032,6 +1032,10 @@
         ".getzilla/agents/security_reviewer.toml",
         ".getzilla/agents/task_analyst.toml",
         ".getzilla/agents/test_reviewer.toml",
+        ".getzilla/config/ci-image-blobs/70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.json",
+        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json",
+        ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json",
+        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json",
         ".getzilla/config/ci-images.json",
         ".getzilla/config/codex-hooks.json",
         ".getzilla/config/cost-providers.json",
@@ -1164,6 +1168,7 @@
         ".getzilla/getzilla/python_test_runner.py",
         ".getzilla/getzilla/quality_gates.py",
         ".getzilla/getzilla/queue_provenance.py",
+        ".getzilla/getzilla/queue_refusal.py",
         ".getzilla/getzilla/read_ledger.py",
         ".getzilla/getzilla/receipts.py",
         ".getzilla/getzilla/release_state.py",
@@ -2191,7 +2196,7 @@
         },
         ".getzilla/getzilla/adapter_removal.py": {
           "mode": 420,
-          "sha256": "bab074e90ea36c8398bb2edf92c33038988755552e7544b6d43a8b706a8b1491"
+          "sha256": "71fea2db913c1fa67c7090dea782176f1fd1ae45efbc53f35ace739dbfed9cab"
         },
         ".getzilla/getzilla/adoption_state.py": {
           "mode": 420,
@@ -2359,7 +2364,7 @@
         },
         ".getzilla/getzilla/disposable_resources.py": {
           "mode": 420,
-          "sha256": "752de0a5d2d4b632c78380b8c3aff95eb6e284329c4c1e16d1e04e642187230a"
+          "sha256": "87bbac7e53e9501552b1f4368b37c882df1abd09741d2ec02e85de20dcb0da63"
         },
         ".getzilla/getzilla/doctor.py": {
           "mode": 420,
@@ -2439,11 +2444,11 @@
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 420,
-          "sha256": "6a1f66d0fe7f46eab578d212d4078ee6377b8c8dc836291c146ad0b38f823a79"
+          "sha256": "756f25e7fda30ee339e4f92096618adab4c79f3374594486c81a88e5bd275fc1"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 420,
-          "sha256": "ff1db9c26aae45cac25635c4afe82aeb9488dc3f20a5ce93065d09bff8677a27"
+          "sha256": "3beb18d59216a1bebbea7bae7e863f5fc6e1f1d547a6d93b31c8da5eee4176e2"
         },
         ".getzilla/getzilla/manifest.py": {
           "mode": 420,
@@ -2535,7 +2540,7 @@
         },
         ".getzilla/getzilla/python_test_runner.py": {
           "mode": 420,
-          "sha256": "544e79e1ea58b94d224d3818f7a86a5e810a6bcbfe5b15a1e4334912d992ddb6"
+          "sha256": "71429feb5a623b94d3136871fe02fc53c743eed19e8ad79ec715c950997f8753"
         },
         ".getzilla/getzilla/quality_gates.py": {
           "mode": 420,
@@ -2543,7 +2548,7 @@
         },
         ".getzilla/getzilla/queue_provenance.py": {
           "mode": 420,
-          "sha256": "633c9701abc1f10cc23836eeca4197579b433df9cef62f5c1a09c08836631e73"
+          "sha256": "ffb90e0774a595f24a6cdca22d0fafb03dcd1855b4b376df05c36dd34e290170"
         },
         ".getzilla/getzilla/read_ledger.py": {
           "mode": 420,
@@ -2767,7 +2772,7 @@
         },
         ".getzilla/getzilla/verification.py": {
           "mode": 420,
-          "sha256": "02fac5cb0e3e2fb3f5297d21208b723959d5dc499700a4659df4efb718b46856"
+          "sha256": "4f870929f300a26ac4721f0de02f077d38bbde38d662782889939a9a53acd2a3"
         },
         ".getzilla/getzilla/verification_dispositions.py": {
           "mode": 420,
@@ -2775,11 +2780,11 @@
         },
         ".getzilla/getzilla/verification_journal.py": {
           "mode": 420,
-          "sha256": "4c9121177b6a8cdc892e26d5607b8adaa981eb83be48ef947b3070f37fd468f5"
+          "sha256": "23f39ca095067d9f5dc2233e9a6642608b7cb0757edd4bdcb005260bb226036c"
         },
         ".getzilla/getzilla/verification_plan.py": {
           "mode": 420,
-          "sha256": "4297fbc66b46da3ee1a8e9f77def24e51b293139f2dcf6d4d53c0c166973b5ec"
+          "sha256": "6eb9aca087ffddb33c8492cacce124a36884ba0537d2c24dbc540120e436e190"
         },
         ".getzilla/getzilla/verification_scope.py": {
           "mode": 420,
@@ -5379,7 +5384,7 @@
         },
         "scripts/getzilla_unittest.py": {
           "mode": 420,
-          "sha256": "cf2b7294b9ffaa1090eb6502ccf4129f770fa405faeb174bc11b97fc8ac88bf5"
+          "sha256": "70077b183563ed18c015e0f902d2a123a5254ba119c19962f8b6e527ae925c09"
         },
         "scripts/getzilla_update.py": {
           "mode": 420,
@@ -5420,6 +5425,26 @@
         "user_prompt_submit.py": {
           "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
+        },
+        ".getzilla/getzilla/queue_refusal.py": {
+          "sha256": "7bc1c015c4605a4195fe5728b333ec82a2af644365fd0f05b5ed4bb49fa453cd",
+          "mode": 420
+        },
+        ".getzilla/config/ci-image-blobs/70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.json": {
+          "sha256": "70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9",
+          "mode": 420
+        },
+        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json": {
+          "sha256": "ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085",
+          "mode": 420
+        },
+        ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json": {
+          "sha256": "b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79",
+          "mode": 420
+        },
+        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json": {
+          "sha256": "e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4",
+          "mode": 420
         }
       }
     },
@@ -7031,7 +7056,7 @@
         },
         "factory/tests/run_disposable_exit.py": {
           "mode": 420,
-          "sha256": "559c7fb184929984ee57124a42acf7b1bca5339156a384f963a626055e6faf51"
+          "sha256": "817080b2da1e12f526d0ffc2c7e316c2cd87ee27dc4eebb9c0be6e2e55f5d1b1"
         },
         "factory/tests/run_live_suite.py": {
           "mode": 420,
@@ -7079,7 +7104,7 @@
         },
         "factory/tests/test_disposable_exit.py": {
           "mode": 420,
-          "sha256": "3d53fd6e2681b9058a944561bd18f65fa1a7071b4076562c0e842157fc21462c"
+          "sha256": "cefe6d946309db710613f732dd65d32b1743130df2a3c92ee257d48e642efde1"
         },
         "factory/tests/test_execution_contracts.py": {
           "mode": 420,
@@ -7203,7 +7228,7 @@
         },
         "factory/tests/test_migrations.py": {
           "mode": 420,
-          "sha256": "2cec1ce4c0e5def31ff7276b6ade49ebac16c528806a7e7555c3aeea9ab213c0"
+          "sha256": "4d29b468ff5453fb822dcd14480b6b13c07ca0387c22835456ac1f1cb9956e5b"
         },
         "factory/tests/test_model_rotator_registry.py": {
           "mode": 420,
