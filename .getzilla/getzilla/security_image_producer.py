@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import sys
 import tarfile
@@ -148,6 +149,45 @@ def _copy_context(root, recipe, destination):
         os.chmod(destination / relative, row['mode'])
 
 
+def _build_recipe(root, recipe, volume, layout, builder):
+    """Retain the completed graph, then retire only this recipe's private state."""
+    from .security_oci import _Root
+    held = _Root(volume)
+    directory = None
+    try:
+        name = Path(tempfile.mkdtemp(prefix='context-', dir=volume)).name
+        directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=held.fd)
+        birth = os.fstat(directory)
+        if birth.st_uid != os.geteuid() or birth.st_mode & 0o077:
+            raise BackendUnavailable('owned recipe directory permissions refused')
+        scope = Path(volume) / name
+        try:
+            context, archive = scope / 'source', scope / 'export.tar'
+            _copy_context(root, recipe, context)
+            if builder.build(recipe, context, archive) is not _ACTIVE:
+                raise BackendUnavailable('build port did not prove actual owned process completion')
+            descriptor = _unpack_export(archive, layout)
+            archive.unlink()
+        finally:
+            current = os.stat(name, dir_fd=held.fd, follow_symlinks=False)
+            if ((current.st_dev, current.st_ino, current.st_uid) != (birth.st_dev, birth.st_ino, birth.st_uid)
+                    or not stat.S_ISDIR(current.st_mode) or current.st_mode & 0o077):
+                raise BackendUnavailable('owned recipe directory identity changed; cleanup refused')
+            # The standard FD-based walker rejects child-link traversal. The held
+            # parent and same-birth check exclude foreign/replaced recipe roots.
+            if not shutil.rmtree.avoids_symlink_attacks:
+                raise BackendUnavailable('descriptor recipe cleanup unavailable')
+            shutil.rmtree(name, dir_fd=held.fd)
+    finally:
+        if directory is not None:
+            os.close(directory)
+        held.close()
+    # This is the sole cache-retirement join: output bytes were fully copied
+    # and hash checked before context/archive cleanup or daemon cache pruning.
+    builder.prune()
+    return descriptor
+
+
 def _binding(use, reference, platform='linux/amd64'):
     return {**{key: use[key] for key in ('manifest', 'line', 'source_sha256', 'source_reference')},
             'reference': reference, 'platform': platform}
@@ -210,16 +250,10 @@ def produce(root, source, run, volume, builder):
     for recipe in build_inventory['builds']:
             identity = recipe['recipe_sha256']
             if identity not in by_recipe:
-                context, archive = volume / ('context-' + identity), volume / ('export-' + identity + '.tar')
-                _copy_context(root, recipe, context)
-                marker = builder.build(recipe, context, archive)
-                if marker is not _ACTIVE:
-                    raise BackendUnavailable('build port did not prove actual owned process completion')
-                descriptor = _unpack_export(archive, layout)
+                descriptor = _build_recipe(root, recipe, volume, layout, builder)
                 reference = 'getzilla.local/build-' + identity + '@' + descriptor['digest']
                 roots[reference] = descriptor
                 by_recipe[identity] = reference
-                archive.unlink()
             reference = by_recipe[identity]
             completed[recipe['build_sha256']] = reference
             by_service[recipe['service']] = reference
