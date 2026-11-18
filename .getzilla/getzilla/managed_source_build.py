@@ -19,6 +19,59 @@ from .managed_runtime import directory, entries, MAX_FILES, MAX_BYTES, MAX_FILE_
 from .toolchain import parse_tool_version
 
 
+class GitHTTPSUnavailable(ValueError):
+    """A correct-version Git lacks its required local HTTPS helper protocol."""
+
+
+def probe_git_https(executable, stage, env):
+    """Require the helper protocol without a fetch, registry call or Git config."""
+    from .architecture_diff import ArchitectureError, _run_capped
+    failure = 'Git HTTPS helper capability unavailable; install libcurl development headers/libraries and rebuild managed Git'
+    try:
+        with tempfile.TemporaryDirectory(prefix='git-https-probe-', dir=stage) as owned:
+            private = Path(owned)
+            clean = {k: v for k, v in env.items() if k in {'SystemRoot', 'SYSTEMROOT', 'WINDIR'}}
+            # Git prepends its own compiled exec path. Ambient PATH helpers
+            # must not supply a missing transport or qualify a broken prefix.
+            clean.update(PATH=owned, HOME=owned, USERPROFILE=owned, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+                         GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='', GIT_NO_REPLACE_OBJECTS='1',
+                         GIT_CEILING_DIRECTORIES=owned, LANG='C', LC_ALL='C')
+            command = [str(executable), '--no-replace-objects', '-c', 'credential.helper=',
+                       '-c', 'core.hooksPath='+owned, 'remote-https', 'getzilla-probe', 'https://github.com/']
+            code, output, error = _run_capped(command, cwd=private, env=clean, stdout_limit=4096,
+                                              stderr_limit=4096, timeout=10, stdin_data=b'capabilities\n\n')
+            if code and (b'unable to find remote helper' in error
+                         or b"'remote-https' is not a git command" in error):
+                raise GitHTTPSUnavailable(failure)
+            capabilities = output[:-2].split(b'\n') if output.endswith(b'\n\n') else []
+            if (code or not capabilities or len(capabilities) != len(set(capabilities))
+                    or any(re.fullmatch(rb'[a-z][a-z0-9-]{0,63}', value) is None for value in capabilities)
+                    or not {b'fetch', b'option'} <= set(capabilities)):
+                raise ValueError(failure)
+    except (ArchitectureError, OSError):
+        raise ValueError(failure) from None
+
+
+def _require_git_curl(source):
+    failure = 'Git HTTPS requires libcurl development headers/libraries; generated source configuration must enable curl'
+    try:
+        fd = os.open(source/'config.mak.autogen', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 65536:
+                raise ValueError(failure)
+            raw = stream.read(65537)
+            after = os.fstat(stream.fileno())
+            fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            if len(raw) > 65536 or any(getattr(before, key) != getattr(after, key) for key in fields):
+                raise ValueError(failure)
+    except OSError:
+        raise ValueError(failure) from None
+    values = re.findall(rb'(?m)^NO_CURL[ \t]*=[ \t]*([^\r\n]*)', raw)
+    if [value.strip() for value in values] != [b'']:
+        raise ValueError(failure)
+
+
 def _inventory(prefix):
     result, total = {}, 0
     for parent, dirs, names in os.walk(prefix, followlinks=False):
@@ -48,6 +101,8 @@ def _probe(target, executable, stage, env, run):
                                (result.stdout or '')+'\n'+(result.stderr or ''))
     if result.returncode or actual != target.version:
         raise ValueError(f'{target.component} target={target.version}: built actual={actual}; no fallback')
+    if target.component == 'git':
+        probe_git_https(executable, stage, env)
 
 
 def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> Path:
@@ -81,10 +136,17 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
         executable = prefix/('bin/python3' if target.component == 'python' else 'bin/'+target.component)
         env = {k: v for k, v in os.environ.items() if k in ('PATH', 'SystemRoot', 'WINDIR', 'LD_LIBRARY_PATH')}
         env.update(HOME=str(stage/'private-home'), USERPROFILE=str(stage/'private-home'), PYTHONNOUSERSITE='1')
-        _probe(target, executable, stage, env, run)
+        missing_https = False
+        try:
+            _probe(target, executable, stage, env, run)
+        except GitHTTPSUnavailable:
+            missing_https = True
         if _inventory(prefix) != record['files']:
             raise ValueError('local source build changed during actual probe')
-        return executable
+        if not missing_https:
+            return executable
+        # Only unchanged, exact-source/custody/version Git reaches this point.
+        # Build once into a fresh stage; retain the old stage/locator on failure.
     stage = Path(tempfile.mkdtemp(prefix=target.component+'-'+target.version+'-', dir=parent))
     source, prefix = stage/'source', stage/'installed'
     source.mkdir(mode=0o700)
@@ -124,6 +186,8 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
         if result.returncode:
             raise ValueError(f'{target.component} {target.version}: verified source build failed; '
                              f'check compiler/development prerequisites: {(result.stderr or result.stdout)[-500:]}')
+        if target.component == 'git' and command[0] == './configure':
+            _require_git_curl(source)
     if not executable.is_file() or not executable.resolve().is_relative_to(prefix.resolve()):
         raise ValueError('built runtime executable is missing or outside the owned prefix')
     _probe(target, executable, source, env, run)

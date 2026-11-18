@@ -16,9 +16,15 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.latest_releases import Target
 from getzilla.managed_source_build import install_source
 from getzilla import managed_source_build
+from getzilla import architecture_diff
 
 
 class SourceRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        probe = patch.object(architecture_diff, '_run_capped', return_value=(0, b'fetch\noption\n\n', b''))
+        probe.start()
+        self.addCleanup(probe.stop)
+
     def git_fixture(self):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode='w:gz') as archive:
@@ -40,6 +46,7 @@ class SourceRuntimeTests(unittest.TestCase):
                 calls.append(command)
                 if command[0] == './configure':
                     prefix = Path(command[1].removeprefix('--prefix='))
+                    (cwd/'config.mak.autogen').write_text('NO_CURL=\n')
                 elif command[0] == 'make':
                     if 'NO_RUST=YesPlease' not in command:
                         return subprocess.CompletedProcess(command, 1, '',
@@ -70,6 +77,7 @@ class SourceRuntimeTests(unittest.TestCase):
                 calls.append(command)
                 if command[0] == './configure':
                     prefix = Path(command[1].removeprefix('--prefix='))
+                    (cwd/'config.mak.autogen').write_text('NO_CURL=\n')
                 elif command[:2] == ['make', 'install']:
                     binary, helpers = prefix/'bin', prefix/'libexec/git-core'
                     binary.mkdir(parents=True)
@@ -142,6 +150,8 @@ class SourceRuntimeTests(unittest.TestCase):
                 calls = []
                 def run(command, cwd=None, **kwargs):
                     calls.append(command)
+                    if command[0] == './configure':
+                        (cwd/'config.mak.autogen').write_text('NO_CURL=\n')
                     return subprocess.CompletedProcess(command, 9 if len(calls)-1 == failure else 0,
                                                        '', 'owned native step failed')
                 with self.assertRaisesRegex(ValueError, 'integrity mismatch'):

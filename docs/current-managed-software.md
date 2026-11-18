@@ -48,6 +48,21 @@ the final integrated gate require separate execution evidence.
 
 Source build reuse checks fresh official source identity, exact retained local
 build inventory and actual executable version under a fixed owned cache namespace.
+Git must also complete the isolated HTTPS-helper capability protocol before
+publication, reuse and final verification. This local protocol performs no
+fetch or network request. A matching version without the helper is incomplete.
+Unix Git configuration must enable libcurl before compilation. Install a C
+compiler, make, and the development headers/libraries for libcurl with HTTPS,
+OpenSSL, zlib and Expat before a source install. On Debian/Ubuntu these are
+`build-essential libcurl4-openssl-dev libssl-dev zlib1g-dev libexpat1-dev`.
+The native Linux CI cells provision these prerequisites explicitly. A missing
+helper in an otherwise unchanged, exact-source/custody/version cache permits
+one fresh build into a new owned stage. The old stage and active locator remain
+until the replacement passes version, HTTPS and custody checks. A failed
+replacement refuses without recursive retries or deleting the old files.
+Version or custody conflicts still refuse. No older Git is used as a fallback.
+These checks do not prove the cause of a historical runner's
+missing helper or qualify its native installer without a fresh run.
 This is local build custody, not a publisher compiled-binary attestation.
 
 The quality environment normally accepts official binary wheels only. If the

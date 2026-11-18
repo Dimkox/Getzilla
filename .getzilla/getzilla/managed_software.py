@@ -14,7 +14,7 @@ from . import latest_releases as releases
 from .managed_environment import PROJECTS, execute
 from .managed_npm import install_npm, install_agent, publish_command
 from .managed_runtime import install as install_runtime
-from .managed_source_build import install_source
+from .managed_source_build import install_source, probe_git_https
 from .toolchain import parse_tool_version
 
 AGENT_PACKAGES = {'qwen': '@qwen-code/qwen-code', 'codex': '@openai/codex',
@@ -160,6 +160,8 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                     actual = target.version if match else None
                 if result.returncode or actual != target.version:
                     raise ValueError(f'active version mismatch: target={target.version}, actual={actual}, exit={result.returncode}')
+                if component == 'git':
+                    probe_git_https(path, root, os.environ)
                 paths[component] = Path(path)
             elif component == 'npm':
                 node = paths['node']
@@ -205,6 +207,8 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
                                   component+('.exe' if system == 'windows' else ''))
                     args = ('-v',) if component == 'php' else ('version',) if component in {'syft', 'cosign'} else ('--version',)
                     path = install_runtime(target, fetch(target.url), root, executable=executable, run=run, version_args=args)
+                if component == 'git':
+                    probe_git_https(path, root, os.environ)
                 paths[component] = path
                 if component != 'python':
                     publish_command(root, command, [str(path)])
