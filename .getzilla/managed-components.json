@@ -287,7 +287,7 @@
         },
         ".codex/hooks.json": {
           "mode": 420,
-          "sha256": "2ee658bf0eca095647fbe5cf1b314deb4bcc3ba8f6040c55f7d29f185f426c46"
+          "sha256": "c3291387d866acb6bd24d6258dda0fb79433ae9d7db59682e0c7fae8ac931ab3"
         }
       }
     },
@@ -388,7 +388,7 @@
         },
         ".github/hooks/getzilla.json": {
           "mode": 420,
-          "sha256": "7093806354e1a24978d72498f07885fef131180ee3efb9148f3dbd9ee2ecd07e"
+          "sha256": "ce5613346d138ac5869862cd769df1fb7d554c80b5bc7248a594e9f35937d4ce"
         }
       }
     },
@@ -2412,7 +2412,7 @@
         },
         ".getzilla/getzilla/harnesses.py": {
           "mode": 420,
-          "sha256": "4470b9c36398eab986bf7b8f0060d6a5e13c23ceb874faa8e9404a5aacfe94ae"
+          "sha256": "269076c5dd1aec9329d5e360558bc7ed1c5d183b7dcb5d478227f3b0e6437a08"
         },
         ".getzilla/getzilla/history.py": {
           "mode": 420,
