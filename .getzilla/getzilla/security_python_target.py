@@ -195,14 +195,21 @@ def closure_graphs(root,inventory):
 def closure_dependencies(dep,dependencies,binding):
     if dep.get('delivery_context') is not None:
         return [[row for row in dependencies if row.get('delivery_context')==dep['delivery_context']]]
+    def active(row):
+        if row.get('ecosystem')!='PyPI' or 'source_pins' not in binding:
+            return True
+        pin=_pin_for(row,binding)
+        if type(pin.get('marker_active')) is not bool:
+            _refuse()
+        return pin['marker_active']
     descriptor=binding.get('closure_graphs')
     if descriptor is not None:
         validate_closure_graphs(descriptor)
     graphs=(descriptor or {}).get('graphs',{}).get(dep.get('manifest','')+'#'+dep.get('usage',''))
     if graphs is None:
         return [[row for row in dependencies if row.get('manifest')==dep.get('manifest')
-            and row.get('usage')==dep.get('usage') and row.get('delivery_context') is None]]
-    return [[row for row in dependencies if row.get('manifest') in graph and row.get('delivery_context') is None]
+            and row.get('usage')==dep.get('usage') and row.get('delivery_context') is None and active(row)]]
+    return [[row for row in dependencies if row.get('manifest') in graph and row.get('delivery_context') is None and active(row)]
         for graph in graphs]
 
 
@@ -232,7 +239,7 @@ def source_pins(root, inventory, target):
     """Private per-use observations, not a rewrite of the source inventory."""
     from .security_inventory import _PIN, _logical_requirements
     from .security_osv_snapshot import REQUIREMENTS_RE
-    from pip._vendor.packaging.markers import Marker
+    from .security_licenses import _marker_required
     manifests={row['path']:row['sha256'] for row in inventory['manifests']}
     result,cache={},{}
     for dep in inventory['dependencies']:
@@ -267,7 +274,7 @@ def source_pins(root, inventory, target):
                     continue
                 if sorted(filter(None,(match[2] or '').split(',')))!=dep['extras']:
                     continue
-                applies=';' not in clean or Marker(clean.split(';',1)[1]).evaluate(environment=target['marker_environment'])
+                applies=';' not in clean or _marker_required(clean.split(';',1)[1],dep,target['marker_environment'])
                 variants.append((applies,set(item.lower() for item in re.findall(r'--hash=sha256:([a-fA-F0-9]{64})',line))))
             if not variants:
                 _refuse()
