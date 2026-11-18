@@ -396,11 +396,13 @@ def _pipeline(request, volume, builder):
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
-            preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
-                                             refresh=True, provision=True, **options)
-            cli._atomic(Path(request['preparation']), canonical(preparation))
-            if preparation.get('status') != 'prepared':
-                raise BackendUnavailable('input preparation did not meet existing obligations')
+            with cli._preparation_step('prepare-inputs'):
+                preparation = cli.prepare_inputs(root, database, artifacts, tools, profile=profile,
+                                                 refresh=True, provision=True, **options)
+            with cli._preparation_step('prepare-result'):
+                cli._atomic(Path(request['preparation']), canonical(preparation))
+                if preparation.get('status') != 'prepared':
+                    raise BackendUnavailable('input preparation did not meet existing obligations')
             _event('evaluate')
             report = cli.evaluate(root, database, artifacts, tools, profile=profile, **options)
             cli._atomic(Path(request['report']), canonical(report))
@@ -595,7 +597,12 @@ def _offline_tool_control(request, volume):
 def _fault(error):
     kind = type(error)
     from .security_oci import bound_fault
+    from .security_cli import _preparation_fault
     detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else bound_fault(error)
+    detail.pop('preparation', None)
+    preparation = _preparation_fault(error)
+    if preparation:
+        detail['preparation'] = preparation
     detail.setdefault('phase', _PHASE)
     detail.setdefault('command_id', 'worker')
     number = getattr(error, 'errno', None)
