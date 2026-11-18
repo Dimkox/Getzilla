@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -20,6 +21,43 @@ NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
 
 
 class SelectedRunLicenseTests(unittest.TestCase):
+    def test_aggregate_reobserves_a_self_consistent_smaller_manifest_scope(self):
+        from getzilla import ci_admission as admission
+        checker='c'*40
+        policy=json.dumps(POLICY).encode()
+        path=self.root/'.getzilla/config/license-policy.json'
+        path.parent.mkdir(parents=True)
+        path.write_bytes(policy)
+        directory=self.root/'saved'
+        directory.mkdir()
+        (directory/'security-run-inputs.json').write_text('{}',encoding='utf-8')
+        observed=dict(claim=dict(required_ids=['one','two']),conditions={'one':{'kind':'host'},'two':{'kind':'family'}})
+        record=dict(checker=dict(head=checker,tree='d'*40,selected_ref=checker,selection='operator-variable'),
+            files=[dict(path='security-run-inputs.json')],scope_expectation=copy.deepcopy(observed))
+        def git(_root,*args):
+            values={('rev-parse',checker+'^{commit}'):checker,('rev-parse',checker+'^{tree}'):'d'*40,
+                ('cat-file','-s',checker+':.getzilla/config/license-policy.json'):str(len(policy)),
+                ('rev-parse','HEAD'):'a'*40,('rev-parse','HEAD^{tree}'):'b'*40,('status','--porcelain'):''}
+            return values[args]
+        environment=dict(GETZILLA_OPERATOR_CHECKER=checker,GITHUB_REPOSITORY='Dimkox/Getzilla',
+            GITHUB_RUN_ID='42',GITHUB_RUN_ATTEMPT='1',GITHUB_SHA='a'*40,GITHUB_EVENT_NAME='pull_request')
+        with mock.patch.object(admission,'_git',side_effect=git), \
+                mock.patch.object(admission.subprocess,'run',return_value=mock.Mock(stdout=policy)), \
+                mock.patch.dict(admission.os.environ,environment), \
+                mock.patch('getzilla.security_license_scope.declaration_expectation',return_value=observed) as reobserve:
+            result=admission._reobserve_scope(self.root,directory,record,'42','1')
+            self.assertIs(type(result),admission._ScopeExpectation)
+            self.assertEqual(reobserve.call_args.args[3]['checker_sha'],checker)
+            subset=copy.deepcopy(record)
+            subset['scope_expectation']['claim']['required_ids']=['one']
+            subset['scope_expectation']['conditions'].pop('two')
+            with self.assertRaises(ValueError):
+                admission._reobserve_scope(self.root,directory,subset,'42','1')
+            altered=copy.deepcopy(record)
+            altered['checker']['head']='0'*40
+            with self.assertRaises(ValueError):
+                admission._reobserve_scope(self.root,directory,altered,'42','1')
+
     def test_build_requirement_ids_do_not_depend_on_a_caller_consumer_subset(self):
         host,future,inactive,inv,source,run,binding=self.fixture()
         dep=dependency(name='setuptools',manifest='trust-ci/pyproject.toml',usage='build')
@@ -128,9 +166,9 @@ class SelectedRunLicenseTests(unittest.TestCase):
         report = cli.finalize_report(source, source, checks, inv["digest"], "f" * 64, now=NOW)
         self.assertEqual(report["status"], "pass-for-selected-run", report["qualification_gaps"])
         self.assertIs(report["overall_coverage_complete"], False)
-        from getzilla.ci_admission import _selected_scope,_security
+        from getzilla.ci_admission import _selected_scope,_security,_ScopeExpectation,_SCOPE_SEAL
         record=dict(report=report,run_id=run['run_id'],attempt=run['run_attempt'],
-            scope_expectation=dict(claim=context.claim,conditions=context.required),
+            scope_expectation=_ScopeExpectation(dict(claim=context.claim,conditions=context.required),_SCOPE_SEAL),
             checker=dict(head=source['checker_sha'],tree=source['checker_tree_sha'],selected_ref=source['checker_sha'],
                 selection='operator-variable',boundary='separate-checkout'))
         self.assertTrue(_selected_scope(record,NOW))
@@ -146,6 +184,9 @@ class SelectedRunLicenseTests(unittest.TestCase):
         missing=copy.deepcopy(record)
         missing.pop('scope_expectation')
         self.assertFalse(_selected_scope(missing,NOW))
+        imported=copy.deepcopy(record)
+        imported['scope_expectation']=dict(imported['scope_expectation'])
+        self.assertFalse(_selected_scope(imported,NOW))
         missing=copy.deepcopy(record)
         missing['scope_expectation']['conditions']={}
         missing['scope_expectation']['claim']['required_ids']=[]

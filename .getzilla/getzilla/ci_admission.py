@@ -25,6 +25,22 @@ HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 SAFE = re.compile(r"[A-Za-z0-9_.-]{1,160}\Z")
 MAX_FILE = 16 * 1024 * 1024
 BOUNDARY = "Candidate-controlled workflow; independent trusted workflow admission is not established by this JSON"
+_SCOPE_SEAL=object()
+
+
+class _ScopeExpectation(dict):
+    def __init__(self,value,seal):
+        if seal is not _SCOPE_SEAL:
+            raise ValueError('Source-reobserved selected-run expectation required')
+        super().__init__(value)
+        self._seal=seal
+        self._digest=hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+    def __deepcopy__(self,memo):
+        from copy import deepcopy
+        result=_ScopeExpectation(deepcopy(dict(self),memo),_SCOPE_SEAL)
+        result._digest=self._digest
+        return result
 
 
 def _timestamp(value):
@@ -101,6 +117,9 @@ def _selected_scope(record,now):
     try:
         report=record['report']
         expected=record['scope_expectation']
+        if (type(expected) is not _ScopeExpectation or expected._seal is not _SCOPE_SEAL
+                or digest(expected)!=expected._digest):
+            return False
         selected=report['acceptance_scope']
         claim=expected['claim']
         conditions=expected['conditions']
@@ -290,6 +309,8 @@ def load_records(artifacts, run_id, attempt, *, root=None):
                     inventory, expected_ids = None, None
                 record = read_live_record(directory, expected, expected_source_inventory=inventory, expected_ids=expected_ids,
                                           expected_factory_applicability=applicability)
+            elif record.get('report',{}).get('status')=='pass-for-selected-run':
+                record['scope_expectation']=_reobserve_scope(root,directory,record,run_id,attempt)
             records[name] = record
     return records
 
@@ -297,6 +318,48 @@ def load_records(artifacts, run_id, attempt, *, root=None):
 def _git(root, *args):
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
                           text=True, encoding="utf-8", timeout=15).stdout.strip()
+
+
+def _reobserve_scope(root,directory,record,run_id,attempt):
+    from .security_license_scope import declaration_expectation
+    from .ci_security_context import selected_run_environment
+    from .security_cli import ci_run_context
+    override=os.environ.get('GETZILLA_OPERATOR_CHECKER','')
+    checker=override or os.environ.get('GETZILLA_BASE_SHA','')
+    identity=record['checker']
+    if (not HEX40.fullmatch(checker) or checker=='0'*40 or identity.get('head')!=checker
+            or identity.get('selected_ref')!=checker
+            or identity.get('selection')!=('operator-variable' if override else 'base-commit')
+            or _git(root,'rev-parse',checker+'^{commit}')!=checker
+            or _git(root,'rev-parse',checker+'^{tree}')!=identity.get('tree')):
+        raise ValueError('Selected checker differs from independent workflow selection or Git objects')
+    policy='.getzilla/config/license-policy.json'
+    size=int(_git(root,'cat-file','-s',checker+':'+policy))
+    if not 0<size<=65536:
+        raise ValueError('Selected checker policy is unbounded')
+    raw=subprocess.run(['git','show',checker+':'+policy],cwd=root,check=True,capture_output=True,timeout=15).stdout
+    if len(raw)!=size or raw!=_bytes(root/policy):
+        raise ValueError('Candidate policy differs from exact selected checker policy')
+    head,tree=_git(root,'rev-parse','HEAD'),_git(root,'rev-parse','HEAD^{tree}')
+    if _git(root,'status','--porcelain'):
+        raise ValueError('Aggregator source is not clean')
+    source=dict(head_sha=head,tree_sha=tree,checker_sha=checker,checker_tree_sha=identity['tree'],
+        candidate_clean=True,checker_clean=True,same_project=True)
+    env,_=selected_run_environment(os.environ,head)
+    run=ci_run_context(env)
+    if run['run_id']!=run_id or run['run_attempt']!=attempt:
+        raise ValueError('Aggregator run differs from current workflow invocation')
+    filename='security-run-inputs.json'
+    if filename not in {row['path'] for row in record['files']}:
+        raise ValueError('Selected-run source declaration is not bound by the artifact manifest')
+    raw=_bytes(directory/filename)
+    if len(raw)>2*1024*1024:
+        raise ValueError('Selected-run source declaration exceeds its finite budget')
+    inputs=json.loads(raw,object_pairs_hook=_pairs)
+    observed=declaration_expectation(root,root,inputs,source,run,now=datetime.now(timezone.utc),scratch=directory)
+    if record.get('scope_expectation')!=observed:
+        raise ValueError('Stored selected-run condition set differs from source reobservation')
+    return _ScopeExpectation(observed,_SCOPE_SEAL)
 
 
 def security_envelope(root, checker, selected_ref, selection, report_path, output):
@@ -346,8 +409,9 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
             inputs=json.loads(raw_inputs)
             actual_source={**{key:report['source'][key] for key in ('candidate_clean','checker_clean','same_project')},
                 'head_sha':source['head'],'tree_sha':source['tree'],'checker_sha':identity['head'],'checker_tree_sha':identity['tree']}
-            record['scope_expectation']=declaration_expectation(root,checker,inputs,actual_source,ci_run_context(env),
+            observed=declaration_expectation(root,checker,inputs,actual_source,ci_run_context(env),
                 now=datetime.now(timezone.utc),scratch=output)
+            record['scope_expectation']=_ScopeExpectation(observed,_SCOPE_SEAL)
             (output/'security-run-inputs.json').write_bytes(raw_inputs)
         except (KeyError,ValueError,TypeError,OSError,RuntimeError):
             record['scope_expectation']=None

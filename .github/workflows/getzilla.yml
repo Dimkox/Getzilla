@@ -571,6 +571,7 @@ jobs:
         if: always()
         env:
           GETZILLA_NEEDS: ${{ toJSON(needs) }}
+          GETZILLA_OPERATOR_CHECKER: ${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}
         run: python scripts/getzilla_ci_admission.py --artifacts "${{ runner.temp }}/required-evidence"
 
   windows:
