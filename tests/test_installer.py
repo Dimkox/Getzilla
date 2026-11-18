@@ -864,6 +864,8 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
                     continue
                 source_path = MODULE.ROOT_HOOK_SHIM_TEMPLATE if entry["path"] in MODULE.ROOT_HOOK_SHIMS else entry["path"]
                 source = (ROOT / source_path).read_bytes()
+                from getzilla import harnesses
+                source = harnesses.platform_hook_payload(entry["path"], source, source_launcher=False)
                 self.assertEqual(entry["sha256"], hashlib.sha256(source).hexdigest(), entry["path"])
                 self.assertEqual(entry["size"], len(source), entry["path"])
 

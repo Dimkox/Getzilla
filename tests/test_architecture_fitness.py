@@ -5991,7 +5991,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
             for node in system['nodes']:
                 node['repository_paths'] = [p for p in node['repository_paths'] if p not in FIT._PUBLIC_WORKER_SOURCES]
             repo.model(system, snapshot.rules)
-            base = repo.commit('unowned public worker membership fixture')
+            if repo.git('diff', '--', 'architecture/system.yaml').strip():
+                base = repo.commit('unowned public worker membership fixture')
+            self.assertTrue(all(not any(path in FIT._PUBLIC_WORKER_SOURCES for path in node['repository_paths'])
+                                for node in system['nodes']))
         descriptors = (
             ("github-public-lifecycle-projection", "CONTRACT-GITHUB-PUBLIC-LIFECYCLE-PROJECTION",
              "NODE-TRUST-CI-API", "json_schema", "consumer", "consumer_accepts_old", "api.py"),

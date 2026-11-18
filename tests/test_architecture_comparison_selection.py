@@ -813,6 +813,7 @@ class OwnedPolicyProviderTests(unittest.TestCase):
         sdk.mkdir(mode=0o700)
         (sdk / 'config').mkdir()
         (sdk / 'config/stacks.json').write_text('{}\n')
+        (sdk / 'config/toolchain.json').write_text('{}\n', encoding='utf-8', newline='\n')
         imported = []
         def owned(name, package):
             imported.append(name)

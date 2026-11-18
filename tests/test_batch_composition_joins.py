@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import verification_plan
+from getzilla import verification_plan, verification_journal
 # Preload before the pure boundary.
 from getzilla import verification_tool_workspace  # noqa: F401
 from tests import _support
@@ -34,7 +34,8 @@ def pure():
     global _PURE
     _PURE = True
     try:
-        yield
+        with verification_journal.bind_sink(None, None):
+            yield
     finally:
         _PURE = False
 

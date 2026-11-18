@@ -216,22 +216,18 @@ class StackPlanTests(unittest.TestCase):
 class CollectedStackRepairTests(unittest.TestCase):
     def test_unavailable_obligation_cannot_credit_a_forged_fallback_pass(self):
         from datetime import datetime, timezone
-        from getzilla import verification_plan as api, quality_gates
+        from getzilla import quality_gates
         stack = stacks.Stack('owned', ('owned.build',), ())
         def unknown(context):
             self.fail('unadmitted runner callback')
         with mock.patch.dict(stacks.RUNNERS, {'owned': unknown}), mock.patch.dict(stacks.PLANNERS, {}, clear=True):
-            rows = stacks.planned_stack_checks(Path('.'), 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
-        self.assertEqual([row['check_id'] for row in rows], ['stack:owned'])
-        with mock.patch.object(api, 'policy_binding', return_value={'digest': 'a' * 64}):
-            plan = api.build_required_plan(Path('.'), mode='fast', context={}, source={}, inventory={}, risk={}, selection={},
-                extra_obligations=[api.obligation(row['check_id'], evidence=row['evidence']) for row in rows])
+            with self.assertRaisesRegex(ValueError, 'required-plan-incomplete'):
+                stacks.planned_stack_checks(Path('.'), 'fast', ['owned.build'], registry={'owned': stack}, files=['owned.build'])
         result = CheckResult('stack:owned', 'pass', 'unproved fallback assertion')
-        api.bind_result(plan, result)
-        decision = quality_gates.evaluate_quality_gate(mode='fast', checks=[result], required_plan=plan,
-            current_binding=plan['binding'], now_utc=datetime(2026,11,9,tzinfo=timezone.utc),
-            data_source_validator=lambda *args, **options: True)
+        decision = quality_gates.evaluate_quality_gate(mode='fast', checks=[result], required_plan=None,
+            now_utc=datetime(2026,11,9,tzinfo=timezone.utc))
         self.assertEqual(decision.status, 'fail')
+        self.assertTrue(any(row['code'] == 'required-plan-unavailable' for row in decision.details))
 
     def observe(self, *, unknown=False, missing=False):
         from datetime import datetime, timezone

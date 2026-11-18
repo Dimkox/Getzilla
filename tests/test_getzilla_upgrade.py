@@ -446,7 +446,9 @@ class ProjectSyncTests(unittest.TestCase):
         record_owned(manifest, relative, hook.read_bytes(), 0o644)
         config = self.project / '.claude/settings.json'
         config.parent.mkdir()
-        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        from getzilla import harnesses
+        canonical = harnesses.platform_hook_payload('.claude/settings.json',
+            (ROOT / '.claude/settings.json').read_bytes(), source_launcher=False)
         config.write_bytes(canonical)
         (self.project / '.getzilla/AGBP_SYNC.json').write_text(json.dumps({
             'schema_version': 1, 'kept_local': ['.claude/settings.json'],
@@ -1226,7 +1228,9 @@ class NeutralHookConfigurationTests(unittest.TestCase):
 
     def test_only_exact_generated_neutral_configuration_proves_neutrality(self):
         classify = self.classifier()
-        canonical = (ROOT / '.claude/settings.json').read_bytes()
+        from getzilla import harnesses
+        canonical = harnesses.platform_hook_payload('.claude/settings.json',
+            (ROOT / '.claude/settings.json').read_bytes(), source_launcher=False)
         self.assertTrue(classify(canonical, canonical))
         self.assertFalse(classify(canonical + b' ', canonical))
         self.assertFalse(classify(canonical, None))

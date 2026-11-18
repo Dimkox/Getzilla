@@ -17,7 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
-from getzilla import fsx, python_test_runner, verification
+from getzilla import fsx, python_test_runner, verification, queue_refusal
 from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
@@ -1454,7 +1454,8 @@ class CoverageLayout(unittest.TestCase):
             harness = str((python_test_runner.STACK_DIR.parent / 'scripts/getzilla_unittest.py').resolve())
             self.assertEqual(['a.py', 'b.py', harness, str(Path(fsx.__file__).resolve()),
                               str(Path(pytest_progress.__file__).resolve()),
-                              str(Path(python_test_runner.diagnostics.__file__).resolve())], after.get_option('run:omit'))
+                              str(Path(python_test_runner.diagnostics.__file__).resolve()),
+                              str(Path(queue_refusal.__file__).resolve())], after.get_option('run:omit'))
             self.assertEqual(original, config.read_bytes())
             fresh = root / 'ambiguous-overlay'
             fresh.mkdir()
@@ -1471,7 +1472,7 @@ class CoverageLayout(unittest.TestCase):
             config = root / '.coveragerc'
             config.write_text('[report]\nfail_under = 100\n')
             before = config.read_bytes()
-            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'queue_refusal.py')]
             owned = root / 'owned.py'
             for path in [*external, owned]:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
@@ -1479,7 +1480,8 @@ class CoverageLayout(unittest.TestCase):
             output.mkdir()
             with patch.object(fsx, '__file__', str(external[0])), \
                  patch.object(pytest_progress, '__file__', str(external[1])), \
-                 patch.object(python_test_runner.diagnostics, '__file__', str(external[2])):
+                 patch.object(python_test_runner.diagnostics, '__file__', str(external[2])), \
+                 patch.object(queue_refusal, '__file__', str(external[3])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
@@ -1507,14 +1509,15 @@ class CoverageLayout(unittest.TestCase):
             before = config.read_bytes()
             package = root / '.getzilla/getzilla'
             package.mkdir(parents=True)
-            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py')]
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'queue_refusal.py')]
             for path in owned:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
             output = root / 'overlay'
             output.mkdir()
             with patch.object(fsx, '__file__', str(owned[0])), \
                  patch.object(pytest_progress, '__file__', str(owned[1])), \
-                 patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])):
+                 patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])), \
+                 patch.object(queue_refusal, '__file__', str(owned[3])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:

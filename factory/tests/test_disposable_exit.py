@@ -47,6 +47,10 @@ class LiveProducerSourceTests(unittest.TestCase):
 
 
 class DisposableExitTests(unittest.TestCase):
+    def setUp(self):
+        # Independent image observation, not inferred from the container being checked.
+        self.enterContext(patch.object(runner, 'runtime_image_id', return_value=runner.POSTGRES['image_id']))
+
     def test_error_diagnostics_name_only_a_fixed_docker_operation(self):
         for command, operation in ((["docker", "port", CONTAINER_ID, "5432/tcp"], "docker.port"),
                                    (["docker", "run", "--env", (''.join(('POSTGRES_', 'PASSWORD', '=')) + DIAGNOSTIC_SENTINEL) + DIAGNOSTIC_SENTINEL], "docker.run"),
@@ -115,6 +119,7 @@ class DisposableExitTests(unittest.TestCase):
             with (
                 patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': ''}),
                 patch.object(runner.subprocess, "run", side_effect=docker),
+                patch.object(runner, "runtime_image_id", return_value=runner.POSTGRES["image_id"]),
                 patch.object(runner, "_binding_matches", return_value=True),
                 patch.object(runner, "_final_postgres_ready", return_value=True),
                 patch.object(runner, "_run", side_effect=execute),

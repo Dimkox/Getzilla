@@ -32,6 +32,7 @@ DOCKER_GZIP = 'application/vnd.docker.image.rootfs.diff.tar.gzip'
 INDEX_MEDIA = frozenset({INDEX, DOCKER_INDEX})
 MANIFEST_MEDIA = frozenset({MANIFEST, DOCKER_MANIFEST})
 LAYER_MEDIA = frozenset({TAR, GZIP, DOCKER_GZIP})
+OPAQUE_ATTESTATION = 'application/vnd.in-toto+json'
 LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
@@ -242,14 +243,50 @@ def scanner_identity(report, image):
         root.close()
 
 
-def _descriptor(value):
+def _descriptor(value, *, opaque_attestation=False):
     if (not isinstance(value, dict) or not {'mediaType', 'digest', 'size'} <= value.keys()
-            or value['mediaType'] not in INDEX_MEDIA | MANIFEST_MEDIA | LAYER_MEDIA | {CONFIG, DOCKER_CONFIG}
+            or (value['mediaType'] not in INDEX_MEDIA | MANIFEST_MEDIA | LAYER_MEDIA | {CONFIG, DOCKER_CONFIG}
+                and not (opaque_attestation is True and value['mediaType'] == OPAQUE_ATTESTATION))
             or not isinstance(value['digest'], str) or not HEX.fullmatch(value['digest'])
             or type(value['size']) is not int or value['size'] < 0 or value.get('urls')
             or value.get('data') is not None):
         raise OCIError('Unsupported OCI descriptor')
     return value['mediaType'], value['digest'], value['size']
+
+
+def _index_children(children):
+    """Only a linked same-index legacy BuildKit role admits opaque provenance."""
+    if not isinstance(children, list) or not 1 <= len(children) <= 512:
+        raise OCIError('OCI nested index is incomplete or excessive')
+    ordinary, attestations, digests = {}, [], set()
+    for child in children:
+        media, digest, _ = _descriptor(child)
+        if digest in digests:
+            raise OCIError('Duplicate or conflicting OCI index role')
+        digests.add(digest)
+        annotations = child.get('annotations', {})
+        if type(annotations) is not dict or any(type(k) is not str or type(v) is not str
+                                              for k, v in annotations.items()):
+            raise OCIError('Unsupported OCI annotations')
+        platform = child.get('platform', {})
+        role = annotations.get('vnd.docker.reference.type')
+        link = annotations.get('vnd.docker.reference.digest')
+        if role is not None or link is not None or platform == {'os': 'unknown', 'architecture': 'unknown'}:
+            if (media != MANIFEST or platform != {'os': 'unknown', 'architecture': 'unknown'}
+                    or role != 'attestation-manifest' or type(link) is not str or not HEX.fullmatch(link)):
+                raise OCIError('Unsupported OCI attestation role')
+            attestations.append((digest, link))
+        else:
+            ordinary[digest] = child
+    for digest, link in attestations:
+        target = ordinary.get(link)
+        platform = target.get('platform') if target else None
+        if (link == digest or target is None or _descriptor(target)[0] not in MANIFEST_MEDIA
+                or type(platform) is not dict or not all(type(platform.get(k)) is str
+                    and platform[k] not in {'', 'unknown'} for k in ('os', 'architecture'))):
+            raise OCIError('OCI attestation target is not one runnable sibling')
+    roles = {digest for digest, _ in attestations}
+    return [(child, child['digest'] in roles) for child in children]
 
 
 def _import_one(record, profile, stage, budget):
@@ -266,10 +303,10 @@ def _import_one(record, profile, stage, budget):
             raise OCIError('Selected OCI root is missing or ambiguous')
         (stage / 'blobs').mkdir(mode=0o700)
         (stage / 'blobs/sha256').mkdir(mode=0o700)
-        seen, active, candidates = {}, set(), []
+        seen, active, candidates, roles = {}, set(), [], {}
 
-        def blob(desc):
-            media, digest, size = _descriptor(desc)
+        def blob(desc, *, opaque=False):
+            media, digest, size = _descriptor(desc, opaque_attestation=opaque)
             old = seen.get(digest)
             if old is not None:
                 if old != (media, size):
@@ -302,9 +339,13 @@ def _import_one(record, profile, stage, budget):
             seen[digest] = (media, size)
             return destination
 
-        def walk(desc, depth=0):
+        def walk(desc, depth=0, *, attestation=False):
             budget.tick()
             media, digest, _ = _descriptor(desc)
+            role = ('attestation', attestation) if attestation else ('ordinary', None)
+            if digest in roles and roles[digest] != role:
+                raise OCIError('Conflicting OCI graph roles')
+            roles[digest] = role
             if depth > 32 or len(seen) > 10000 or digest in active:
                 raise OCIError('OCI graph depth, nodes or cycle unsupported')
             path = blob(desc)
@@ -312,14 +353,12 @@ def _import_one(record, profile, stage, budget):
                 raise OCIError('OCI entry is not an image/index')
             active.add(digest)
             value = document(path.read_bytes())
-            if value.get('schemaVersion') != 2 or value.get('mediaType', media) != media or value.get('subject'):
+            if value.get('schemaVersion') != 2 or value.get('mediaType', media) != media or value.get('subject') or value.get('artifactType'):
                 raise OCIError('Unsupported OCI image document')
             if media in INDEX_MEDIA:
                 children = value.get('manifests')
-                if not isinstance(children, list) or not 1 <= len(children) <= 512:
-                    raise OCIError('OCI nested index is incomplete or excessive')
-                for child in children:
-                    walk(child, depth + 1)
+                for child, child_attestation in _index_children(children):
+                    walk(child, depth + 1, attestation=child['annotations']['vnd.docker.reference.digest'] if child_attestation else False)
             else:
                 config_desc = value.get('config')
                 if _descriptor(config_desc)[0] != (CONFIG if media == MANIFEST else DOCKER_CONFIG):
@@ -339,13 +378,25 @@ def _import_one(record, profile, stage, budget):
                         or rootfs.get('type') != 'layers' or not isinstance(rootfs.get('diff_ids'), list)
                         or len(rootfs['diff_ids']) != len(layers)):
                     raise OCIError('OCI rootfs/layer accounting missing')
+                if attestation and (platform != 'unknown/unknown' or config.get('config') != {}
+                        or set(config) != {'architecture', 'os', 'config', 'rootfs'}
+                        or any(key in value for key in ('subject', 'artifactType'))):
+                    raise OCIError('Unsupported OCI attestation configuration')
                 for layer, diff_id in zip(layers, rootfs['diff_ids']):
+                    if attestation:
+                        layer_media, layer_digest, layer_size = _descriptor(layer, opaque_attestation=True)
+                        if layer_media != OPAQUE_ATTESTATION or diff_id != layer_digest:
+                            raise OCIError('Opaque OCI attestation digest accounting differs')
+                        blob(layer, opaque=True)
+                        budget.charge('layers', 1)
+                        budget.charge('unpacked', layer_size)
+                        continue
                     layer_media = _descriptor(layer)[0]
                     allowed_layers = {TAR, GZIP} if media == MANIFEST else {DOCKER_GZIP}
                     if layer_media not in allowed_layers or not isinstance(diff_id, str) or not HEX.fullmatch(diff_id):
                         raise OCIError('Unsupported OCI layer or diff ID')
                     _layer(blob(layer), layer_media, diff_id, budget)
-                if platform == profile['platform']:
+                if not attestation and platform == profile['platform']:
                     candidates.append((desc, config_desc['digest']))
             active.remove(digest)
 

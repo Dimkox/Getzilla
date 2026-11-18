@@ -3986,6 +3986,7 @@
       "public_contracts": [],
       "repository_paths": [
         ".getzilla/config/ci-images.json",
+        ".getzilla/config/ci-image-blobs",
         ".getzilla/getzilla/disposable_resources.py",
         ".getzilla/getzilla/factory_tests.py",
         "trust-ci/scripts/postgres-integration.sh",
@@ -4197,6 +4198,7 @@
         ".getzilla/config",
         ".getzilla/cursor-rules",
         ".getzilla/getzilla",
+        ".getzilla/getzilla/queue_refusal.py",
         ".getzilla/getzilla/component_state.py",
         ".getzilla/getzilla/model_data_admission.py",
         ".getzilla/hooks",

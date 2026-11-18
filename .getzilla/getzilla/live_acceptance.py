@@ -24,7 +24,7 @@ from .python_test_runner import execute, cleanup_details, RunCancelled
 from . import fsx
 from . import factory_tests
 from . import live_contracts
-from .disposable_resources import image_pins
+from .disposable_resources import image_pins, runtime_image_id
 
 OUTPUT_LIMIT = 2 * 1024 * 1024
 CELLS = {'factory': ('factory-postgres-exit',),
@@ -504,7 +504,7 @@ def owned_postgres_endpoint(journal, *, container_id, container_name, nonce, nam
                 raise ValueError('PostgreSQL original resource birth changed')
     check_births()
     endpoint = resources.internal_postgres_endpoint(container_id=container_id, container_name=container_name,
-        nonce=nonce, namespace=namespace, network_id=network_id, image=pin['reference'], image_id=pin['image_id'])
+        nonce=nonce, namespace=namespace, network_id=network_id, image=pin['reference'], image_id=runtime_image_id(Path(__file__).resolve().parents[2], pin))
     check_births()
     if resources._read(Path(journal), private=True).identity != snapshot.identity:
         raise ValueError('PostgreSQL ownership journal changed during observation')
@@ -608,7 +608,7 @@ def _trust_ci(root, output, binding):
             bind={root/'.getzilla':'/repo/.getzilla', root/'trust-ci':'/repo/trust-ci', output:'/artifacts'},
             working_directory='/repo/trust-ci', environment=environment, command=('sleep','1200'))
         for item, key in ((postgres,'postgres'),(tester,'python'),(provision,'python')):
-            if item['image_id'] != pins[key]['image_id']:
+            if item['image_id'] != runtime_image_id(root, pins[key]):
                 raise ValueError('Trust image configuration identity mismatch')
         endpoint()
         suite = json.loads(_run(['docker','exec',tester['id'],'python3','tests/run_postgres_suite.py','--stdout'], timeout=600), object_pairs_hook=_pairs)

@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .security_oci import INDEX_MEDIA, MANIFEST_MEDIA, LIMITS, _descriptor, canonical, document
+from .security_oci import INDEX_MEDIA, MANIFEST_MEDIA, LIMITS, _descriptor, _index_children, OPAQUE_ATTESTATION, canonical, document
 
 _ORIGINS = {'registry-1.docker.io', 'auth.docker.io', 'github.com'}
 # Docker's published pull CDN, not arbitrary redirects or authentication realms.
@@ -160,7 +160,7 @@ class Registry:
     def __init__(self, *, transport=None, deadline=None):
         self.deadline = deadline or time.monotonic() + LIMITS['deadline_seconds']
         self.http = transport or BoundedHTTP(deadline=self.deadline)
-        self.tokens, self.blobs, self.descriptors = {}, {}, {}
+        self.tokens, self.blobs, self.descriptors, self.roles = {}, {}, {}, {}
         self.downloaded = 0
 
     def _get(self, repository, kind, selector, maximum):
@@ -203,12 +203,18 @@ class Registry:
             display = display.rsplit(':', 1)[0] if ':' in display else display
         return display + '@' + digest, root
 
-    def _graph(self, repository, descriptor, raw=None, depth=0):
+    def _graph(self, repository, descriptor, raw=None, depth=0, *, attestation=False, opaque=False):
         if time.monotonic() >= self.deadline:
             raise RegistryError('registry aggregate deadline exceeded')
-        media, digest, size = _descriptor(descriptor)
+        media, digest, size = _descriptor(descriptor, opaque_attestation=opaque)
+        if opaque and size > LIMITS['max_manifest_bytes']:
+            raise RegistryError('opaque registry metadata exceeds existing bound')
         if depth > 64 or len(self.descriptors) >= 100000:
             raise RegistryError('registry graph exceeds traversal bound')
+        role = ('opaque', None) if opaque else ('attestation', attestation) if attestation else ('ordinary', None)
+        if digest in self.roles and self.roles[digest] != role:
+            raise RegistryError('conflicting registry graph roles')
+        self.roles[digest] = role
         if digest in self.descriptors:
             if (media, size) != self.descriptors[digest]:
                 raise RegistryError('conflicting registry descriptors')
@@ -226,5 +232,10 @@ class Registry:
             children = node.get('manifests') if media in INDEX_MEDIA else [node.get('config'), *node.get('layers', [])]
             if not isinstance(children, list) or len(children) > LIMITS['max_layers'] + 1:
                 raise RegistryError('registry graph children exceed bound')
-            for child in children:
-                self._graph(repository, child, depth=depth + 1)
+            if media in INDEX_MEDIA:
+                for child, child_attestation in _index_children(children):
+                    self._graph(repository, child, depth=depth + 1, attestation=child['annotations']['vnd.docker.reference.digest'] if child_attestation else False)
+            else:
+                for child in children:
+                    child_opaque = attestation and type(child) is dict and child.get('mediaType') == OPAQUE_ATTESTATION
+                    self._graph(repository, child, depth=depth + 1, opaque=child_opaque)

@@ -420,6 +420,75 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         (self.fake_bin / 'uv').chmod(0o755)
         self._offline: dict[str, str] = {}
 
+    def _owned_python_launcher(self) -> Path:
+        # Fixture assembly substitutes component acquisition, never a production
+        # freshness switch. Other checkout/provider/security scripts stay real.
+        launcher = self.fake_bin / 'python3'
+        program = r'''import json,os,runpy,shutil,sys
+from pathlib import Path
+arguments=sys.argv[1:]
+owned=Path(os.environ['OWNED_INSTALL_FIXTURE']).resolve()
+def audit(event,args):
+    if event.startswith('socket.'):
+        raise AssertionError('offline installer fixture denies network')
+    if event=='subprocess.Popen':
+        command=args[1]
+        if not isinstance(command,(list,tuple)) or any('http://' in str(v) or 'https://' in str(v) for v in command):
+            raise AssertionError('offline installer fixture denies transport process')
+sys.addaudithook(audit)
+if arguments[:1]==['--version']:
+    print('Python '+sys.version.split()[0]);raise SystemExit(0)
+if arguments[:1]==['-c']:
+    assert len(arguments)==2 and arguments[1]=="import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+    raise SystemExit(0)
+assert arguments and not arguments[0].startswith('-'), 'unknown Python acquisition effect'
+script=Path(arguments[0]).resolve()
+assert script.is_relative_to(owned) and script.parent.name=='scripts', 'foreign script'
+if script.name=='getzilla_install_managed.py':
+    args=arguments[1:];home=Path(args[args.index('--home')+1]).resolve()
+    assert home.is_relative_to(owned) and script.parent.parent==home
+    selected=[v for i,v in enumerate(args) if i and args[i-1]=='--agent']
+    assert selected in ([],['qwen'])
+    expected=(['--environment-only','--home',str(home)] if '--environment-only' in args else
+              (['--verify-only','--home',str(home)] if '--verify-only' in args else ['--home',str(home)]))
+    if selected:expected+=['--agent','qwen']
+    assert args==expected, 'unknown managed acquisition arguments'
+    with (owned/'managed-calls.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(args)+'\n')
+    if '--environment-only' in args:
+        python=home/'.venv/bin/python';python.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(__file__,python);python.chmod(0o755)
+        print('Python environment: '+str(home/'.venv'))
+    print(json.dumps({'status':'complete','scope':'owned component acquisition fixture'}))
+    raise SystemExit(0)
+assert script.name in {'getzilla_setup_agent.py','getzilla_update.py','getzilla_doctor.py','install_into.py'}, 'unknown installer Python boundary'
+sys.path[:0]=[str(script.parent),str(script.parent.parent/'.getzilla')]
+if script.name=='getzilla_update.py':
+    args=arguments[1:]
+    assert args in (['--only','osv','--only','opengrep'],['--only','baseline']), 'unknown acquisition boundary'
+    with (owned/'component-calls.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(args)+'\n')
+    from getzilla import updater
+    from getzilla.baseline import install_user,components
+    mirror=updater.Mirror.from_environ()
+    assert mirror is not None
+    state=Path.home()/'.getzilla'
+    if args==['--only','baseline']:
+        config={name:{**item,'pinned_commit':mirror.baseline[name]} for name,item in components().items()}
+        rows=install_user(state,config=config,locate=mirror.url)
+    else:
+        rows=updater.update_osv(mirror.fetch,state,source_database=mirror.root/'osv')
+        assets={key:(asset,mirror.opengrep.get(asset,digest)) for key,(asset,digest) in updater.OPENGREP_ASSETS.items()}
+        rows+=updater.update_opengrep(mirror.fetch,state,assets=assets)
+    assert all(row.status in ('ok','pass') for row in rows), 'owned component data preparation failed'
+    print('Owned-current acquisition callback; fixture assembly only. Offline mirror data, not current upstream acceptance.')
+    for row in rows:print(row.detail)
+    raise SystemExit(0)
+sys.argv=arguments
+runpy.run_path(str(script),run_name='__main__')
+'''
+        launcher.write_text('#!' + sys.executable + '\n' + program, encoding='utf-8', newline='\n')
+        launcher.chmod(0o755)
+        return launcher
+
     def _require_branch(self) -> None:
         if _branch() == 'HEAD':
             self.skipTest('detached checkout: no branch to clone')
@@ -434,13 +503,16 @@ class InstallScriptEndToEndTests(unittest.TestCase):
             for name in ('no_proxy', 'NO_PROXY'):
                 env.pop(name, None)
             env.update(self._offline)
+        if not network:
+            self._owned_python_launcher()
+            env['OWNED_INSTALL_FIXTURE'] = str(self.tmp)
         env.update(extra)
         # Own process group: on a timeout the updater and its downloads stop with the installer
         # instead of running on as orphans (a killed updater also left a stale update.lock).
         process = subprocess.Popen(['bash', str(SHELL)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
+                                   text=True, start_new_session=True, umask=0o022)
         try:
-            stdout, stderr = process.communicate(timeout=3600 if network else 600)
+            stdout, stderr = process.communicate(timeout=3600 if network else 60)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
@@ -460,7 +532,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         self.assertIn('Getzilla is ready in', result.stdout)
         self.assertIn('Install plan for', result.stdout)
         self.assertIn(f'Python environment: {home}/.venv', result.stdout)
-        self.assertIn('Installing the pinned workflow baseline', result.stdout)
+        self.assertIn('Resolving the current verified workflow baseline', result.stdout)
         self.assertIn('Offline mirror', result.stdout)
         state = self.user_home / '.getzilla'
         self.assertFalse((state / 'update.lock').exists())
@@ -477,6 +549,11 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout[-2000:] + again.stderr[-2000:])
         self.assertIn('Updating Getzilla in', again.stdout)
         self.assertIn('already installed, sha256 verified', again.stdout)
+        calls = [json.loads(line) for line in (self.tmp/'managed-calls.jsonl').read_text().splitlines()]
+        self.assertEqual(calls, [['--environment-only','--home',str(home)], ['--home',str(home)],
+                                ['--verify-only','--home',str(home)]] * 2)
+        components = [json.loads(line) for line in (self.tmp/'component-calls.jsonl').read_text().splitlines()]
+        self.assertEqual(components, [['--only','osv','--only','opengrep'], ['--only','baseline']] * 2)
 
     def test_rejects_an_unknown_agent_before_downloading(self) -> None:
         home = self.tmp / 'Getzilla'
@@ -493,7 +570,7 @@ class InstallScriptEndToEndTests(unittest.TestCase):
         result = self._install(self.tmp / 'Getzilla', GETZILLA_NONINTERACTIVE='1', OPENROUTER_API_KEY=key)
         self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
         self.assertIn('Coding agent: qwen (models: openrouter)', result.stdout)
-        self.assertIn('Qwen Code: already installed.', result.stdout)
+        self.assertIn('owned component acquisition fixture', result.stdout)
         self.assertNotIn(key, result.stdout + result.stderr)
         self.assertIn(f"export OPENROUTER_API_KEY='{key}'",
                       (self.user_home / '.getzilla/openrouter.env').read_text(encoding='utf-8'))

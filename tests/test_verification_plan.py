@@ -470,7 +470,11 @@ class VerificationPlanTests(unittest.TestCase):
 
     def test_required_check_omission_is_not_covered_by_other_passes(self):
         with project_copy(git=True) as root:
-            plan = self.plan(root)
+            inputs = self.inputs()
+            # This scenario requires the whole check; individual criterion
+            # execution has separate source-owned proof controls below.
+            inputs['extra_obligations'][0]['expected_tests'] = []
+            plan = self.module().build_required_plan(root, **inputs)
             results = self.results(plan)
             self.assertEqual(self.gaps(plan, results), [])
             self.assertTrue(self.gaps(plan, [item for item in results if item['name'] != 'python-unittest']))

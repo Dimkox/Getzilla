@@ -19,8 +19,30 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / '.getzilla'), str(ROOT)]
 
 
+class NestedSourceInventoryTests(unittest.TestCase):
+    def test_source_inventory_is_relative_to_selected_subtree(self):
+        import hashlib
+        from getzilla.live_contracts import source_inventory
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw)/'.getzilla/runtime/worktrees/owned'
+            source=root/'trust-ci/src/app.py'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'VALUE=1\n')
+            omitted=root/'trust-ci/runtime/private.py'
+            omitted.parent.mkdir()
+            omitted.write_bytes(b'private runtime')
+            self.assertEqual(source_inventory(root,'trust-ci'),
+                {'trust-ci/src/app.py':hashlib.sha256(source.read_bytes()).hexdigest()})
+            (root/'trust-ci/src/link.py').symlink_to(source)
+            with self.assertRaisesRegex(ValueError,'refuses links'):
+                source_inventory(root,'trust-ci')
+
+
 class LiveSourceTests(unittest.TestCase):
     def setUp(self):
+        # This class owns the image-observation port; exact image proof has its own controls.
+        self.enterContext(patch.object(self.module(), 'runtime_image_id',
+            side_effect=lambda _root, pin: pin['image_id']))
         for target in ('subprocess.Popen', 'socket.socket', 'socket.create_connection'):
             self.enterContext(patch(target, side_effect=AssertionError('unmocked transport forbidden')))
 
@@ -193,7 +215,7 @@ class LiveSourceTests(unittest.TestCase):
         module = self.module()
         self.assertTrue(callable(getattr(module, 'main', None)), 'live entrypoint missing')
         with tempfile.TemporaryDirectory() as raw, patch.object(module,'_run',side_effect=AssertionError('Git or transport before refusal')) as run:
-            with self.assertRaisesRegex(ValueError, 'Trust CI source'):
+            with self.assertRaisesRegex(ValueError, 'Trust CI complete source producer'):
                 module.main(['--root', raw, '--cell', 'trust-ci', '--output', str(Path(raw)/'output')])
             run.assert_not_called()
 
@@ -203,7 +225,7 @@ class LiveSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw, \
                 patch.object(module,'_run',side_effect=AssertionError('Git or transport before refusal')) as run, \
                 patch.object(resources,'OwnedDocker',side_effect=AssertionError('Allocation before refusal')) as owner:
-            with self.assertRaisesRegex(ValueError,'Trust CI source'):
+            with self.assertRaisesRegex(ValueError,'Trust CI complete source producer'):
                 try:
                     module._trust_ci(Path(raw),Path(raw),dict(self.binding(),cell='trust-ci'))
                 except KeyError:
@@ -599,6 +621,13 @@ class FactoryControllerTests(unittest.TestCase):
         module=importlib.import_module('getzilla.live_acceptance')
         with tempfile.TemporaryDirectory() as raw:
             root=Path(raw)
+            records=[]
+            token=object()
+            def recorded(output,cell,binding,*,parser_observation):
+                self.assertEqual((output,cell,binding),(root,'factory',LiveSourceTests.binding(self)))
+                self.assertIs(parser_observation,token)
+                self.assertTrue(any(root.glob('factory-live-venv-*')))
+                records.append('intermediate')
             native=module._remove_factory_environment
             def observed(_command,**kwargs):
                 path=Path(kwargs['environment']['UV_PROJECT_ENVIRONMENT'])
@@ -613,11 +642,14 @@ class FactoryControllerTests(unittest.TestCase):
             with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
                     patch('socket.socket',side_effect=AssertionError('unmocked network forbidden')), \
                     patch.object(module,'observe',side_effect=observed), \
-                    patch.object(module,'observe_parser_applicability',return_value=object()), \
+                    patch.object(module,'observe_parser_applicability',return_value=token), \
+                    patch.object(module,'_record_controller',side_effect=recorded), \
                     patch.object(module,'validate_components',return_value=True), \
                     patch.object(module,'_remove_factory_environment',side_effect=swapped):
                 result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
                     binding=LiveSourceTests.binding(self),timeout=1)
+            self.assertEqual(records,['intermediate'])
+            self.assertFalse((root/'controller-validation.json').exists())
             self.assertEqual(result['status'],'fail')
             self.assertEqual(result['venv_cleanup_outcome'],'unknown')
             self.assertEqual([p.read_text() for p in root.rglob('replacement')],['replacement'])
@@ -654,6 +686,12 @@ class FactoryControllerTests(unittest.TestCase):
                     self.assertTrue(paths[0].is_dir())
                     order.append('validate')
                     return True
+                def recorded(output,cell,binding,*,parser_observation):
+                    self.assertEqual((output,cell,binding),(root,'factory',LiveSourceTests.binding(self)))
+                    self.assertIs(parser_observation,token)
+                    self.assertTrue(paths[0].is_dir())
+                    self.assertEqual(order[-1],'validate')
+                    order.append('intermediate-record')
                 native_remove=module._remove_factory_environment
                 def removed(path):
                     order.append('cleanup')
@@ -665,6 +703,7 @@ class FactoryControllerTests(unittest.TestCase):
                         patch.object(module,'observe',side_effect=observed), \
                         patch.object(module,'observe_parser_applicability',side_effect=measured), \
                         patch.object(module,'validate_components',side_effect=validated), \
+                        patch.object(module,'_record_controller',side_effect=recorded), \
                         patch.object(module,'_remove_factory_environment',side_effect=removed):
                     result=module._run_factory_cell(['owned'],root=root,output=root,environment={},
                         binding=LiveSourceTests.binding(self),timeout=1,required_parser=True)
@@ -673,7 +712,7 @@ class FactoryControllerTests(unittest.TestCase):
                 self.assertEqual(result['status'],'pass' if primary=='passed' and confirmed and not cleanup_failure else 'fail')
                 self.assertEqual(paths[0].exists(),cleanup_failure or not confirmed)
                 if primary=='passed' and confirmed:
-                    self.assertEqual(order,['observe','final-measurement','validate','cleanup'])
+                    self.assertEqual(order,['observe','final-measurement','validate','intermediate-record','cleanup'])
                 else:
                     self.assertNotIn('validate',order)
 

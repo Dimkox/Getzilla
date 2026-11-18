@@ -144,6 +144,9 @@ class LightLaneVerificationTests(unittest.TestCase):
         from getzilla.verification import verify
         from tests._support import project_copy
         with project_copy(git=True, verification_fixture=True) as root:
+            (root / 'requirements.txt').write_text('jinja2==2.11.0\n', encoding='utf-8', newline='\n')
+            git(root, 'add', 'requirements.txt')
+            git(root, 'commit', '-qm', 'owned real dependency baseline')
             base = git(root, 'rev-parse', 'HEAD')
             git(root, 'update-ref', 'refs/remotes/origin/main', base)
             route = build_route(root, 'Fix the greeting text', 'light-e2e').to_dict()

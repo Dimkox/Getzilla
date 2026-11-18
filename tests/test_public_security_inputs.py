@@ -371,10 +371,88 @@ class PublicInputProfileTests(unittest.TestCase):
 
 class UnactivatedWorkflowBoundaryTests(unittest.TestCase):
     def test_earlier_capability_keeps_accepted_required_ci_unactivated(self):
-        expected = {'.github/workflows/getzilla.yml': 'ab97a59a7cf20e704e8398123428fc63deab0d96864f2ac52c6ee9c3030a140f', '.getzilla/templates/ci/github-actions-verify.yml': '4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37', 'tests/test_ci_gate.py': 'fc231f2ccf886e7f4cac7b85eb3b132221cd13db90ae7b5e791c2fa3e6ceb792'}
-        for relative, digest in expected.items():
-            with self.subTest(path=relative):
-                self.assertEqual(sha((ROOT / relative).read_bytes()), digest)
+        import os
+        import yaml
+        from tests.test_393_review_boundaries import guarded
+
+        def owned(function, root):
+            with guarded(root):
+                return function()
+
+        workflow = yaml.safe_load((ROOT / ".github/workflows/getzilla.yml").read_text())
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        steps = workflow["jobs"]["security-expanded"]["steps"]
+        selected = next(row for row in steps if row.get("id") == "checker_ref")
+        self.assertEqual(
+            selected["env"],
+            {
+                "OPERATOR_CHECKER": "${{ vars.GETZILLA_SECURITY_CHECKER_SHA }}",
+                "BASE_CHECKER": "${{ github.event.pull_request.base.sha || github.event.before }}",
+            },
+        )
+        checkout = next(row for row in steps if row.get("with", {}).get("path") == "trusted-checker")
+        self.assertEqual(checkout["with"]["ref"], "${{ steps.checker_ref.outputs.sha }}")
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        code = compile(selected["run"], "owned-checker-selection", "exec")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for override, base in (("", "a" * 40), ("b" * 40, "a" * 40)):
+                output = root / "selected"
+                if output.exists():
+                    output.unlink()
+                with patch.dict(
+                    os.environ,
+                    {
+                        "OPERATOR_CHECKER": override,
+                        "BASE_CHECKER": base,
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    clear=True,
+                ):
+                    owned(lambda: exec(code, {"__name__": "owned_selection"}), root)
+                self.assertIn("sha=" + (override or base) + "\n", output.read_text())
+                self.assertNotIn("sha=" + "c" * 40, output.read_text())
+            for base in ("", "0" * 40, "not-an-exact-sha"):
+                output = root / "refused"
+                with patch.dict(
+                    os.environ,
+                    {
+                        "OPERATOR_CHECKER": "",
+                        "BASE_CHECKER": base,
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    clear=True,
+                ):
+                    with self.assertRaises(SystemExit):
+                        owned(lambda: exec(code, {"__name__": "owned_selection"}), root)
+                self.assertFalse(output.exists())
+
+    def test_original_unactivated_capability_bytes_are_historical_not_current_defaults(self):
+        import subprocess
+        from tests._support import missing_history
+
+        expected = {
+            ".github/workflows/getzilla.yml": (
+                "f643fe1a13103d29f34a42a7fc6343389a628c4c",
+                "ab97a59a7cf20e704e8398123428fc63deab0d96864f2ac52c6ee9c3030a140f",
+            ),
+            "tests/test_ci_gate.py": (
+                "b0906fadf83643b3fa621e4c1cf05742d6e6bd60",
+                "fc231f2ccf886e7f4cac7b85eb3b132221cd13db90ae7b5e791c2fa3e6ceb792",
+            ),
+        }
+        for path, (anchor, digest) in expected.items():
+            result = subprocess.run(["git", "show", anchor + ":" + path], cwd=ROOT, capture_output=True, timeout=5)
+            if result.returncode:
+                missing_history("original unactivated capability " + anchor)
+            self.assertEqual(sha(result.stdout), digest)
+        self.assertEqual(
+            sha((ROOT / ".getzilla/templates/ci/github-actions-verify.yml").read_bytes()),
+            "4ef210a1d4e819d4a4d410e090b6fd96833f271c1b73ddfcd886124c459e8d37",
+        )
 
 
 class BoundedPreparationDispatchTests(unittest.TestCase):

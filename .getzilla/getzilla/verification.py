@@ -2570,7 +2570,8 @@ def _verify_focused_static_seo_landing(
         results.append(_focused_landing_contract(root, scope, required_plan=required_plan))
 
     if required_plan is not None:
-        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan)
+        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan,
+                                 blocked_by=None if scope.get('eligible') is True else 'scope-selection')
         for name, callback in [('secret-scan', lambda: _secret_scan(root, files)),
                                ('known-vulnerabilities', lambda: _known_vulnerabilities(root)),
                                ('opengrep', lambda: _opengrep(root)), ('bandit', lambda: _bandit(root))]:

@@ -306,7 +306,9 @@ class GeneratedHookCommandTests(unittest.TestCase):
     """Run the exact generated hook commands, from a subdirectory, as each agent would."""
 
     def _run(self, root: Path, settings: str, payload: dict) -> tuple[int, str]:
-        hooks = json.loads((root / settings).read_text(encoding='utf-8'))['hooks']
+        from getzilla import harnesses
+        content = harnesses.platform_hook_payload(settings, (root / settings).read_bytes(), source_launcher=False)
+        hooks = json.loads(content)['hooks']
         if 'preToolUse' in hooks:
             command = hooks['preToolUse'][0]['bash']
         elif 'BeforeTool' in hooks:

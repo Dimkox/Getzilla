@@ -402,14 +402,8 @@ jobs:
           python - <<'PYTHON'
           import json, pathlib, subprocess, sys
           sys.path.insert(0, '.getzilla')
-          from getzilla.disposable_resources import image_pins
-          for name, pin in image_pins(pathlib.Path('.')).items():
-              if not isinstance(pin, dict):
-                  continue
-              subprocess.run(['docker', 'pull', '--platform', 'linux/amd64', pin['reference']], check=True, timeout=120)
-              image = json.loads(subprocess.run(['docker', 'image', 'inspect', pin['reference']], check=True, capture_output=True, text=True, timeout=30).stdout)[0]
-              if image['Id'] != pin['image_id'] or pin['reference'] not in image.get('RepoDigests', []):
-                  raise SystemExit('pulled image does not match the approved manifest and configuration digests')
+          from getzilla.disposable_resources import ensure_images
+          ensure_images(pathlib.Path('.'))
           PYTHON
       - name: Run bounded isolated acceptance with cleanup observer
         shell: bash

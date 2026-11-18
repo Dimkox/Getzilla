@@ -884,7 +884,7 @@ class VerificationTests(unittest.TestCase):
                 self.assertIn(repr(malformed), scope['rejected_files'])
 
     def test_focused_verification_runs_only_landing_contract_and_reports_scope(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
@@ -2038,7 +2038,7 @@ class VerificationTests(unittest.TestCase):
 
 
     def test_parent_contract_focused_verification_runs_only_landing_contract_and_reports_scope(self) -> None:
-        with project_copy(git=True) as root:
+        with project_copy(git=True, verification_fixture=True) as root:
             base = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
             ).strip()
@@ -2080,12 +2080,24 @@ class VerificationTests(unittest.TestCase):
 
 
     def test_parent_contract_verify_records_receipt_for_active_route(self) -> None:
-        with project_copy(git=True, source_only_runtime=True) as root:
+        with full_project_copy(git=True, source_only_runtime=True) as root:
+            (root/'owned_receipt_app.py').write_text('VALUE = 7\n', encoding='utf-8', newline='\n')
+            (root/'tests').mkdir(exist_ok=True)
+            (root/'tests/__init__.py').write_text('', encoding='utf-8', newline='\n')
+            (root/'tests/test_receipt_app.py').write_text(
+                'import unittest\nimport owned_receipt_app\nclass OwnedReceipt(unittest.TestCase):\n'
+                ' def test_value(self): self.assertEqual(owned_receipt_app.VALUE, 7)\n',
+                encoding='utf-8', newline='\n')
+            (root/'.coveragerc').write_text('[run]\nbranch=True\nsource=owned_receipt_app\n[report]\nfail_under=100\n',
+                                           encoding='utf-8', newline='\n')
+            subprocess.run(['git','add','.'], cwd=root, check=True)
+            subprocess.run(['git','commit','-qm','owned receipt application'], cwd=root, check=True)
             route = build_route(root, 'Review current code', 's1').to_dict()
             route['quality_profiles'] = ['base']
             activate_owned_route(root, route)
             synchronize_fixture_scope(root)
-            report = verify(root, mode='pr', record=True)
+            with patch.dict(os.environ, {'GETZILLA_TEST_WORKERS':'1'}):
+                report = verify(root, mode='pr', record=True)
             self.assertEqual(report['status'], 'pass', report)
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())

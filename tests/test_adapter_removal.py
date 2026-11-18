@@ -196,7 +196,8 @@ class RemovalPlanTests(unittest.TestCase):
         self.project.mkdir()
         self.selected = (*harnesses.HARNESSES, 'cursor')
         with BoundRoot(ROOT) as source:
-            self.outputs = harnesses._render(source, self.selected)
+            self.outputs = {path: harnesses.platform_hook_payload(path, content, source_launcher=False)
+                            for path, content in harnesses._render(source, self.selected).items()}
         self.manifest = {'schema_version': V2, 'agents': list(self.selected), 'components': {}}
         for path, content in self.outputs.items():
             self.put(path, content)

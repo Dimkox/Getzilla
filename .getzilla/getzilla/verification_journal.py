@@ -20,7 +20,7 @@ from types import FunctionType, MethodType
 import uuid
 
 from . import fsx
-from .queue_provenance import QueueRefusalCapture, queue_refusal_text
+from .queue_refusal import QueueRefusalCapture, queue_refusal_text
 
 EVENT_BYTES = 2048
 SEGMENT_BYTES = 128 * 1024

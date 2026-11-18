@@ -69,11 +69,17 @@ def _native(content: bytes) -> dict:
 def _stock_guards(source: BoundRoot, agent: str) -> dict:
     events = harnesses._hook_events(source)
     if agent == 'copilot':
-        return harnesses._copilot_hooks(events)['hooks']
-    if agent == 'gemini':
-        return harnesses._renamed_hooks_block(events, harness=agent, names=harnesses.GEMINI_EVENTS)
-    return harnesses._hooks_block(events, harness=agent, milliseconds=agent == 'qwen',
-                                  only=harnesses.CODEX_HOOK_EVENTS if agent == 'codex' else None)
+        guards = harnesses._copilot_hooks(events)['hooks']
+        path = '.github/hooks/getzilla.json'
+    elif agent == 'gemini':
+        guards = harnesses._renamed_hooks_block(events, harness=agent, names=harnesses.GEMINI_EVENTS)
+        path = '.gemini/settings.json'
+    else:
+        guards = harnesses._hooks_block(events, harness=agent, milliseconds=agent == 'qwen',
+                                       only=harnesses.CODEX_HOOK_EVENTS if agent == 'codex' else None)
+        path = f'.{agent}/hooks.json' if agent in {'codex', 'grok'} else f'.{agent}/settings.json'
+    encoded = json.dumps({'hooks': guards}).encode('utf-8')
+    return _native(harnesses.platform_hook_payload(path, encoded, source_launcher=False))['hooks']
 
 
 def _subtract(content: bytes, expected: bytes, guards: dict) -> bytes | None:

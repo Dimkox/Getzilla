@@ -25,7 +25,7 @@ POSTGRES = image_pins(ROOT)['postgres']
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla.disposable_resources import image_pins, ensure_images
+from getzilla.disposable_resources import image_pins, ensure_images, runtime_image_id
 
 POSTGRES = image_pins(ROOT)["postgres"]
 
@@ -102,7 +102,7 @@ def _binding_matches(
         container_id,
         f"/{name}",
         POSTGRES["reference"],
-    ] and fields[3] in {"true", "false"} and fields[4] == nonce and fields[5] == POSTGRES["image_id"]
+    ] and fields[3] in {"true", "false"} and fields[4] == nonce and fields[5] == runtime_image_id(ROOT, POSTGRES)
     return identity_matches and (not require_running or fields[3] == "true")
 
 
@@ -189,7 +189,7 @@ def _postgres(owner, suffix, password, network):
     volume = owner.volume(suffix+'-data')
     item = owner.container(suffix, POSTGRES['reference'], volume=volume, network=network,
         environment={'POSTGRES_DB': 'factory_exit', 'POSTGRES_USER': 'factory_exit', 'POSTGRES_PASSWORD': password})
-    if item['image_id'] != POSTGRES['image_id']:
+    if item['image_id'] != runtime_image_id(ROOT, POSTGRES):
         raise RuntimeError('Pinned PostgreSQL image identity mismatch')
     deadline = time.monotonic()+45
     while not _final_postgres_ready(item['id']):

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import copy
-import json
 import math
 import re
 from collections import Counter
@@ -1915,46 +1914,4 @@ def analyze_queue_tree(
     return _Interpreter(tree, adapter_names, statement_limit, value_limit, loop_limit).analyze()
 
 
-class QueueRefusalCapture(NamedTuple):
-    owner: Exception
-    message: str
-    payload: str
-
-
-def queue_refusal_text(error: Exception) -> str:
-    """Retain only the bound internal capture, never a mutable public sidecar.
-
-    This protects optional diagnostic serialization, not arbitrary same-process
-    execution. Invalid optional metadata must not mask the original refusal.
-    """
-    original = str(error)
-    capture = getattr(error, '_queue_refusal_capture', None)
-    if (getattr(error, 'code', None) != 'limit' or type(capture) is not QueueRefusalCapture or capture.owner is not error
-            or type(capture.message) is not str or capture.message != original or type(capture.payload) is not str):
-        return original
-    text = original + '; ' + capture.payload
-    try:
-        if len(text.encode('utf-8')) > 2048:
-            return original
-        detail = json.loads(capture.payload)
-        fields = {'version', 'kind', 'side', 'category', 'limit', 'observed', 'site', 'witness_scope',
-                  'active', 'cached', 'active_omitted', 'cached_omitted', 'cached_witness_unavailable'}
-        if (type(detail) is not dict or set(detail) != fields or type(detail['version']) is not int
-                or detail['version'] != 1 or detail['kind'] != 'queue-analysis-refusal'
-                or detail['side'] not in ('head', 'base', 'unknown')
-                or detail['category'] not in ('depth', 'work', 'bytes', 'nodes', 'modules', 'other')
-                or detail['site'] not in ('budget', 'cached', 'active', 'declaration', 'resolver')
-                or detail['witness_scope'] != 'ordered-module-request-frames'
-                or type(detail['cached_witness_unavailable']) is not bool):
-            return original
-        for key in ('limit', 'observed', 'active_omitted', 'cached_omitted'):
-            if not (detail[key] is None and key in ('limit', 'observed')) and (
-                    type(detail[key]) is not int or detail[key] < 0):
-                return original
-        for key in ('active', 'cached'):
-            if type(detail[key]) is not list or any(type(value) is not str or not re.fullmatch(
-                    r'(?:[A-Za-z_][A-Za-z0-9_.]{0,255}|sha256:[0-9a-f]{64})', value) for value in detail[key]):
-                return original
-    except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
-        return original
-    return text
+from .queue_refusal import QueueRefusalCapture, queue_refusal_text  # noqa: E402,F401

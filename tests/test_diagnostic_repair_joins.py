@@ -107,7 +107,7 @@ class DiagnosticRepairJoinsTests(unittest.TestCase):
         rows = [dict(worker=i, sequence=4, overflow=True, dropped=False, partial_tail=False,
                      events=[dict(ordinal=j, phase='call', path=path, key='a' * 64) for j in range(1, 5)])
                 for i in range(64)]
-        result = self.owned(lambda: progress._failure_progress_details(rows, {}, 64))
+        result = self.owned(lambda: progress._failure_progress_details(rows, {}, 64, trusted_paths={path}))
         self.assertLessEqual(len(json.dumps(result).encode()), 8192)
         self.assertTrue(result['render_truncated'])
         self.assertEqual(result.get('omitted_events'), 256 - len(result['events']))

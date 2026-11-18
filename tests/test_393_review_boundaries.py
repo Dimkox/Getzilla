@@ -18,6 +18,7 @@ from getzilla import expanded_security as expanded
 from getzilla import security_cli as cli
 from getzilla import security_inventory as inventory
 from getzilla import security_tools as tools
+from getzilla import verification_journal
 
 ACTIVE = False
 OWNED = None
@@ -42,7 +43,8 @@ def guarded(root=None):
     global ACTIVE, OWNED
     ACTIVE, OWNED = True, root
     try:
-        yield
+        with verification_journal.bind_sink(None, None):
+            yield
     finally:
         ACTIVE, OWNED = False, None
 
