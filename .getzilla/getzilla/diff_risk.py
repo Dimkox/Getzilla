@@ -12,9 +12,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Any, Iterable, Mapping
 from . import STACK_DIR
 
@@ -24,6 +26,10 @@ RULES_SCHEMA = 'diff-risk-rules-v1'
 DEFAULT_RULES = STACK_DIR / 'config' / 'diff-risk-rules.json'
 ORDER = {'low': 0, 'medium': 1, 'high': 2}
 MAX_GRAPH_FILES = 5000
+_DEPENDENCY_INDEX_BYTES = 2 * 1024 * 1024
+_DEPENDENCY_INDEX_ROWS = 16_384
+_DEPENDENCY_INDEX_CACHE = OrderedDict()
+_DEPENDENCY_INDEX_LOCK = Lock()
 
 
 class DiffRiskError(ValueError):
@@ -197,24 +203,54 @@ def _head_python(root: Path, head: str) -> dict[str, bytes]:
     return contents
 
 
-def _one_hop_dependents(contents: Mapping[str, bytes], changed: set[str], tree: str) -> tuple[dict[str, set[str]], list[str]]:
-    from .code_graph.builder import build_generation
-    from .code_graph.models import GraphConfig, make_graph_input
-    graph = build_generation(make_graph_input({'source_kind': 'local_git', 'source_digest': tree}, dict(contents),
-                                              GraphConfig()))
-    dependents: dict[str, set[str]] = {}
+def _dependency_index(graph_input, build_generation):
+    """Reuse only immutable graph facts; no source/risk/route decision is cached."""
+    key = (graph_input.identity, build_generation)
+    with _DEPENDENCY_INDEX_LOCK:
+        cached = _DEPENDENCY_INDEX_CACHE.get(key)
+        if cached is not None:
+            _DEPENDENCY_INDEX_CACHE.move_to_end(key)
+            return cached[:2]
+    graph = build_generation(graph_input)
+    pairs = set()
     for edge in graph.imports:
-        if edge.resolution == 'internal' and edge.target_file in changed and edge.source_file not in changed:
-            dependents.setdefault(edge.target_file, set()).add(edge.source_file)
+        if edge.resolution == 'internal':
+            pairs.add((edge.target_file, edge.source_file))
     for edge in graph.calls:
         if edge.resolution != 'exact':
             continue
         caller_file = edge.caller.split(':', 1)[1].split('::', 1)[0]
         for target in edge.targets:
             target_file = target.split(':', 1)[1].split('::', 1)[0]
-            if target_file in changed and caller_file not in changed:
-                dependents.setdefault(target_file, set()).add(caller_file)
-    gaps = [f'PARSE_INCOMPLETE:{path}' for path, _ in graph.coverage.incomplete if path in changed]
+            pairs.add((target_file, caller_file))
+    pairs = frozenset(pairs)
+    incomplete = tuple(path for path, _ in graph.coverage.incomplete)
+    rows = len(pairs) + len(incomplete)
+    size = sum(len(path.encode('utf-8', 'surrogatepass')) + 1
+               for paths in pairs for path in paths)
+    size += sum(len(path.encode('utf-8', 'surrogatepass')) + 1 for path in incomplete)
+    if rows <= _DEPENDENCY_INDEX_ROWS and size <= _DEPENDENCY_INDEX_BYTES:
+        with _DEPENDENCY_INDEX_LOCK:
+            _DEPENDENCY_INDEX_CACHE.pop(key, None)
+            while _DEPENDENCY_INDEX_CACHE and (len(_DEPENDENCY_INDEX_CACHE) >= 2
+                    or sum(item[2] for item in _DEPENDENCY_INDEX_CACHE.values()) + size > _DEPENDENCY_INDEX_BYTES):
+                _DEPENDENCY_INDEX_CACHE.popitem(last=False)
+            _DEPENDENCY_INDEX_CACHE[key] = (pairs, incomplete, size)
+    return pairs, incomplete
+
+
+def _one_hop_dependents(contents: Mapping[str, bytes], changed: set[str], tree: str) -> tuple[dict[str, set[str]], list[str]]:
+    from .code_graph.builder import build_generation
+    from .code_graph.models import GraphConfig, make_graph_input
+    # Derive the complete identity from fresh bytes, paths, scope, source and
+    # config each time. A HEAD-only key cannot bind those independent facts.
+    graph_input = make_graph_input({'source_kind': 'local_git', 'source_digest': tree}, dict(contents), GraphConfig())
+    pairs, incomplete = _dependency_index(graph_input, build_generation)
+    dependents: dict[str, set[str]] = {}
+    for target, caller in pairs:
+        if target in changed and caller not in changed:
+            dependents.setdefault(target, set()).add(caller)
+    gaps = [f'PARSE_INCOMPLETE:{path}' for path in incomplete if path in changed]
     return dependents, gaps
 
 
