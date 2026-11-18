@@ -57,6 +57,55 @@ _PROOF = object()
 
 class OCIError(ValueError):
     """Fixed local diagnostics contain no raw image/config/private path values."""
+    def __init__(self, *args, detail=None):
+        super().__init__(*args)
+        self.detail = _bound_detail(detail) if detail is not None else {}
+
+
+_BOUND_LIMITS = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
+                 'storage': 'max_storage_bytes', 'layers': 'max_layers',
+                 'expanded': 'max_unpacked_bytes', 'entries': 'max_tar_entries'}
+_BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed'},
+                 'unpacked': {'budget-charge', 'layer-decoded', 'attestation-bytes'},
+                 'storage': {'budget-charge', 'blob-storage', 'scanner-entrypoint'},
+                 'layers': {'budget-charge', 'layer-count', 'attestation-count'},
+                 'entries': {'budget-charge', 'tar-entries'},
+                 'expanded': {'budget-charge', 'tar-expanded'}}
+_BOUND_KEYS = {'dimension', 'oci_phase', 'limit_name', 'before', 'charge', 'attempted', 'limit',
+               'profile_compressed', 'profile_unpacked', 'profile_storage', 'image_ordinal'}
+
+
+def _bound_detail(value):
+    """Validate refusal-only observations; these fields grant no profile authority."""
+    if type(value) is not dict or set(value) != _BOUND_KEYS:
+        raise OCIError('Invalid OCI bound diagnostic')
+    dimension = value['dimension']
+    if (type(dimension) is not str or dimension not in _BOUND_LIMITS
+            or type(value['oci_phase']) is not str or value['oci_phase'] not in _BOUND_PHASES[dimension]
+            or type(value['limit_name']) is not str or value['limit_name'] != _BOUND_LIMITS[dimension]):
+        raise OCIError('Invalid OCI bound diagnostic')
+    numbers = ('before', 'charge', 'attempted', 'limit', 'profile_compressed', 'profile_unpacked', 'profile_storage')
+    if (any(type(value[key]) is not int or not 0 <= value[key] < 2 ** 63 for key in numbers)
+            or any(not 0 < value[key] <= CI_BYTES for key in numbers[4:])
+            or type(value['image_ordinal']) is not int or not -1 <= value['image_ordinal'] < 512
+            or not 0 <= value['before'] <= value['limit'] < value['attempted']
+            or value['before'] + value['charge'] != value['attempted']):
+        raise OCIError('Invalid OCI bound diagnostic')
+    expected = (value['profile_' + ('unpacked' if dimension == 'expanded' else dimension)]
+                if dimension in {'compressed', 'unpacked', 'storage', 'expanded'} else
+                100000 if dimension == 'entries' else value['limit'])
+    if value['limit'] != expected or not 0 < value['limit'] <= (10000 if dimension == 'layers' else 2 ** 63 - 1):
+        raise OCIError('Invalid OCI bound diagnostic')
+    return dict(value)
+
+
+def bound_fault(error):
+    if type(error) is not OCIError:
+        return {}
+    try:
+        return _bound_detail(error.detail)
+    except (OCIError, AttributeError, TypeError):
+        return {}
 
 
 def canonical(value):
@@ -100,6 +149,7 @@ class _Budget:
         if any(profile[key] > LIMITS[key] for key in LIMITS):
             self._native = sys.modules[__package__ + '.security_image_backend']
             self._guard = self._native._GUARD
+        self.image_ordinal = -1
         self.deadline = time.monotonic() + profile['deadline_seconds']
         self.totals = dict(compressed=0, unpacked=0, storage=0, layers=0, entries=0, expanded=0)
 
@@ -109,13 +159,25 @@ class _Budget:
         if time.monotonic() >= self.deadline:
             raise OCIError('OCI deadline exceeded')
 
-    def charge(self, key, size):
+    def charge(self, key, size, *, phase='budget-charge'):
         self.tick()
         limit = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
                  'storage': 'max_storage_bytes', 'layers': 'max_layers', 'expanded': 'max_unpacked_bytes'}.get(key)
         ceiling = self.profile[limit] if limit else 100000
-        if type(size) is not int or size < 0 or self.totals[key] + size > ceiling:
+        if type(size) is not int or size < 0:
             raise OCIError('Aggregate OCI resource bound exceeded')
+        if self.totals[key] + size > ceiling:
+            detail = dict(dimension=key, oci_phase=phase, limit_name=_BOUND_LIMITS[key],
+                          before=self.totals[key], charge=size, attempted=self.totals[key] + size, limit=ceiling,
+                          profile_compressed=self.profile['max_compressed_bytes'],
+                          profile_unpacked=self.profile['max_unpacked_bytes'],
+                          profile_storage=self.profile['max_storage_bytes'], image_ordinal=self.image_ordinal)
+            try:
+                detail = _bound_detail(detail)
+            except OCIError:
+                raise OCIError('Aggregate OCI resource bound exceeded') from None
+            raise OCIError(f'Aggregate OCI resource bound exceeded: {key} {detail["attempted"]}>{ceiling} ({phase})',
+                           detail=detail)
         self.totals[key] += size
 
 
@@ -166,7 +228,7 @@ class _Root:
     def json(self, name, budget):
         with self.file(name, budget.profile['max_manifest_bytes']) as (stream, _):
             raw = stream.read(budget.profile['max_manifest_bytes'] + 1)
-        budget.charge('compressed', len(raw))
+        budget.charge('compressed', len(raw), phase='layout-json')
         if len(raw) > budget.profile['max_manifest_bytes']:
             raise OCIError('OCI metadata exceeds bound')
         return document(raw)
@@ -181,20 +243,20 @@ class _Decoded:
         # tarfile streaming requests are bounded; never accept an unbounded read.
         size = 65536 if size < 0 else min(size, 65536)
         value = self.stream.read(size)
-        self.budget.charge('unpacked', len(value))
+        self.budget.charge('unpacked', len(value), phase='layer-decoded')
         self.digest.update(value)
         return value
 
 
 def _layer(path, media, expected, budget):
-    budget.charge('layers', 1)
+    budget.charge('layers', 1, phase='layer-count')
     declared = 0
     with path.open('rb') as raw:
         with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else raw) as decoded:
             stream = _Decoded(decoded, budget)
             with tarfile.open(fileobj=stream, mode='r|') as archive:
                 for member in archive:
-                    budget.charge('entries', 1)
+                    budget.charge('entries', 1, phase='tar-entries')
                     name = member.name
                     if (not name or len(name) > 4096 or '\\' in name or name.startswith('/')
                             or '..' in PurePosixPath(name).parts
@@ -209,7 +271,7 @@ def _layer(path, media, expected, budget):
                             raise OCIError('OCI link escapes image root')
                     if member.size < 0 or declared + member.size > budget.profile['max_unpacked_bytes']:
                         raise OCIError('OCI logical layer size exceeds bound')
-                    budget.charge('expanded', member.size)
+                    budget.charge('expanded', member.size, phase='tar-expanded')
                     declared += member.size
             while stream.read(65536):
                 pass
@@ -348,8 +410,8 @@ def _import_one(record, profile, stage, budget):
                 return stage / 'blobs/sha256' / digest[7:]
             if size > profile['max_storage_bytes'] or media not in LAYER_MEDIA and size > profile['max_manifest_bytes']:
                 raise OCIError('OCI descriptor exceeds selected bound')
-            budget.charge('storage', size)
-            budget.charge('compressed', size)
+            budget.charge('storage', size, phase='blob-storage')
+            budget.charge('compressed', size, phase='blob-compressed')
             destination = stage / 'blobs/sha256' / digest[7:]
             measured = hashlib.sha256()
             with source.file('blobs/sha256/' + digest[7:], size) as (stream, actual):
@@ -426,8 +488,8 @@ def _import_one(record, profile, stage, budget):
                         if layer_media != OPAQUE_ATTESTATION or diff_id != layer_digest:
                             raise OCIError('Opaque OCI attestation digest accounting differs')
                         blob(layer, opaque=True)
-                        budget.charge('layers', 1)
-                        budget.charge('unpacked', layer_size)
+                        budget.charge('layers', 1, phase='attestation-count')
+                        budget.charge('unpacked', layer_size, phase='attestation-bytes')
                         continue
                     layer_media = _descriptor(layer)[0]
                     allowed_layers = {TAR, GZIP} if media == MANIFEST else {DOCKER_GZIP}
@@ -450,7 +512,7 @@ def _import_one(record, profile, stage, budget):
         for name, value in (('oci-layout', {'imageLayoutVersion': '1.0.0'}),
                             ('index.json', {'schemaVersion': 2, 'mediaType': INDEX, 'manifests': [descriptor]})):
             raw = canonical(value)
-            budget.charge('storage', len(raw))
+            budget.charge('storage', len(raw), phase='scanner-entrypoint')
             fd = os.open(stage / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(raw)
@@ -541,6 +603,7 @@ def import_layouts(catalog, inventory, profile, workspace):
         with tempfile.TemporaryDirectory(prefix='verified-oci-', dir=workspace) as owned:
             images = []
             for index, record in enumerate(sorted(records, key=lambda r: r['reference'])):
+                budget.image_ordinal = index
                 stage = Path(owned) / str(index)
                 stage.mkdir(mode=0o700)
                 image = _import_one(record, profile, stage, budget)

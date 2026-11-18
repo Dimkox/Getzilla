@@ -594,7 +594,8 @@ def _offline_tool_control(request, volume):
 
 def _fault(error):
     kind = type(error)
-    detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else {}
+    from .security_oci import bound_fault
+    detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else bound_fault(error)
     detail.setdefault('phase', _PHASE)
     detail.setdefault('command_id', 'worker')
     number = getattr(error, 'errno', None)

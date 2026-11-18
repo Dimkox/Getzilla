@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
@@ -27,7 +28,7 @@ from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
-from .security_oci import source_bindings
+from .security_oci import source_bindings, bound_fault, _bound_detail
 from .public_security_context import current_context, bind_context, validate_context
 from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source
 
@@ -270,6 +271,32 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
 
 
+def _output_identity(path):
+    try:
+        value = path.stat(follow_symlinks=False)
+        if stat.S_ISREG(value.st_mode):
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    except OSError:
+        pass
+    return None
+
+
+def _failed_input_fault(path, previous):
+    """Refusal data only, read fresh and bounded; never grants success/authority."""
+    current = _output_identity(path)
+    if current is None or current == previous:
+        return {}
+    try:
+        report = _json(read_file(path.parent, path.name, MAX_INDEX_BYTES))
+        if (current != _output_identity(path) or type(report) is not dict
+                or report.get('kind') != 'public-security-input-refusal'
+                or report.get('status') != 'fail' or report.get('qualification') != 'UNVERIFIED'):
+            return {}
+        return _bound_detail(report.get('fault'))
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return {}
+
+
 def _supervised_preparation(args, profile):
     """Reuse the existing runner's deadline/group cleanup, never a shell timeout."""
     import getzilla
@@ -295,6 +322,7 @@ def _supervised_preparation(args, profile):
             command.extend(['--image-selection', str(args.image_selection)])
         if args.family_records is not None:
             command.extend(['--family-records', str(args.family_records)])
+        previous = _output_identity(args.json_out)
         process = execute(command, args.root, environment, timeout=600)
         if process.returncode == 0 and process.terminal_state == 'completed' and not process.cleanup_error:
             report = _json(read_file(args.json_out.parent, args.json_out.name, MAX_INDEX_BYTES))
@@ -302,12 +330,17 @@ def _supervised_preparation(args, profile):
                     and report.get('qualification') == 'UNVERIFIED' and report.get('profile') == profile
                     and report.get('profile_sha256') == profile.get('profile_sha256')):
                 return report
-        return {'kind': 'public-security-input-refusal', 'status': 'unavailable', 'qualification': 'UNVERIFIED',
+        refusal = {'kind': 'public-security-input-refusal', 'status': 'unavailable', 'qualification': 'UNVERIFIED',
                 'gaps': ['input-worker-incomplete'], 'returncode': process.returncode,
                 'stop': stop_details(process),
                 'terminal_state': process.terminal_state if process.terminal_state in {'completed', 'timeout', 'interrupted'} else 'unknown',
                 'cleanup_uncertain': bool(process.cleanup_error),
                 'publication_state': 'reconcile selected roots before further publication; no automatic retry'}
+        if process.returncode != 0 and process.terminal_state == 'completed' and not process.cleanup_error:
+            fault = _failed_input_fault(args.json_out, previous)
+            if fault:
+                refusal['fault'] = fault
+        return refusal
 
 
 def _clock(now=None):
@@ -848,9 +881,12 @@ def main(argv=None) -> int:
         else:
             report = evaluate(args.root, args.database, args.artifacts, args.tools,
                               **_evaluation_kwargs(args, profile, run))
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as error:
         report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
                   'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused'}
+        fault = bound_fault(error)
+        if fault:
+            report['fault'] = fault
     body = (json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n').encode()
     if len(body) > MAX_INDEX_BYTES:
         raise SecurityDataError('public input report exceeds the existing metadata byte bound')
