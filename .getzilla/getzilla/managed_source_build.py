@@ -108,8 +108,9 @@ def install_source(target: Target, data: bytes, root: Path, *, run=execute) -> P
         commands += [['make', '-j4'], ['make', 'install']]
         executable = prefix/'bin/php'
     else:
-        commands += [['make', '-j4', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease'],
-                     ['make', 'install', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease']]
+        # Git 2.x documents its C implementation as supported with optional Rust.
+        commands += [['make', '-j4', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease'],
+                     ['make', 'install', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease']]
         executable = prefix/'bin/git'
     env = {k: v for k, v in os.environ.items() if k in ('PATH', 'SystemRoot', 'WINDIR', 'LD_LIBRARY_PATH')}
     private = stage/'private-home'
