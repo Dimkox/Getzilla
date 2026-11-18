@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+sys.dont_write_bytecode = True
 import types
 from urllib.parse import quote
 import uuid

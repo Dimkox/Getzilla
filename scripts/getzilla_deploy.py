@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import sys
-
-# The read-only command must also avoid import-cache writes during ordinary startup.
-if __name__ == '__main__' and sys.argv[1:2] == ['preflight']:
-    sys.dont_write_bytecode = True
+sys.dont_write_bytecode = True
 
 from pathlib import Path
 

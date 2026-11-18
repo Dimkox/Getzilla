@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import runpy
 import sys
+sys.dont_write_bytecode = True
 
 
 def main(argv: list[str] | None = None) -> None:

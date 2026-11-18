@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+sys.dont_write_bytecode = True
 import subprocess
 import tarfile
 import zipfile

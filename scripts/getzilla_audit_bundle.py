@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess  # nosec B404
 import sys
+sys.dont_write_bytecode = True
 import threading
 import time
 from datetime import date, datetime, timezone

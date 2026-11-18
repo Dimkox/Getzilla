@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+sys.dont_write_bytecode = True
 import time
 from pathlib import Path
 

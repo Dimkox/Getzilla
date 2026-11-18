@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+sys.dont_write_bytecode = True
 
 try:
     from _lib import emit, is_child_payload, prompt_text, read_payload, root_from, run_hook, session_id
