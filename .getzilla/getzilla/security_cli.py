@@ -50,8 +50,10 @@ _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'arti
     'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'artifact-factory-input',
     'artifact-factory-output', 'artifact-factory-source-output','license-run-scope-unavailable',
     'artifact-action-data','artifact-action-link','artifact-action-metadata','artifact-action-origin',
-    'artifact-action-selector','artifact-action-source-count','artifact-action-stale','artifact-action-transport',
-    'artifact-family-preparation','artifact-context','license-conflict','license-obligation-missing','license-transitive-coverage','other'))
+    'artifact-action-selector','artifact-action-source-count','artifact-action-source-provider','artifact-action-stale','artifact-action-transport',
+    'artifact-npm-integrity','artifact-npm-metadata','artifact-npm-origin','artifact-npm-stale','artifact-npm-budget',
+    'artifact-npm-cache','artifact-npm-transport','artifact-archive','artifact-family-preparation','artifact-context',
+    'license-conflict','license-metadata-missing','license-text-review','license-obligation-missing','license-transitive-coverage','other'))
 
 
 def _preparation_detail(value):
