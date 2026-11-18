@@ -23,7 +23,7 @@ BLOB_PREFIX = '.getzilla/templates/baseline/blobs/'
 ARCHIVE_LIMIT = 16 * 1024 * 1024
 
 
-def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
+def archive_entries(raw: bytes, *, canonical: bool = False) -> dict[str, tuple[bytes, int]]:
     """Decode the existing source container; no extraction or code execution."""
     if type(raw) is not bytes or len(raw) > ARCHIVE_LIMIT:
         raise ValueError('ASSET_ARCHIVE_BOUNDS')
@@ -32,7 +32,14 @@ def archive_entries(raw: bytes) -> dict[str, tuple[bytes, int]]:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             if not 1 <= len(archive.infolist()) <= MAX_FILES:
                 raise ValueError('ASSET_ARCHIVE_BOUNDS')
+            if canonical and (archive.comment or archive.namelist() != sorted(archive.namelist())
+                    or archive.infolist()[0].header_offset != 0 or raw[-22:-18] != b'PK\x05\x06'):
+                raise ValueError('NONCANONICAL_ASSET_ARCHIVE')
             for member in archive.infolist():
+                if canonical and (member.date_time != (1980, 1, 1, 0, 0, 0)
+                        or member.external_attr != 0o644 << 16 or member.compress_type != zipfile.ZIP_DEFLATED
+                        or member.flag_bits or member.extra or member.comment or member.create_system not in (0, 3)):
+                    raise ValueError('NONCANONICAL_ASSET_ARCHIVE')
                 if member.orig_filename != member.filename:
                     raise ValueError('UNSAFE_ASSET_ARCHIVE_MEMBER')
                 name = member.filename
