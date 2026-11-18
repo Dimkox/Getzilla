@@ -69,22 +69,55 @@ class DiagnosticRepairJoinsTests(unittest.TestCase):
         self.assertLessEqual(clock[0], 2.0)
 
     def test_unknown_identity_retains_bounded_source_and_refusal(self):
-        path = 'tests/test_own_a.py'
-        key = hashlib.sha256((path + '::test_a').encode()).hexdigest()
+        path = 'tests/test_diagnostic_repair_joins.py'
+        node = 'DiagnosticRepairJoinsTests::test_unresolved_owned_node'
+        observation = {}
+        trusted = progress._trusted_progress_metadata(W, [path], observation=observation)
+        self.assertIn(path, trusted)
+        self.assertNotIn(node, trusted[path][1])
+        self.assertEqual(observation['currentness'], 'verified')
+        key = hashlib.sha256((path + '::' + node).encode()).hexdigest()
+        raw = dict(selected_workers=1, status='observed',
+                   slots=[dict(worker=0, state='active', path=path, key=key)])
+
+        def observed(root, paths, **kwargs):
+            self.assertEqual(root, W)
+            self.assertEqual(paths, [path])
+            kwargs['observation'].update(observation)
+            return trusted
+
+        with patch.object(progress, '_trusted_progress_metadata', side_effect=observed):
+            result = self.owned(lambda: progress._core_progress_details(W, raw))
+        self.assertIsNone(result['slots'][0]['identity'])
+        self.assertEqual(result['slots'][0].get('source'), dict(path=path, key=key))
+        self.assertEqual(result['source_lookup'], observation)
+        self.assertEqual(result['status'], 'partial')
+        self.assertLessEqual(len(json.dumps(result).encode()), 16000)
+
+    def test_untrusted_deadline_lookup_omits_source_and_terminal_claims(self):
+        path = 'tests/UNTRACKED_PRIVATE_CANARY.py'
+        key = hashlib.sha256((path + '::test_unproved').encode()).hexdigest()
         raw = dict(selected_workers=1, status='observed',
                    slots=[dict(worker=0, state='active', path=path, key=key)])
 
         def unavailable(root, paths, **kwargs):
-            if 'observation' in kwargs:
-                kwargs['observation'].update(status='unavailable', reason='deadline', head=None)
+            self.assertEqual(paths, [path])
+            kwargs['observation'].update(status='unavailable', reason='deadline', head=None)
             return {}
 
-        with patch.object(progress, '_trusted_progress_metadata', side_effect=unavailable):
+        with patch.object(progress, '_trusted_progress_metadata', side_effect=unavailable) as lookup, \
+                patch.object(progress, '_observed_run', side_effect=AssertionError('no Git lookup')):
             result = self.owned(lambda: progress._core_progress_details(Path('/owned'), raw))
+        self.assertEqual(lookup.call_count, 1)
         self.assertIsNone(result['slots'][0]['identity'])
-        self.assertEqual(result['slots'][0].get('source'), dict(path=path, key=key))
-        self.assertEqual(result.get('source_lookup', {}).get('reason'), 'deadline')
+        self.assertNotIn('source', result['slots'][0])
+        self.assertNotIn(path, json.dumps(result))
+        self.assertNotIn(key, json.dumps(result))
+        self.assertEqual(result['source_lookup']['reason'], 'deadline')
+        self.assertEqual(result['source_lookup']['currentness'], 'unknown')
         self.assertEqual(result['status'], 'partial')
+        for name in ('failed_tests', 'completed_tests', 'passed_tests', 'exit_code', 'coverage'):
+            self.assertNotIn(name, result)
         self.assertLessEqual(len(json.dumps(result).encode()), 16000)
 
     def test_changed_source_head_never_yields_named_identity(self):
