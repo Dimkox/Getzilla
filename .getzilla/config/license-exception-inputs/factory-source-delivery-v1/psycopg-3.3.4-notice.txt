@@ -2,8 +2,8 @@ Getzilla includes psycopg 3.3.4 unchanged from the identified PyPI wheel.
 Wheel: psycopg-3.3.4-py3-none-any.whl
 SHA256: b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a
 All 85 shipped package members are byte-identical to the matching members of the publisher source release.
-Source archive included at ../sources/psycopg-3.3.4.tar.gz
-Source SHA256: e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc
+Canonical repack of unchanged complete source content included at ../sources/psycopg-3.3.4.tar.gz
+Original publisher archive SHA256: e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc
 Official source URL: https://files.pythonhosted.org/packages/db/2f/cb91e5502ec9de1de6f1b76cfbf69531932725361168bb06963620c77e2e/psycopg-3.3.4.tar.gz
 Copyright (C) 2020 The Psycopg Team.
 This library and its use are covered by GNU Lesser General Public License version 3.
@@ -11,3 +11,6 @@ The original LGPL text remains at ../../site-packages/psycopg-3.3.4.dist-info/li
 The complete GNU GPL version 3 accompanies this distribution at ../licenses/GPL-3.0.txt.
 This archive contains the pure Python library source. It does not describe corresponding source or replacement conditions for psycopg-binary or its bundled client libraries.
 This source/use notice does not establish that the final application meets every applicable combined-work condition.
+The delivered gzip/tar container is repacked with canonical member order, modes and timestamps.
+Its actual SHA256 and size are recorded as source_delivery in ../source-map.json.
+The original publisher archive SHA256 above is historical origin and is not the delivered container hash.

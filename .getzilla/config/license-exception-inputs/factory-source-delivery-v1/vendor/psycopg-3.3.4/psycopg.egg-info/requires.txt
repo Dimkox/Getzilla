@@ -1,0 +1,50 @@
+
+[:python_version < "3.13"]
+typing-extensions>=4.6
+
+[:sys_platform == "win32"]
+tzdata
+
+[binary]
+
+[binary:implementation_name != "pypy"]
+psycopg-binary==3.3.4
+
+[c]
+
+[c:implementation_name != "pypy"]
+psycopg-c==3.3.4
+
+[dev]
+ast-comments>=1.1.2
+black>=26.1.0
+codespell>=2.2
+cython-lint>=0.16
+dnspython>=2.1
+flake8>=4.0
+isort[colors]>=6.0
+isort-psycopg
+mypy>=1.19.0
+pre-commit>=4.0.1
+types-setuptools>=57.4
+types-shapely>=2.0
+wheel>=0.37
+
+[docs]
+Sphinx>=9.1
+furo==2025.12.19
+sphinx-autobuild>=2025.8.25
+sphinx-autodoc-typehints>=3.10.2
+
+[pool]
+psycopg-pool
+
+[test]
+anyio>=4.0
+pproxy>=2.7
+pytest>=6.2.5
+pytest-cov>=3.0
+pytest-randomly>=3.5
+
+[test:implementation_name != "pypy"]
+mypy>=1.19.0
