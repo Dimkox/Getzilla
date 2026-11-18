@@ -25,6 +25,7 @@ _DIRECTORY = 0x1200A1  # list/traverse/read attributes/security/synchronize
 _WRITE = 0x13019F  # FILE_GENERIC_READ|FILE_GENERIC_WRITE|DELETE
 _DESTRUCTIVE = 0xD0150  # DELETE, WRITE_DAC/OWNER, DELETE_CHILD, WRITE_EA/ATTRIBUTES
 _OWNED_WRITE = _DESTRUCTIVE | 0x6  # also add-file/add-subdirectory (write/append)
+_ROOT_SELF = 0x10110  # DELETE, WRITE_EA/ATTRIBUTES on the proven volume root itself
 
 
 class _Unicode(C.Structure):
@@ -74,10 +75,12 @@ class Metadata:
         return stable if self.directory else (*stable, self.links, self.size, self.write, self.change)
 
 
-def check_acl(owner, aces, trusted, *, owned):
+def check_acl(owner, aces, trusted, *, owned, volume_root=False):
     """Conservative effective ACE policy; creation of siblings is not replacement."""
     if owner not in trusted:
         raise SecurityDataError('snapshot native owner is not trusted')
+    if volume_root and owned:
+        raise SecurityDataError('snapshot native volume-root role is invalid')
     for kind, flags, mask, sid in aces:
         if kind not in {0, 1}:
             raise SecurityDataError('snapshot DACL has an unsupported ACE type')
@@ -88,7 +91,13 @@ def check_acl(owner, aces, trusted, *, owned):
             expanded |= 0x1F01FF
         if mask & 0x40000000:
             expanded |= 0x120116
-        if sid not in trusted and expanded & (_OWNED_WRITE if owned else _DESTRUCTIVE):
+        forbidden = _OWNED_WRITE if owned else _DESTRUCTIVE
+        if volume_root:
+            # Only the independently proven, held physical root can omit its
+            # own deletion/metadata rights. Child removal and security changes
+            # remain forbidden; generic write/all grants remain conservative.
+            forbidden &= ~_ROOT_SELF
+        if sid not in trusted and (expanded & forbidden or volume_root and mask & 0x50000000):
             raise SecurityDataError('snapshot native DACL permits untrusted writes or path replacement')
 
 
@@ -264,10 +273,19 @@ class Native:
             self._ok(self.k.GetVolumeInformationByHandleW(handle, None, 0, None, None, C.byref(flags), name, 32))
             if name.value != 'NTFS' or not flags.value & 8:
                 raise SecurityDataError('snapshot Windows store requires NTFS persistent ACLs')
+            self.verify_root(handle)
             return handle
         except BaseException:
             self.close(handle)
             raise
+
+    def verify_root(self, handle):
+        # FILE_NAME_INFO is volume-relative. A larger/truncated/failed result
+        # cannot prove root. Never infer this role from a drive letter or depth.
+        name = C.create_string_buffer(8)
+        self._ok(self.k.GetFileInformationByHandleEx(handle, 2, name, len(name)))
+        if int.from_bytes(name.raw[:4], 'little') != 2 or name.raw[4:6] != b'\\\x00':
+            raise SecurityDataError('snapshot native volume root proof failed')
 
     def security(self, handle):
         owner, acl, sd = HANDLE(), HANDLE(), HANDLE()
@@ -405,14 +423,16 @@ class SnapshotStore:
             self.native.shutdown()
             self.native = None
 
-    def _metadata(self, handle, *, owned, directory, maximum=None, ancestor_depth=None):
+    def _metadata(self, handle, *, owned, directory, maximum=None, ancestor_depth=None, volume_root=False):
+        if volume_root:
+            self.native.verify_root(handle)
         value = self.native.metadata(handle)
         if (value.directory != directory or value.attributes & 0x400
                 or not directory and (value.links != 1 or value.size < 0)):
             raise SecurityDataError('snapshot native object type/reparse/hardlink is unsafe')
         trusted = self.native.trusted if owned else self.native.ancestors
         try:
-            check_acl(*value.security[:2], trusted, owned=owned)
+            check_acl(*value.security[:2], trusted, owned=owned, volume_root=volume_root)
         except SecurityDataError as error:
             diagnostic = _acl_diagnostic(self.native, value.security, owned=owned,
                                          directory=directory, ancestor_depth=ancestor_depth)
@@ -427,7 +447,8 @@ class SnapshotStore:
     def _hold(self, handle, parent, name, *, owned, directory, maximum=None):
         try:
             identity = self._metadata(handle, owned=owned, directory=directory, maximum=maximum,
-                                      ancestor_depth=len(self.directories) if directory and not owned else None).identity()
+                                      ancestor_depth=len(self.directories) if directory and not owned else None,
+                                      volume_root=parent is None and directory and not owned).identity()
         except BaseException:
             self.native.close(handle)
             raise
@@ -441,7 +462,9 @@ class SnapshotStore:
     def confirm(self):
         for depth, (directory, held) in enumerate([(True, node) for node in self.directories] + [(False, f) for f in self.files.values()]):
             ancestor_depth = depth if directory and not held.owned else None
-            value = self._metadata(held.handle, owned=held.owned, directory=directory, ancestor_depth=ancestor_depth)
+            volume_root = directory and held.parent is None and not held.owned
+            value = self._metadata(held.handle, owned=held.owned, directory=directory, ancestor_depth=ancestor_depth,
+                                   volume_root=volume_root)
             if value.identity() != held.identity:
                 raise SecurityDataError('snapshot held native identity or security changed')
             if held.parent is not None:
