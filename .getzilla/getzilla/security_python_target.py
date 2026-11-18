@@ -75,14 +75,21 @@ def binding(profile):
         inventory_sha256=profile['inventory_sha256'], profile_sha256=profile['profile_sha256'])
     if 'python_source_pins' in profile:
         value['source_pins'] = profile['python_source_pins']
+    if 'factory_inputs' in profile:
+        value['factory_inputs'] = profile['factory_inputs']
     return _binding(value)
 
 
 def _binding(value):
-    if (type(value) is not dict or set(value)-{'source_pins'} != {'target','source','run','inventory_sha256','profile_sha256'}):
+    if (type(value) is not dict or set(value)-{'source_pins','factory_inputs'} != {'target','source','run','inventory_sha256','profile_sha256'}):
         _refuse()
     if 'source_pins' in value:
         validate_source_pins(value['source_pins'])
+    if 'factory_inputs' in value:
+        from .security_factory_inputs import validate_declaration
+        declared=validate_declaration(value['factory_inputs'])
+        if declared['inventory_sha256']!=value['inventory_sha256']:
+            _refuse()
     validate_target(value['target'])
     source, run = value['source'], value['run']
     hashes = ('head_sha','tree_sha','checker_sha','checker_tree_sha')

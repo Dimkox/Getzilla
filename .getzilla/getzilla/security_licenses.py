@@ -469,7 +469,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
             result['python_target_scope'] = {'target':target_binding['target'],
                 'assurance':'current-interpreter-only; no unobserved target or final-delivery credit'}
-            if policy.get('factory_offline_profile') and any(
+            if policy.get('factory_offline_profile') and 'factory_inputs' not in target_binding and any(
                     dep.get('manifest','').startswith('factory/') for dep in dependencies):
                 gap('artifact-target-scope-unobserved',
                     'current interpreter observation does not qualify the separate Factory offline target and final delivery')
@@ -501,6 +501,15 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
         result['source_evidence'] = {'manifest_sha256': hashlib.sha256(raw).hexdigest(),
             'last_verified_sync_utc': bundle['last_verified_sync_utc'], 'age_seconds': age,
             'checked_at_utc': current.isoformat(), 'coverage': {'declared_packages': len(indexed)}}
+        if target_binding is not None and 'factory_inputs' in target_binding:
+            from .security_factory_inputs import verify
+            auxiliary=verify(artifacts,target_binding,policy,now=now)
+            output=evaluate_artifacts(auxiliary['inventory'],auxiliary['root'],policy,now=now)
+            result['factory_output']={'profile':target_binding['factory_inputs']['profile'],
+                'status':output['status'],'source_evidence':output.get('source_evidence'),
+                'assurance':'named Factory output only; original source uses remain separate'}
+            result['details'].extend(output['details'])
+            result['gaps'].extend(output['gaps'])
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
             try:
@@ -722,6 +731,13 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
                    'policy_digest': selected_policy['digest'],
                    'records': sorted(bindings, key=lambda item: item['artifact_id']),
                    'deliveries': deliveries}
+        if target_binding is not None and 'factory_inputs' in target_binding:
+            from .security_factory_inputs import verify
+            auxiliary=verify(artifacts,target_binding,selected_policy,now=now)
+            binding['factory_output']=auxiliary['projection']
+            total+=auxiliary['projection']['payload_size']
+            if total>512*1024*1024:
+                raise ArtifactError('artifact-size','catalog and Factory output exceed the shared aggregate byte budget')
         content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
                 'source_url': 'urn:getzilla:artifact-license-catalog:1',

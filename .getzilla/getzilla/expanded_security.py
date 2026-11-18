@@ -152,8 +152,13 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     if 'python_source_pins' in profile:
         from .security_python_target import source_pins,validate_target
         package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+    factory_inputs=None
+    if 'factory_inputs' in profile:
+        from .security_factory_inputs import declaration as factory_declaration
+        from .security_licenses import load_policy
+        factory_inputs=factory_declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=Path(roots['tools']))
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
-                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins)
+                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs)
     if catalog is not None:
         validate_selection(catalog, inventory, profile['image_profile'])
     after, after_run = _selection_authority(root, env)

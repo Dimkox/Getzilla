@@ -187,7 +187,7 @@ def _select(index: dict, dep: dict) -> dict:
 
 def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_digest: str,
                  fetch=bounded_default, now: datetime | None = None, families: list[dict] | None = None,
-                 target_binding: dict | None = None) -> dict:
+                 target_binding: dict | None = None, byte_budget: int | None = None) -> dict:
     """Save fixed-origin artifacts and commit manifest last; no dependency resolution.
 
     Failure before pointer replacement leaves an existing manifest unchanged.
@@ -202,6 +202,9 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
     if not isinstance(dependencies, list) or len(dependencies) > MAX_PACKAGES or not all(isinstance(dep, dict) for dep in dependencies):
         raise ArtifactError('artifact-inventory-binding', 'producer dependencies must be a bounded list')
     current = _clock(now)
+    byte_budget=MAX_BATCH_BYTES if byte_budget is None else byte_budget
+    if type(byte_budget) is not int or not 1<=byte_budget<=MAX_BATCH_BYTES:
+        raise ArtifactError('artifact-size','acquisition shared byte budget is invalid')
     if target_binding is not None:
         from .security_python_target import _binding
         _binding(target_binding)
@@ -242,7 +245,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             if not 0 <= age <= MAX_AGE_SECONDS:
                 raise ArtifactError('artifact-stale', 'retained family source age is unavailable, future or stale')
             total += evidence['bound_bytes']
-            if total > MAX_BATCH_BYTES:
+            if total > byte_budget:
                 raise ArtifactError('artifact-size', 'selected catalog exceeds its aggregate byte budget')
             seen.add(key)
             records.append(record)
@@ -275,7 +278,7 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
                 selected = _select(_json(index_bytes), selected_dependency)
             payload = _fetch(fetch, selected['url'], MAX_ARTIFACT_BYTES)
             total += len(index_bytes) + len(payload)
-            if total > MAX_BATCH_BYTES:
+            if total > byte_budget:
                 raise ArtifactError('artifact-size', 'acquisition batch exceeds its total byte budget')
             digest = hashlib.sha256(payload).hexdigest()
             if ecosystem == 'PyPI' and digest != selected['digests']['sha256']:

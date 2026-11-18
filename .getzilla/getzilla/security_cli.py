@@ -46,7 +46,8 @@ _PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory',
 _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'artifact-size',
     'artifact-identity', 'artifact-hash', 'artifact-inventory-binding', 'artifact-manifest',
     'artifact-path', 'artifact-platform', 'artifact-publication-uncertain', 'artifact-stale',
-    'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'other'))
+    'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'artifact-factory-input',
+    'artifact-factory-output', 'artifact-factory-source-output', 'other'))
 
 
 def _preparation_detail(value):
@@ -146,7 +147,7 @@ def validate_selection_authority(source: dict, run: dict, selection=None, *, now
 
 
 def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                  package_target=None, package_pins=None) -> dict:
+                  package_target=None, package_pins=None, factory_inputs=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     validate_selection_authority(source, run, image_selection, now=now)
     if isinstance(inventory, dict) and inventory.get('builds'):
@@ -206,6 +207,11 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         if package_pins is not None:
             from .security_python_target import validate_source_pins
             body['python_source_pins'] = validate_source_pins(package_pins)
+    if factory_inputs is not None:
+        from .security_factory_inputs import validate_declaration
+        body['factory_inputs']=validate_declaration(factory_inputs)
+        if body['factory_inputs']['inventory_sha256']!=inventory['digest']:
+            raise SecurityDataError('Factory input declaration belongs to another inventory')
     public = current_context()
     if public is not None:
         body['public_execution_sha256'] = canonical_digest(public)
@@ -214,7 +220,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
 
 
 def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                           package_pins=None) -> dict:
+                           package_pins=None, factory_inputs=None) -> dict:
     if not isinstance(profile, dict) or not isinstance(profile.get('created_at'), str):
         raise SecurityDataError('explicit public input profile is missing')
     from .security_data import _timestamp
@@ -228,7 +234,7 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     if 'python_source_pins' in profile and package_pins is None:
         raise SecurityDataError('source artifact pins must be reobserved before profile consumption')
     if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts, image_selection=image_selection,
-                                                               package_target=target,package_pins=package_pins):
+                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -314,13 +320,17 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         if observed_target is not None and any(dep['ecosystem']=='PyPI' for dep in inventory['dependencies']):
             from .security_python_target import source_pins, validate_target
             package_pins = source_pins(root,inventory,validate_target(observed_target))
+        factory_inputs=None
+        if observed_target is not None:
+            from .security_factory_inputs import declaration
+            factory_inputs=declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=tools)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
         with _preparation_step('source-binding'):
             before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
             with _preparation_step('profile-declaration'):
                 declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                         package_target=package_target,package_pins=package_pins)
+                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs)
                 if source_bindings(catalog):
                     refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
                     if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
@@ -329,7 +339,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             return declared
         with _preparation_step('profile-validation'):
             validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                   package_pins=package_pins)
+                                   package_pins=package_pins,factory_inputs=factory_inputs)
             if package_target is not None and profile.get('python_target') != package_target:
                 raise SecurityDataError('Python target differs from the current input profile')
             from .security_python_target import binding
@@ -361,6 +371,9 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                     bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, families=families,
                                           **python_options)
                     acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
+                    if python_binding is not None and 'factory_inputs' in python_binding:
+                        from .security_factory_inputs import prepare
+                        prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
                 with _preparation_step('image-artifacts'):
@@ -768,6 +781,10 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
     if profile is not None and 'python_source_pins' in profile:
         from .security_python_target import source_pins,validate_target
         package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
+    factory_inputs=None
+    if profile is not None and 'factory_inputs' in profile:
+        from .security_factory_inputs import declaration
+        factory_inputs=declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=tools)
     policy = _policy_digest(TRUSTED_ROOT)
     acquisitions = []
     checks = []
@@ -780,7 +797,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
             if profile is not None:
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
                                        'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                       package_pins=package_pins)
+                                       package_pins=package_pins,factory_inputs=factory_inputs)
             if refresh and inventory['images'] and image_artifacts is None:
                 raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations remain unqualified')
             def acquire(label, operation):
@@ -797,6 +814,9 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 if inventory['dependencies']:
                     def package_artifacts():
                         bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, **python_options)
+                        if python_binding is not None and 'factory_inputs' in python_binding:
+                            from .security_factory_inputs import prepare
+                            prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
                         return [{'kind': 'artifact-acquisition', 'status': 'fail' if bundle.get('gaps') else 'pass',
                                  'records': len(bundle.get('records', [])), 'gaps': bundle.get('gaps', [])}]
                     acquire('artifact-acquisition', package_artifacts)

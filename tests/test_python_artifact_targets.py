@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import inspect
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -24,6 +25,109 @@ MIT = json.loads((ROOT/'tests/fixtures/security-license-texts.json').read_bytes(
 
 
 class PythonArtifactTargetTests(unittest.TestCase):
+    def test_factory_fresh_output_uses_trusted_builder_and_rechecks_current_app_source(self):
+        from getzilla import security_factory_inputs as factory
+        from getzilla.security_artifacts import archive_inventory
+        dep,index,payload=self.fixture(tag='cp312-cp312-manylinux_2_17_x86_64')
+        checker=self.root/'checker'
+        (checker/'factory/runtime').mkdir(parents=True)
+        builder=b'owned trusted builder adapter fixture'
+        (checker/'factory/runtime/build_offline_release.py').write_bytes(builder)
+        (checker/'factory/runtime/setup_manager.py').write_bytes(b'owned trusted helper')
+        profile=dict(profile=factory.PROFILE,distribution='redistributed',lock_sha256='1'*64,
+            wheel_inventory_sha256='2'*64,builder_sha256=hashlib.sha256(builder).hexdigest())
+        app={'app/getzilla_factory/__init__.py':b'owned current source'}
+        selected=dict(dep,manifest='factory/uv.lock',usage='runtime',artifact_filename=index['urls'][0]['filename'],
+            artifact_sha256=hashlib.sha256(payload).hexdigest(),artifact_source=index['urls'][0]['url'],
+            distribution='redistributed',delivery_kind='factory-offline-archive',source_use_sha256=['3'*64])
+        declared=dict(schema_version=1,profile=factory.PROFILE,policy_profile=profile,inventory_sha256='a'*64,product_version='0.1.0',
+            dependencies=[selected],app_members_sha256=factory.digest({k:dict(size=len(v),sha256=hashlib.sha256(v).hexdigest()) for k,v in app.items()}))
+        binding=dict(source={'head_sha':'a'*40},run={'diagnostic':'owned'},factory_inputs=declared)
+        policy=licenses._policy(dict(schema_version=1,project_repository='github.com/Dimkox/Getzilla',
+            auto_allow=['MIT'],usage_distribution={},factory_offline_profile=profile))
+        artifacts_root=self.root/'artifacts'
+        artifacts_root.mkdir()
+        (artifacts_root/'manifest.json').write_text(json.dumps(dict(records=[])))
+        tools=self.root/'tools'
+        tools.mkdir()
+        environment={**factory.MARKERS,'python_full_version':'3.12.3'}
+        calls=[]
+        def command(argv,stage):
+            calls.append(argv)
+            self.assertEqual(Path(argv[5]).read_bytes(),builder)
+            self.assertNotIn(str(self.root/'candidate/factory/runtime/build_offline_release.py'),argv)
+            if argv[-1]=='--describe-target':
+                return dict(environment=environment,pointer_bits=64,releaselevel='final')
+            self.assertEqual(argv[argv.index('--expected-head')+1],'a'*40)
+            self.assertNotIn('--no-enforce-host',argv)
+            stem=Path(argv[argv.index('--output')+1])
+            entries=dict(app)
+            with zipfile.ZipFile(io.BytesIO(payload)) as wheel:
+                entries.update({'site-packages/'+name:wheel.read(name) for name in wheel.namelist()})
+            archive=Path(str(stem)+'.zip')
+            with zipfile.ZipFile(archive,'w') as output:
+                for name,raw in entries.items():
+                    output.writestr(name,raw)
+            members=archive_inventory(archive.read_bytes(),archive.name)
+            manifest=Path(str(stem)+'.manifest.json')
+            manifest.write_text(json.dumps(dict(schema_version='factory-release/v1',profile='factory-python',product_version='0.1.0',
+                files=[dict(path=k,**v,mode=0o644) for k,v in members.items()])))
+            ah=hashlib.sha256(archive.read_bytes()).hexdigest()
+            mh=hashlib.sha256(manifest.read_bytes()).hexdigest()
+            sidecar=Path(str(stem)+'.sha256')
+            sidecar.write_text(f'{ah}  {archive.name}\n{mh}  {manifest.name}\n')
+            return dict(archive=str(archive),manifest=str(manifest),sidecar=str(sidecar),archive_sha256=ah,
+                manifest_sha256=mh,source_head='a'*40,profile=factory.PROFILE,target_environment=environment,host_enforced=True)
+        def fetch(url,*,maximum):
+            return json.dumps(index).encode() if url==artifacts.pypi_index_url('owned','1.0') else payload
+        with mock.patch.object(factory,'_command',side_effect=command),mock.patch.object(licenses,'load_policy',return_value=policy):
+            result=factory.prepare(self.root/'candidate',artifacts_root,tools,binding,checker,now=NOW,fetch=fetch)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(len(result['inventory']['dependencies']),1)
+        value=licenses.evaluate_artifacts(result['inventory'],result['root'],policy,now=NOW)
+        self.assertEqual(value['status'],'pass',value['gaps'])
+        substituted=copy.deepcopy(binding)
+        substituted['source']['head_sha']='b'*40
+        with self.assertRaises(artifacts.ArtifactError):
+            factory.verify(artifacts_root,substituted,policy,now=NOW,checker=checker)
+        # Current output must contain current app bytes, independently of WHEEL composition.
+        output_path=result['root']/'factory-output.zip'
+        with zipfile.ZipFile(output_path) as current:
+            entries={name:current.read(name) for name in current.namelist()}
+        entries['app/getzilla_factory/__init__.py']=b'older different source'
+        with zipfile.ZipFile(output_path,'w') as output:
+            for name,raw in entries.items():
+                output.writestr(name,raw)
+        with self.assertRaises(artifacts.ArtifactError) as error:
+            factory.verify(artifacts_root,binding,policy,now=NOW,checker=checker)
+        self.assertEqual(error.exception.code,'artifact-factory-source-output')
+
+    def test_acquisition_shared_budget_cannot_be_raised_or_reset_by_factory_namespace(self):
+        self.assertIn('byte_budget',inspect.signature(acquisition.acquire_pypi).parameters)
+        dep,index,payload=self.fixture(tag='py3-none-any')
+        def fetch(url,*,maximum):
+            return json.dumps(index).encode() if url==artifacts.pypi_index_url('owned','1.0') else payload
+        for budget in (True,0,acquisition.MAX_BATCH_BYTES+1,len(payload)):
+            with self.subTest(budget=budget),self.assertRaises(artifacts.ArtifactError):
+                acquisition.acquire_pypi([dep],self.root/str(budget),inventory_digest='a'*64,
+                    fetch=fetch,now=NOW,byte_budget=budget)
+
+    def test_named_factory_target_is_independent_and_checks_actual_internal_tags(self):
+        self.assertIsNotNone(importlib.util.find_spec('getzilla.security_factory_inputs'),
+            'missing independently source-bound Factory input observer')
+        from getzilla import security_factory_inputs as factory
+        dep,index,payload=self.fixture(tag='cp312-cp312-manylinux_2_17_x86_64')
+        selected=dict(dep,artifact_filename=index['urls'][0]['filename'],
+            artifact_sha256=hashlib.sha256(payload).hexdigest(),artifact_source=index['urls'][0]['url'])
+        self.assertEqual(factory.verify_wheel(selected,payload), ['cp312-cp312-manylinux_2_17_x86_64'])
+        _,_,bad=self.fixture(tag='cp312-cp312-manylinux_2_17_x86_64',wheel_tag='cp313-cp313-manylinux_2_17_x86_64')
+        with self.assertRaises(artifacts.ArtifactError):
+            factory.verify_wheel(selected,bad)
+        dep,index,payload=self.fixture(tag='cp313-cp313-manylinux_2_17_x86_64')
+        selected.update(artifact_filename=index['urls'][0]['filename'],artifact_sha256=hashlib.sha256(payload).hexdigest())
+        with self.assertRaises(artifacts.ArtifactError):
+            factory.verify_wheel(selected,payload)
+
     def setUp(self):
         effects = ExitStack()
         self.addCleanup(effects.close)
