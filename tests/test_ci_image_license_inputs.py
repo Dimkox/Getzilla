@@ -442,7 +442,11 @@ class CIImageTargetBindingTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertTrue(calls[0][2]["offline_control"])
         self.assertGreater(budget.totals["unpacked"], 0)
-        with patch.object(builder, "build", return_value=object()):
+        def foreign_completion(*args, **kwargs):
+            build(*args, **kwargs)
+            return object()
+
+        with patch.object(builder, "build", side_effect=foreign_completion):
             with self.assertRaises(ValueError):
                 api.observe_base(builder, consumer["base"], fixture.root, budget)
         with self.assertRaises(ValueError):
