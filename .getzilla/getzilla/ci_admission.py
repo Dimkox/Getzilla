@@ -356,7 +356,8 @@ def _reobserve_scope(root,directory,record,run_id,attempt):
     if len(raw)>2*1024*1024:
         raise ValueError('Selected-run source declaration exceeds its finite budget')
     inputs=json.loads(raw,object_pairs_hook=_pairs)
-    observed=declaration_expectation(root,root,inputs,source,run,now=datetime.now(timezone.utc),scratch=directory)
+    observed=declaration_expectation(root,root,inputs,source,run,now=datetime.now(timezone.utc),scratch=directory,
+        checker_revision=checker)
     if record.get('scope_expectation')!=observed:
         raise ValueError('Stored selected-run condition set differs from source reobservation')
     return _ScopeExpectation(observed,_SCOPE_SEAL)

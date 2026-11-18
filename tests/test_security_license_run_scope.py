@@ -21,6 +21,49 @@ NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
 
 
 class SelectedRunLicenseTests(unittest.TestCase):
+    def test_family_provider_join_keeps_full_inventory_records_and_one_budget_owner(self):
+        inventory=dict(digest='a'*64,tools=[dict(kind='github-action'),dict(kind='release-tool')])
+        old=dict(kind='image')
+        action_record=dict(kind='action')
+        actions=dict(records=[action_record],source_inventory=inventory,bound_bytes=123,record_bytes=45)
+        release=dict(records=[],frontiers=[dict(path='owned')],bound_bytes=67)
+        with mock.patch('getzilla.security_release_tool_inputs.prepare',return_value=release) as raw, \
+                mock.patch('getzilla.security_action_inputs.prepare_actions',return_value=actions) as node:
+            records,providers=cli._prepare_families(inventory,self.root,self.root/'tools',[old],now=NOW)
+        self.assertEqual(records,[old,action_record])
+        raw.assert_called_once_with(inventory,self.root,self.root/'tools',now=NOW)
+        node.assert_called_once_with(inventory,self.root,now=NOW)
+        self.assertEqual(providers,dict(schema_version=1,providers=[
+            dict(kind='opengrep-release-v1',frontiers=release['frontiers']),
+            dict(kind='github-action-source-v1',report=actions)]))
+        error=licenses.ArtifactError('artifact-action-origin','PRIVATE_MARKER')
+        with mock.patch('getzilla.security_action_inputs.prepare_actions',side_effect=error),self.assertRaises(licenses.ArtifactError):
+            cli._prepare_families(dict(tools=[dict(kind='github-action')]),self.root,self.root/'tools',None,now=NOW)
+        self.assertEqual(cli._preparation_fault(error),dict(stage='action-source',error_kind='artifact',
+            error_code='artifact-action-origin',errno=None))
+
+    def test_checker_provisioned_tools_stay_mandatory_with_an_explicit_runtime_tcb(self):
+        module=self.module()
+        paths={'.getzilla/getzilla/security_acquisition.py':"TRIVY_VERSION='1.2.3'\nTRIVY_ARCHIVE_SHA256='"+'a'*64+"'\n",
+            '.getzilla/getzilla/security_image_provision.py':"VERSION='4.5.6'\nARCHIVE_SHA256='"+'b'*64+"'\n"}
+        for path,text in paths.items():
+            named=self.root/path
+            named.parent.mkdir(parents=True,exist_ok=True)
+            named.write_text(text,encoding='utf-8')
+        tools=module.checker_tools(self.root)
+        self.assertEqual(set(tools),{'checker-tool:trivy:'+'a'*64,'checker-tool:buildkit:'+'b'*64})
+        host,future,inactive,inv,source,run,binding=self.fixture()
+        context=self.live(inv,source,run,binding,checker_tool_conditions=tools)
+        self.catalog(host,inv,binding)
+        result=licenses.evaluate_artifacts(inv,self.root,POLICY,now=NOW,target_binding=binding,run_context=context)
+        self.assertEqual(result['selected_run']['status'],'fail-for-selected-run')
+        self.assertEqual(sum(gap['code']=='required-checker-tool-unverified' for gap in result['selected_run']['gaps']),2)
+        self.assertTrue(result['selected_run']['tcb_assumptions'])
+        named=self.root/'.getzilla/getzilla/security_image_provision.py'
+        named.write_text(paths['.getzilla/getzilla/security_image_provision.py']+"VERSION='4.5.7'\n",encoding='utf-8')
+        with self.assertRaises(Exception):
+            module.checker_tools(self.root)
+
     def test_aggregate_reobserves_a_self_consistent_smaller_manifest_scope(self):
         from getzilla import ci_admission as admission
         checker='c'*40
@@ -80,7 +123,8 @@ class SelectedRunLicenseTests(unittest.TestCase):
         inputs=dict(schema_version=1,profile=profile,inventory=inv,selection=None,catalog=None)
         with mock.patch('getzilla.security_inventory.declared_inventory',return_value=inv), \
                 mock.patch('getzilla.security_cli._policy_digest',return_value='f'*64), \
-                mock.patch('getzilla.security_licenses.load_policy',return_value=POLICY):
+                mock.patch('getzilla.security_licenses.load_policy',return_value=POLICY), \
+                mock.patch.object(module,'checker_tools',return_value={}):
             expected=module.declaration_expectation(self.root,self.root,inputs,source,run,now=NOW,scratch=self.root)
             self.assertEqual(expected['claim']['required_ids'],['host:'+target.digest(target._subject(host))])
             for variant in ('inventory','pins','source','profile'):
@@ -276,7 +320,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 module.activate(self.root, wrong, _entry=producer._LICENSE_ENTRY)
 
-    def live(self, inv, source, run, binding):
+    def live(self, inv, source, run, binding,*,checker_tool_conditions=None):
         module = self.module()
         guard = object()
         state = dict(
@@ -290,6 +334,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             license_entry=producer._LICENSE_ENTRY,
             license_binding=copy.deepcopy(binding),
             license_profile=dict(profile_sha256=binding["profile_sha256"], source=source),
+            license_checker_tools=dict(checker_tool_conditions or {}),
         )
         effects = mock.patch.multiple(producer, _LIVE=state)
         effects.start()

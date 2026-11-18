@@ -521,7 +521,8 @@ def _pipeline(request, volume, builder):
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
             from .security_license_scope import activate
-            license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
+            with cli._preparation_step('license-run-scope'):
+                license_inputs=activate(root,profile,_entry=_LICENSE_ENTRY)
             license_inputs.update(selection=selection,catalog=catalog)
             cli._atomic(Path(request['report']).parent/'security-run-inputs.json',canonical(license_inputs))
             cli._atomic(Path(request['profile']), canonical(profile))

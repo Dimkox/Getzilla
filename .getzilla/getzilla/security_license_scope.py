@@ -2,13 +2,59 @@
 from __future__ import annotations
 
 import json
+import ast
+import hashlib
 from pathlib import Path
+import re
+import subprocess
 
 from .security_artifacts import ArtifactError
 from .security_python_target import digest,_subject,_pin_for
 
 _SEAL=object()
 _HOST={'.getzilla/config/python-test-requirements.txt','.getzilla/config/python-quality-requirements.txt'}
+_TOOL_SOURCES=(('trivy','.getzilla/getzilla/security_acquisition.py','TRIVY_VERSION','TRIVY_ARCHIVE_SHA256'),
+    ('buildkit','.getzilla/getzilla/security_image_provision.py','VERSION','ARCHIVE_SHA256'))
+_TCB_ASSUMPTIONS=['Host OS, kernel, interpreter and CI-provider runtime are the external verification TCB; '
+    'their artifact licenses and the entire GitHub provider are outside this selected artifact claim.']
+
+
+def checker_tools(checker,*,revision=None):
+    """Read two fixed checker pins as bounded literals, never execute another revision."""
+    from .security_artifacts import read_file
+    output={}
+    for role,path,version_name,sha_name in _TOOL_SOURCES:
+        if revision is None:
+            raw=read_file(checker,path,65536)
+        else:
+            if not re.fullmatch('[0-9a-f]{40}',revision):
+                _refuse()
+            reference=revision+':'+path
+            size=int(subprocess.run(['git','cat-file','-s',reference],cwd=checker,capture_output=True,check=True,timeout=15).stdout)
+            if not 0<size<=65536:
+                _refuse()
+            raw=subprocess.run(['git','show',reference],cwd=checker,capture_output=True,check=True,timeout=15).stdout
+            if len(raw)!=size:
+                _refuse()
+        values={}
+        try:
+            nodes=ast.parse(raw).body
+        except (SyntaxError,ValueError,TypeError):
+            _refuse()
+        for node in nodes:
+            if isinstance(node,ast.Assign):
+                for name in node.targets:
+                    if isinstance(name,ast.Name) and name.id in {version_name,sha_name}:
+                        if name.id in values or not isinstance(node.value,ast.Constant) or type(node.value.value) is not str:
+                            _refuse()
+                        values[name.id]=node.value.value
+        version,sha=values.get(version_name),values.get(sha_name)
+        if (type(version) is not str or not re.fullmatch(r'[0-9]+(?:\.[0-9]+){2}',version)
+                or type(sha) is not str or not re.fullmatch('[0-9a-f]{64}',sha)):
+            _refuse()
+        output['checker-tool:'+role+':'+sha]=dict(kind='checker-tool',role=role,version=version,
+            archive_sha256=sha,source_path=path,source_sha256=hashlib.sha256(raw).hexdigest())
+    return output
 
 
 def _refuse():
@@ -50,6 +96,8 @@ def activate(root,profile,*,_entry=None):
     state['license_profile']=json.loads(json.dumps(profile))
     state['license_scope']=None
     state['license_results']={}
+    from .security_tools import TRUSTED_ROOT
+    state['license_checker_tools']=checker_tools(TRUSTED_ROOT)
     return dict(schema_version=1,profile=json.loads(json.dumps(profile)),inventory=json.loads(json.dumps(inventory)))
 
 
@@ -67,9 +115,9 @@ def current(root,inventory,binding):
     return scope
 
 
-def requirements(inventory,binding):
+def requirements(inventory,binding,*,checker_tool_conditions=None):
     """Pure applicability from reobserved declarations; this grants no evidence."""
-    required,host,inactive={},[],[]
+    required,host,inactive=dict(checker_tool_conditions or {}),[],[]
     for dep in inventory['dependencies']:
         if dep.get('ecosystem')=='PyPI':
             pin=_pin_for(dep,binding)
@@ -102,10 +150,11 @@ class Scope:
         if seal is not _SEAL:
             _refuse()
         self.root,self.inventory,self.binding,self.state=Path(root),inventory,binding,state
-        self.required,self.host,self.inactive=requirements(inventory,binding)
+        self.required,self.host,self.inactive=requirements(inventory,binding,
+            checker_tool_conditions=state['license_checker_tools'])
         self.claim=dict(schema_version=1,kind='selected-native-security-run',source=binding['source'],run=binding['run'],
             profile_sha256=binding['profile_sha256'],inventory_sha256=inventory['digest'],
-            required_ids=sorted(self.required),overall_coverage_complete=False)
+            required_ids=sorted(self.required),overall_coverage_complete=False,tcb_assumptions=list(_TCB_ASSUMPTIONS))
         self.claim['context_sha256']=digest(self.claim)
         self.begin()
 
@@ -213,7 +262,7 @@ def validate_result(value,*,profile=None,inventory_sha256=None,now=None,diagnost
         return False
 
 
-def declaration_expectation(root,checker,inputs,source,run,*,now,scratch):
+def declaration_expectation(root,checker,inputs,source,run,*,now,scratch,checker_revision=None):
     """Reobserve source applicability outside the native job; never restore its seals."""
     from .security_cli import _profile_declaration,validate_selection_authority,_policy_digest
     from .security_inventory import declared_inventory
@@ -281,9 +330,9 @@ def declaration_expectation(root,checker,inputs,source,run,*,now,scratch):
         profile_sha256=profile['profile_sha256'],source_pins=pins,closure_graphs=graphs)
     if factory is not None:
         binding['factory_inputs']=factory
-    required,_,_=requirements(inventory,binding)
+    required,_,_=requirements(inventory,binding,checker_tool_conditions=checker_tools(checker,revision=checker_revision))
     claim=dict(schema_version=1,kind='selected-native-security-run',source=source,run=run,
         profile_sha256=profile['profile_sha256'],inventory_sha256=inventory['digest'],
-        required_ids=sorted(required),overall_coverage_complete=False)
+        required_ids=sorted(required),overall_coverage_complete=False,tcb_assumptions=list(_TCB_ASSUMPTIONS))
     claim['context_sha256']=digest(claim)
     return dict(claim=claim,conditions=required)

@@ -41,14 +41,17 @@ _PREPARATION_SEAL = object()
 _PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration', 'profile-validation',
     'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
     'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target',
-    'factory-target','factory-acquisition','factory-output'))
+    'factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source'))
 _PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory', 'os',
     'key', 'type', 'value', 'runtime', 'other'))
 _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'artifact-size',
     'artifact-identity', 'artifact-hash', 'artifact-inventory-binding', 'artifact-manifest',
     'artifact-path', 'artifact-platform', 'artifact-publication-uncertain', 'artifact-stale',
     'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'artifact-factory-input',
-    'artifact-factory-output', 'artifact-factory-source-output','license-run-scope-unavailable', 'other'))
+    'artifact-factory-output', 'artifact-factory-source-output','license-run-scope-unavailable',
+    'artifact-action-data','artifact-action-link','artifact-action-metadata','artifact-action-origin',
+    'artifact-action-selector','artifact-action-source-count','artifact-action-stale','artifact-action-transport',
+    'artifact-family-preparation','artifact-context','license-conflict','license-obligation-missing','license-transitive-coverage','other'))
 
 
 def _preparation_detail(value):
@@ -331,6 +334,25 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
                 'selected_run':selected} if selected is not None else {})}
 
 
+def _prepare_families(inventory,artifacts,tools,families,*,now=None):
+    """Acquire finite source data; the common catalog reader owns all charging."""
+    from .security_release_tool_inputs import prepare as prepare_release
+    from .security_action_inputs import prepare_actions
+    providers=[]
+    selected=list(families or [])
+    if any(row.get('kind')=='release-tool' for row in inventory['tools']):
+        with _preparation_step('release-tool-source'):
+            release=prepare_release(inventory,artifacts,tools,now=now)
+            providers.append(dict(kind='opengrep-release-v1',frontiers=release['frontiers']))
+            selected.extend(release['records'])
+    if any(row.get('kind')=='github-action' for row in inventory['tools']):
+        with _preparation_step('action-source'):
+            actions=prepare_actions(inventory,artifacts,now=now)
+            providers.append(dict(kind='github-action-source-v1',report=actions))
+            selected.extend(actions['records'])
+    return selected,dict(schema_version=1,providers=providers)
+
+
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
                    run=None, write_profile=False, refresh=False, provision=False, families=None, now=None, image_artifacts=None, image_selection=None,
                    package_target=None) -> dict:
@@ -416,8 +438,12 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                     acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
             if inventory['dependencies'] or inventory['tools'] or inventory['images']:
                 with _preparation_step('package-artifacts'):
+                    family_options={}
+                    if run_context is not None:
+                        families,preparation=_prepare_families(inventory,artifacts,tools,families,now=now)
+                        family_options={'family_preparation':preparation}
                     bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, families=families,
-                                          **python_options)
+                                          **python_options,**family_options)
                     acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
                     if python_binding is not None and 'factory_inputs' in python_binding:
                         from .security_factory_inputs import prepare
@@ -901,7 +927,12 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                     acquire('feed-acquisition', lambda: refresh_feeds(database, ecosystems, now=now))
                 if inventory['dependencies']:
                     def package_artifacts():
-                        bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, **python_options)
+                        family_options={}
+                        if run_context is not None:
+                            selected,preparation=_prepare_families(inventory,artifacts,tools,None,now=now)
+                            family_options=dict(families=selected,family_preparation=preparation)
+                        bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now,
+                            **python_options,**family_options)
                         if python_binding is not None and 'factory_inputs' in python_binding:
                             from .security_factory_inputs import prepare
                             prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
