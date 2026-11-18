@@ -5,7 +5,7 @@ never restores it. The existing OCI importer independently checks every graph.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import hashlib
 import gzip
 import io
@@ -27,6 +27,7 @@ from .security_oci import LIMITS, active_limits, INDEX, MANIFEST, OCIError, cano
 
 _LIVE = None
 _PHASE = 'opening'
+_MEMBER_SEAL = object()
 
 
 def require_builds(inventory, source, run):
@@ -72,10 +73,23 @@ def ci_use_observations(root,inventory,source,run,graphs):
             continue
         if hashlib.sha256(read_file(root,recipe,4*1024*1024)).hexdigest()!=proof[recipe]:
             raise BackendUnavailable('current CI consumer source changed')
-        consumers.append(dict(recipe=recipe,recipe_sha256=row['recipe_sha256'],build_sha256=row['build_sha256'],
+        consumer = dict(recipe=recipe,recipe_sha256=row['recipe_sha256'],build_sha256=row['build_sha256'],
             image=_LIVE['builds'][row['build_sha256']],requirements=requirements,
             requirements_sha256=proof[requirements],distribution='internal',purpose='isolated-public-ci',
-            image_target_observed=False))
+            image_target_observed=False)
+        observed = _LIVE.get('base_targets',{}).get(row['recipe_sha256'])
+        if observed is not None:
+            from .security_python_target import source_pins
+            consumer.update(image_target_observed=True,base=observed['base'],target=observed['target'],
+                supported_tags=observed['supported_tags'],site_packages=observed['site_packages'],
+                base_observation={key:observed[key] for key in ('observer_manifest','observer_config','observer_recipe_sha256')
+                                  if key in observed},
+                source_pins=source_pins(root,inventory,observed['target']),
+                dependencies=[dict(dep) for dep in inventory['dependencies'] if dep.get('ecosystem')=='PyPI'
+                    and (dep.get('manifest')==requirements or dep.get('manifest')=='trust-ci/pyproject.toml'
+                         and (dep.get('usage')=='runtime' or dep.get('usage')=='optional'
+                              and requirements=='trust-ci/requirements-test.txt'))])
+        consumers.append(consumer)
     subjects={}
     for dep in inventory['dependencies']:
         if dep.get('ecosystem')!='PyPI':
@@ -104,6 +118,35 @@ def validate_ci_uses(value,source,run):
             or _LIVE['source']!=source or _LIVE['run']!=run or _LIVE.get('ci_uses')!=value):
         raise BackendUnavailable('current CI use observation cannot be restored from declarations')
     return json.loads(json.dumps(value))
+
+
+def ci_member_evidence(value,source,run,index,paths):
+    from .security_oci import read_members, scanner_identity
+    uses=validate_ci_uses(value,source,run)
+    if type(index) is not int or not 0<=index<len(uses['consumers']):
+        raise BackendUnavailable('CI installation consumer is missing')
+    consumer=uses['consumers'][index]
+    image=_LIVE.get('images',{}).get(consumer['image'])
+    if image is None or image.reference!=consumer['image'] or consumer.get('image_target_observed') is not True:
+        raise BackendUnavailable('CI installation image proof is missing')
+    facts=_LIVE.setdefault('member_facts',{})
+    fact=facts.get(consumer['image'])
+    valid=type(fact) is tuple and len(fact)==3 and fact[0] is _MEMBER_SEAL and fact[1] is image
+    previous=fact[2] if valid else {}
+    # Reuse decoded data only after fresh hashes of the entire actual graph.
+    # No saved JSON can produce the seal or the live imported image object.
+    if valid:
+        scanner_identity(dict(Metadata=dict(ImageID=image.config_digest)),image)
+    missing=[path for path in paths if path not in previous]
+    if missing:
+        current=read_members(image,missing)
+        retained=_LIVE.get('member_fact_bytes',0)+sum(len(body) for body in current.values())
+        if retained>16*1024*1024:
+            raise BackendUnavailable('CI installation evidence exceeds retained byte bound')
+        previous={**previous,**current}
+        facts[consumer['image']]=(_MEMBER_SEAL,image,previous)
+        _LIVE['member_fact_bytes']=retained
+    return {path:previous[path] for path in paths}
 
 
 def _write(root, relative, raw):
@@ -301,12 +344,25 @@ def produce(root, source, run, volume, builder):
     for digest, raw in registry.blobs.items():
         _write(layout, 'blobs/sha256/' + digest[7:], raw)
     del registry.blobs
+    from .security_oci import _Budget
+    shared_budget=_Budget(dict(active_limits(),images=[],platform='linux/amd64'))
+    shared_budget.deadline=min(shared_budget.deadline,deadline)
+    base_targets,observed_bases={},{}
     completed, by_service, by_recipe = {}, {}, {}
     if builder.deadline > deadline:
         builder.deadline = deadline
     for recipe in build_inventory['builds']:
             identity = recipe['recipe_sha256']
             if identity not in by_recipe:
+                from .security_tools import TRUSTED_ROOT
+                from .security_ci_inputs import observe_base
+                base=recipe['arguments'].get('PYTHON_BASE_IMAGE')
+                if (recipe['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test'}
+                        and base==resolved[ci['python']['reference']][0]
+                        and read_file(root,recipe['dockerfile'],4*1024*1024)==read_file(TRUSTED_ROOT,recipe['dockerfile'],4*1024*1024)):
+                    if base not in observed_bases:
+                        observed_bases[base]=observe_base(builder,base,volume,shared_budget)
+                    base_targets[identity]=observed_bases[base]
                 descriptor = _build_recipe(root, recipe, volume, layout, builder)
                 reference = 'getzilla.local/build-' + identity + '@' + descriptor['digest']
                 roots[reference] = descriptor
@@ -334,21 +390,22 @@ def produce(root, source, run, volume, builder):
     profile = dict(active_limits(), images=sorted(roots), platform='linux/amd64')
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
-    with import_layouts(catalog, inventory, profile, volume):
-        pass
-    from .public_security_context import selection_document, project_catalog
-    from .security_cli import _clock
-    selection = selection_document(inventory, source, run, _clock().isoformat())
-    declared = declared_inventory(root, selection)
-    catalog = project_catalog(catalog, declared['digest'])
-    from . import security_image_backend as native
-    _LIVE = dict(source=source, run=run, builds=completed,native_guard=native._GUARD,
-        build_inputs=json.loads(json.dumps(declared['builds'])))
-    try:
-        require_builds(declared, source, run)
-        yield selection, catalog
-    finally:
-        _LIVE = None
+    with ExitStack() as verified:
+        imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget))
+        from .public_security_context import selection_document, project_catalog
+        from .security_cli import _clock
+        selection = selection_document(inventory, source, run, _clock().isoformat())
+        declared = declared_inventory(root, selection)
+        catalog = project_catalog(catalog, declared['digest'])
+        from . import security_image_backend as native
+        _LIVE = dict(source=source, run=run, builds=completed,native_guard=native._GUARD,
+            build_inputs=json.loads(json.dumps(declared['builds'])),base_targets=base_targets,
+            images={image.reference:image for image in imported})
+        try:
+            require_builds(declared, source, run)
+            yield selection, catalog
+        finally:
+            _LIVE = None
 
 
 def _event(stage):

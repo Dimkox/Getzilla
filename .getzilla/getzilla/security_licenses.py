@@ -502,7 +502,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             if target_binding['inventory_sha256'] != inventory.get('digest'):
                 raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
             result['python_target_scope'] = {'target':target_binding['target'],
-                'assurance':'current-interpreter-only; no unobserved target or final-delivery credit'}
+                'assurance':('one observed CI installation; no final runtime integrity claim' if 'ci_consumer' in target_binding
+                    else 'current-interpreter-only; no unobserved target or final-delivery credit')}
             if 'ci_uses' in target_binding:
                 result['observed_ci_uses']=target_binding['ci_uses']
             if policy.get('factory_offline_profile') and 'factory_inputs' not in target_binding and any(
@@ -546,6 +547,21 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 'assurance':'named Factory output only; original source uses remain separate'}
             result['details'].extend(output['details'])
             result['gaps'].extend(output['gaps'])
+        ci_proved={}
+        if target_binding is not None and 'ci_uses' in target_binding and 'ci_consumer' not in target_binding:
+            from .security_ci_inputs import verify as verify_ci
+            result['ci_installations']=[]
+            for index,consumer in enumerate(target_binding['ci_uses']['consumers']):
+                if consumer.get('image_target_observed') is not True:
+                    continue
+                auxiliary=verify_ci(artifacts,target_binding,index,policy,now=now)
+                from .security_python_target import digest as subject_digest, _subject
+                ci_proved[index]={subject_digest(_subject(dep)) for dep in auxiliary['inventory']['dependencies']}
+                output=evaluate_artifacts(auxiliary['inventory'],auxiliary['root'],policy,now=now,target_binding=auxiliary['binding'])
+                result['ci_installations'].append(dict(image=consumer['image'],status=output['status'],
+                    source_evidence=output.get('source_evidence'),assurance='isolated CI installation only; original scopes remain'))
+                result['details'].extend(output['details'])
+                result['gaps'].extend(output['gaps'])
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
             try:
@@ -601,7 +617,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     if target_binding and 'source_pins' in target_binding and not target_binding['source_pins'][observed['subject_sha256']]['marker_active']:
                         raise ArtifactError('artifact-target-use-unobserved', 'this source marker requires a separately observed target; current input bytes grant no other-target use credit')
                     ci=target_binding.get('ci_uses',{})
-                    if observed.get('subject_sha256') in ci.get('subjects',{}):
+                    if ('ci_consumer' not in target_binding and observed.get('subject_sha256') in ci.get('subjects',{})
+                            and not all(observed['subject_sha256'] in ci_proved.get(index,set())
+                                for index in ci['subjects'][observed['subject_sha256']])):
                         # Existing #323 internal CI decision applies to this actual consumer only.
                         # The original production/customer source-use row remains separate above.
                         ci_image_target_gap=True
@@ -629,6 +647,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     final_wheel=dep['ecosystem']=='PyPI' and record['filename'].endswith('.whl'))
                 custody = None
                 context = dep.get('delivery_context')
+                if target_binding is not None and 'ci_consumer' in target_binding:
+                    from .security_ci_inputs import verify_custody
+                    custody=verify_custody(target_binding,dep,files,[item['path'] for item in license_files+notice_files])
                 if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:
                     raise ArtifactError('license-obligation-missing', 'offline archive requires actual final output and composition evidence')
                 if context in deliveries:
@@ -787,6 +808,17 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             total+=auxiliary['projection']['payload_size']
             if total>512*1024*1024:
                 raise ArtifactError('artifact-size','catalog and Factory output exceed the shared aggregate byte budget')
+        if target_binding is not None and 'ci_uses' in target_binding and 'ci_consumer' not in target_binding:
+            from .security_ci_inputs import verify as verify_ci
+            binding['ci_installations']=[]
+            for index,consumer in enumerate(target_binding['ci_uses']['consumers']):
+                if consumer.get('image_target_observed') is not True:
+                    continue
+                auxiliary=verify_ci(artifacts,target_binding,index,selected_policy,now=now)
+                binding['ci_installations'].append(auxiliary['projection'])
+                total+=auxiliary['projection']['payload_size']
+                if total>512*1024*1024:
+                    raise ArtifactError('artifact-size','CI installations exceed the shared package byte budget')
         if target_binding is not None and 'ci_uses' in target_binding:
             from .security_python_target import digest as python_digest
             binding['ci_use_observation_sha256']=python_digest(target_binding['ci_uses'])

@@ -85,7 +85,7 @@ def binding(profile):
 
 
 def _binding(value):
-    if (type(value) is not dict or set(value)-{'source_pins','factory_inputs','closure_graphs','ci_uses'} != {'target','source','run','inventory_sha256','profile_sha256'}):
+    if (type(value) is not dict or set(value)-{'source_pins','factory_inputs','closure_graphs','ci_uses','ci_consumer'} != {'target','source','run','inventory_sha256','profile_sha256'}):
         _refuse()
     if 'source_pins' in value:
         validate_source_pins(value['source_pins'])
@@ -96,7 +96,7 @@ def _binding(value):
     if 'ci_uses' in value:
         from .security_image_producer import validate_ci_uses
         validate_ci_uses(value['ci_uses'],value['source'],value['run'])
-        if (value['ci_uses']['inventory_sha256']!=value['inventory_sha256']
+        if 'ci_consumer' not in value and (value['ci_uses']['inventory_sha256']!=value['inventory_sha256']
                 or value['ci_uses']['closure_graphs_sha256']!=digest(value.get('closure_graphs'))):
             _refuse()
     if 'factory_inputs' in value:
@@ -104,7 +104,11 @@ def _binding(value):
         declared=validate_declaration(value['factory_inputs'])
         if declared['inventory_sha256']!=value['inventory_sha256']:
             _refuse()
-    validate_target(value['target'])
+    if 'ci_consumer' in value:
+        from .security_ci_inputs import validate_binding
+        validate_binding(value)
+    else:
+        validate_target(value['target'])
     source, run = value['source'], value['run']
     hashes = ('head_sha','tree_sha','checker_sha','checker_tree_sha')
     if (type(source) is not dict or set(source) != set(hashes)|{'candidate_clean','checker_clean','same_project'}
@@ -327,7 +331,11 @@ def _python_compatible(value, version):
 
 def select_dependency(index, dependency, expected):
     _binding(expected)
-    _, tags = _facts()
+    if 'ci_consumer' in expected:
+        from .security_ci_inputs import target_facts
+        _, tags = target_facts(expected)
+    else:
+        _, tags = _facts()
     ranks = {tag: index for index,tag in enumerate(tags)}
     urls = index.get('urls')
     if type(urls) is not list or len(urls) > 8192:
@@ -375,7 +383,11 @@ def observation(value):
 
 def wheel_observation(filename, files, expected, *, dependency=None):
     _binding(expected)
-    _, supported = _facts()
+    if 'ci_consumer' in expected:
+        from .security_ci_inputs import target_facts
+        _, supported = target_facts(expected)
+    else:
+        _, supported = _facts()
     _, _, filename_tags = _filename(filename)
     names = [name for name in files if name.endswith('.dist-info/WHEEL') and name.count('/') == 1]
     metadata = [name for name in files if name.endswith('.dist-info/METADATA') and name.count('/') == 1]
@@ -406,6 +418,21 @@ def verify_record(record, payload, expected, *, files=None, dependency=None):
     claimed = observation(record.get('python_target'))
     if hashlib.sha256(payload).hexdigest() != record.get('sha256'):
         _refuse()
+    if 'ci_consumer' in expected:
+        from .security_ci_inputs import scope
+        inventory, _ = scope(expected, expected['ci_consumer'])
+        matches = [dep for dep in inventory['dependencies'] if digest(_subject(dep)) == claimed.get('subject_sha256')
+                   and artifact_context(dep) == record.get('context')]
+        if len(matches) != 1 or dependency is not None and dependency != matches[0]:
+            _refuse()
+        pin = _pin_for(matches[0], expected)
+        if not _allowed_pin(pin,record['filename'],record['sha256'],record['origin']['artifact_url']):
+            _refuse()
+        measured = wheel_observation(record['filename'],archive_files(payload,record['filename']) if files is None else files,
+                                     expected,dependency=matches[0])
+        if claimed != measured:
+            _refuse()
+        return measured
     if 'source_pins' in expected:
         key=claimed.get('subject_sha256')
         pin=expected['source_pins'].get(key)
