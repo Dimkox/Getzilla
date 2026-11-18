@@ -6,6 +6,7 @@ import sys
 import unittest
 from unittest.mock import patch
 from tests import test_offline_oci_import as fixtures
+
 INDEX, MANIFEST, CONFIG = fixtures.INDEX, fixtures.MANIFEST, fixtures.CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,8 +34,8 @@ class OpaqueAttestationGraphTests(unittest.TestCase):
             config_value["rootfs"]["diff_ids"] = ["sha256:" + "e" * 64]
         if mutation == "platform":
             config_value["architecture"] = "amd64"
-        if mutation == 'foreign-media':
-            layer['mediaType'] = 'application/octet-stream'
+        if mutation == "foreign-media":
+            layer["mediaType"] = "application/octet-stream"
         cfg = fixture.blob(config_value, CONFIG)
         manifest = fixture.blob({"schemaVersion": 2, "mediaType": MANIFEST, "config": cfg, "layers": [layer]}, MANIFEST)
         desc = {

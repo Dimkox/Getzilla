@@ -2103,9 +2103,17 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue(receipt.is_file())
             from getzilla.verification_plan import report_gaps
             self.assertEqual(report_gaps(root, report), [])
+            previous_receipt = receipt.read_bytes()
             fast = verify(root, mode='fast', record=False)
             self.assertEqual(fast['status'], 'fail', 'a full task cannot qualify with fast evidence')
-            self.assertIn('required-qualifying-mode', {item['code'] for item in _check(fast, 'quality-gate')['details']})
+            self.assertIsInstance(fast['required_plan'], dict)
+            self.assertEqual({item['code'] for item in _check(fast, 'quality-gate')['details']},
+                             {'required-plan-unavailable'})
+            # Receipt qualification owns the explicit full-lane mode rule;
+            # the dispatch gate separately requires a matching final binding.
+            self.assertEqual({item['code'] for item in report_gaps(root, fast)}, {'required-qualifying-mode'})
+            self.assertEqual(receipt.read_bytes(), previous_receipt)
+
 
 
     def test_parent_contract_factory_postgres_exit_outer_timeout_exceeds_bounded_inner_timeout(self) -> None:
