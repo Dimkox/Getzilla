@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 import hashlib
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -154,8 +155,8 @@ class BuildLifetimeControls(unittest.TestCase):
 
             def prune():
                 self.assertTrue((layout / "retained").is_file())
-                self.assertFalse(events[0][1].exists())
-                self.assertFalse(events[1][1].exists())
+                self.assertTrue(events[0][1].is_dir())
+                self.assertTrue(events[1][1].is_file())
                 events.append(("prune", None))
 
             builder.build, builder.prune = build, mock.Mock(side_effect=prune)
@@ -164,7 +165,7 @@ class BuildLifetimeControls(unittest.TestCase):
                     producer._build_recipe(root, recipe, volume, layout, builder), {"digest": "owned-descriptor"}
                 )
             self.assertEqual([x[0] for x in events], ["build", "copied", "prune"])
-            self.assertEqual(sorted(x.name for x in volume.iterdir()), ["oci"])
+            self.assertEqual(len(list(volume.glob('context-*'))), 1)
             for bad_export in (True, False):
                 with self.subTest(bad_export=bad_export):
                     builder.prune.reset_mock()
@@ -175,7 +176,7 @@ class BuildLifetimeControls(unittest.TestCase):
                         with self.assertRaises(backend.BackendUnavailable):
                             producer._build_recipe(root, recipe, volume, layout, builder)
                     builder.prune.assert_not_called()
-                    self.assertEqual(sorted(x.name for x in volume.iterdir()), ["oci"])
+                    self.assertTrue(events[0][1].is_dir())
 
     def test_context_name_replacement_refuses_foreign_cleanup(self):
         self.assertTrue(callable(getattr(producer, "_build_recipe", None)))
@@ -197,6 +198,40 @@ class BuildLifetimeControls(unittest.TestCase):
                     producer._build_recipe(volume, {}, volume, layout, builder)
             self.assertEqual(len(list(volume.glob("*/foreign-marker"))), 1)
             builder.prune.assert_not_called()
+
+    def test_late_cleanup_boundary_cannot_delete_a_replacement_recipe_root(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
+            volume = Path(raw)
+            layout = volume / 'oci'
+            layout.mkdir()
+            foreign = volume / 'foreign-canary'
+            foreign.mkdir()
+            marker = foreign / 'marker'
+            marker.write_bytes(b'foreign inert canary')
+            identity = foreign.stat()
+            contexts = []
+            def build(_recipe, context, archive):
+                contexts.append(context)
+                archive.write_bytes(b'owned model export')
+                return backend._ACTIVE
+            recursive = shutil.rmtree
+            def swap_at_recursive_call(name, **kwargs):
+                scope = volume / name
+                scope.rename(volume / 'original-held-root')
+                foreign.rename(scope)
+                return recursive(name, **kwargs)
+            builder = SimpleNamespace(build=build, prune=mock.Mock())
+            with mock.patch.object(producer, '_copy_context', side_effect=lambda _r, _s, path: path.mkdir()), \
+                    mock.patch.object(producer, '_unpack_export', return_value={'digest': 'owned'}), \
+                    mock.patch.object(shutil, 'rmtree', side_effect=swap_at_recursive_call) as deletion, \
+                    mock.patch.object(Path, 'unlink', side_effect=AssertionError('early path deletion denied')):
+                self.assertEqual(producer._build_recipe(volume, {}, volume, layout, builder), {'digest': 'owned'})
+                deletion.assert_not_called()
+            self.assertEqual(marker.read_bytes(), b'foreign inert canary')
+            self.assertEqual((foreign.stat().st_dev, foreign.stat().st_ino), (identity.st_dev, identity.st_ino))
+            self.assertTrue(contexts[0].is_dir(), 'original context stays until whole-job teardown')
+            self.assertEqual((contexts[0].parent / 'export.tar').read_bytes(), b'owned model export')
+            builder.prune.assert_called_once_with()
 
     def test_runner_installs_after_exact_inputs_and_preserves_final_runtime(self):
         statements = [value for _, value in _instructions((ROOT / "trust-ci/runner.Dockerfile").read_text())]

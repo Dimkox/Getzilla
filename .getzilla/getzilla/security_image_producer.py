@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import stat
 import sys
 import tarfile
@@ -150,7 +149,7 @@ def _copy_context(root, recipe, destination):
 
 
 def _build_recipe(root, recipe, volume, layout, builder):
-    """Retain the completed graph, then retire only this recipe's private state."""
+    """Retain the completed graph and private recipe state until job teardown."""
     from .security_oci import _Root
     held = _Root(volume)
     directory = None
@@ -167,23 +166,20 @@ def _build_recipe(root, recipe, volume, layout, builder):
             if builder.build(recipe, context, archive) is not _ACTIVE:
                 raise BackendUnavailable('build port did not prove actual owned process completion')
             descriptor = _unpack_export(archive, layout)
-            archive.unlink()
         finally:
             current = os.stat(name, dir_fd=held.fd, follow_symlinks=False)
             if ((current.st_dev, current.st_ino, current.st_uid) != (birth.st_dev, birth.st_ino, birth.st_uid)
                     or not stat.S_ISDIR(current.st_mode) or current.st_mode & 0o077):
-                raise BackendUnavailable('owned recipe directory identity changed; cleanup refused')
-            # The standard FD-based walker rejects child-link traversal. The held
-            # parent and same-birth check exclude foreign/replaced recipe roots.
-            if not shutil.rmtree.avoids_symlink_attacks:
-                raise BackendUnavailable('descriptor recipe cleanup unavailable')
-            shutil.rmtree(name, dir_fd=held.fd)
+                raise BackendUnavailable('owned recipe directory identity changed')
+            # Do not delete through a mutable recipe pathname. The existing
+            # whole-job teardown reclaims this bounded ephemeral volume.
     finally:
         if directory is not None:
             os.close(directory)
         held.close()
     # This is the sole cache-retirement join: output bytes were fully copied
-    # and hash checked before context/archive cleanup or daemon cache pruning.
+    # and hash checked before daemon cache pruning. Recipe state stays private
+    # in the same bounded volume until whole-job teardown.
     builder.prune()
     return descriptor
 
