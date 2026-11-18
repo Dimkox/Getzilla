@@ -53,6 +53,11 @@ class ManagedEnvironmentTests(unittest.TestCase):
                 metadata=dict(name='pytest', version='10.0.0'), download_info=dict(url=self.url,
                 archive_info=dict(hashes=dict(sha256=self.digest))))]}))
         if '-I' in command:
+            if 'sysconfig' in command[command.index('-c')+1]:
+                facts = dict(python_version='3.15.2', implementation='cpython',
+                             version_info=[3, 15, 2], soabi='cpython-315-x86_64-linux-gnu',
+                             cache_tag='cpython-315', executable=command[0])
+                return subprocess.CompletedProcess(command, 0, json.dumps(facts), '')
             return subprocess.CompletedProcess(command, 0, json.dumps({'pytest': '10.0.0'}), '')
         return subprocess.CompletedProcess(command, 0, '', '')
 
@@ -113,6 +118,8 @@ class ManagedEnvironmentTests(unittest.TestCase):
         self.assertNotIn(b'owned-token', raw)
         report = json.loads(raw)
         self.assertEqual(report['phase'], 'resolve exact wheel closure')
+        self.assertEqual(report['runtime']['python_version'], '3.15.2')
+        self.assertEqual(report['runtime']['soabi'], 'cpython-315-x86_64-linux-gnu')
         self.assertIn('INDEX-WARNING', report['stderr']['retained'])
         self.assertIn('PyYAML', report['stderr']['retained'])
         self.assertGreater(report['stderr']['omitted_bytes'], 0)

@@ -49,3 +49,15 @@ the final integrated gate require separate execution evidence.
 Source build reuse checks fresh official source identity, exact retained local
 build inventory and actual executable version under a fixed owned cache namespace.
 This is local build custody, not a publisher compiled-binary attestation.
+
+The quality environment normally accepts official binary wheels only. If the
+current official PyYAML release has no wheel for the actual selected Python,
+Getzilla supports its reviewed pure source build: verify the official source
+SHA256 and closed PEP 517 format, qualify the binary build-tool closure, then
+build offline with both `--without-libyaml` and `PYYAML_FORCE_LIBYAML=0`.
+The result must be a pure universal wheel and pass `safe_load` and version probes
+on the selected runtime. Only that invocation's completed build can supply a
+local wheel; retained JSON or a file URL does not authorize one. Other sdists,
+unknown build formats, unavailable binary build tools or failed probes report
+incomplete and preserve the previous environment. Failure diagnostics include
+the actual managed Python version and ABI, independently of the bootstrap Python.

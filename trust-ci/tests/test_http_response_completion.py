@@ -1,9 +1,11 @@
 """Production exchange framing against a bounded owned HTTP/1.0 loopback server."""
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
 import threading
 import time
 import unittest
 import urllib.request
+from unittest import mock
 
 from adaptive_trust_ci.http_response import ResponseLimitError, exchange
 
@@ -31,7 +33,11 @@ class ResponseCompletionTests(unittest.TestCase):
             worker.start()
             try:
                 request = urllib.request.Request('http://127.0.0.1:'+str(server.server_port)+'/owned')
-                status, result = exchange(request, deadline=time.monotonic()+2)
+                proxies = {key: '' for key in ('http_proxy', 'https_proxy', 'all_proxy',
+                                               'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')}
+                proxies.update(NO_PROXY='127.0.0.1,localhost', no_proxy='127.0.0.1,localhost')
+                with mock.patch.dict(os.environ, proxies):
+                    status, result = exchange(request, deadline=time.monotonic()+2)
                 self.assertEqual(status, 200)
                 return result
             finally:

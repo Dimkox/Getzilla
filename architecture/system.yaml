@@ -4147,6 +4147,7 @@
         ".getzilla/getzilla/latest_releases.py",
         ".getzilla/getzilla/managed_environment.py",
         ".getzilla/getzilla/managed_npm.py",
+        ".getzilla/getzilla/managed_pyyaml.py",
         ".getzilla/getzilla/managed_runtime.py",
         ".getzilla/getzilla/managed_software.py",
         ".getzilla/getzilla/managed_source_build.py",

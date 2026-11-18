@@ -1,6 +1,7 @@
 """Resolve current direct tools, qualify the complete wheel graph, then activate it.
 
-Only Getzilla's own environment changes. No customer requirements or sdist code run.
+Only Getzilla's own environment changes. Customer requirements never run.
+The sole reviewed sdist exception is current official PyYAML's pure wheel build.
 The isolated resolver uses public PyPI without user configuration or credentials.
 """
 from __future__ import annotations
@@ -95,9 +96,9 @@ def _redact_urls(text):
     return re.sub(r'https?://[^\s\'"<>]+', redact, str(text))
 
 
-def _failure_record(stage, command, phase, result):
+def _failure_record(stage, command, phase, result, runtime=None):
     """Private bounded first/last output; no ambient environment or credentials."""
-    report = {'schema_version': 1, 'phase': phase,
+    report = {'schema_version': 1, 'phase': phase, 'runtime': runtime,
               'command': [_redact_urls(value) for value in command], 'returncode': result.returncode,
               'environment_policy': {'ambient_pip_overrides': False, 'config_file': 'disabled',
                                      'keyring': 'disabled', 'private_home': True}}
@@ -140,11 +141,13 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
                        TMPDIR=str(private), TEMP=str(private), TMP=str(private), NETRC=str(private/'absent-netrc'),
                        PIP_CONFIG_FILE=os.devnull, PIP_NO_INPUT='1', PIP_KEYRING_PROVIDER='disabled')
 
+    runtime = None
+
     def checked(command, phase):
         result = run(command, home, env=environment)
         if result.returncode:
             try:
-                path, details = _failure_record(stage, command, phase, result)
+                path, details = _failure_record(stage, command, phase, result, runtime)
                 diagnostic = str(path.relative_to(home))
             except (OSError, ValueError):
                 diagnostic, details = 'unavailable', None
@@ -156,12 +159,44 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
     executable = stage/('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     if not executable.is_file():
         raise ValueError('managed interpreter was not created')
+    facts_code = ("import json,sys,sysconfig;print(json.dumps({'python_version':sys.version.split()[0],"
+                  "'version_info':list(sys.version_info[:3]),'implementation':sys.implementation.name,"
+                  "'soabi':sysconfig.get_config_var('SOABI'),'cache_tag':sys.implementation.cache_tag,"
+                  "'executable':sys.executable}))")
+    facts = checked([str(executable), '-I', '-c', facts_code], 'observe managed Python runtime')
+    if len(facts.stdout.encode('utf-8')) > 4096:
+        raise ValueError('managed Python runtime facts exceed bound')
+    runtime = json.loads(facts.stdout)
+    fields = {'python_version', 'version_info', 'implementation', 'soabi', 'cache_tag', 'executable'}
+    if (type(runtime) is not dict or set(runtime) != fields
+            or any(type(runtime[key]) is not str or not 0 < len(runtime[key]) <= 1024
+                   for key in ('python_version', 'implementation', 'executable'))
+            or any(runtime[key] is not None and (type(runtime[key]) is not str or len(runtime[key]) > 1024)
+                   for key in ('soabi', 'cache_tag'))
+            or type(runtime['version_info']) is not list or len(runtime['version_info']) != 3
+            or any(type(value) is not int or value < 0 for value in runtime['version_info'])
+            or runtime['python_version'] != '.'.join(str(value) for value in runtime['version_info'])):
+        raise ValueError('managed Python runtime facts are invalid')
     report = stage/'resolved-wheels.json'
     prefix = [str(executable), '-m', 'pip', '--isolated', '--disable-pip-version-check']
+    from .managed_pyyaml import prepare, consume, location
+    nonce = object()
+    try:
+        built = prepare(stage, executable, targets, fetch=fetch, checked=checked, environment=environment, nonce=nonce)
+    except EnvironmentFailure:
+        raise
+    except ValueError as error:
+        raise EnvironmentFailure('current official PyYAML source build refused: '+_redact_urls(error),
+            {'schema_version': 1, 'phase': 'qualify current PyYAML source build', 'runtime': runtime,
+             'validation_error': _redact_urls(error)[:4096]}) from error
+    local = []
+    if built is not None:
+        path, version = location(built, nonce)
+        local = ['--find-links', str(path.parent), 'PyYAML=='+version]
     checked([*prefix, 'install', '--dry-run', '--ignore-installed', '--only-binary=:all:', '--no-input',
              '--keyring-provider', 'disabled', '--retries', '0', '--timeout', '20',
              '--index-url', 'https://pypi.org/simple', '--report', str(report),
-             *[name+'=='+version for name, version in targets.items()]], 'resolve exact wheel closure')
+             *[name+'=='+version for name, version in targets.items()], *local], 'resolve exact wheel closure')
     if report.stat().st_size > 2*1024*1024:
         raise ValueError('quality dependency report exceeds byte bound')
     graph = json.loads(report.read_text())
@@ -172,7 +207,10 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
     wheelhouse.mkdir(mode=0o700)
     exact, total, lock = {}, 0, []
     for row in rows:
-        name, version, filename, sha, raw = _wheel(row, fetch)
+        if urlsplit(row.get('download_info', {}).get('url', '')).scheme == 'file':
+            name, version, filename, sha, raw = consume(built, row, nonce)
+        else:
+            name, version, filename, sha, raw = _wheel(row, fetch)
         if name in exact or (wheelhouse/filename).exists():
             raise ValueError('duplicate quality dependency identity')
         exact[name] = version

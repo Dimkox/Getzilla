@@ -120,7 +120,7 @@ def policy_binding(root: Path) -> dict:
                  'cost_guard.py',
                  'baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py',
                  'current_workflows.py', 'latest_releases.py', 'managed_runtime.py', 'managed_source_build.py',
-                 'managed_environment.py', 'managed_npm.py', 'managed_software.py', 'opengrep_releases.py',
+                 'managed_environment.py', 'managed_pyyaml.py', 'managed_npm.py', 'managed_software.py', 'opengrep_releases.py',
                  'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
                  'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
                  'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
