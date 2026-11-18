@@ -59,11 +59,15 @@ def _wheelhouse(base: Path) -> Path:
             requirement = line.split('#', 1)[0].strip()
             if not requirement:
                 continue
-            project, version = requirement.split('==')
+            project, version = requirement.split(';', 1)[0].strip().split('==')
+            project, _, extra = project.partition('[')
+            extras = extra.removesuffix(']').split(',') if extra else []
             dist = re.sub(r'[-_.]+', '_', project).lower()
             info = f'{dist}-{version}.dist-info'
             with zipfile.ZipFile(house / f'{dist}-{version}-py3-none-any.whl', 'w') as wheel:
-                wheel.writestr(f'{info}/METADATA', f'Metadata-Version: 2.1\nName: {project}\nVersion: {version}\n')
+                metadata = f'Metadata-Version: 2.1\nName: {project}\nVersion: {version}\n'
+                metadata += ''.join(f'Provides-Extra: {name}\n' for name in extras)
+                wheel.writestr(f'{info}/METADATA', metadata)
                 wheel.writestr(f'{info}/WHEEL', 'Wheel-Version: 1.0\nGenerator: getzilla-tests\n'
                                                 'Root-Is-Purelib: true\nTag: py3-none-any\n')
                 wheel.writestr(f'{info}/RECORD', f'{info}/METADATA,,\n{info}/WHEEL,,\n{info}/RECORD,,\n')
@@ -76,6 +80,31 @@ def _branch() -> str:
 
 
 class InstallScriptContractTests(unittest.TestCase):
+    def test_offline_wheelhouse_uses_pin_version_without_marker_data(self):
+        scratch = ROOT / '.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='owned-marker-wheels-', dir=scratch) as owned:
+            base = Path(owned)
+            source = base / 'source'
+            config = source / '.getzilla/config'
+            config.mkdir(parents=True)
+            (config / 'python-test-requirements.txt').write_text(
+                'typing-extensions==4.16.0; python_version < "3.13"\ncoverage[toml]==7.15.4\n')
+            (config / 'python-quality-requirements.txt').write_text('ruff==0.16.3\n')
+            with patch(__name__ + '.ROOT', source):
+                house = _wheelhouse(base)
+            wheel = house / 'typing_extensions-4.16.0-py3-none-any.whl'
+            self.assertTrue(wheel.is_file(), sorted(path.name for path in house.iterdir()))
+            with zipfile.ZipFile(wheel) as archive:
+                metadata = archive.read('typing_extensions-4.16.0.dist-info/METADATA').decode()
+            self.assertIn('Version: 4.16.0\n', metadata)
+            self.assertNotIn('python_version', metadata)
+            coverage = house / 'coverage-7.15.4-py3-none-any.whl'
+            self.assertTrue(coverage.is_file(), sorted(path.name for path in house.iterdir()))
+            with zipfile.ZipFile(coverage) as archive:
+                metadata = archive.read('coverage-7.15.4.dist-info/METADATA').decode()
+            self.assertIn('Provides-Extra: toml\n', metadata)
+
     @unittest.skipIf(sys.platform == 'win32' or shutil.which('bash') is None,
                      'public shell configuration boundary needs POSIX bash; PowerShell has separate controls')
     def test_configure_agent_is_one_local_configuration_child_without_model_execution(self):

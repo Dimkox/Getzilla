@@ -648,7 +648,7 @@ PIP_INSTALL_HINT = (
     '--ignore-installed -r .getzilla/config/python-test-requirements.txt '
     '(optionally also -r .getzilla/config/python-quality-requirements.txt). '
     'Use an existing owner-only (0700) POSIX venv under non-shared owned directories, '
-    'with no system site packages, only plain pinned requirements, '
+    'with no system site packages, exact package pins and bounded environment markers, '
     'and no extra options or shell commands.'
 )
 
@@ -670,6 +670,27 @@ def _plain_file(path: Path, limit: int) -> str:
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > limit:
         raise ValueError('not a bounded regular file')
     return path.read_text(encoding='utf-8')
+
+
+def _pinned_requirement_with_marker(line: str) -> bool:
+    pin, separator, marker = line.partition(';')
+    # pytest-cov already selects this exact extra in the Core consumer.
+    # No unrelated package extras enter the closed requirement profile.
+    pin = pin.strip()
+    if pin.startswith('coverage[toml]=='):
+        pin = 'coverage==' + pin[len('coverage[toml]=='):]
+    if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.]*', pin) is None:
+        return False
+    if not separator:
+        return True
+    if not marker.strip() or len(marker) > 256:
+        return False
+    try:
+        from pip._vendor.packaging.markers import Marker
+        Marker(marker.strip())
+        return True
+    except (ImportError, ValueError):
+        return False
 
 
 def _scratch_pip_targets(root: Path, command: str) -> tuple[list[str], bool] | None:
@@ -751,8 +772,7 @@ def _scratch_pip_targets(root: Path, command: str) -> tuple[list[str], bool] | N
                 return denied
             pins = [line.strip() for line in _plain_file(path, 16384).splitlines()
                     if line.strip() and not line.lstrip().startswith('#')]
-            if not pins or not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.]*', pin)
-                                   for pin in pins):
+            if not pins or not all(_pinned_requirement_with_marker(pin) for pin in pins):
                 return denied
     except (OSError, ValueError, UnicodeError, RuntimeError):
         return denied
