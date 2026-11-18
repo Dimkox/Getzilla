@@ -624,11 +624,21 @@ def _findings_consistent(name: str, detail: dict, current: datetime) -> bool:
         fields = {'ecosystem', 'package', 'version', 'manifest', 'status', 'expression', 'selected_expression',
                   'distribution', 'artifact_sha256', 'origin', 'license_files', 'notice_files', 'obligations'}
         for finding in findings:
-            if (not isinstance(finding, dict) or not fields <= set(finding) <= fields | {'artifact_id', 'context', 'delivery'}
+            if isinstance(finding,dict) and 'kind' in finding:
+                from .security_license_families import finding_consistent
+                if not finding_consistent(finding,list(ALLOWED),_select_expression):
+                    return False
+                continue
+            if (not isinstance(finding, dict) or not fields <= set(finding) <= fields | {'artifact_id', 'context', 'delivery', 'policy_exception'}
                     or finding['status'] != 'pass' or finding['distribution'] not in {'internal', 'redistributed'}
                     or not _digest(finding['artifact_sha256']) or not isinstance(finding['license_files'], list)
                     or not finding['license_files'] or not isinstance(finding['notice_files'], list)):
                 return False
+            if 'policy_exception' in finding:
+                from .security_license_exceptions import detail_consistent
+                if not detail_consistent(finding):
+                    return False
+                continue
             try:
                 selected, _ = _select_expression(finding['selected_expression'], list(ALLOWED))
                 chosen, _ = _select_expression(finding['expression'], selected, require_all=True)

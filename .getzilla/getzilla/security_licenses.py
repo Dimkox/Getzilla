@@ -36,7 +36,7 @@ _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 def _policy(policy: dict) -> dict:
     required = {'schema_version', 'project_repository', 'auto_allow', 'usage_distribution'}
-    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest', 'factory_offline_profile'}:
+    if not isinstance(policy, dict) or not required <= set(policy) or set(policy) - required - {'digest', 'factory_offline_profile', 'dependency_exceptions'}:
         raise ArtifactError('license-policy-missing', 'choose an explicit project-specific license policy')
     if type(policy['schema_version']) is not int or policy['schema_version'] != 1:
         raise ArtifactError('license-policy-review', 'unsupported project license policy version')
@@ -58,6 +58,9 @@ def _policy(policy: dict) -> dict:
                 or any(not isinstance(scope[k], str) or not re.fullmatch(r'[0-9a-f]{64}', scope[k]) for k in hashes)):
             raise ArtifactError('license-policy-review', 'invalid Getzilla offline profile decision')
         raw['factory_offline_profile'] = dict(scope)
+    if 'dependency_exceptions' in policy:
+        from .security_license_exceptions import validate_exceptions
+        raw['dependency_exceptions'] = validate_exceptions(policy['dependency_exceptions'])
     digest = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if policy.get('digest', digest) != digest:
         raise ArtifactError('license-policy-review', 'policy digest does not match its actual contents')
@@ -475,7 +478,7 @@ def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: d
 
 
 def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
-                       target_binding: dict | None = None) -> dict:
+                       target_binding: dict | None = None, _factory_parent_binding: dict | None = None) -> dict:
     """Evaluate exact package artifacts; expose every unsupported/missing obligation."""
     result = {'status': 'fail', 'summary': '', 'details': [], 'gaps': [], 'assurance': 'artifact-integrity-only',
               'inventory_digest': inventory.get('digest') if isinstance(inventory, dict) else None, 'policy_digest': None}
@@ -496,6 +499,16 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             return {**result, 'status': 'skip', 'summary': 'complete inventory has no applicable third-party artifacts'}
         policy = _policy(policy)
         result['policy_digest'] = policy['digest']
+        factory_scope = None
+        if _factory_parent_binding is not None:
+            from .security_python_target import _binding
+            from .security_factory_inputs import verify as verify_factory, PROFILE
+            _binding(_factory_parent_binding)
+            auxiliary = verify_factory(artifacts.parent, _factory_parent_binding, policy, now=now)
+            if auxiliary['inventory'] != inventory or auxiliary['root'] != artifacts:
+                raise ArtifactError('license-exception-conditions', 'Factory exception scope differs from actual verified output')
+            factory_scope = dict(manifest_sha256=_factory_parent_binding['factory_inputs']['policy_profile']['lock_sha256'],
+                profile=PROFILE, abi='cp312-cp312-manylinux_2_17_x86_64', delivery_kind='factory-offline-archive')
         if target_binding is not None:
             from .security_python_target import _binding
             _binding(target_binding)
@@ -541,7 +554,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
         if target_binding is not None and 'factory_inputs' in target_binding:
             from .security_factory_inputs import verify
             auxiliary=verify(artifacts,target_binding,policy,now=now)
-            output=evaluate_artifacts(auxiliary['inventory'],auxiliary['root'],policy,now=now)
+            output=evaluate_artifacts(auxiliary['inventory'],auxiliary['root'],policy,now=now, _factory_parent_binding=target_binding)
             result['factory_output']={'profile':target_binding['factory_inputs']['profile'],
                 'status':output['status'],'source_evidence':output.get('source_evidence'),
                 'assurance':'named Factory output only; original source uses remain separate'}
@@ -584,7 +597,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     notices.extend(notice_files)
                 result['details'].append({'kind': kind, 'reference': subject['reference'], 'status': 'pass',
                     'selected_expression': ' AND '.join(sorted(set(selected))), 'distribution': distribution,
-                    **evidence['binding'], 'license_files': licenses, 'notice_files': notices,
+                    **evidence['binding'], 'family_record': record,
+                    'component_inventory_json': read_file(artifacts,record['components']['path'],MAX_INDEX_BYTES).decode('utf-8'),
+                    'license_files': licenses, 'notice_files': notices,
                     'obligations': 'internal use; exact source/component/license evidence retained'})
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
                 code = getattr(exc, 'code', 'artifact-invalid')
@@ -637,26 +652,45 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if package_key(dep['ecosystem'], metadata['name'], metadata['version']) != key:
                     raise ArtifactError('artifact-identity', 'artifact metadata Name/Version differs from inventory')
                 _validate_extra_scope(metadata, dep)
-                chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
-                if dep['ecosystem'] == 'Packagist':
-                    from .security_packagist import license_members
-                    license_inputs = license_members(files, metadata)
-                else:
-                    license_inputs = files
-                license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen,
-                    final_wheel=dep['ecosystem']=='PyPI' and record['filename'].endswith('.whl'))
+                exception = None
+                required_retention = []
+                try:
+                    chosen, identifiers = _select_expression(metadata['expression'], policy['auto_allow'])
+                    if dep['ecosystem'] == 'Packagist':
+                        from .security_packagist import license_members
+                        license_inputs = license_members(files, metadata)
+                    else:
+                        license_inputs = files
+                    license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen,
+                        final_wheel=dep['ecosystem']=='PyPI' and record['filename'].endswith('.whl'))
+                except ArtifactError as original:
+                    from .security_license_exceptions import retention_paths, scope_for, verify_exception
+                    requested = retention_paths(policy,dep)
+                    if not requested:
+                        raise
+                    try:
+                        if requested - set(files):
+                            files.update(archive_files(payload,record['filename'],requested=requested-set(files)))
+                        scope = factory_scope if factory_scope is not None else scope_for(dep,target_binding,observed)
+                        exception = verify_exception(policy,dep,record,files,metadata,distribution,scope)
+                    except ArtifactError as condition:
+                        raise ArtifactError(condition.code, str(condition)+'; original license diagnostic ['+original.code+']: '+str(original)) from condition
+                    exception['detail']['original_diagnostic'] = dict(code=original.code,message=str(original))
+                    chosen = [metadata['expression']]
+                    license_files, notice_files = exception['license_files'], exception['notice_files']
+                    required_retention = exception['required_retention']
                 custody = None
                 context = dep.get('delivery_context')
                 if target_binding is not None and 'ci_consumer' in target_binding:
                     from .security_ci_inputs import verify_custody
-                    custody=verify_custody(target_binding,dep,files,[item['path'] for item in license_files+notice_files])
+                    custody=verify_custody(target_binding,dep,files,sorted(set(required_retention)|{item['path'] for item in license_files+notice_files}))
                 if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:
                     raise ArtifactError('license-obligation-missing', 'offline archive requires actual final output and composition evidence')
                 if context in deliveries:
                     if distribution != 'redistributed':
                         raise ArtifactError('license-scope-conflict', 'named archive components must retain redistributed scope')
                     output = deliveries[context]
-                    retained = sorted('site-packages/' + item['path'] for item in license_files + notice_files)
+                    retained = sorted('site-packages/' + path for path in set(required_retention)|{item['path'] for item in license_files + notice_files})
                     custody = {field: value for field, value in output.items() if field != 'members'}
                     custody['retained_members'] = retained
                 elif distribution == 'redistributed':
@@ -682,7 +716,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     'selected_expression': ' AND '.join(chosen), 'distribution': distribution,
                     'artifact_sha256': record['sha256'], 'artifact_id': artifact_identity(record),
                     'context': {**record.get('context', {}), **({'python_target_sha256':observed['target_sha256']} if observed else {})}, **({'delivery': custody} if custody else {}),
-                    'origin': origin, 'license_files': license_files,
+                    'origin': origin, **({'policy_exception':exception['detail']} if exception else {}), 'license_files': license_files,
                     'notice_files': notice_files, 'obligations': ('retained in final extracted archive' if custody else 'retained in exact artifact')
                     if distribution == 'redistributed' else 'internal use; license evidence retained'})
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError, VulnerabilityError) as exc:
