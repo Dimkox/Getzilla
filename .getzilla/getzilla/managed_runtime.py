@@ -18,6 +18,21 @@ from .latest_releases import Target
 MAX_FILES = 16384
 MAX_BYTES = 512 * 1024 * 1024
 MAX_FILE_BYTES = 128 * 1024 * 1024
+MAX_NODE_EXECUTABLE_BYTES = 256 * 1024 * 1024
+
+
+def _member_limit(target: Target, name: str):
+    if target.component == 'node':
+        version = re.escape(target.version)
+        if re.fullmatch(r'node-v'+version+r'-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz', target.filename):
+            executable = target.filename.removesuffix('.tar.gz')+'/bin/node'
+        elif re.fullmatch(r'node-v'+version+r'-win-(?:x64|arm64)\.zip', target.filename):
+            executable = target.filename.removesuffix('.zip')+'/node.exe'
+        else:
+            executable = None
+        if name == executable:
+            return MAX_NODE_EXECUTABLE_BYTES
+    return MAX_FILE_BYTES
 
 
 def directory(path: Path, *, mode=0o700):
@@ -65,25 +80,32 @@ def _entries(target: Target, data: bytes):
             if len(archive.infolist()) > MAX_FILES:
                 raise ValueError('runtime member count exceeds bound')
             for item in archive.infolist():
-                if item.orig_filename != item.filename or item.flag_bits & 1 or item.file_size > MAX_FILE_BYTES:
+                limit = _member_limit(target, item.filename)
+                if item.orig_filename != item.filename or item.flag_bits & 1 or item.file_size > limit:
                     raise ValueError('unsafe runtime ZIP entry')
                 if item.is_dir():
                     continue
                 mode = item.external_attr >> 16
                 if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
                     raise ValueError('linked or special runtime ZIP entry')
-                add(item.filename, archive.read(item), 0o755 if mode & 0o111 or item.filename.endswith('.exe') else 0o644)
+                with archive.open(item) as stream:
+                    add(item.filename, stream.read(limit+1),
+                        0o755 if mode & 0o111 or item.filename.endswith('.exe') else 0o644, file_limit=limit)
     elif target.filename.endswith(('.tar.gz', '.tgz', '.tar.xz')):
         with tarfile.open(fileobj=io.BytesIO(data), mode='r:*') as archive:
             for i, item in enumerate(archive):
-                if i >= MAX_FILES or item.size > MAX_FILE_BYTES:
+                limit = _member_limit(target, item.name)
+                if i >= MAX_FILES or item.size > limit:
                     raise ValueError('runtime archive exceeds finite bounds')
                 if item.isdir():
                     continue
                 if item.issym():
                     name = item.name
                     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), item.linkname))
-                    if (os.name == 'nt' or name in files or name in links or item.linkname.startswith('/')
+                    if (os.name == 'nt' or name.startswith('/') or '\\' in name or ':' in name
+                            or any(p in ('', '.', '..') for p in name.split('/'))
+                            or name.casefold() in {p.casefold() for p in [*files, *links]}
+                            or item.linkname.startswith('/')
                             or resolved.startswith('../') or '\\' in item.linkname):
                         raise ValueError('unsafe runtime symlink')
                     links[name] = item.linkname
@@ -92,7 +114,7 @@ def _entries(target: Target, data: bytes):
                     if stream is None:
                         raise ValueError('truncated runtime archive')
                     with stream:
-                        add(item.name, stream.read(MAX_FILE_BYTES+1), 0o755 if item.mode & 0o111 else 0o644)
+                        add(item.name, stream.read(limit+1), 0o755 if item.mode & 0o111 else 0o644, file_limit=limit)
                 else:
                     raise ValueError('special runtime archive entry')
     elif target.component == 'cosign' and target.filename.startswith('cosign-'):
@@ -107,14 +129,29 @@ def _entries(target: Target, data: bytes):
         raise ValueError('unsupported current runtime archive format')
     # Node's tarballs/ZIPs contain one version-named outer directory.
     roots = {p.split('/')[0] for p in [*files, *links]}
-    if len(roots) == 1 and files and all('/' in p for p in [*files, *links]):
+    single_root = len(roots) == 1 and bool(files) and all('/' in p for p in [*files, *links])
+    if single_root:
         files = {p.split('/', 1)[1]: body for p, body in files.items()}
         links = {p.split('/', 1)[1]: body for p, body in links.items()}
+    # No materialized member may have a file or alias as its parent.
+    members = set(files) | set(links)
+    for name in members:
+        parts = name.split('/')
+        if any('/'.join(parts[:i]) in members for i in range(1, len(parts))):
+            raise ValueError('runtime archive member ancestor conflict')
     for name, link in links.items():
         if any(p in ('', '.', '..') for p in name.split('/')):
             raise ValueError('unsafe runtime symlink name')
         resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
         if resolved not in files:
+            # Git's official source has direct aliases to git-gui/gitk directories.
+            # Only a nonempty, closed regular subtree is accepted; nested aliases
+            # (including cycles/chains) remain forbidden in directory targets.
+            prefix = resolved+'/'
+            if (target.component == 'git' and single_root
+                    and any(p.startswith(prefix) for p in files)
+                    and not any(p == resolved or p.startswith(prefix) for p in links)):
+                continue
             raise ValueError('runtime symlink target is not a closed regular member')
     if not files:
         raise ValueError('empty runtime archive')

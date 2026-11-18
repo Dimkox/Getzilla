@@ -137,6 +137,13 @@ def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execut
         target = targets[component]
         command = component.removeprefix('agent:')
         try:
+            prerequisites = (('node',) if component == 'npm' else
+                             ('node', 'npm') if component == 'jscpd' or
+                             (component.startswith('agent:') and component != 'agent:claude') else
+                             ('php',) if component == 'composer' else ())
+            missing = [name for name in prerequisites if name not in paths]
+            if missing:
+                raise ValueError('missing verified prerequisite: '+', '.join(missing))
             if verify_only:
                 path = which(command)
                 allowed = [root/'bin'/(command+'.cmd' if system == 'windows' else command)]
