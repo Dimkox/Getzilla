@@ -1,17 +1,21 @@
 """Own source/hash fixtures and inert configure/make effects, no real build."""
 import hashlib
 import io
+import os
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.latest_releases import Target
 from getzilla.managed_source_build import install_source
+from getzilla import managed_source_build
 
 
 class SourceRuntimeTests(unittest.TestCase):
@@ -46,11 +50,88 @@ class SourceRuntimeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, 'git version 2.56.1', '')
             path = install_source(target, raw, Path(owned), run=run)
             self.assertEqual([c for c in calls if c[0] == 'make'], [
-                ['make', '-j4', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease'],
-                ['make', 'install', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease']])
+                ['make', '-j4', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease',
+                 'NO_INSTALL_HARDLINKS=YesPlease', 'SKIP_DASHED_BUILT_INS=YesPlease'],
+                ['make', 'install', 'NO_TCLTK=YesPlease', 'NO_GETTEXT=YesPlease', 'NO_RUST=YesPlease',
+                 'NO_INSTALL_HARDLINKS=YesPlease', 'SKIP_DASHED_BUILT_INS=YesPlease']])
             self.assertEqual(calls[-1], [str(path), '--version'])
             self.assertEqual(install_source(target, raw, Path(owned), run=run), path)
             self.assertEqual(len([c for c in calls if c[0] == 'make']), 2)
+
+    @unittest.skipIf(os.name == 'nt', 'Unix source installation aliases')
+    def test_git_install_avoids_hardlinks_and_unused_dashed_aliases(self):
+        target, raw = self.git_fixture()
+        scratch = ROOT/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='owned-git-install-', dir=scratch) as owned:
+            calls, prefix = [], None
+            def run(command, cwd=None, **kwargs):
+                nonlocal prefix
+                calls.append(command)
+                if command[0] == './configure':
+                    prefix = Path(command[1].removeprefix('--prefix='))
+                elif command[:2] == ['make', 'install']:
+                    binary, helpers = prefix/'bin', prefix/'libexec/git-core'
+                    binary.mkdir(parents=True)
+                    helpers.mkdir(parents=True)
+                    (binary/'git').write_bytes(b'owned executable')
+                    no_hardlinks = 'NO_INSTALL_HARDLINKS=YesPlease' in command
+                    if no_hardlinks:
+                        shutil.copyfile(binary/'git', helpers/'git')
+                    else:
+                        os.link(binary/'git', helpers/'git')
+                    for name in ('git-upload-pack', 'git-receive-pack', 'git-upload-archive'):
+                        if no_hardlinks:
+                            (binary/name).symlink_to('git')
+                        else:
+                            os.link(binary/'git', binary/name)
+                    (helpers/'git-remote-http').write_bytes(b'owned HTTP helper')
+                    if no_hardlinks:
+                        (helpers/'git-remote-https').symlink_to('git-remote-http')
+                    else:
+                        os.link(helpers/'git-remote-http', helpers/'git-remote-https')
+                    if 'SKIP_DASHED_BUILT_INS=YesPlease' not in command:
+                        (helpers/'git-status').symlink_to('git')
+                return subprocess.CompletedProcess(command, 0, 'git version 2.56.1', '')
+            path = install_source(target, raw, Path(owned), run=run)
+            inventory = managed_source_build._inventory(prefix)
+            self.assertNotIn('libexec/git-core/git-status', inventory)
+            self.assertEqual(inventory['bin/git-upload-pack'], {'link': 'git'})
+            self.assertEqual(inventory['libexec/git-core/git-remote-https'], {'link': 'git-remote-http'})
+            self.assertTrue(all((prefix/name).stat().st_nlink == 1 for name, row in inventory.items() if 'sha256' in row))
+            self.assertEqual(install_source(target, raw, Path(owned), run=run), path)
+            self.assertEqual(len([c for c in calls if c[0] == 'make']), 2)
+            path.write_bytes(b'user change')
+            with self.assertRaisesRegex(ValueError, 'custody conflict'):
+                install_source(target, raw, Path(owned), run=lambda *a, **kw: self.fail('preserve user bytes'))
+            self.assertEqual(path.read_bytes(), b'user change')
+
+    @unittest.skipIf(os.name == 'nt', 'Unix hardlink and symlink refusal')
+    def test_source_inventory_retains_file_aggregate_hardlink_and_escape_bounds(self):
+        scratch = ROOT/'.getzilla/runtime/scratch'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='owned-git-bounds-', dir=scratch) as owned:
+            root = Path(owned)
+            prefix = root/'installed'
+            prefix.mkdir()
+            with patch.object(managed_source_build, 'MAX_FILE_BYTES', 8), patch.object(managed_source_build, 'MAX_BYTES', 12):
+                (prefix/'one').write_bytes(b'x'*9)
+                with self.assertRaisesRegex(ValueError, 'byte/link bound'):
+                    managed_source_build._inventory(prefix)
+                (prefix/'one').write_bytes(b'x'*7)
+                (prefix/'two').write_bytes(b'x'*6)
+                with self.assertRaisesRegex(ValueError, 'byte/link bound'):
+                    managed_source_build._inventory(prefix)
+            (prefix/'one').unlink()
+            (prefix/'two').unlink()
+            (root/'outside').write_bytes(b'owned')
+            os.link(root/'outside', prefix/'one')
+            with self.assertRaisesRegex(ValueError, 'byte/link bound'):
+                managed_source_build._inventory(prefix)
+            (prefix/'one').unlink()
+            (prefix/'one').symlink_to('../outside')
+            with self.assertRaisesRegex(ValueError, 'leaves owned prefix'):
+                managed_source_build._inventory(prefix)
 
     def test_git_c_mode_preserves_integrity_preflight_and_each_native_failure(self):
         target, raw = self.git_fixture()
