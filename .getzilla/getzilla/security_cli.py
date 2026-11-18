@@ -48,7 +48,7 @@ _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'arti
     'artifact-identity', 'artifact-hash', 'artifact-inventory-binding', 'artifact-manifest',
     'artifact-path', 'artifact-platform', 'artifact-publication-uncertain', 'artifact-stale',
     'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'artifact-factory-input',
-    'artifact-factory-output', 'artifact-factory-source-output', 'other'))
+    'artifact-factory-output', 'artifact-factory-source-output','license-run-scope-unavailable', 'other'))
 
 
 def _preparation_detail(value):
@@ -290,7 +290,15 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
     if any(item.get('status') != 'pass' for item in acquisitions):
         gaps.append('acquisition-incomplete')
     count = sum(profile.get('observed_counts', {}).values())
-    if license_result.get('status') != ('pass' if count else 'skip'):
+    selected=license_result.get('selected_run')
+    scoped_ok=False
+    if selected is not None:
+        from .security_license_scope import validate_result
+        scoped_ok=(type(license_result.get('gaps')) is list and type(license_result.get('raw_coverage')) is dict
+            and validate_result(selected,profile=profile,inventory_sha256=profile.get('inventory_sha256'),now=_clock(now),
+                diagnostics=license_result['gaps'],raw_coverage=license_result['raw_coverage'])
+            and selected.get('status')=='pass-for-selected-run' and not selected.get('gaps'))
+    if not scoped_ok and (selected is not None or license_result.get('status') != ('pass' if count else 'skip')):
         gaps.append('artifact-license-input-unverified')
     return {'schema_version': 1, 'kind': 'public-security-input-preparation',
             'status': 'unavailable' if gaps else 'prepared', 'qualification': 'UNVERIFIED',
@@ -298,7 +306,9 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
             'before': before, 'after': after, 'required_sources': obligations,
             'acquisitions': acquisitions, 'license_inputs': license_result, 'gaps': sorted(set(gaps)),
             'checked_at': _clock(now).isoformat(), 'scan_outcomes': [],
-            'assurance': 'local-input-integrity-only-not-external-attestation'}
+            'assurance': 'local-input-integrity-only-not-external-attestation',
+            **({'preparation_scope':'selected-native-security-run','overall_coverage_complete':False,
+                'selected_run':selected} if selected is not None else {})}
 
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
@@ -360,6 +370,9 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             from .security_python_target import binding
             python_binding = binding(profile)
             python_options = {'target_binding': python_binding} if python_binding is not None else {}
+            from .security_license_scope import current as current_run_scope
+            run_context=current_run_scope(root,inventory,python_binding)
+            required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
         if refresh and inventory['images'] and image_artifacts is None:
             raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations are not qualified artifacts')
         if families is not None:
@@ -383,7 +396,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                     acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
             if inventory['dependencies'] or inventory['tools'] or inventory['images']:
                 with _preparation_step('package-artifacts'):
-                    bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, families=families,
+                    bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, families=families,
                                           **python_options)
                     acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
                     if python_binding is not None and 'factory_inputs' in python_binding:
@@ -404,7 +417,8 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         with _preparation_step('obligations'):
             obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
         with _preparation_step('licenses'):
-            licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now, **python_options)
+            licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now, **python_options,
+                **({'run_context':run_context} if run_context is not None else {}))
         with _preparation_step('final-binding'):
             if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
                 raise SecurityDataError('Selected OCI catalog changed during preparation')
@@ -649,7 +663,7 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
                 'data_sources', 'findings', 'gaps', 'assurance'}
     extra = {'family', 'reason_code', 'applicability_evidence'}
     extra |= ({'accepted'} if name == 'known-vulnerabilities' else
-              {'factory_offline_use'} if name == 'security-licenses' else
+              {'factory_offline_use','selected_run','raw_coverage','raw_license_diagnostics'} if name == 'security-licenses' else
               {'binary_inputs'} if name == 'secret-scan' else
               {'coverage'} if name in {'opengrep', 'bandit', 'trivy-config'} else set())
     if (not required <= set(detail) <= required | extra or type(detail.get('schema_version')) is not int
@@ -666,6 +680,17 @@ def _detail_consistent(name: str, detail: dict, inventory: str, policy: str, cur
     if ('applicability_evidence' in detail or detail['outcome'] != 'pass'
             or not _findings_consistent(name, detail, current)):
         return False
+    if name=='security-licenses' and 'selected_run' in detail:
+        from .security_license_scope import validate_result
+        selected=detail['selected_run']
+        raw=detail.get('raw_coverage')
+        if (type(detail.get('raw_license_diagnostics')) is not list or type(raw) is not dict
+                or not validate_result(selected,inventory_sha256=inventory,now=current,
+                    diagnostics=detail['raw_license_diagnostics'],raw_coverage=raw)
+                or selected.get('status')!='pass-for-selected-run' or selected.get('gaps')
+                or selected.get('details')!=detail['findings']
+                or raw.get('complete') is not False):
+            return False
     identifiers = [s.get('source_id') for s in detail['data_sources'] if isinstance(s, dict)]
     if (len(identifiers) != len(detail['data_sources']) or any(not isinstance(i, str) for i in identifiers)
             or len(identifiers) != len(set(identifiers)) or not all(_source_valid(s) for s in detail['data_sources'])):
@@ -760,11 +785,17 @@ def finalize_report(before: dict, after: dict, checks: list[dict], inventory_dig
                     expiry = min(expiry, instant + timedelta(seconds=MAX_AGE_SECONDS))
             except (KeyError, TypeError, ValueError, AttributeError):
                 gaps.append(f'{check.get("name")}: missing, future or stale source timestamp')
-    return {'schema_version': 1, 'kind': 'security-expanded', 'status': 'fail' if gaps else 'pass',
+    scoped=[detail['selected_run'] for check in checks for detail in check.get('details',[])
+        if isinstance(detail,dict) and 'selected_run' in detail]
+    if scoped and (len(scoped)!=1 or not isinstance(scoped[0],dict) or scoped[0].get('source')!=after):
+        gaps.append('selected-run scope differs from actual source or is duplicated')
+    return {'schema_version': 1, 'kind': 'security-expanded',
+            'status': ('fail-for-selected-run' if gaps else 'pass-for-selected-run') if scoped else 'fail' if gaps else 'pass',
             'source': after, 'created_at_utc': current.isoformat(),
             'valid_until_utc': None if gaps else expiry.isoformat(), 'checks': checks,
             'inventory_sha256': inventory_digest, 'policy_sha256': policy_digest,
-            'assurance': 'local-input-integrity-only', 'qualification_gaps': gaps}
+            'assurance': 'local-input-integrity-only', 'qualification_gaps': gaps,
+            **({'acceptance_scope':scoped[0],'overall_coverage_complete':False} if scoped else {})}
 
 
 def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refresh=False,
@@ -822,6 +853,9 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
                                        'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
                                        package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+            from .security_license_scope import current as current_run_scope
+            run_context=current_run_scope(root,inventory,python_binding)
+            required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
             if refresh and inventory['images'] and image_artifacts is None:
                 raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations remain unqualified')
             def acquire(label, operation):
@@ -837,7 +871,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                     acquire('feed-acquisition', lambda: refresh_feeds(database, ecosystems, now=now))
                 if inventory['dependencies']:
                     def package_artifacts():
-                        bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, **python_options)
+                        bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, **python_options)
                         if python_binding is not None and 'factory_inputs' in python_binding:
                             from .security_factory_inputs import prepare
                             prepare(root,artifacts,tools,python_binding,TRUSTED_ROOT,now=now)
@@ -1026,7 +1060,7 @@ def main(argv=None) -> int:
         _atomic(args.json_out, (json.dumps(report, sort_keys=True) + '\n').encode())
         if os.geteuid() == 0 and os.environ.get('SUDO_UID', '').isdecimal() and os.environ.get('SUDO_GID', '').isdecimal():
             os.chown(args.json_out, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']), follow_symlinks=False)
-        return 0 if report.get('status') == 'pass' else 1
+        return 0 if report.get('status') in {'pass','pass-for-selected-run'} else 1
     if args.backend_tool_pins is not None:
         parser.error('--backend-tool-pins requires --produce-images')
     if args.image_artifacts is not None:
@@ -1074,4 +1108,4 @@ def main(argv=None) -> int:
         print(f'{check["status"].upper()} {check["name"]}: {check["summary"]}')
     for gap in report['qualification_gaps']:
         print(f'BLOCKED: {gap}')
-    return 0 if report['status'] == 'pass' else 1
+    return 0 if report['status'] in {'pass','pass-for-selected-run'} else 1

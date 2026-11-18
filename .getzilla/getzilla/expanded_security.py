@@ -426,13 +426,23 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 from .security_licenses import artifact_catalog_source, evaluate_artifacts, load_policy
                 artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
                 license_policy = load_policy(policy_root or root)
-                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current, **_license_target(env))
-                outcome = 'pass' if report['status'] == 'pass' else 'blocked'
+                target_options=_license_target(env)
+                from .security_license_scope import current as current_run_scope
+                run_context=current_run_scope(root,inventory,target_options.get('target_binding'))
+                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current, **target_options,
+                    **({'run_context':run_context} if run_context is not None else {}))
+                selected=report.get('selected_run')
+                outcome = ('pass' if selected['status']=='pass-for-selected-run' else 'blocked') if selected is not None else 'pass' if report['status'] == 'pass' else 'blocked'
                 proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current, **_license_target(env))
                 if [proof] != obligation['data_sources']:
                     raise SecurityDataError('license artifact inputs changed during evaluation')
-                results.append(_result(name, outcome, report['summary'], inventory, policy,
-                                       sources=[proof], findings=report.get('details', []), gaps=report.get('gaps', [])))
+                check=_result(name, outcome, selected['summary'] if selected is not None else report['summary'], inventory, policy,
+                    sources=[proof],findings=selected['details'] if selected is not None else report.get('details', []),
+                    gaps=selected['gaps'] if selected is not None else report.get('gaps', []))
+                if selected is not None:
+                    check['details'][0].update(selected_run=selected,raw_coverage=report['raw_coverage'],
+                        raw_license_diagnostics=report.get('gaps',[]))
+                results.append(check)
             else:
                 if image_scan is None:
                     raise SecurityDataError('no image scan covered the required image inventory')

@@ -26,6 +26,7 @@ from .security_inventory import collect_inventory, declared_inventory
 from .security_oci import LIMITS, active_limits, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
 
 _LIVE = None
+_LICENSE_ENTRY = object()
 _PHASE = 'opening'
 _MEMBER_SEAL = object()
 
@@ -400,6 +401,7 @@ def produce(root, source, run, volume, builder):
         from . import security_image_backend as native
         _LIVE = dict(source=source, run=run, builds=completed,native_guard=native._GUARD,
             build_inputs=json.loads(json.dumps(declared['builds'])),base_targets=base_targets,
+            root=root,declared_inventory=json.loads(json.dumps(declared)),
             images={image.reference:image for image in imported})
         try:
             require_builds(declared, source, run)
@@ -518,6 +520,8 @@ def _pipeline(request, volume, builder):
                            package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
+            from .security_license_scope import activate
+            activate(root,profile,_entry=_LICENSE_ENTRY)
             cli._atomic(Path(request['profile']), canonical(profile))
             _event('prepare')
             with cli._preparation_step('prepare-inputs'):
