@@ -91,14 +91,14 @@ class BudgetFaultControls(unittest.TestCase):
                 self.assertEqual(ledger.totals[dimension], ceiling)
                 self.assertIn(str(ceiling + 1), str(caught.exception))
 
-    def test_all_ten_charge_sites_name_a_closed_phase(self):
+    def test_all_charge_sites_name_a_closed_phase(self):
         tree = ast.parse((ROOT / ".getzilla/getzilla/security_oci.py").read_bytes())
         calls = [
             node
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "charge"
         ]
-        self.assertEqual(len(calls), 10)
+        self.assertEqual(len(calls), 12)
         phases = []
         for call in calls:
             phase = next((value.value for value in call.keywords if value.arg == "phase"), None)
@@ -117,6 +117,8 @@ class BudgetFaultControls(unittest.TestCase):
                 "attestation-count",
                 "attestation-bytes",
                 "scanner-entrypoint",
+                "layer-cached-unpacked",
+                "layer-cached-expanded",
             },
         )
 

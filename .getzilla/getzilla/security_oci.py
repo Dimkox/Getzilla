@@ -39,6 +39,7 @@ LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
 CI_BYTES = 8 * 1024 ** 3
 CI_MEMORY = 12 * 1024 ** 3
+_MAX_TAR_ENTRIES = 100000
 
 
 def active_limits():
@@ -53,6 +54,8 @@ def active_limits():
 HEX = re.compile(r'sha256:[0-9a-f]{64}\Z')
 REFERENCE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}\Z')
 _PROOF = object()
+_LAYER_FACT_SEAL = object()
+_LAYER_CACHE_MAX = 1024
 
 
 class OCIError(ValueError):
@@ -66,11 +69,11 @@ _BOUND_LIMITS = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked
                  'storage': 'max_storage_bytes', 'layers': 'max_layers',
                  'expanded': 'max_unpacked_bytes', 'entries': 'max_tar_entries'}
 _BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed'},
-                 'unpacked': {'budget-charge', 'layer-decoded', 'attestation-bytes'},
+                 'unpacked': {'budget-charge', 'layer-decoded', 'attestation-bytes', 'layer-cached-unpacked'},
                  'storage': {'budget-charge', 'blob-storage', 'scanner-entrypoint'},
                  'layers': {'budget-charge', 'layer-count', 'attestation-count'},
                  'entries': {'budget-charge', 'tar-entries'},
-                 'expanded': {'budget-charge', 'tar-expanded'}}
+                 'expanded': {'budget-charge', 'tar-expanded', 'layer-cached-expanded'}}
 _BOUND_KEYS = {'dimension', 'oci_phase', 'limit_name', 'before', 'charge', 'attempted', 'limit',
                'profile_compressed', 'profile_unpacked', 'profile_storage', 'image_ordinal'}
 
@@ -93,7 +96,7 @@ def _bound_detail(value):
         raise OCIError('Invalid OCI bound diagnostic')
     expected = (value['profile_' + ('unpacked' if dimension == 'expanded' else dimension)]
                 if dimension in {'compressed', 'unpacked', 'storage', 'expanded'} else
-                100000 if dimension == 'entries' else value['limit'])
+                _MAX_TAR_ENTRIES if dimension == 'entries' else value['limit'])
     if value['limit'] != expected or not 0 < value['limit'] <= (10000 if dimension == 'layers' else 2 ** 63 - 1):
         raise OCIError('Invalid OCI bound diagnostic')
     return dict(value)
@@ -150,6 +153,7 @@ class _Budget:
             self._native = sys.modules[__package__ + '.security_image_backend']
             self._guard = self._native._GUARD
         self.image_ordinal = -1
+        self._layer_facts = {}
         self.deadline = time.monotonic() + profile['deadline_seconds']
         self.totals = dict(compressed=0, unpacked=0, storage=0, layers=0, entries=0, expanded=0)
 
@@ -163,7 +167,7 @@ class _Budget:
         self.tick()
         limit = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
                  'storage': 'max_storage_bytes', 'layers': 'max_layers', 'expanded': 'max_unpacked_bytes'}.get(key)
-        ceiling = self.profile[limit] if limit else 100000
+        ceiling = self.profile[limit] if limit else _MAX_TAR_ENTRIES
         if type(size) is not int or size < 0:
             raise OCIError('Aggregate OCI resource bound exceeded')
         if self.totals[key] + size > ceiling:
@@ -238,45 +242,94 @@ class _Decoded:
     def __init__(self, stream, budget):
         self.stream, self.budget = stream, budget
         self.digest = hashlib.sha256()
+        self.bytes = 0
 
     def read(self, size=-1):
         # tarfile streaming requests are bounded; never accept an unbounded read.
         size = 65536 if size < 0 else min(size, 65536)
         value = self.stream.read(size)
         self.budget.charge('unpacked', len(value), phase='layer-decoded')
+        self.bytes += len(value)
         self.digest.update(value)
         return value
 
 
 def _layer(path, media, expected, budget):
     budget.charge('layers', 1, phase='layer-count')
-    declared = 0
-    with path.open('rb') as raw:
-        with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else raw) as decoded:
-            stream = _Decoded(decoded, budget)
-            with tarfile.open(fileobj=stream, mode='r|') as archive:
-                for member in archive:
-                    budget.charge('entries', 1, phase='tar-entries')
-                    name = member.name
-                    if (not name or len(name) > 4096 or '\\' in name or name.startswith('/')
-                            or '..' in PurePosixPath(name).parts
-                            or member.sparse is not None
-                            or not (member.isfile() or member.isdir() or member.issym() or member.islnk())):
-                        raise OCIError('Unsupported or unsafe OCI layer member')
-                    if member.issym() or member.islnk():
-                        target = member.linkname
-                        joined = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
-                        if (not target or '\\' in target or len(target) > 4096 or joined == '..'
-                                or joined.startswith('../') or member.islnk() and target.startswith('/')):
-                            raise OCIError('OCI link escapes image root')
-                    if member.size < 0 or declared + member.size > budget.profile['max_unpacked_bytes']:
-                        raise OCIError('OCI logical layer size exceeds bound')
-                    budget.charge('expanded', member.size, phase='tar-expanded')
-                    declared += member.size
-            while stream.read(65536):
-                pass
-            if 'sha256:' + stream.digest.hexdigest() != expected:
-                raise OCIError('OCI uncompressed layer digest differs')
+    if media not in LAYER_MEDIA or not isinstance(expected, str) or not HEX.fullmatch(expected):
+        raise OCIError('Unsupported OCI layer or diff ID')
+    path = Path(path)
+    source = _Root(path.parent)
+    complete = None
+    try:
+        # This descriptor stays open for BOTH fresh content hashing and miss
+        # parsing. _Root.file checks the same regular FD's identity afterward.
+        with source.file(path.name, budget.profile['max_storage_bytes']) as (raw, size):
+            digest, total = hashlib.sha256(), 0
+            while True:
+                budget.tick()
+                chunk = raw.read(min(65536, size - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > size:
+                    raise OCIError('OCI layer changed during content hashing')
+                digest.update(chunk)
+            if total != size:
+                raise OCIError('OCI layer changed during content hashing')
+            key = (digest.hexdigest(), size, media, expected)
+            fact = budget._layer_facts.get(key)
+            valid = (type(fact) is tuple and len(fact) == 5 and fact[0] is _LAYER_FACT_SEAL
+                     and fact[1] == key and all(type(n) is int and n >= 0 for n in fact[2:])
+                     and fact[2] <= budget.profile['max_unpacked_bytes']
+                     and fact[3] <= budget.profile['max_unpacked_bytes'] and fact[4] <= _MAX_TAR_ENTRIES)
+            if valid:
+                # No gzip/TAR parser runs here. Preserve conservative byte
+                # weights and every layer occurrence; only NEW headers count.
+                budget.charge('unpacked', fact[2], phase='layer-cached-unpacked')
+                budget.charge('expanded', fact[3], phase='layer-cached-expanded')
+            else:
+                budget._layer_facts.pop(key, None)
+                raw.seek(0)
+                unpacked, expanded, entries = _parse_layer(raw, media, expected, budget)
+                complete = (_LAYER_FACT_SEAL, key, unpacked, expanded, entries)
+    finally:
+        source.close()
+    # Insert only AFTER the held FD's final identity/stability check succeeds.
+    # A full cache is just an uncached parse, never truncated validation.
+    if complete is not None and len(budget._layer_facts) < _LAYER_CACHE_MAX:
+        budget._layer_facts[key] = complete
+
+
+def _parse_layer(raw, media, expected, budget):
+    declared, entries = 0, 0
+    with (gzip.GzipFile(fileobj=raw) if media in {GZIP, DOCKER_GZIP} else raw) as decoded:
+        stream = _Decoded(decoded, budget)
+        with tarfile.open(fileobj=stream, mode='r|') as archive:
+            for member in archive:
+                entries += 1
+                budget.charge('entries', 1, phase='tar-entries')
+                name = member.name
+                if (not name or len(name) > 4096 or '\\' in name or name.startswith('/')
+                        or '..' in PurePosixPath(name).parts
+                        or member.sparse is not None
+                        or not (member.isfile() or member.isdir() or member.issym() or member.islnk())):
+                    raise OCIError('Unsupported or unsafe OCI layer member')
+                if member.issym() or member.islnk():
+                    target = member.linkname
+                    joined = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                    if (not target or '\\' in target or len(target) > 4096 or joined == '..'
+                            or joined.startswith('../') or member.islnk() and target.startswith('/')):
+                        raise OCIError('OCI link escapes image root')
+                if member.size < 0 or declared + member.size > budget.profile['max_unpacked_bytes']:
+                    raise OCIError('OCI logical layer size exceeds bound')
+                budget.charge('expanded', member.size, phase='tar-expanded')
+                declared += member.size
+        while stream.read(65536):
+            pass
+        if 'sha256:' + stream.digest.hexdigest() != expected:
+            raise OCIError('OCI uncompressed layer digest differs')
+    return stream.bytes, declared, entries
 
 
 class VerifiedOCIImage:
@@ -619,3 +672,5 @@ def import_layouts(catalog, inventory, profile, workspace):
                     image._proof = None
     except (OSError, KeyError, TypeError, AttributeError, EOFError, tarfile.TarError):
         raise OCIError('Local OCI input unavailable, malformed or unsafe') from None
+    finally:
+        budget._layer_facts.clear()
