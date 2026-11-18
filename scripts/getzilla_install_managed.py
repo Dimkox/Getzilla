@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import subprocess
 import tarfile
@@ -18,6 +19,7 @@ from getzilla.updater import _release_fetch, home_dir
 
 
 def main(argv=None):
+    original_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--environment-only', action='store_true')
     parser.add_argument('--verify-only', action='store_true')
@@ -25,11 +27,22 @@ def main(argv=None):
     parser.add_argument('--agent', choices=('qwen', 'codex', 'claude', 'gemini', 'copilot', 'grok'))
     parser.add_argument('--tool', action='append', default=[])
     parser.add_argument('--result', type=Path)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(original_argv)
     try:
         if args.environment_only:
             from getzilla.managed_software import ensure_python
             python = ensure_python(home_dir(), fetch=_release_fetch)
+            if sys.version_info < (3, 11):
+                # The supported 3.10 bootstrap must leave before importing the
+                # selected runtime's tomllib-dependent pure-build helper.
+                selected = Path(python)
+                if not selected.is_absolute() or not selected.is_file():
+                    raise ValueError('fresh selected Python handoff path is unavailable')
+                selected = selected.resolve(strict=True)
+                if selected.samefile(sys.executable):
+                    raise ValueError('fresh selected Python still has the old bootstrap identity')
+                os.execv(str(selected), [str(selected), '-I', '-B', str(Path(__file__).resolve()), *original_argv])
+                raise ValueError('selected Python process replacement did not complete')
             executable = install_environment(args.home, str(python), fetch=_release_fetch)
             result = dict(status='complete', python=str(executable), detail='exact current quality wheel closure verified')
         else:

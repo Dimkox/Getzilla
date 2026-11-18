@@ -32,3 +32,11 @@ runtime before issuing an invocation-bound local completion. Generic sdists stay
 refused; incompatible or failed builds preserve the previous environment. A real
 private Python 3.15.2 / PyYAML 6.0.3 build and `safe_load` probe succeeded. This does
 not recover the unrecorded historical interpreter or qualify the full installer.
+
+The supported Python 3.10 bootstrap stayed in the CLI after selecting a newer
+managed Python, so importing the PyYAML helper could fail on missing `tomllib`.
+Replace that old CLI process with the freshly selected interpreter before the
+helper import, preserving original arguments, standard streams and exit status.
+An unavailable or identical old interpreter remains incomplete; current runtimes
+keep the direct path. A missing-tomllib control proves the selected runtime can
+import the helper without running an installer or build.
