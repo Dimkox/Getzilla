@@ -54,3 +54,6 @@ bounded closed diagnostic for ordinary failures, hash the complete capped
 capture, and redact before choosing first/last text so boundary fragments cannot
 leak. Bound serialized Unicode/control text within the existing worker IPC limit.
 The owned failure regression uses a real tail beyond4097bytes and mocked effects.
+Preserve sanitized literal causes for exact registry/OCI refusal types too;
+unknown exception messages, subclasses, arguments and detail sidecars do not gain
+diagnostic authority. Reasons and nested worker payloads keep their existing caps.

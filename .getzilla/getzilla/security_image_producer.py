@@ -19,10 +19,10 @@ import tempfile
 import time
 
 from .security_artifacts import read_file
-from .security_image_backend import BuildKit, _ACTIVE, BackendUnavailable
-from .security_image_registry import Registry
+from .security_image_backend import BuildKit, _ACTIVE, BackendUnavailable, _diagnostic
+from .security_image_registry import Registry, RegistryError
 from .security_inventory import collect_inventory, declared_inventory
-from .security_oci import LIMITS, INDEX, MANIFEST, canonical, document, _descriptor, import_layouts
+from .security_oci import LIMITS, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
 
 _LIVE = None
 _PHASE = 'opening'
@@ -437,12 +437,19 @@ def _offline_tool_control(request, volume):
 
 
 def _fault(error):
-    detail = dict(getattr(error, 'detail', {}))
+    kind = type(error)
+    detail = dict(error.detail) if kind is BackendUnavailable else {}
     detail.setdefault('phase', _PHASE)
     detail.setdefault('command_id', 'worker')
-    detail.setdefault('errno', getattr(error, 'errno', None))
+    number = getattr(error, 'errno', None)
+    detail.setdefault('errno', number if type(number) is int else None)
     detail.setdefault('exit_code', 1)
-    detail['reason'] = str(error)[:128] if type(error) is BackendUnavailable else 'worker operation refused'
+    detail['reason'] = 'worker operation refused'
+    if (kind in (BackendUnavailable, RegistryError, OCIError) and len(error.args) == 1
+            and type(error.args[0]) is str and len(error.args[0]) <= 4096):
+        raw = error.args[0].encode('utf-8', errors='replace')
+        if len(raw) <= 4096:
+            detail['reason'] = _diagnostic(raw)['first'][:128]
     os.write(2, canonical({'fault': detail}) + b'\n')
 
 

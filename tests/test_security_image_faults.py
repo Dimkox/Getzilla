@@ -12,9 +12,43 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import security_image_backend as backend
+from getzilla import security_image_producer as producer
+from getzilla.security_image_registry import RegistryError
+from getzilla.security_oci import OCIError
 
 
 class FaultControls(unittest.TestCase):
+    def test_known_graph_failures_keep_literal_causes_unknown_errors_stay_private(self):
+        class ForeignRegistryError(RegistryError):
+            pass
+        class NotText:
+            def __str__(self):
+                raise AssertionError('untrusted exception argument must not be rendered')
+        unknown = ValueError('owned-unknown-secret')
+        unknown.detail = {'private': 'owned-sidecar-secret'}
+        unknown.errno = 'owned-errno-secret'
+        cases = [(RegistryError('registry redirect leaves registered origins'), 'registry redirect leaves registered origins'),
+                 (OCIError('Aggregate OCI resource bound exceeded'), 'Aggregate OCI resource bound exceeded'),
+                 (OCIError('Unsupported OCI layer or diff ID'), 'Unsupported OCI layer or diff ID'),
+                 (unknown, 'worker operation refused'),
+                 (ForeignRegistryError('owned-subclass-secret'), 'worker operation refused'),
+                 (RegistryError(NotText()), 'worker operation refused')]
+        for error, expected in cases:
+            with self.subTest(error=type(error).__name__), mock.patch.object(producer.os, 'write') as write:
+                producer._fault(error)
+                write.assert_called_once()
+                self.assertEqual(write.call_args.args[0], 2)
+                raw = write.call_args.args[1]
+                self.assertLess(len(raw), 4096)
+                detail = json.loads(raw)['fault']
+                self.assertEqual(detail['reason'], expected)
+                self.assertLessEqual(len(detail['reason']), 128)
+                self.assertEqual(detail['exit_code'], 1)
+                self.assertNotIn('owned-unknown-secret', raw.decode())
+                self.assertNotIn('owned-sidecar-secret', raw.decode())
+                self.assertNotIn('owned-subclass-secret', raw.decode())
+                self.assertNotIn('owned-errno-secret', raw.decode())
+
     def test_normal_build_failure_retains_redacted_actual_tail_and_complete_capture_identity(self):
         first = b'ordinary first error: input refused\n'
         final = b'\nACTUAL FINAL FAILURE: no space left on device\n'
