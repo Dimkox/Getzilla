@@ -28,6 +28,7 @@ import urllib.request
 import urllib.parse
 import zipfile
 import zlib
+from urllib.error import HTTPError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,6 +189,31 @@ class _ReleaseRedirect(urllib.request.HTTPRedirectHandler):
 _RELEASE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _ReleaseRedirect())
 
 
+def _release_refusal(error, origin):
+    values = {}
+    get_all = getattr(error.headers, 'get_all', None)
+    for header, field in (('X-RateLimit-Remaining', 'remaining'), ('X-RateLimit-Reset', 'reset'),
+                          ('Retry-After', 'retry_after')):
+        rows = get_all(header) if callable(get_all) else None
+        if (type(rows) is list and len(rows) == 1 and type(rows[0]) is str
+                and re.fullmatch(r'[0-9]{1,19}', rows[0]) and int(rows[0]) < 2**63):
+            values[field] = int(rows[0])
+    source = 'github-api' if origin.netloc == 'api.github.com' else 'official-release'
+    repository = r'/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+    kinds = (('latest-release', repository + r'/releases/latest'),
+             ('tag-refs', repository + r'/git/(?:matching-refs/tags/|ref/tags/[^/]+|tags/[a-f0-9]{40})'),
+             ('tagged-release', repository + r'/releases/tags/[^/]+'))
+    endpoint = next((kind for kind, pattern in kinds
+                     if source == 'github-api' and re.fullmatch(pattern, origin.path)), 'other')
+    if (origin.netloc == 'github.com' and re.fullmatch(
+            r'/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^/]+/[^/]+', origin.path)):
+        endpoint = 'release-asset'
+    reason = ('quota-exhausted' if values.get('remaining') == 0 else
+              'rate-limited' if error.code == 429 else 'forbidden')
+    detail = f'official release request refused: source={source} status={error.code} reason={reason} endpoint={endpoint}'
+    return detail + ''.join(f' {name}={value}' for name, value in values.items())
+
+
 def _release_fetch(url: str) -> bytes:
     """Bounded public release transport, owned by the existing updater boundary."""
     origin = urllib.parse.urlsplit(url)
@@ -200,7 +226,17 @@ def _release_fetch(url: str) -> bytes:
     headers = {'User-Agent': 'Getzilla-release-resolver/1', 'Accept-Encoding': 'gzip' if catalog else 'identity'}
     request = urllib.request.Request(url, headers=headers)  # nosec B310
     started = time.monotonic()
-    with _RELEASE_OPENER.open(request, timeout=20) as response:  # nosec B310
+    try:
+        response = _RELEASE_OPENER.open(request, timeout=20)  # nosec B310
+    except HTTPError as exc:
+        if exc.code not in {403, 429}:
+            raise
+        try:
+            detail = _release_refusal(exc, origin)
+        finally:
+            exc.close()
+        raise ValueError(detail) from None
+    with response:
         _release_origin(response.geturl())
         encoding = response.headers.get('Content-Encoding', 'identity')
         if encoding not in ({'identity', 'gzip'} if catalog else {'identity'}):
