@@ -9,6 +9,8 @@ from __future__ import annotations
 import ctypes as C
 import contextlib
 import hashlib
+import itertools
+import json
 import os
 import re
 import uuid
@@ -90,6 +92,47 @@ def check_acl(owner, aces, trusted, *, owned):
             raise SecurityDataError('snapshot native DACL permits untrusted writes or path replacement')
 
 
+def _diagnostic_sid(value):
+    # SID text only, never an account name, path or raw descriptor. This is an
+    # output filter, not a trust decision or an alternative security parser.
+    return value if (type(value) is str and len(value) <= 192 and re.fullmatch(
+        r'S-1-(?:[0-9]{1,15}|0x[0-9a-fA-F]{12})(?:-[0-9]{1,10}){0,15}', value)) else None
+
+
+def _acl_diagnostic(native, security, *, owned, directory, ancestor_depth):
+    def number(value, maximum):
+        return value if type(value) is int and 0 <= value <= maximum else None
+
+    def principals(values):
+        if type(values) not in {set, frozenset, tuple, list}:
+            return [], None
+        selected = [_diagnostic_sid(value) for value in itertools.islice(values, 8)]
+        valid = sorted(value for value in selected if value is not None)
+        return valid, len(values) - len(valid)
+
+    trusted, trusted_omitted = principals(native.trusted)
+    ancestors, ancestors_omitted = principals(native.ancestors)
+    aces = security[1]
+    count = len(aces) if type(aces) in {tuple, list} else None
+    entries = []
+    for ace in itertools.islice(aces if count is not None else (), 32):
+        kind, flags, mask, sid = ace if type(ace) in {tuple, list} and len(ace) == 4 else (None,) * 4
+        entries.append({'kind': number(kind, 255), 'flags': number(flags, 255),
+                        'mask': number(mask, 0xffffffff), 'sid': _diagnostic_sid(sid)})
+    service = getattr(native, 'service_owner', None)
+    lookup = ('unknown' if not hasattr(native, 'service_owner') else 'unavailable' if service is None
+              else 'resolved' if _diagnostic_sid(service) is not None else 'invalid')
+    return {'schema_version': 1,
+            'role': ('owned-directory' if directory else 'owned-file') if owned else
+                    'volume-root' if ancestor_depth == 0 else 'ancestor',
+            'ancestor_depth': number(ancestor_depth, 128), 'owner_sid': _diagnostic_sid(security[0]),
+            'aces': entries, 'ace_count': count, 'aces_omitted': count - len(entries) if count is not None else None,
+            'dacl_protected': security[2] if len(security) > 2 and type(security[2]) is bool else None,
+            'trusted_sids': trusted, 'trusted_sids_omitted': trusted_omitted,
+            'ancestor_sids': ancestors, 'ancestor_sids_omitted': ancestors_omitted,
+            'trustedinstaller_lookup': lookup}
+
+
 def _component(name):
     if (not isinstance(name, str) or not name or len(name) > 255 or name in {'.', '..'}
             or re.search(r'[\\/:<>"|?*\x00-\x1f\ud800-\udfff]', name) or name[-1] in '. '
@@ -148,6 +191,7 @@ class Native:
         self.trusted = {self.user, 'S-1-5-18', 'S-1-5-32-544'}
         self.ancestors = set(self.trusted)
         service = self._lookup_service()
+        self.service_owner = service
         if service:
             self.ancestors.add(service)
         self.sd = HANDLE()
@@ -361,20 +405,29 @@ class SnapshotStore:
             self.native.shutdown()
             self.native = None
 
-    def _metadata(self, handle, *, owned, directory, maximum=None):
+    def _metadata(self, handle, *, owned, directory, maximum=None, ancestor_depth=None):
         value = self.native.metadata(handle)
         if (value.directory != directory or value.attributes & 0x400
                 or not directory and (value.links != 1 or value.size < 0)):
             raise SecurityDataError('snapshot native object type/reparse/hardlink is unsafe')
         trusted = self.native.trusted if owned else self.native.ancestors
-        check_acl(*value.security[:2], trusted, owned=owned)
+        try:
+            check_acl(*value.security[:2], trusted, owned=owned)
+        except SecurityDataError as error:
+            diagnostic = _acl_diagnostic(self.native, value.security, owned=owned,
+                                         directory=directory, ancestor_depth=ancestor_depth)
+            failure = SecurityDataError(str(error) + '; native_acl_diagnostic=' +
+                                        json.dumps(diagnostic, sort_keys=True, separators=(',', ':')))
+            failure.native_acl_diagnostic = diagnostic
+            raise failure from error
         if maximum is not None and value.size > maximum:
             raise SecurityDataError('snapshot file exceeds the bounded read limit')
         return value
 
     def _hold(self, handle, parent, name, *, owned, directory, maximum=None):
         try:
-            identity = self._metadata(handle, owned=owned, directory=directory, maximum=maximum).identity()
+            identity = self._metadata(handle, owned=owned, directory=directory, maximum=maximum,
+                                      ancestor_depth=len(self.directories) if directory and not owned else None).identity()
         except BaseException:
             self.native.close(handle)
             raise
@@ -386,14 +439,15 @@ class SnapshotStore:
         return held
 
     def confirm(self):
-        for directory, held in [(True, node) for node in self.directories] + [(False, f) for f in self.files.values()]:
-            value = self._metadata(held.handle, owned=held.owned, directory=directory)
+        for depth, (directory, held) in enumerate([(True, node) for node in self.directories] + [(False, f) for f in self.files.values()]):
+            ancestor_depth = depth if directory and not held.owned else None
+            value = self._metadata(held.handle, owned=held.owned, directory=directory, ancestor_depth=ancestor_depth)
             if value.identity() != held.identity:
                 raise SecurityDataError('snapshot held native identity or security changed')
             if held.parent is not None:
                 named = self.native.open(held.parent, held.name, directory=directory, inspect=True)
                 try:
-                    current = self._metadata(named, owned=held.owned, directory=directory)
+                    current = self._metadata(named, owned=held.owned, directory=directory, ancestor_depth=ancestor_depth)
                     if current.identity() != held.identity:
                         raise SecurityDataError('snapshot native name was replaced while held')
                 finally:

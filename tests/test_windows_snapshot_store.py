@@ -181,6 +181,131 @@ class MemoryNative:
                 del node['children'][name]
 
 
+class AclDiagnosticTests(unittest.TestCase):
+    USER = 'S-1-5-21-1-2-3-1001'
+    OTHER = 'S-1-5-21-1-2-3-9999'
+    SERVICE = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+
+    def native(self):
+        native = MemoryNative()
+        native.trusted = {self.USER, 'S-1-5-18', 'S-1-5-32-544'}
+        native.ancestors = native.trusted | {self.SERVICE}
+        native.service_owner = self.SERVICE
+        return native
+
+    def refusal(self, native, security):
+        native.nodes[native.root_id]['security'] = security
+        with self.assertRaises(SD.SecurityDataError) as caught:
+            W.SnapshotStore('C:\\database', create=True, _native=native).__enter__()
+        self.assertEqual(native.handles, {})
+        diagnostic = caught.exception.native_acl_diagnostic
+        self.assertEqual(json.loads(str(caught.exception).split('; native_acl_diagnostic=', 1)[1]), diagnostic)
+        return caught.exception, diagnostic
+
+    def test_owner_refusal_reports_exact_bounded_root_facts_without_changing_trust(self):
+        native = self.native()
+        trusted, ancestors = native.trusted.copy(), native.ancestors.copy()
+        aces = ((0, 0, 0x1F01FF, self.USER), (0, 8, 0x40000000, 'S-1-1-0'))
+        error, found = self.refusal(native, (self.OTHER, aces, True))
+        self.assertTrue(str(error).startswith('snapshot native owner is not trusted;'))
+        self.assertEqual(found['schema_version'], 1)
+        self.assertEqual((found['role'], found['ancestor_depth']), ('volume-root', 0))
+        self.assertEqual(found['owner_sid'], self.OTHER)
+        self.assertEqual(found['aces'], [{'kind': k, 'flags': f, 'mask': m, 'sid': s} for k, f, m, s in aces])
+        self.assertEqual((found['ace_count'], found['aces_omitted'], found['dacl_protected']), (2, 0, True))
+        self.assertEqual(found['trusted_sids'], sorted(trusted))
+        self.assertEqual(found['ancestor_sids'], sorted(ancestors))
+        self.assertEqual(found['trustedinstaller_lookup'], 'resolved')
+        self.assertEqual((native.trusted, native.ancestors), (trusted, ancestors))
+
+    def test_dacl_refusal_keeps_original_reason_and_service_unavailable_fact(self):
+        native = self.native()
+        native.service_owner = None
+        error, found = self.refusal(native, (self.USER, ((0, 0, 0x10000, self.OTHER),), False))
+        self.assertTrue(str(error).startswith('snapshot native DACL permits untrusted writes or path replacement;'))
+        self.assertEqual(found['trustedinstaller_lookup'], 'unavailable')
+        self.assertFalse(found['dacl_protected'])
+
+    def test_untrusted_diagnostic_fields_cannot_escape_shape_or_output_bound(self):
+        native = self.native()
+        secret = 'username=fixture; HOME=C:\\private\\tree\n' + 'x' * 100000
+        native.trusted = {secret}
+        native.ancestors = {secret}
+        native.service_owner = secret
+        aces = [(999, -1, 2**80, secret)] * 4096
+        error, found = self.refusal(native, (secret, aces, 'raw descriptor'))
+        self.assertIsNone(found['owner_sid'])
+        self.assertIsNone(found['dacl_protected'])
+        self.assertEqual((found['ace_count'], len(found['aces']), found['aces_omitted']), (4096, 32, 4064))
+        self.assertEqual(found['aces'][0], {'kind': None, 'flags': None, 'mask': None, 'sid': None})
+        self.assertNotIn('private', str(error))
+        self.assertNotIn('username', str(error))
+        self.assertLess(len(str(error).encode()), 16384)
+
+    def test_ancestor_refusal_records_depth_and_releases_root_handle(self):
+        native = self.native()
+        native.nodes[native.root_id]['security'] = (self.USER, (), True)
+        parent = native.node(True, security=(self.OTHER, (), False))
+        native.nodes[native.root_id]['children']['parent'] = parent
+        with self.assertRaises(SD.SecurityDataError) as caught:
+            W.SnapshotStore('C:\\parent\\database', create=True, _native=native).__enter__()
+        self.assertEqual(native.handles, {})
+        self.assertEqual(caught.exception.native_acl_diagnostic['role'], 'ancestor')
+        self.assertEqual(caught.exception.native_acl_diagnostic['ancestor_depth'], 1)
+
+    def test_maximum_valid_sid_diagnostic_and_principal_collections_are_bounded(self):
+        native = self.native()
+        sid = 'S-1-281474976710655' + '-4294967295' * 15
+        native.trusted = {sid + str(i) for i in range(100)}
+        native.ancestors = {sid + str(i) for i in range(100)}
+        error, found = self.refusal(native, (sid, [(255, 255, 0xffffffff, sid)] * 4096, True))
+        self.assertEqual(len(found['aces']), 32)
+        self.assertEqual(found['aces_omitted'], 4064)
+        self.assertEqual(found['trusted_sids_omitted'], 100)
+        self.assertLess(len(str(error).encode()), 16384)
+
+    def test_native_security_api_port_preserves_owner_aces_protection_and_free_order(self):
+        # The Windows ABI port supplies only typed API outputs in owned memory.
+        # Native.security itself parses the real ACL/ACE layouts and SID offsets.
+        import ctypes as C
+        sid = b'\x01\x01' + (5).to_bytes(6, 'big') + (18).to_bytes(4, 'little')
+        owner = C.create_string_buffer(sid)
+        ace = b'\x00\x10' + (20).to_bytes(2, 'little') + (0x120089).to_bytes(4, 'little') + sid
+        acl = C.create_string_buffer(b'\x02\x00' + (28).to_bytes(2, 'little') + b'\x01\x00\x00\x00' + ace)
+        descriptor = C.create_string_buffer(8)
+        freed = []
+
+        def security(handle, kind, flags, owner_out, group, acl_out, sacl, sd_out):
+            self.assertEqual((handle, kind, flags), (17, 1, 5))
+            for output, value in ((owner_out, owner), (acl_out, acl), (sd_out, descriptor)):
+                C.cast(output, C.POINTER(W.HANDLE))[0] = C.addressof(value)
+            return 0
+
+        def get_ace(pointer, index, output):
+            self.assertEqual((pointer.value, index), (C.addressof(acl), 0))
+            C.cast(output, C.POINTER(W.HANDLE))[0] = C.addressof(acl) + 8
+            return 1
+
+        def control(pointer, output, revision):
+            C.cast(output, C.POINTER(W.U16))[0] = 0x1000
+            C.cast(revision, C.POINTER(W.U32))[0] = 1
+            return 1
+
+        def convert(pointer):
+            self.assertEqual(freed, [])
+            address = pointer.value if isinstance(pointer, W.HANDLE) else pointer
+            self.assertEqual(C.string_at(address, len(sid)), sid)
+            return 'S-1-5-18'
+
+        native = W.Native.__new__(W.Native)
+        native.a = SimpleNamespace(GetSecurityInfo=security, GetAce=get_ace,
+                                   GetSecurityDescriptorControl=control)
+        native.k = SimpleNamespace(LocalFree=lambda pointer: freed.append(pointer.value))
+        native._sid = convert
+        self.assertEqual(native.security(17), ('S-1-5-18', ((0, 0x10, 0x120089, 'S-1-5-18'),), True))
+        self.assertEqual(freed, [C.addressof(descriptor)])
+
+
 class StoreModelTests(unittest.TestCase):
     def test_held_model_roundtrip_update_and_bounded_read(self):
         native = MemoryNative()
