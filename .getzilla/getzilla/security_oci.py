@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import stat
+import sys
 import tarfile
 import tempfile
 import time
@@ -36,6 +37,19 @@ OPAQUE_ATTESTATION = 'application/vnd.in-toto+json'
 LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
+CI_BYTES = 8 * 1024 ** 3
+CI_MEMORY = 12 * 1024 ** 3
+
+
+def active_limits():
+    """JSON is a declaration; only the existing measured native job raises bounds."""
+    limits = dict(LIMITS)
+    native = sys.modules.get(__package__ + '.security_image_backend')
+    if native is not None and native.measured_ci_profile():
+        for key in ('max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes'):
+            limits[key] = CI_BYTES
+    return limits
+
 HEX = re.compile(r'sha256:[0-9a-f]{64}\Z')
 REFERENCE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}\Z')
 _PROOF = object()
@@ -70,9 +84,10 @@ def document(raw):
 
 
 def _profile(profile):
+    ceiling = active_limits()
     if (not isinstance(profile, dict) or set(profile) != set(LIMITS) | {'images', 'platform'}
             or profile['platform'] not in {'linux/amd64', 'linux/arm64'}
-            or any(type(profile[k]) is not int or not 0 < profile[k] <= n for k, n in LIMITS.items())):
+            or any(type(profile[k]) is not int or not 0 < profile[k] <= n for k, n in ceiling.items())):
         raise OCIError('Unsupported or oversized OCI profile')
 
 
@@ -80,10 +95,17 @@ class _Budget:
     def __init__(self, profile):
         _profile(profile)
         self.profile = profile
+        self._native = None
+        self._guard = None
+        if any(profile[key] > LIMITS[key] for key in LIMITS):
+            self._native = sys.modules[__package__ + '.security_image_backend']
+            self._guard = self._native._GUARD
         self.deadline = time.monotonic() + profile['deadline_seconds']
         self.totals = dict(compressed=0, unpacked=0, storage=0, layers=0, entries=0, expanded=0)
 
     def tick(self):
+        if self._native is not None and self._native._GUARD is not self._guard:
+            raise OCIError('CI image profile lifetime ended')
         if time.monotonic() >= self.deadline:
             raise OCIError('OCI deadline exceeded')
 
