@@ -1,0 +1,67 @@
+[
+  {
+    "package": "cryptography",
+    "version": "50.0.2",
+    "artifact_filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+    "artifact_sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079",
+    "member": "cryptography-50.0.2.dist-info/licenses/LICENSE",
+    "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+    "text": "This software is made available under the terms of *either* of the licenses\nfound in LICENSE.APACHE or LICENSE.BSD. Contributions to cryptography are made\nunder the terms of *both* these licenses.\n",
+    "expected": {
+      "kind": "license-declaration",
+      "expression": "Apache-2.0 OR BSD-3-Clause",
+      "required_files": {
+        "LICENSE.APACHE": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+        "LICENSE.BSD": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+      }
+    }
+  },
+  {
+    "package": "pytest-cov",
+    "version": "7.1.0",
+    "artifact_filename": "pytest_cov-7.1.0-py3-none-any.whl",
+    "artifact_sha256": "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678",
+    "member": "pytest_cov-7.1.0.dist-info/licenses/AUTHORS.rst",
+    "sha256": "d7390c793c73c36265497ffac90a886a235c8b50948454c9af98f1aef2a00d2a",
+    "text": "\nAuthors\n=======\n\n* Marc Schlaich - https://github.com/schlamar (\\http://www.schlamar.org)\n* Rick van Hattem - http://wol.ph\n* Buck Evan - https://github.com/bukzor\n* Eric Larson - http://larsoner.com\n* Marc Abramowitz - \\http://marc-abramowitz.com\n* Thomas Kluyver - https://github.com/takluyver\n* Guillaume Ayoub - http://www.yabz.fr\n* Federico Ceratto - \\http://firelet.net\n* Josh Kalderimis - \\http://blog.cookiestack.com\n* Ionel Cristian Mărieș - https://blog.ionelmc.ro\n* Christian Ledermann - https://github.com/cleder\n* Alec Nikolas Reiter - https://github.com/justanr\n* Patrick Lannigan - https://github.com/plannigan\n* David Szotten - https://github.com/davidszotten\n* Michael Elovskikh - https://github.com/wronglink\n* Saurabh Kumar - https://github.com/theskumar\n* Michael Elovskikh - https://github.com/wronglink\n* Daniel Hahler - https://github.com/blueyed (\\https://daniel.hahler.de)\n* Florian Bruhin - http://www.the-compiler.org\n* Zoltan Kozma - https://github.com/kozmaz87\n* Francis Niu - https://flniu.github.io\n* Jannis Leidel - https://github.com/jezdez\n* Ryan Hiebert - http://ryanhiebert.com/\n* Terence Honles - https://github.com/terencehonles\n* Jeremy Bowman - https://github.com/jmbowman\n* Samuel Giffard - https://github.com/Mulugruntz\n* Семён Марьясин - https://github.com/MarSoft\n* Alexander Shadchin - https://github.com/shadchin\n* Thomas Grainger - https://graingert.co.uk\n* Juanjo Bazán - https://github.com/xuanxu\n* Andrew Murray - https://github.com/radarhere\n* Ned Batchelder - https://nedbatchelder.com/\n* Albert Tugushev - https://github.com/atugushev\n* Martín Gaitán - https://github.com/mgaitan\n* Hugo van Kemenade - https://github.com/hugovk\n* Michael Manganiello - https://github.com/adamantike\n* Anders Hovmöller - https://github.com/boxed\n* Zac Hatfield-Dodds - https://zhd.dev\n* Mateus Berardo de Souza Terra - https://github.com/MatTerra\n* Ganden Schaffner - https://github.com/gschaffner\n* Michał Górny - https://github.com/mgorny\n* Bernát Gábor - https://github.com/gaborbernat\n* Pamela McA'Nulty - https://github.com/PamelaM\n* Christian Riedel - https://github.com/Cielquan\n* Chris Sreesangkom - https://github.com/csreesan\n* Sorin Sbarnea - https://github.com/ssbarnea\n* Brian Rutledge - https://github.com/bhrutledge\n* Danilo Šegan - https://github.com/dsegan\n* Michał Bielawski - https://github.com/D3X\n* Zac Hatfield-Dodds - https://github.com/Zac-HD\n* Ben Greiner - https://github.com/bnavigator\n* Delgan - https://github.com/Delgan\n* Andre Brisco - https://github.com/abrisco\n* Colin O'Dell - https://github.com/colinodell\n* Ronny Pfannschmidt - https://github.com/RonnyPfannschmidt\n* Christian Fetzer - https://github.com/fetzerch\n* Jonathan Stewmon - https://github.com/jstewmon\n* Matthew Gamble - https://github.com/mwgamble\n* Christian Clauss - https://github.com/cclauss\n* Dawn James - https://github.com/dawngerpony\n* Tsvika Shapira - https://github.com/tsvikas\n* Marcos Boger - https://github.com/marcosboger\n* Ofek Lev - https://github.com/ofek\n* Art Pelling - https://github.com/artpelling\n* Markéta Machová - https://github.com/MeggyCal\n",
+    "expected": {
+      "kind": "attribution",
+      "expression": "MIT",
+      "required_files": {
+        "LICENSE": "835586ae156766a24e3c103fbc55d9af6b1a16df57ca932c97482a2737fd83d5"
+      }
+    }
+  },
+  {
+    "package": "tzdata",
+    "version": "2026.3",
+    "artifact_filename": "tzdata-2026.3-py2.py3-none-any.whl",
+    "artifact_sha256": "dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931",
+    "member": "tzdata-2026.3.dist-info/licenses/LICENSE",
+    "sha256": "df58f69ea88683035d720b5375bcef0cf5aeaa98a1d098d572e0992c378deb46",
+    "text": "Apache Software License 2.0\n\nCopyright (c) 2020, Paul Ganssle (Google)\nCopyright (c) 2026, Stan Ulbrych\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use this file except in compliance with the License.\nYou may obtain a copy of the License at\n\nhttp://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n",
+    "expected": {
+      "kind": "attribution",
+      "expression": "Apache-2.0",
+      "required_files": {
+        "licenses/LICENSE_APACHE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    }
+  },
+  {
+    "package": "coverage",
+    "version": "7.15.4",
+    "artifact_filename": "coverage-7.15.4-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+    "artifact_sha256": "899b9da30f3c6c336566e3707495bb23e8302d39d862f01fa78c48b99b9437e2",
+    "member": "coverage-7.15.4.dist-info/licenses/NOTICE.txt",
+    "sha256": "80e177ab397d5f332954693a52abc1b34b06c5792dd57297608b6d68a2f6af11",
+    "text": "Copyright 2001 Gareth Rees.  All rights reserved.\nCopyright 2004-2026 Ned Batchelder.  All rights reserved.\n\nExcept where noted otherwise, this software is licensed under the Apache\nLicense, Version 2.0 (the \"License\"); you may not use this work except in\ncompliance with the License.  You may obtain a copy of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n",
+    "expected": {
+      "kind": "attribution",
+      "expression": "Apache-2.0",
+      "required_files": {
+        "LICENSE.txt": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+      }
+    }
+  }
+]
