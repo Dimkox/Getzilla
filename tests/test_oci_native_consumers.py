@@ -13,7 +13,6 @@ sys.path.insert(0, str(W / '.getzilla'))
 from getzilla import expanded_security as security
 from getzilla import security_inventory as inventory
 from getzilla import security_licenses  # preload before the closed fixture boundary
-from getzilla import security_oci
 from getzilla import security_tools
 from getzilla.security_cli import input_profile
 from getzilla.security_data import SecurityDataError
