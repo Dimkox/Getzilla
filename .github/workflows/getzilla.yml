@@ -472,6 +472,12 @@ jobs:
           import json, os, pathlib, sys
           sys.path.insert(0, str(pathlib.Path.cwd() / '.getzilla'))
           from getzilla.startup_cpu import parse_cpu_list, format_cpu_list
+          try:
+              from getzilla.security_image_job import _memory_admission
+          except ImportError:
+              raise SystemExit('BLOCKED: operator must select an exact reviewed checker/producer SHA with CI memory admission; candidate HEAD is never selected automatically')
+          memory = _memory_admission(pathlib.Path('/sys/fs/cgroup/system.slice'))
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'security-memory.json').write_text(json.dumps(memory, sort_keys=True))
           record = json.loads(pathlib.Path(sys.argv[1]).read_text())
           capacity = record['chosen_capacity']
           if type(capacity) is not int or capacity <= 0:
@@ -517,7 +523,7 @@ jobs:
           test -f trusted-checker/.getzilla/getzilla/security_image_provision.py || { echo 'BLOCKED: operator must accept an exact reviewed checker/producer SHA and configure GETZILLA_SECURITY_CHECKER_SHA; candidate HEAD is never selected automatically'; exit 1; }
           selected_python="$(command -v python)"
           taskset -c "$SECURITY_CPUS" "$selected_python" -I -S -B -c 'import sys;sys.path.insert(0,sys.argv[1]);from getzilla.security_image_provision import provision;provision(sys.argv[2])' "$GITHUB_WORKSPACE/trusted-checker/.getzilla" "$RUNNER_TEMP/security-buildkit"
-          sudo -n /usr/bin/env GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_SHA="$GITHUB_SHA" "$selected_python" -I -S -B -c 'import sys,sysconfig;sys.path.insert(0,sys.argv.pop(1));sys.path.extend(sorted(set(sysconfig.get_paths()[k] for k in ("purelib","platlib"))));from getzilla.security_cli import main;raise SystemExit(main())' "$GITHUB_WORKSPACE/trusted-checker/.getzilla" --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --produce-images --backend-tool-pins "$RUNNER_TEMP/security-buildkit/toolchain.json" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"
+          sudo -n /usr/bin/env GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_SHA="$GITHUB_SHA" "$selected_python" -I -S -B -c 'import sys,sysconfig;sys.path.insert(0,sys.argv.pop(1));sys.path.extend(sorted(set(sysconfig.get_paths()[k] for k in ("purelib","platlib"))));from getzilla.security_cli import main;raise SystemExit(main())' "$GITHUB_WORKSPACE/trusted-checker/.getzilla" --root "$GITHUB_WORKSPACE/candidate" --database "$RUNNER_TEMP/security-data" --artifacts "$RUNNER_TEMP/security-artifacts" --tools "$RUNNER_TEMP/security-tools" --produce-images --ci-image-corpus --backend-tool-pins "$RUNNER_TEMP/security-buildkit/toolchain.json" --input-profile "$RUNNER_TEMP/security-input-profile.json" --json-out "$RUNNER_TEMP/security-expanded.json"
       - name: Bind scanner observations to this workflow and source
         if: always()
         shell: bash

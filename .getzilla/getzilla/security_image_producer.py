@@ -22,7 +22,7 @@ from .security_artifacts import read_file
 from .security_image_backend import BuildKit, _ACTIVE, BackendUnavailable, _diagnostic
 from .security_image_registry import Registry, RegistryError
 from .security_inventory import collect_inventory, declared_inventory
-from .security_oci import LIMITS, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
+from .security_oci import LIMITS, active_limits, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
 
 _LIVE = None
 _PHASE = 'opening'
@@ -45,15 +45,56 @@ def require_builds(inventory, source, run):
 
 
 def _write(root, relative, raw):
+    if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
+        return _ci_write(root, relative, raw)
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists():
-        if read_file(root, relative, LIMITS['max_storage_bytes']) != raw:
+        if read_file(root, relative, active_limits()['max_storage_bytes']) != raw:
             raise BackendUnavailable('conflicting immutable producer artifact')
         return
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(raw)
+
+
+def _ci_write(root, relative, raw):
+    """Image outputs stay below held native volume, including through parents."""
+    from . import security_image_backend as native
+    from .security_oci import _Root
+    root, relative = Path(root), Path(relative)
+    if (not root.is_relative_to(native._GUARD[0]) or relative.is_absolute()
+            or not relative.parts or '..' in relative.parts or len(relative.parts) > 64):
+        raise BackendUnavailable('CI image output leaves its held volume')
+    held = _Root(root)
+    fd = None
+    try:
+        fd = os.dup(held.fd)
+        if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+            raise BackendUnavailable('CI image output filesystem differs')
+        for name in relative.parts[:-1]:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+                raise BackendUnavailable('CI image output parent leaves its bounded filesystem')
+        try:
+            output = os.open(relative.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=fd)
+        except FileExistsError:
+            if read_file(root, str(relative), active_limits()['max_storage_bytes']) != raw:
+                raise BackendUnavailable('conflicting immutable producer artifact')
+            return
+        with os.fdopen(output, 'wb') as stream:
+            stream.write(raw)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        held.close()
 
 
 def _unpack_export(archive, layout):
@@ -69,7 +110,7 @@ def _unpack_export(archive, layout):
                 raise BackendUnavailable('build export contains unsafe or unknown OCI member')
             seen.add(name)
             total += member.size
-            if total > LIMITS['max_storage_bytes'] or len(seen) > 100002:
+            if total > active_limits()['max_storage_bytes'] or len(seen) > 100002:
                 raise BackendUnavailable('build export exceeds existing storage/member bound')
             source = stream.extractfile(member)
             if source is None:
@@ -198,7 +239,7 @@ def produce(root, source, run, volume, builder):
     _write(layout, 'index.json', canonical(dict(schemaVersion=2, mediaType=INDEX, manifests=list(descriptors.values()))))
     catalog = dict(schema_version=1, inventory_sha256=inventory['digest'], source_bindings=bindings,
                    records=[dict(reference=reference, platform='linux/amd64', layout=str(layout)) for reference in sorted(roots)])
-    profile = dict(LIMITS, images=sorted(roots), platform='linux/amd64')
+    profile = dict(active_limits(), images=sorted(roots), platform='linux/amd64')
     # Validate the ORIGINAL catalog against independently recollected raw source
     # before any declaration projection. No producer success bypasses OCI checks.
     with import_layouts(catalog, inventory, profile, volume):
@@ -223,12 +264,22 @@ def _event(stage):
     sys.stdout.flush()
 
 
+def _pipeline_tools(request, volume):
+    if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
+        from . import security_image_backend as native
+        if Path(volume) != native._GUARD[0]:
+            raise BackendUnavailable('CI tools root differs from held image volume')
+        return Path(volume) / 'tools'
+    return Path(request['tools'])
+
+
 def _pipeline(request, volume, builder):
     global _PHASE
     _PHASE = 'producer'
     from . import security_cli as cli
     root = Path(request['root'])
-    database, artifacts, tools = (Path(request[key]) for key in ('database', 'artifacts', 'tools'))
+    database, artifacts = (Path(request[key]) for key in ('database', 'artifacts'))
+    tools = _pipeline_tools(request, volume)
     with tempfile.TemporaryDirectory(prefix='source-', dir=volume) as directory:
         source = cli.source_binding(root, cli.TRUSTED_ROOT, Path(directory))
         cli.validate_selection_authority(source, request['run'])
@@ -258,11 +309,11 @@ def _worker():
     global _PHASE
     from . import security_image_backend as native
     request = document(sys.stdin.buffer.read(65537))
-    if len(sys.argv) != 3 or not isinstance(request, dict):
+    if len(sys.argv) not in (3, 4) or len(sys.argv) == 4 and sys.argv[3] != 'ci-corpus' or not isinstance(request, dict):
         raise BackendUnavailable('invalid image worker dispatch')
     volume, cgroup = Path(sys.argv[1]), Path(sys.argv[2])
     _PHASE = 'kernel'
-    with native.namespace_volume(volume, cgroup):
+    with native.namespace_volume(volume, cgroup, ci_corpus=len(sys.argv) == 4):
         if isinstance(request, dict) and request.get('kind') == 'offline-tool-control':
             if set(request) != {'kind', 'tool', 'archive'} or request['tool'] not in {'trivy', 'buildkit'}:
                 raise BackendUnavailable('invalid fixed offline tool control')
@@ -489,4 +540,4 @@ def run_pipeline(args, run):
     # This directory is private task runtime on a workstation, RUNNER_TEMP on
     # ephemeral GitHub runners. It never contains candidate source or user data.
     workspace = args.json_out.absolute().parent
-    return run_job(payload, workspace, slice_name='system.slice')
+    return run_job(payload, workspace, slice_name='system.slice', ci_corpus=getattr(args, 'ci_image_corpus', False))

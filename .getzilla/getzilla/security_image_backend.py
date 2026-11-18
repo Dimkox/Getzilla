@@ -24,7 +24,7 @@ import tempfile
 import time
 import uuid
 
-from .security_oci import LIMITS, _Root
+from .security_oci import LIMITS, CI_BYTES, CI_MEMORY, _Root
 
 _ACTIVE = object()
 _GUARD = None
@@ -138,7 +138,7 @@ def _reap_children():
             time.sleep(.02)
 
 
-def _configure_cgroup(cgroup, bounds):
+def _configure_cgroup(cgroup, bounds, *, ci_corpus=False):
     from .startup_cpu import parse_cpu_list, format_cpu_list
     available = set(os.sched_getaffinity(0))
     if bounds.get('effective_cpuset'):
@@ -156,7 +156,7 @@ def _configure_cgroup(cgroup, bounds):
     quota = int(min(quotas) * 100000)
     if quota <= 0:
         raise BackendUnavailable('observed inherited CPU quota cannot be safely represented')
-    controls = {'memory.max': str(2 * 1024 * 1024 * 1024), 'memory.swap.max': '0',
+    controls = {'memory.max': str(CI_MEMORY if ci_corpus else 2 * 1024 ** 3), 'memory.swap.max': '0',
                 'pids.max': '256', 'cpu.max': f'{quota} 100000'}
     for name, value in controls.items():
         path = cgroup / name
@@ -284,9 +284,9 @@ def _retain_fault(workspace, detail):
         root.close()
 
 
-def run_guarded(payload, workspace, *, owned_root=None, started=None):
+def run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus=False):
     try:
-        return _run_guarded(payload, workspace, owned_root=owned_root, started=started)
+        return _run_guarded(payload, workspace, owned_root=owned_root, started=started, ci_corpus=ci_corpus)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         detail = dict(getattr(error, 'detail', {}))
         detail.setdefault('phase', 'admission-or-cleanup')
@@ -300,7 +300,7 @@ def run_guarded(payload, workspace, *, owned_root=None, started=None):
         raise BackendUnavailable('bounded image backend refused', detail=detail) from None
 
 
-def _run_guarded(payload, workspace, *, owned_root=None, started=None):
+def _run_guarded(payload, workspace, *, owned_root=None, started=None, ci_corpus=False):
     """Outer root supervisor. Deadline includes namespace opening and all work."""
     born = time.monotonic() if started is None else started
     if not 0 <= time.monotonic() - born <= LIMITS['deadline_seconds']:
@@ -313,11 +313,15 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
     selected = document(payload)
     offline_control = isinstance(selected, dict) and selected.get('kind') == 'offline-tool-control'
     kernel_control = selected == {'kind': 'kernel-self-test'} or offline_control
+    if ci_corpus and (kernel_control or not isinstance(selected, dict) or selected.get('kind') != 'pipeline'):
+        raise BackendUnavailable('CI corpus mode is only for the owned producer pipeline')
     from .startup_cpu import cgroup_bounds
     bounds = cgroup_bounds()
     if bounds.get('cgroup_version') != 2 or not bounds.get('levels'):
         raise BackendUnavailable('current inherited image cgroup membership is unknown')
     parent = Path(bounds['levels'][0]['path'])
+    if ci_corpus and owned_root is None:
+        raise BackendUnavailable('CI corpus requires its explicit owned job scope')
     if owned_root is not None:
         owned_root = Path(owned_root)
         if (not re.fullmatch(r'getzilla-image-job-[0-9a-f]{32}\.scope', owned_root.name)
@@ -332,6 +336,11 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
         parent = owned_root
     if _filesystem(parent) != 0x63677270:
         raise BackendUnavailable('current image cgroup parent is not a measured cgroup v2 mount')
+    if ci_corpus:
+        from .security_image_job import _memory_admission
+        # The owned leaf has its 12GiB cap. Admission checks the actual outer
+        # allocation ancestors, without subtracting reserve inside that leaf.
+        _memory_admission(parent.parent)
     library = ctypes.CDLL(None, use_errno=True)
     previous = ctypes.c_int()
     if library.prctl(37, ctypes.byref(previous), 0, 0, 0) or library.prctl(36, 1, 0, 0, 0):
@@ -339,7 +348,7 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
     cgroup = parent / ('getzilla-images-' + uuid.uuid4().hex)
     cgroup.mkdir(mode=0o700)
     try:
-        cpus = _configure_cgroup(cgroup, bounds)
+        cpus = _configure_cgroup(cgroup, bounds, ci_corpus=ci_corpus)
         if not (cgroup / 'cgroup.kill').is_file():
             raise BackendUnavailable('kernel cgroup.kill is required')
         with tempfile.TemporaryDirectory(prefix='image-volume-', dir=workspace) as directory:
@@ -350,6 +359,8 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
                     'os.execv("/usr/bin/unshare",sys.argv[3:])')
             worker = [sys.executable, '-I', '-S', '-B', '-c', _BOOT, str(_ROOT),
                       directory, str(cgroup)]
+            if ci_corpus:
+                worker.append('ci-corpus')
             command = [sys.executable, '-I', '-S', '-B', '-c', join, str(cgroup), json.dumps(cpus),
                        '/usr/bin/unshare', '--mount', '--cgroup', '--pid', '--fork', '--kill-child=KILL',
                        '--mount-proc', *(['--net'] if offline_control else []), *worker]
@@ -388,8 +399,51 @@ def _run_guarded(payload, workspace, *, owned_root=None, started=None):
         library.prctl(36, previous.value, 0, 0, 0)
 
 
+def measured_ci_profile():
+    """Recheck inherited held kernel proof; a dictionary or environment is insufficient."""
+    if (_GUARD is None or len(_GUARD) != 4 or not isinstance(_GUARD[3], dict)
+            or _GUARD[3].get('ci_corpus') is not True):
+        return False
+    try:
+        path, _nonce, _mounted, proof = _GUARD
+        volume, cgroup = proof['volume_fd'], proof['cgroup_fd']
+        if type(volume) is not int or type(cgroup) is not int:
+            raise ValueError('missing held descriptors')
+        info, group = os.fstat(volume), os.fstat(cgroup)
+        current = os.stat(path, follow_symlinks=False)
+        mounted = os.stat('/sys/fs/cgroup', follow_symlinks=False)
+        if (not stat.S_ISDIR(info.st_mode) or not stat.S_ISDIR(group.st_mode)
+                or (info.st_dev, info.st_ino) != proof['volume_identity']
+                or (current.st_dev, current.st_ino) != proof['volume_identity']
+                or (group.st_dev, group.st_ino) != (proof['cgroup_root_device'], proof['cgroup_root_inode'])
+                or (mounted.st_dev, mounted.st_ino) != (group.st_dev, group.st_ino)
+                or _filesystem(path) != 0x01021994 or _filesystem('/sys/fs/cgroup') != 0x63677270):
+            raise ValueError('held kernel identity differs')
+        size = os.fstatvfs(volume)
+        if size.f_blocks * size.f_frsize != CI_BYTES or size.f_flag & (os.ST_NOSUID | os.ST_NODEV) != os.ST_NOSUID | os.ST_NODEV:
+            raise ValueError('held volume bound differs')
+        def control(name):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=cgroup)
+            try:
+                raw = os.read(fd, 4097)
+                if len(raw) > 4096:
+                    raise ValueError('kernel control exceeds bound')
+                return raw.decode('ascii').strip()
+            finally:
+                os.close(fd)
+        if (control('memory.max') != str(CI_MEMORY) or control('memory.swap.max') != '0'
+                or control('pids.max') != '256' or str(os.getpid()) not in control('cgroup.procs').split()):
+            raise ValueError('held resource controls differ')
+        quota, period = control('cpu.max').split()
+        if not 0 < int(quota) <= 6 * int(period) or not 0 < len(os.sched_getaffinity(0)) <= 6:
+            raise ValueError('held CPU controls differ')
+        return True
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        raise BackendUnavailable('live CI image kernel proof unavailable') from error
+
+
 @contextmanager
-def namespace_volume(path, cgroup):
+def namespace_volume(path, cgroup, *, ci_corpus=False):
     """Called only by the fixed worker after unshare; mount proof is measured."""
     global _GUARD
     path, cgroup = Path(path), Path(cgroup)
@@ -426,15 +480,17 @@ def namespace_volume(path, cgroup):
     controls = {name: (Path('/sys/fs/cgroup') / name).read_text(encoding='utf-8').strip()
                 for name in ('memory.max', 'memory.swap.max', 'pids.max', 'cpu.max')}
     quota, period = controls['cpu.max'].split()
-    if (controls['memory.max'] != str(2 * 1024 * 1024 * 1024) or controls['memory.swap.max'] != '0'
+    memory = CI_MEMORY if ci_corpus else 2 * 1024 ** 3
+    storage = CI_BYTES if ci_corpus else LIMITS['max_storage_bytes']
+    if (controls['memory.max'] != str(memory) or controls['memory.swap.max'] != '0'
             or controls['pids.max'] != '256' or quota == 'max'
             or not 0 < int(quota) <= 6 * int(period) or not 0 < len(os.sched_getaffinity(0)) <= 6):
         raise BackendUnavailable('live image namespace resource controls differ from admitted bounds')
     _fixed(['/usr/bin/mount', '-t', 'tmpfs', '-o',
-            f'size={LIMITS["max_storage_bytes"]},mode=0700,nosuid,nodev', 'getzilla-images', str(path)])
+            f'size={storage},mode=0700,nosuid,nodev', 'getzilla-images', str(path)])
     try:
         info = os.statvfs(path)
-        if _filesystem(path) != 0x01021994 or info.f_blocks * info.f_frsize != LIMITS['max_storage_bytes']:
+        if _filesystem(path) != 0x01021994 or info.f_blocks * info.f_frsize != storage:
             raise BackendUnavailable('image volume is not the exact hard-bounded tmpfs')
         # runc's ordinary /run state and helpers which ignore TMPDIR must share
         # this same volume. No second tmpfs or host daemon storage is available.
@@ -453,12 +509,23 @@ def namespace_volume(path, cgroup):
         for name, target in (('run', '/run'), ('tmp', '/tmp'), ('var-tmp', '/var/tmp')):  # nosec B108
             _fixed(['/usr/bin/mount', '--bind', str(path / name), target])
             mounted.append(target)
-        _GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
-                    'cgroup_root_inode': expected.st_ino, 'cgroup_mount_flags': flags})
+        proof_volume = proof_cgroup = None
         try:
+            if ci_corpus:
+                proof_volume = _Root(path)
+                proof_cgroup = _Root('/sys/fs/cgroup')
+            _GUARD = (path, object(), mounted, {'cgroup_root_device': expected.st_dev,
+                        'cgroup_root_inode': expected.st_ino, 'cgroup_mount_flags': flags})
+            if ci_corpus:
+                _GUARD[3].update(ci_corpus=True, volume_fd=proof_volume.fd, cgroup_fd=proof_cgroup.fd,
+                    volume_identity=(os.fstat(proof_volume.fd).st_dev, os.fstat(proof_volume.fd).st_ino))
             yield path
         finally:
             _GUARD = None
+            if proof_cgroup is not None:
+                proof_cgroup.close()
+            if proof_volume is not None:
+                proof_volume.close()
             # The fixed unshare child is PID 1 in its new PID namespace. This
             # signal cannot address host processes; reap all adopted workers.
             try:

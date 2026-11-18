@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .security_oci import INDEX_MEDIA, MANIFEST_MEDIA, LIMITS, _descriptor, _index_children, OPAQUE_ATTESTATION, canonical, document
+from .security_oci import INDEX_MEDIA, MANIFEST_MEDIA, LIMITS, active_limits, _descriptor, _index_children, OPAQUE_ATTESTATION, canonical, document
 
 _ORIGINS = {'registry-1.docker.io', 'auth.docker.io', 'github.com'}
 # Docker's published pull CDN, not arbitrary redirects or authentication realms.
@@ -158,12 +158,15 @@ def split_reference(reference):
 class Registry:
     """Actual descriptor/hash-addressed graph collector; injected ports are fixture-only models."""
     def __init__(self, *, transport=None, deadline=None):
+        self.limits = active_limits()
         self.deadline = deadline or time.monotonic() + LIMITS['deadline_seconds']
         self.http = transport or BoundedHTTP(deadline=self.deadline)
         self.tokens, self.blobs, self.descriptors, self.roles = {}, {}, {}, {}
         self.downloaded = 0
 
     def _get(self, repository, kind, selector, maximum):
+        if active_limits() != self.limits:
+            raise RegistryError('registry live aggregate profile changed')
         if time.monotonic() >= self.deadline:
             raise RegistryError('registry aggregate deadline exceeded')
         if repository not in self.tokens:
@@ -174,7 +177,7 @@ class Registry:
             if not isinstance(token, str) or not 0 < len(token) < 32768 or '\n' in token or '\r' in token:
                 raise RegistryError('anonymous registry token unavailable')
             self.tokens[repository] = token
-        maximum = min(maximum, LIMITS['max_storage_bytes'] - self.downloaded)
+        maximum = min(maximum, LIMITS['max_storage_bytes'], self.limits['max_storage_bytes'] - self.downloaded)
         if maximum <= 0:
             raise RegistryError('registry aggregate byte budget exceeded')
         header, body = self.http.get(f'https://registry-1.docker.io/v2/{repository}/{kind}/{selector}',
@@ -221,11 +224,11 @@ class Registry:
             return
         if raw is None:
             _, raw, _ = self._get(repository, 'manifests' if media in INDEX_MEDIA | MANIFEST_MEDIA else 'blobs', digest,
-                                  min(size, LIMITS['max_storage_bytes']))
+                                  min(size, self.limits['max_storage_bytes']))
         if len(raw) != size or 'sha256:' + hashlib.sha256(raw).hexdigest() != digest:
             raise RegistryError('registry graph bytes differ from descriptor')
         self.descriptors[digest], self.blobs[digest] = (media, size), raw
-        if sum(len(value) for value in self.blobs.values()) > LIMITS['max_storage_bytes']:
+        if sum(len(value) for value in self.blobs.values()) > self.limits['max_storage_bytes']:
             raise RegistryError('registry graph storage bound exceeded')
         if media in INDEX_MEDIA | MANIFEST_MEDIA:
             node = document(raw)

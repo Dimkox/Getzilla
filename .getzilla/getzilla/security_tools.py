@@ -258,9 +258,9 @@ def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
             'max_manifest_bytes', 'max_layers', 'deadline_seconds', 'platform'}
     if not isinstance(profile, dict) or set(profile) != keys or profile.get('platform') not in {'linux/amd64', 'linux/arm64'}:
         raise SecurityDataError('image acquisition needs a complete explicit bounded profile')
-    limits = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
-              'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
-              'max_manifest_bytes': MAX_REPORT, 'max_layers': 10000, 'deadline_seconds': 900}
+    from .security_oci import active_limits
+    limits = active_limits()
+    limits['max_manifest_bytes'] = min(limits['max_manifest_bytes'], MAX_REPORT)
     if any(type(profile[key]) is not int or not 0 < profile[key] <= limit for key, limit in limits.items()):
         raise SecurityDataError('image acquisition profile exceeds existing finite ceilings')
     images = inventory.get('images')

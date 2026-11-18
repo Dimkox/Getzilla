@@ -116,10 +116,9 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         platforms = {item.get('platform') for item in inventory['images']}
         if len(platforms) != 1 or not platforms <= {'linux/amd64', 'linux/arm64'}:
             raise SecurityDataError('image input platform remains unproved')
-        body['image_profile'] = {'images': sorted({item['reference'] for item in inventory['images']}),
-            'platform': next(iter(platforms)), 'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
-            'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
-            'max_manifest_bytes': MAX_INDEX_BYTES, 'max_layers': 10000, 'deadline_seconds': 900}
+        from .security_oci import active_limits
+        body['image_profile'] = dict(active_limits(), images=sorted({item['reference'] for item in inventory['images']}),
+                                     platform=next(iter(platforms)))
     if image_artifacts is not None:
         from .security_oci import validate_selection
         validate_selection(image_artifacts, inventory, body['image_profile'])
@@ -791,6 +790,7 @@ def main(argv=None) -> int:
     preparation.add_argument('--write-input-profile', type=Path, help='write a current source/run declaration without acquisition or scans')
     preparation.add_argument('--prepare-inputs', action='store_true', help='prepare explicit selected inputs; never grants scan or attestation credit')
     preparation.add_argument('--produce-images', action='store_true', help='owned Linux OCI builds and all three input stages; needs qualified ephemeral root backend')
+    parser.add_argument('--ci-image-corpus', action='store_true', help='request approved CI8GiB/12GiB job; actual kernel and memory admission required')
     parser.add_argument('--backend-tool-pins', type=Path, help='bounded source-pinned BuildKit distribution selector; never resource or build-completion authority')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
@@ -799,6 +799,8 @@ def main(argv=None) -> int:
     parser.add_argument('--input-worker', help=argparse.SUPPRESS)
     parser.add_argument('--json-out', type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.ci_image_corpus and not args.produce_images:
+        parser.error('--ci-image-corpus requires the live --produce-images path')
     if args.produce_images:
         if (args.backend_tool_pins is None or args.input_profile is None or args.image_artifacts is not None
                 or args.image_selection is not None or args.family_records is not None or args.input_worker is not None
