@@ -2236,7 +2236,7 @@
         },
         ".getzilla/getzilla/baseline_assets.py": {
           "mode": 420,
-          "sha256": "c98e8d879d34b0bcdfd330b3c485e85331e5f71b76030b8e29e46d87c8319259"
+          "sha256": "6238898026972e302ab78a7d796269206a00997c4dd02c29e91df695b7505693"
         },
         ".getzilla/getzilla/bitrix_checks.py": {
           "mode": 420,
@@ -2328,7 +2328,7 @@
         },
         ".getzilla/getzilla/continuity.py": {
           "mode": 420,
-          "sha256": "29befd1571340f9c6e851041ca2978427c6c7eb87c60cc41fb4f6148f2633a77"
+          "sha256": "f04c8683e137aa18698d7b5b9fafa86caf5a4c1ac65ef26aea37d993264f2e62"
         },
         ".getzilla/getzilla/controlled_fixture.py": {
           "mode": 420,
@@ -2572,7 +2572,7 @@
         },
         ".getzilla/getzilla/review_plan.py": {
           "mode": 420,
-          "sha256": "27e78157bdc2ef44a2c289edc9d448663bef5aa9eaf7c673d9c7897a40f882d3"
+          "sha256": "b2952ddded0f0f04bb11ce819e5d7a574f71647d7a249c97c12424f33eade2f4"
         },
         ".getzilla/getzilla/review_snapshot.py": {
           "mode": 420,
@@ -2604,7 +2604,7 @@
         },
         ".getzilla/getzilla/security_cli.py": {
           "mode": 420,
-          "sha256": "38e264fcbf5af89b15d02d5bfdd716db6cba131f2a8be65c078240298bf073e7"
+          "sha256": "d31319d93f38bc3d7380d9f06200f1ce10b2c5b31705ebe349c66d6874c5fcdb"
         },
         ".getzilla/getzilla/security_data.py": {
           "mode": 420,
@@ -2740,7 +2740,7 @@
         },
         ".getzilla/getzilla/state.py": {
           "mode": 420,
-          "sha256": "eebdcc6b02c0e9d0fecd47882bd6a02934329685b73e6cefb6cc4e4bc451dd2d"
+          "sha256": "406c70d47927dc0ebcf3d4f3b9051c8407fba81052a3e8e3c0c295ea78a54db1"
         },
         ".getzilla/getzilla/task_intent.py": {
           "mode": 420,
@@ -2760,7 +2760,7 @@
         },
         ".getzilla/getzilla/updater.py": {
           "mode": 420,
-          "sha256": "fa517853ebc1aae419e9e17d384956613ec59a8b540ac3d5fdbe73dd74c2ba97"
+          "sha256": "89f802e727c279263e71d1041a2233c894fcc1829ba398cf5c402a4ee0aeccb2"
         },
         ".getzilla/getzilla/util.py": {
           "mode": 420,
