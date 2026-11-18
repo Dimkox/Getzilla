@@ -270,4 +270,3 @@ class PyYamlBuildTests(unittest.TestCase):
                                          str(source), str(output)], capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), 'owned guard refused')
-
