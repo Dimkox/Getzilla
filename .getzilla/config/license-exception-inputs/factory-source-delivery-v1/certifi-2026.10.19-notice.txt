@@ -2,9 +2,12 @@ Getzilla includes certifi 2026.10.19 unchanged from the identified PyPI wheel.
 Wheel: certifi-2026.10.19-py3-none-any.whl
 SHA256: 42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
 All 7 shipped package members are byte-identical to the matching members of the publisher source release.
-Source archive included at ../sources/certifi-2026.10.19.tar.gz
-Source SHA256: 035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae
+Canonical repack of unchanged complete source content included at ../sources/certifi-2026.10.19.tar.gz
+Original publisher archive SHA256: 035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae
 Official source URL: https://files.pythonhosted.org/packages/a6/bd/1436c50cc46699de0230fbaacc1d1de7bfec413176099949e9d5112e88f2/certifi-2026.10.19.tar.gz
 The original Mozilla-derived CA-bundle notice remains with certifi.
 The complete Mozilla Public License 2.0 accompanies this distribution at ../licenses/MPL-2.0.txt.
 The source archive is the exact certifi publisher release. No claim is made that it identifies or reproduces the original Mozilla certdata generator or tip revision.
+The delivered gzip/tar container is repacked with canonical member order, modes and timestamps.
+Its actual SHA256 and size are recorded as source_delivery in ../source-map.json.
+The original publisher archive SHA256 above is historical origin and is not the delivered container hash.

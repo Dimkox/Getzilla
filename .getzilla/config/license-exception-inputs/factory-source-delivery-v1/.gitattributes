@@ -1,0 +1,4 @@
+# Preserve literal upstream corresponding-source data; snapshot hashes enforce exact bytes.
+# Keep text diffs enabled and the Getzilla source whitespace rules unchanged.
+vendor/certifi-2026.10.19/setup.cfg whitespace=-blank-at-eol,-blank-at-eof
+vendor/psycopg-3.3.4/setup.cfg whitespace=-blank-at-eol,-blank-at-eof
