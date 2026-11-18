@@ -908,7 +908,7 @@ class Run:
                     raise ValueError('journal-unknown-storage')
                 # Never evict active or unknown runs. Exact terminal owned runs alone qualify.
                 if len(registry['runs']) >= RUNS:
-                    candidate = next((r for r in registry['runs'] if r.get('status') == 'closed'), None)
+                    candidate = next((r for r in registry['runs'] if r.get('status') in {'closed', 'incomplete'}), None)
                     if candidate is None:
                         raise OSError('journal-retention-unavailable')
                     _remove_run(history, candidate)
@@ -1102,7 +1102,7 @@ class Run:
 
 
 def _remove_run(history, record):
-    if (set(record) != {'run_id', 'nonce', 'status'} or record['status'] != 'closed'
+    if (set(record) != {'run_id', 'nonce', 'status'} or record['status'] not in {'closed', 'incomplete'}
             or not _RUN.fullmatch(record['run_id']) or not _RUN.fullmatch(record['nonce'])):
         raise ValueError('journal-retention-record')
     path = history / record['run_id']
@@ -1110,23 +1110,41 @@ def _remove_run(history, record):
     locks = []
     try:
         index = _decode(_read(handle, 'index.json', 16384))
-        if index['run_id'] != record['run_id'] or index['nonce'] != record['nonce'] or index['status'] != 'closed':
+        if (index['run_id'] != record['run_id'] or index['nonce'] != record['nonce']
+                or index['status'] != record['status']):
             raise ValueError('journal-retention-identity')
         names = os.listdir(path)
         if len(names) > ACTORS * 7 + 1:
             raise ValueError('journal-retention-count')
+        actors = {}
         for name in names:
-            if name != 'index.json' and not re.fullmatch(r'(?:controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3]))(?:\.lock|\.json|-[0-3]\.jsonl)', name):
+            if name == 'index.json':
+                continue
+            match = re.fullmatch(r'(controller|worker-(?:[0-9]|[1-5][0-9]|6[0-3]))(\.lock|\.json|-[0-3]\.jsonl|\.json\.tmp)', name)
+            if (match is None or match[1] + '.lock' not in names
+                    or match[2] == '.json.tmp' and record['status'] != 'incomplete'):
                 raise ValueError('journal-retention-shape')
-            _read(handle, name, SEGMENT_BYTES)
+            actors[name] = match[1]
+            # Only _publish's exact health temporary namespace is known. A
+            # failed write may leave partial JSON, never authority or success.
+            _read(handle, name, 2048 if name.endswith(('.json', '.json.tmp')) else SEGMENT_BYTES)
+        # Acquire every lifetime lock before inspecting health or deleting any
+        # leaf. Terminal incomplete health can outlive a still-running actor.
+        for name in names:
             if name.endswith('.lock'):
                 descriptor = fsx.open_at(handle, name, os.O_RDWR | fsx.O_NOFOLLOW)
                 locks.append(descriptor)
+                if not _regular(os.fstat(descriptor)):
+                    raise OSError('journal-retention-lock')
                 fsx.lock_file(descriptor, blocking=False)
-            elif name.endswith('.json') and name != 'index.json':
+        for name in actors:
+            if name.endswith('.json'):
                 health = _decode(_read(handle, name, 2048))
                 if (health['run_id'] != record['run_id'] or health['nonce'] != record['nonce']
-                        or health['status'] != 'closed' or health.get('open_spans', 0)):
+                        or health.get('actor') != actors[name]
+                        or health['status'] not in {'active', 'closed', 'unavailable'}
+                        or type(health.get('open_spans')) is not int or health['open_spans'] < 0
+                        or record['status'] == 'closed' and (health['status'] != 'closed' or health['open_spans'])):
                     raise ValueError('journal-retention-active-stream')
                 _retained_health(health)
         for name in names:
