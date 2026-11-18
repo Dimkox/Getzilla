@@ -97,7 +97,10 @@ def check_acl(owner, aces, trusted, *, owned, volume_root=False):
             # own deletion/metadata rights. Child removal and security changes
             # remain forbidden; generic write/all grants remain conservative.
             forbidden &= ~_ROOT_SELF
-        if sid not in trusted and (expanded & forbidden or volume_root and mask & 0x50000000):
+        # OWNER RIGHTS names this descriptor's already-checked owner, not the
+        # CREATOR OWNER inheritance placeholder. Do not infer implicit rights.
+        trustee = owner if sid == 'S-1-3-4' else sid
+        if trustee not in trusted and (expanded & forbidden or volume_root and mask & 0x50000000):
             raise SecurityDataError('snapshot native DACL permits untrusted writes or path replacement')
 
 
