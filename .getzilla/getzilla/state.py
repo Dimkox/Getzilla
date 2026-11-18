@@ -650,6 +650,18 @@ def _repository_identity(root: Path) -> str:
     raise RuntimeError('remote.origin.url must identify a supported GitHub or Entire repository without credentials')
 
 
+def _grant_repository_identity(root: Path, scope: str) -> str:
+    """Local grants have a separate identity; remote target checks stay remote-only."""
+    try:
+        return _repository_identity(root)
+    except RuntimeError:
+        if scope not in {'protected-path', 'external-write'} or \
+                git_output(root, 'config', '--get', 'remote.origin.url') is not None:
+            raise
+        from .local_grant_identity import repository_identity
+        return repository_identity(root)
+
+
 def _active_change_id(root: Path) -> str | None:
     change = get_active_change(root) or {}
     value = change.get('change_id')
@@ -801,6 +813,10 @@ def add_approval(
     branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
     if normalized_scope == 'protected-path' and not branch:
         raise ValueError('a named Git branch is required for protected-path approval')
+    repository = _grant_repository_identity(root, normalized_scope)
+    local_repository = repository.startswith('local-git-v1:')
+    if local_repository and not current_session():
+        raise ValueError('an explicit caller session is required for local delegated approval')
     now = datetime.now(timezone.utc)
     approval = {
         'schema_version': 2,
@@ -811,13 +827,14 @@ def add_approval(
         'actions': normalized_actions,
         'resources': normalized_resources,
         'reason': normalized_reason,
-        'repository': _repository_identity(root),
+        'repository': repository,
         'route_id': route.get('route_id'),
         'logical_task_id': task_identity(route),
         'authority_epoch': route.get('authority_epoch', 0),
         'owner_session_id': route.get('session_id'),
         'change_id': _active_change_id(root),
         'git_head': head,
+        **({'session_id': current_session()} if local_repository else {}),
         **({'binding': BRANCH_RESOURCES_BINDING, 'git_branch': branch, 'anchor_commit': head,
             'session_id': current_session()}
            if normalized_scope == 'protected-path' else {}),
@@ -868,8 +885,11 @@ def has_valid_approval(
     if not isinstance(approvals, list):
         return False
     try:
-        repository = _repository_identity(root)
+        repository = _grant_repository_identity(root, scope)
     except RuntimeError:
+        return False
+    local_repository = repository.startswith('local-git-v1:')
+    if local_repository and not current_session():
         return False
     head = git_head(root)
     if not head:
@@ -902,6 +922,8 @@ def has_valid_approval(
         if approval.get('authorization') != 'delegated-local-grant':
             continue
         if approval.get('scope') != scope:
+            continue
+        if local_repository and approval.get('session_id') != current_session():
             continue
         branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
         continuity_fields = {'logical_task_id', 'authority_epoch', 'owner_session_id'}
