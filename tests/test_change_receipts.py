@@ -935,7 +935,7 @@ class ContourTests(unittest.TestCase):
             write_receipt(root, 'test_review', 'pass', **review)
             # A full task's fast observation remains readable but is not PR qualification.
             self.assertEqual(validate_evidence(root, get_active_route(root) or route),
-                             ['verification: required-plan-unavailable: required_plan: current required plan and evidence could not be established'])
+                             ['verification: required-qualifying-mode: mode: full task completion requires pr/release; fast qualifies only a measured light diff'])
             self.assertEqual(json.loads((root / '.getzilla/runtime/receipts' / route['route_id'] / 'code_review.json').read_text())['review_plan_digest'],
                              reconciled['review_plan']['digest'])
 

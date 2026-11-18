@@ -69,6 +69,13 @@ class ImageStoreIdentityTests(unittest.TestCase):
                         resources.runtime_image_id(root, wrong, inspection=current)
                     path = root / ".getzilla/config/ci-image-blobs" / (pin["image_id"][7:] + ".json")
                     original = path.read_bytes()
+                    changed = original.replace(b'"created"', b'"creatfd"', 1)
+                    self.assertNotEqual(changed, original)
+                    self.assertEqual(len(changed), len(original))
+                    path.write_bytes(changed)
+                    with self.assertRaises(ValueError):
+                        resources.runtime_image_id(root, pin, inspection=current)
+                    path.write_bytes(original)
                     path.write_bytes(original + b" ")
                     with self.assertRaises(ValueError):
                         resources.runtime_image_id(root, pin, inspection=current)

@@ -108,7 +108,14 @@ class OpaqueAttestationGraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             oci._descriptor(layer)
         self.assertNotIn(OPAQUE, oci.LAYER_MEDIA)
-        f.profile["max_unpacked_bytes"] = layer["size"] - 1
+        import gzip
+
+        root_index = oci.document((f.layout / "blobs/sha256" / index["digest"][7:]).read_bytes())
+        selected_digest = root_index["manifests"][0]["digest"]
+        selected = oci.document((f.layout / "blobs/sha256" / selected_digest[7:]).read_bytes())
+        layer_digest = selected["layers"][0]["digest"]
+        raw_layer = (f.layout / "blobs/sha256" / layer_digest[7:]).read_bytes()
+        f.profile["max_unpacked_bytes"] = len(gzip.decompress(raw_layer)) + layer["size"] - 1
         with self.assertRaises(ValueError):
             with oci.import_layouts(catalog, inventory, f.profile, f.stage):
                 pass
