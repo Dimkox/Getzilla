@@ -97,7 +97,8 @@ def activate(root,profile,*,_entry=None):
     state['license_scope']=None
     state['license_results']={}
     from .security_tools import TRUSTED_ROOT
-    state['license_checker_tools']=checker_tools(TRUSTED_ROOT)
+    state['license_checker_declarations']=checker_tools(TRUSTED_ROOT)
+    state.pop('license_checker_tools',None)
     return dict(schema_version=1,profile=json.loads(json.dumps(profile)),inventory=json.loads(json.dumps(inventory)))
 
 
@@ -151,7 +152,7 @@ class Scope:
             _refuse()
         self.root,self.inventory,self.binding,self.state=Path(root),inventory,binding,state
         self.required,self.host,self.inactive=requirements(inventory,binding,
-            checker_tool_conditions=state['license_checker_tools'])
+            checker_tool_conditions=state['license_checker_declarations'])
         self.claim=dict(schema_version=1,kind='selected-native-security-run',source=binding['source'],run=binding['run'],
             profile_sha256=binding['profile_sha256'],inventory_sha256=inventory['digest'],
             required_ids=sorted(self.required),overall_coverage_complete=False,tcb_assumptions=list(_TCB_ASSUMPTIONS))
@@ -204,8 +205,31 @@ class Scope:
             _refuse()
         self.gaps.extend(output.get('gaps',[]))
         if output.get('status')=='pass':
+            if self.required[key]['kind']=='checker-tool':
+                self._checker_output(output)
             self.passed[key]=digest(output)
-            self.details.extend(output.get('details',[]))
+            self.details.extend(row for row in output.get('details',[]) if row not in self.details)
+
+    def _checker_output(self,output):
+        self.validate(self.inventory,self.binding)
+        from .security_artifacts import artifact_identity
+        expected={key:value for key,value in self.required.items() if value['kind']=='checker-tool'}
+        bindings=self.state.get('license_checker_tools')
+        if (type(bindings) is not dict or set(bindings)!=set(expected) or output.get('gaps')
+                or type(output.get('details')) is not list or any(type(row) is not dict for row in output['details'])):
+            _refuse()
+        mapped=[]
+        for key,source in expected.items():
+            row=bindings[key]
+            if (type(row) is not dict or set(row)!={'source_pins','family_artifact_id'}
+                    or row['source_pins']!=source or type(row['family_artifact_id']) is not str
+                    or not re.fullmatch('[0-9a-f]{64}',row['family_artifact_id'])):
+                _refuse()
+            mapped.append(row['family_artifact_id'])
+        actual=[artifact_identity(row['family_record']) for row in output.get('details',[])
+            if row.get('kind')=='tool' and type(row.get('family_record')) is dict]
+        if len(set(mapped))!=len(expected) or len(actual)!=len(expected) or set(actual)!=set(mapped):
+            _refuse()
 
     def finish(self,report):
         self.validate(self.inventory,self.binding)

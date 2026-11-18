@@ -59,6 +59,26 @@ class SelectedRunLicenseTests(unittest.TestCase):
         self.assertEqual(result['selected_run']['status'],'fail-for-selected-run')
         self.assertEqual(sum(gap['code']=='required-checker-tool-unverified' for gap in result['selected_run']['gaps']),2)
         self.assertTrue(result['selected_run']['tcb_assumptions'])
+        joined=dict(status='pass',gaps=[],details=[dict(kind='tool',family_record=dict(owned_id='1'*64)),
+            dict(kind='tool',family_record=dict(owned_id='2'*64))])
+        with self.assertRaises(Exception):
+            context._checker_output(joined)
+        bindings={key:dict(source_pins=value,family_artifact_id=str(index)*64)
+            for index,(key,value) in enumerate(tools.items(),1)}
+        context.state['license_checker_tools']=bindings
+        with mock.patch('getzilla.security_artifacts.artifact_identity',side_effect=lambda record:record['owned_id']):
+            context._checker_output(joined)
+            partial=copy.deepcopy(joined)
+            partial['details'].pop()
+            with self.assertRaises(Exception):
+                context._checker_output(partial)
+            wrong=copy.deepcopy(bindings)
+            first=next(iter(wrong))
+            wrong[first]['source_pins']['archive_sha256']='f'*64
+            context.state['license_checker_tools']=wrong
+            with self.assertRaises(Exception):
+                context._checker_output(joined)
+        context.state['license_checker_tools']=bindings
         named=self.root/'.getzilla/getzilla/security_image_provision.py'
         named.write_text(paths['.getzilla/getzilla/security_image_provision.py']+"VERSION='4.5.7'\n",encoding='utf-8')
         with self.assertRaises(Exception):
@@ -334,7 +354,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             license_entry=producer._LICENSE_ENTRY,
             license_binding=copy.deepcopy(binding),
             license_profile=dict(profile_sha256=binding["profile_sha256"], source=source),
-            license_checker_tools=dict(checker_tool_conditions or {}),
+            license_checker_declarations=dict(checker_tool_conditions or {}),
         )
         effects = mock.patch.multiple(producer, _LIVE=state)
         effects.start()
