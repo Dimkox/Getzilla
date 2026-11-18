@@ -291,6 +291,30 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
             self.assertEqual('LEGAL_INPUT_MISMATCH', error.exception.code)
             self.assertFalse(any(self.base.glob('symlink-snapshot*')))
 
+    def test_literal_upstream_cfg_whitespace_keeps_text_diffs_and_other_checks(self):
+        with self.selected_legal_fixture() as inputs:
+            result = subprocess.run(['git', 'diff', '--check', 'HEAD~', 'HEAD'], cwd=self.repo,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            prefix = '.getzilla/config/license-exception-inputs/factory-source-delivery-v1/'
+            for package in ('certifi-2026.10.19', 'psycopg-3.3.4'):
+                relative = prefix + 'vendor/' + package + '/setup.cfg'
+                manifest = json.loads((inputs / (package + '-snapshot.json')).read_text())
+                member = next(row for row in manifest['members'] if row['path'] == 'setup.cfg')
+                self.assertEqual(member['sha256'], hashlib.sha256((self.repo / relative).read_bytes()).hexdigest())
+                changed = subprocess.check_output(['git', 'diff', '--numstat', 'HEAD~', 'HEAD', '--', relative],
+                                                  cwd=self.repo, text=True)
+                self.assertRegex(changed, r'^\d+\t\d+\t')
+                attributes = subprocess.check_output(['git', 'check-attr', 'diff', '--', relative],
+                                                     cwd=self.repo, text=True)
+                self.assertIn(': diff: unspecified', attributes)
+            source = self.repo / 'factory/src/getzilla_factory/server.py'
+            source.write_text(source.read_text() + '# product whitespace remains checked  \n')
+            result = subprocess.run(['git', 'diff', '--check'], cwd=self.repo,
+                                    capture_output=True, text=True, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('trailing whitespace', result.stdout)
+
     def test_missing_legal_text_refuses_before_publication(self):
         with self.selected_legal_fixture() as inputs:
             (inputs / 'MPL-2.0.txt').unlink()
