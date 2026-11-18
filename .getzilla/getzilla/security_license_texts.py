@@ -18,6 +18,9 @@ sibling's exact bytes and complete terms.
 The finite NPM complete-file table, source attribution and review-required gaps
 are retained in tests/fixtures/security-license-npm-complete-files.json.
 Its README container entry matches only that entire reviewed file.
+Exact multi-grant bundles and two complete ownerless MIT files are retained in
+tests/fixtures/security-license-npm-bundles.json. Identification does not
+authenticate a publisher or supply missing copyright attribution.
 """
 from __future__ import annotations
 
@@ -109,6 +112,8 @@ _REVIEWED_FILES = {
     '0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9': 'Apache-2.0',
     'b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5': 'BSD-2-Clause',
     'ff138e683771b187f3629c383db72ee7d632009010a36d08e18e8d2a34222ec7': 'MIT',
+    '435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b': 'MIT',
+    '75486ea0af9309140ca6e2c401d7e67bea8f4892344e5707f6394dc5e83dfc44': 'MIT',
 }
 _ANCILLARY_FILES = {
     '3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb': (
@@ -125,6 +130,26 @@ _ANCILLARY_FILES = {
         'attribution', 'Apache-2.0', (
             ('licenses/LICENSE_APACHE', 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4'),)),
 }
+
+
+# Each tuple identifies all complete grants in one retained whole-file body.
+# IDs are deduplicated; the original file retains every attribution and grant.
+_REVIEWED_BUNDLES = {
+    'ec62dc96da0099b87f4511736c87309335527fb7031639493e06c95728dc8c54': ('MIT',),
+    '11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b': ('MIT',),
+    '12b06934bd437fee7b52583c0b1062181957363f4f520dd7a5305362f3c9e6e6': ('ISC', 'MIT'),
+}
+
+
+def recognized_license_bundle(text: str) -> tuple[str, ...] | None:
+    """Identify an exact reviewed multi-grant file, never infer an SPDX branch.
+
+    Return every distinct existing license ID present in the complete file.
+    The caller must retain all original bytes and separately check its SPDX
+    expression and policy. Unknown or altered containers return None.
+    Single-license files use recognized_license; that API remains unchanged.
+    """
+    return _REVIEWED_BUNDLES.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
 
 
 def reviewed_ancillary(text: str) -> dict | None:
