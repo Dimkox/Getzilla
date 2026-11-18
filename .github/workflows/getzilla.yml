@@ -80,6 +80,11 @@ jobs:
         with:
           python-version: "3.13"
           architecture: ${{ matrix.arch }}
+      - name: Provide native Git HTTPS build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev libexpat1-dev libssl-dev zlib1g-dev
       - name: Exercise the real user installer and previous-stable project upgrade
         shell: python
         run: |
