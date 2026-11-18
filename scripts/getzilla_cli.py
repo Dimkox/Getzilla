@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import sys
 
-if __name__ == '__main__' and sys.argv[1:3] == ['deploy', 'preflight']:
-    sys.dont_write_bytecode = True
+sys.dont_write_bytecode = True
 
 import os
 import subprocess

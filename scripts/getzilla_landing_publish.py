@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import re
 import sys
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 for component in (ROOT / ".getzilla", ROOT / "delivery/src", ROOT / "factory/src"):

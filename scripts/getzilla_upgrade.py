@@ -28,6 +28,7 @@ import math
 import re
 import subprocess
 import sys
+sys.dont_write_bytecode = True
 import tomllib
 from pathlib import Path
 

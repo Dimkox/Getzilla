@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import errno
 import sys
+sys.dont_write_bytecode = True
 import webbrowser
 from pathlib import Path
 

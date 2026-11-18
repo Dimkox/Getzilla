@@ -194,7 +194,11 @@ class GetzillaCliTests(unittest.TestCase):
 
     def test_project_scripts_take_precedence_inside_a_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = Path(tmp) / 'project'
+            parent = Path(tmp)
+            (parent / '.getzilla').mkdir()
+            (parent / 'scripts').mkdir()
+            (parent / 'scripts/getzilla_status.py').write_text("print('ancestor status')\n", encoding='utf-8')
+            project = parent / 'project'
             (project / '.getzilla').mkdir(parents=True)
             (project / 'scripts').mkdir()
             (project / 'scripts/getzilla_status.py').write_text("print('project status')\n", encoding='utf-8')
@@ -206,7 +210,12 @@ class GetzillaCliTests(unittest.TestCase):
             self.assertEqual(proc.stdout.strip(), 'project status')
             outside = Path(tmp) / 'elsewhere'
             outside.mkdir()
-            self.assertEqual(cli.script_path('getzilla_status.py', outside), ROOT / 'scripts/getzilla_status.py')
+            # Runtime scratch can itself be inside a real Getzilla checkout.
+            # Give the ancestor its own marker instead of assuming no project.
+            self.assertEqual(cli.script_path('getzilla_status.py', outside), parent / 'scripts/getzilla_status.py')
+            proc = run('status', cwd=outside)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout.strip(), 'ancestor status')
 
 
 class ShimTests(unittest.TestCase):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Entry point for the optional source-only duplicate scanner."""
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

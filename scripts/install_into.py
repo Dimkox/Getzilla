@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import sys
+sys.dont_write_bytecode = True
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
