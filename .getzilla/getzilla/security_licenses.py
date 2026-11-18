@@ -16,10 +16,10 @@ from urllib.parse import urlsplit
 
 from .security_osv_snapshot import VulnerabilityError, _pypi_key, _semver_key, normalize_name
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, archive_files,
-                                 artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin)
+                                 artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin, safe_parts)
 from .security_artifacts import family_evidence, select_family
 from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
-from .security_license_texts import recognized_license
+from .security_license_texts import recognized_license, reviewed_ancillary
 from .security_deliveries import verify_deliveries
 
 POLICY_PATH = '.getzilla/config/license-policy.json'
@@ -267,7 +267,7 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
             license_paths.add(path)
     if not license_paths:
         raise ArtifactError('license-obligation-missing', 'artifact contains no license text evidence')
-    licenses, notices, recognized = [], [], set()
+    licenses, notices, recognized, ancillary_paths = [], [], set(), set()
     for path in sorted(license_paths):
         body = files.get(path)
         if not body or not body.strip():
@@ -283,7 +283,40 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
             raise ArtifactError('license-conflict', 'GPL license text conflicts with distribution SPDX metadata')
         text_license = recognized_license(text)
         if text_license is None:
-            raise ArtifactError('license-text-review', f'license text is incomplete, modified or outside the qualified templates: {path}')
+            ancillary=reviewed_ancillary(text)
+            if ancillary is None:
+                raise ArtifactError('license-text-review', f'license text is incomplete, modified or outside the qualified templates: {path}')
+            if (type(ancillary) is not dict or set(ancillary)!={'kind','expression','required_files'}
+                    or ancillary['kind'] not in {'attribution','license-declaration'}
+                    or type(ancillary['required_files']) is not dict or not 1<=len(ancillary['required_files'])<=16):
+                raise ArtifactError('license-text-review','ancillary declaration has no closed reviewed reference contract')
+            if ancillary['expression']!=metadata.get('expression'):
+                raise ArtifactError('license-conflict','ancillary declaration conflicts with the exact distribution SPDX expression')
+            references,reference_terms=[],set()
+            for relative,expected_sha in sorted(ancillary['required_files'].items()):
+                parts=safe_parts(relative)
+                reference=str(PurePosixPath(path).parent.joinpath(*parts))
+                complete=files.get(reference)
+                if (reference==path or reference not in license_paths or not complete or not complete.strip()
+                        or type(expected_sha) is not str or re.fullmatch('[0-9a-f]{64}',expected_sha) is None
+                        or hashlib.sha256(complete).hexdigest()!=expected_sha):
+                    raise ArtifactError('license-obligation-missing','ancillary declaration requires its exact independently retained complete terms')
+                identifier=recognized_license(complete.decode('utf-8'))
+                if identifier is None:
+                    raise ArtifactError('license-text-review','ancillary reference does not independently contain recognized complete terms')
+                if identifier not in identifiers:
+                    raise ArtifactError('license-conflict','ancillary reference conflicts with the distribution SPDX expression')
+                reference_terms.add(identifier)
+                references.append({'path':reference,'sha256':expected_sha,'recognized_license':identifier})
+            # Every referenced branch is checked, even when metadata permits OR.
+            # Ancillary bytes themselves never enter recognized or license_files.
+            if not identifiers<=reference_terms:
+                raise ArtifactError('license-obligation-missing','ancillary declaration lacks complete referenced terms for its exact expression')
+            ancillary_paths.add(path)
+            notices.append({'path':path,'sha256':hashlib.sha256(body).hexdigest(),'bytes':len(body),
+                'ancillary_kind':ancillary['kind'],'expression':ancillary['expression'],
+                'validation':'exact-reviewed-ancillary-with-independent-complete-terms','required_files':references})
+            continue
         if text_license not in identifiers:
             raise ArtifactError('license-conflict', 'complete license text conflicts with the distribution SPDX expression')
         recognized.add(text_license)
@@ -295,7 +328,8 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
         if PurePosixPath(path).name.lower().startswith('notice'):
             if not body.strip():
                 raise ArtifactError('license-obligation-missing', 'artifact NOTICE is empty')
-            notices.append({'path': path, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body)})
+            if path not in ancillary_paths:
+                notices.append({'path': path, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body)})
     return licenses, notices
 
 
