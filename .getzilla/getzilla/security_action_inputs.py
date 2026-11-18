@@ -31,6 +31,21 @@ OPAQUE_LINKS = {
 }
 
 
+# Closed original same-Action cache witnesses approved for exact missing-term
+# npm identities. Every cache field, whole container and decoded term is rechecked.
+_LICENSED_FALLBACKS = {
+    ('actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0', 'binary', '0.3.0'): ('.licenses/npm/binary.dep.yml', '69503ebd906e58708424e8dfebaadb4b4d2daeadf54e2748a8983ac2a4a0a38d'),
+    ('actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0', 'tr46', '0.0.3'): ('.licenses/npm/tr46.dep.yml', '83707076fccc2ba3edb2be8e9ea0d921d5383e10b04f36b346d0f45f9ba1e5ed'),
+    ('actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', '@nodable/entities', '2.1.0'): ('.licenses/npm/@nodable/entities.dep.yml', '37e679b38b99f2ecbe7cf21eb18620dff4b91150f13e05fc9aa8418740f79ae0'),
+    ('actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', 'xml-naming', '0.1.0'): ('.licenses/npm/xml-naming.dep.yml', '241f7313d502a4df2a56a490af65f943f73870a6235e9d5dfedb4bcff825d95e'),
+    ('actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97', '@nodable/entities', '2.2.0'): ('.licenses/npm/@nodable/entities.dep.yml', '18be94628938e1f6236ed25e387e705f78f22421efee031e79bd7c957562c7df'),
+    ('actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97', 'xml-naming', '0.1.0'): ('.licenses/npm/xml-naming.dep.yml', '46384797400b7f114fcd599052d2fae1c31282da14aeaf06d2a8e038b831ad43'),
+    ('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'binary', '0.3.0'): ('.licenses/npm/binary.dep.yml', '69503ebd906e58708424e8dfebaadb4b4d2daeadf54e2748a8983ac2a4a0a38d'),
+    ('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'eastasianwidth', '0.2.0'): ('.licenses/npm/eastasianwidth.dep.yml', '186ed578aed3897e12e75036cc05a1e8f5510ffd87e3a55f1b8d357d1032e216'),
+    ('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02', 'tr46', '0.0.3'): ('.licenses/npm/tr46.dep.yml', '83707076fccc2ba3edb2be8e9ea0d921d5383e10b04f36b346d0f45f9ba1e5ed'),
+}
+
+
 def _sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -249,6 +264,10 @@ def verify_family(root, record, *, now=None):
     tree_raw, _ = _saved_proof(Path(root), origin['tree_path'], origin['tree_sha256'])
     files, members, prefix, metadata, entries, rows = _source(payload, commit_raw, tree_raw, repository, pin, origin['archive_root'])
     raw, proof = _saved_proof(Path(root), record['components']['path'], record['components']['sha256'])
+    if proof.get('kind') == 'action-source-possible-closure/v1':
+        source_proofs = [{'path': origin['index_path'], 'sha256': origin['index_sha256'], 'bytes': len(commit_raw)},
+                         {'path': origin['tree_path'], 'sha256': origin['tree_sha256'], 'bytes': len(tree_raw)}]
+        return _possible_evidence(root, record, files, members, prefix, metadata, entries, proof, raw, source_proofs, now=now)
     required = {'schema_version', 'kind', 'artifact_sha256', 'metadata_sha256', 'entrypoints', 'bundles', 'components'}
     if (set(proof) != required or type(proof['schema_version']) is not int or proof['schema_version'] != 1
             or proof['kind'] != 'action-source-components/v1' or proof['artifact_sha256'] != _sha(payload)
@@ -410,14 +429,17 @@ def _component_inputs(files):
             for name, version in sorted(expected, key=str)], 'licensed_candidates': candidates, 'gaps': gaps}
 
 
-def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_maps=None, byte_budget=None):
+def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_maps=None, byte_budget=None, npm_sources=None, npm_fetch=None):
     """Retain deduplicated source facts; emit only proved per-use family records."""
+    import copy
     from . import manifest
-    from .security_license_acquisition import _write
+    from .security_license_acquisition import _write, MAX_BATCH_BYTES
     fetch, now = fetch or _fetch, now or datetime.now(timezone.utc)
-    maps = component_maps or {}
+    maps = dict(component_maps or {})
+    from .security_action_npm_fetch import acquire_sources, fetch_state
+    npm_state = fetch_state()
     report = {'schema_version': 1, 'inventory_sha256': inventory.get('digest'), 'records': [], 'gaps': [],
-              'source_facts': [], 'bound_bytes': 0, 'record_bytes': 0}
+              'source_facts': [], 'bound_bytes': 0, 'record_bytes': 0, 'source_inventory': copy.deepcopy(inventory)}
     groups = {}
     for subject in inventory.get('tools', []):
         if subject.get('kind') == 'github-action':
@@ -427,7 +449,8 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                            'message': 'finite Action adapter admits at most six distinct source pins'}
                           for subjects in groups.values() for subject in subjects]
         return report
-    budget = BATCH_LIMIT if byte_budget is None else min(BATCH_LIMIT, byte_budget)
+    budget = MAX_BATCH_BYTES if byte_budget is None else min(MAX_BATCH_BYTES, byte_budget)
+    source_budget = BATCH_LIMIT
     _, descriptor = manifest._open_root(Path(artifacts))
     try:
         for reference, subjects in groups.items():
@@ -444,8 +467,8 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                 report['source_facts'].append(facts)
 
                 def receive(url, key, maximum):
-                    nonlocal budget
-                    maximum = min(maximum, max(0, budget))
+                    nonlocal budget, source_budget
+                    maximum = min(maximum, max(0, budget), max(0, source_budget))
                     if maximum <= 0:
                         _fail('artifact-size', 'shared Action byte budget is exhausted')
                     raw = fetch(url, maximum=maximum)
@@ -457,6 +480,7 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                     logical = len(raw) * len(subjects)
                     report['bound_bytes'] += logical
                     budget -= logical
+                    source_budget -= len(raw)
                     return raw
 
                 commit_url = f'https://api.github.com/repos/{repository}/git/commits/{pin}'
@@ -478,6 +502,57 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                 if budget < 0:
                     _fail('artifact-size', 'logical Action uses exceed shared byte budget')
                 if reference not in maps:
+                    expected_npm = _possible_lock(files)
+                    source_gaps = []
+                    if npm_sources is None:
+                        acquired = acquire_sources(expected_npm, Path(artifacts), fetch=npm_fetch, now=now,
+                                                   state=npm_state, byte_budget=max(0, budget // len(subjects)))
+                        selected_map = acquired['sources']
+                        receipts = acquired['responses']
+                        source_gaps = acquired['gaps']
+                    else:
+                        if not isinstance(npm_sources, dict):
+                            _fail('action-npm-source-missing', 'original npm source map must be an object')
+                        selected_map = npm_sources
+                        receipts = []
+                        for url in sorted(expected_npm):
+                            if url not in selected_map:
+                                continue
+                            source = selected_map[url]
+                            receipts.append({key: source[key] for key in ('url', 'path', 'sha256', 'bytes', 'acquired_at')})
+                            if source['strong_metadata'] is not None:
+                                receipts.append(dict(source['strong_metadata'], acquired_at=source['acquired_at']))
+                    selected_sources = [selected_map[url] for url in sorted(expected_npm) if url in selected_map]
+                    facts['npm_sources'] = selected_sources
+                    facts['npm_responses'] = receipts
+                    facts['npm_source_gaps'] = source_gaps
+                    npm_physical = 0
+                    for response in receipts:
+                        raw_response = read_file(Path(artifacts), response['path'], 16 * 1024 * 1024 + 1)
+                        npm_physical += len(raw_response)
+                        logical = len(raw_response) * len(subjects)
+                        report['bound_bytes'] += logical
+                        budget -= logical
+                    physical += npm_physical
+                    facts['bound_bytes'] = physical
+                    if budget < 0:
+                        _fail('artifact-size', 'possible npm closure exceeds shared logical byte budget')
+                    if source_gaps or not set(expected_npm) <= set(selected_map):
+                        _fail('action-npm-source-missing', 'one or more exact official npm objects are unavailable or invalid')
+                    from .security_action_npm import source_custody
+                    for source in selected_sources:
+                        source_custody(Path(artifacts), source, expected_npm[source['url']], now=now)
+                    possible = {'schema_version': 1, 'kind': 'action-source-possible-closure/v1',
+                                'coverage_basis': 'source-declared-possible-runtime-components',
+                                'exact_runtime_membership_proved': False, 'artifact_sha256': _sha(payload),
+                                'metadata_sha256': _sha(files[metadata]), 'lock_sha256': _sha(files['package-lock.json']),
+                                'entrypoints': entries, 'npm_sources': selected_sources}
+                    import json
+                    possible_raw = json.dumps(possible, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+                    possible_path = base + '/possible-closure.json'
+                    _write(descriptor, possible_path, possible_raw)
+                    maps[reference] = {'path': possible_path, 'sha256': _sha(possible_raw)}
+                if reference not in maps:
                     _fail('action-bundle-map-missing', 'qualified exact bundle/component/term map is absent; root license is insufficient')
                 pending, pending_bytes = [], 0
                 for subject in subjects:
@@ -487,6 +562,10 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                               'components': maps[reference], 'origin': {'kind': 'github-action-source/v1',
                                   'index_url': commit_url, 'index_path': paths['commit'], 'index_sha256': _sha(commit_raw),
                                   'tree_path': paths['tree'], 'tree_sha256': _sha(tree_raw), 'artifact_url': zip_url, 'archive_root': prefix}}
+                    if 'npm_sources' in facts:
+                        oldest = min([now] + [datetime.fromisoformat(source['acquired_at'].replace('Z', '+00:00'))
+                                              for source in facts['npm_sources']])
+                        record['acquired_at'] = oldest.isoformat()
                     checked = verify_family(Path(artifacts), record, now=now)
                     extra = checked['bound_bytes'] - physical
                     if extra > budget:
@@ -508,3 +587,317 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
     finally:
         import os
         os.close(descriptor)
+
+
+def validate_source_facts(artifacts, report, *, now=None, inventory_digest=None, records=None):
+    """Rebind provider costs to saved responses and the complete source inventory.
+
+    Qualified family records already charge their source bytes. Every unresolved
+    source use pays its actual retained response bytes, including partial fetches.
+    Caller totals, diagnostic gap labels and cache summaries grant no credit.
+    """
+    from collections import Counter
+    from .security_inventory import canonical_digest
+    result = {'gaps': [], 'bound_bytes': 0, 'records': []}
+
+    def gap(message):
+        result['gaps'].append({'code': 'artifact-action-source-provider', 'message': message})
+
+    try:
+        if not isinstance(report, dict) or type(report.get('schema_version')) is not int or report['schema_version'] != 1:
+            _fail('artifact-action-source-provider', 'unsupported Action source provider')
+        inventory = report.get('source_inventory')
+        if not isinstance(inventory, dict):
+            _fail('artifact-action-source-provider', 'complete source inventory is missing')
+        digest = canonical_digest({key: value for key, value in inventory.items() if key != 'digest'})
+        if digest != inventory.get('digest') or digest != inventory_digest or digest != report.get('inventory_sha256'):
+            _fail('artifact-action-source-provider', 'source inventory digest differs')
+        if not isinstance(inventory.get('tools'), list) or any(not isinstance(row, dict) for row in inventory['tools']):
+            _fail('artifact-action-source-provider', 'source inventory tool declarations are malformed')
+        subjects = [row for row in inventory.get('tools', []) if isinstance(row, dict) and row.get('kind') == 'github-action']
+        keys = [canonical_digest(row) for row in subjects]
+        if len(set(keys)) != len(keys):
+            _fail('artifact-action-source-provider', 'source inventory repeats an Action use')
+        expected = dict(zip(keys, subjects))
+        supplied = report.get('records')
+        supplied_gaps = report.get('gaps')
+        facts = report.get('source_facts')
+        if not all(isinstance(value, list) for value in (supplied, supplied_gaps, facts)):
+            _fail('artifact-action-source-provider', 'provider source/record/gap lists are missing')
+        selected = supplied if records is None else [row for row in records if isinstance(row, dict) and row.get('kind') == 'action']
+        if Counter(canonical_digest(row) for row in supplied) != Counter(canonical_digest(row) for row in selected):
+            _fail('artifact-action-source-provider', 'published Action records differ from this provider')
+        partition = [canonical_digest(row.get('subject')) for row in supplied + supplied_gaps if isinstance(row, dict)]
+        if Counter(partition) != Counter(keys):
+            gap('qualified records and unavailable source uses do not partition the bound source inventory')
+        qualified = set()
+        for record in supplied:
+            try:
+                key = canonical_digest(record.get('subject'))
+                if key not in expected or key in qualified:
+                    _fail('artifact-action-source-provider', 'family belongs to another or repeated source use')
+                verify_family(Path(artifacts), record, now=now or datetime.now(timezone.utc))
+                qualified.add(key)
+                result['records'].append(record)
+            except (ArtifactError, ValueError, TypeError, KeyError, OSError) as exc:
+                gap(str(exc))
+        refs = {row['reference'] for row in subjects}
+        if len(facts) != len(refs) or {row.get('reference') for row in facts if isinstance(row, dict)} != refs:
+            _fail('artifact-action-source-provider', 'source facts do not cover each exact source pin once')
+        for fact in facts:
+            reference = fact['reference']
+            response_rows = fact.get('responses', [])
+            matching = set()
+            if isinstance(response_rows, list) and len(response_rows) == 3:
+                for record in result['records']:
+                    if record['subject']['reference'] != reference:
+                        continue
+                    origin = record['origin']
+                    locations = [(origin['index_path'], origin['index_sha256']),
+                                 (origin['tree_path'], origin['tree_sha256']), (record['path'], record['sha256'])]
+                    if all(isinstance(response, dict) and (response.get('path'), response.get('sha256')) == location
+                           for response, location in zip(response_rows, locations)):
+                        matching.add(canonical_digest(record['subject']))
+            unresolved = sum(row['reference'] == reference and key not in matching for key, row in expected.items())
+            try:
+                match = REFERENCE.fullmatch(reference)
+                if not match:
+                    _fail('artifact-action-origin', 'source reference is unsupported')
+                repository, pin = match.groups()
+                try:
+                    acquired = datetime.fromisoformat(fact['acquired_at'].replace('Z', '+00:00'))
+                    age = (now or datetime.now(timezone.utc)) - acquired
+                    if acquired.tzinfo is None or not timedelta(0) <= age <= timedelta(hours=72):
+                        raise ValueError('source acquisition is stale or future-dated')
+                except (ValueError, TypeError, AttributeError) as exc:
+                    gap(str(exc))
+                responses = fact.get('responses')
+                if not isinstance(responses, list) or len(responses) > 3:
+                    _fail('artifact-action-source-provider', 'source response prefix is malformed')
+                raw_responses = []
+                for index, response in enumerate(responses):
+                    try:
+                        if not isinstance(response, dict):
+                            _fail('artifact-action-source-provider', 'source response descriptor is malformed')
+                        raw = read_file(Path(artifacts), response.get('path'), ZIP_LIMIT if index == 2 else MAX_INDEX_BYTES)
+                        result['bound_bytes'] += len(raw) * unresolved
+                        if len(raw) != response.get('bytes') or _sha(raw) != response.get('sha256'):
+                            gap('saved source response bytes/hash differ')
+                        raw_responses.append(raw)
+                    except (ArtifactError, ValueError, TypeError, KeyError, OSError) as exc:
+                        gap(str(exc))
+                        raw_responses.append(None)
+                if any(raw is None for raw in raw_responses):
+                    _fail('artifact-action-source-provider', 'one or more saved source responses are unavailable')
+                tree_id = None
+                for index, raw in enumerate(raw_responses):
+                    response = responses[index]
+                    kind = ('commit', 'tree', 'zip')[index]
+                    if not source_url(response.get('url'), repository, pin, kind, tree_id):
+                        gap('saved source response URL/order differs from exact official origin')
+                    if index == 0:
+                        commit = _json(raw)
+                        tree_id = commit.get('tree', {}).get('sha')
+                        if commit.get('sha') != pin or not isinstance(tree_id, str) or not re.fullmatch('[0-9a-f]{40}', tree_id):
+                            _fail('artifact-action-origin', 'saved commit identity differs')
+                if len(raw_responses) == 3:
+                    files, _, _, _, _, _ = _source(raw_responses[2], raw_responses[0], raw_responses[1], repository, pin)
+                    _component_inputs(files)  # Recompute diagnostics; do not trust caller summaries.
+                    if 'npm_sources' in fact or 'npm_responses' in fact:
+                        from .security_action_npm import source_custody
+                        from urllib.parse import quote
+                        expected_npm = _possible_lock(files)
+                        admitted_urls = set(expected_npm)
+                        for rows in expected_npm.values():
+                            for row in rows:
+                                if row['integrity'].startswith('sha1-'):
+                                    admitted_urls.add('https://registry.npmjs.org/' + quote(row['name'], safe='@') + '/' + quote(row['version'], safe=''))
+                        receipts = fact.get('npm_responses')
+                        if not isinstance(receipts, list) or len(receipts) > 272:
+                            _fail('artifact-action-source-provider', 'npm response receipts are missing or unbounded')
+                        seen_urls = set()
+                        for response in receipts:
+                            if not isinstance(response, dict):
+                                _fail('artifact-action-source-provider', 'npm response descriptor is malformed')
+                            raw_response = read_file(Path(artifacts), response.get('path'), 16 * 1024 * 1024 + 1)
+                            paid = set()
+                            for record in result['records']:
+                                key = canonical_digest(record['subject'])
+                                if key not in matching:
+                                    continue
+                                _, proof = _saved_proof(Path(artifacts), record['components']['path'], record['components']['sha256'])
+                                for source in proof.get('npm_sources', []):
+                                    descriptors = [source] + ([source['strong_metadata']] if source['strong_metadata'] is not None else [])
+                                    if any((row['path'], row['sha256']) == (response.get('path'), response.get('sha256')) for row in descriptors):
+                                        paid.add(key)
+                            count = sum(row['reference'] == reference and key not in paid for key, row in expected.items())
+                            result['bound_bytes'] += len(raw_response) * count
+                            if (response.get('url') not in admitted_urls or response.get('url') in seen_urls
+                                    or response.get('sha256') != _sha(raw_response) or response.get('bytes') != len(raw_response)):
+                                gap('npm receipt origin/hash/size differs from exact source lock')
+                            seen_urls.add(response.get('url'))
+                        sources = fact.get('npm_sources')
+                        if (not isinstance(sources, list) or len(sources) != len(expected_npm)
+                                or any(not isinstance(source, dict) for source in sources)
+                                or {source.get('url') for source in sources} != set(expected_npm)):
+                            _fail('artifact-action-source-provider', 'npm facts do not cover the source-declared possible closure')
+                        for source in sources:
+                            source_custody(Path(artifacts), source, expected_npm[source['url']], now=now or datetime.now(timezone.utc))
+                            required_receipts = [source] + ([source['strong_metadata']] if source['strong_metadata'] is not None else [])
+                            if any(not any((receipt.get('url'), receipt.get('path'), receipt.get('sha256')) == (row['url'], row['path'], row['sha256'])
+                                           for receipt in receipts) for row in required_receipts):
+                                gap('original npm source has no exact receipt in provider costs')
+                else:
+                    gap('partial Action source responses remain unavailable')
+                if unresolved:
+                    gap('source-owned Action uses have no verified qualified family record')
+            except (ArtifactError, ValueError, TypeError, KeyError, OSError) as exc:
+                gap(str(exc))
+    except (ArtifactError, ValueError, TypeError, KeyError, OSError) as exc:
+        gap(str(exc))
+    return result
+
+
+def _possible_lock(files):
+    """Rederive the complete declared possible production closure from source."""
+    lock = _json(files.get('package-lock.json', b'{}'))
+    packages = lock.get('packages')
+    if lock.get('lockfileVersion') not in {2, 3} or not isinstance(packages, dict) or len(packages) > MAX_MEMBERS:
+        _fail('license-transitive-coverage', 'source has no bounded npm production lock')
+    declarations = [('', _json(files.get('package.json', b'{}')).get('dependencies', {}))]
+    declarations.extend((path, row.get('dependencies', {})) for path, row in packages.items()
+                        if path and isinstance(row, dict) and row.get('dev') is not True)
+    for parent, dependencies in declarations:
+        if not isinstance(dependencies, dict):
+            _fail('license-transitive-coverage', 'npm required dependency mapping is malformed')
+        for name in dependencies:
+            current = parent
+            while True:
+                candidate = (current + '/' if current else '') + 'node_modules/' + name
+                row = packages.get(candidate)
+                if isinstance(row, dict) and row.get('dev') is not True:
+                    break
+                if not current:
+                    _fail('license-transitive-coverage', 'declared production dependency is missing from the locked possible closure')
+                current = current.rsplit('/node_modules/', 1)[0] if '/node_modules/' in current else ''
+    expected = {}
+    for path, row in packages.items():
+        if not isinstance(row, dict):
+            _fail('license-transitive-coverage', 'npm lock component is malformed')
+        if not path or row.get('dev') is True:
+            continue
+        safe_parts(path)
+        if 'node_modules/' not in path or row.get('link'):
+            _fail('license-transitive-coverage', 'linked/workspace npm closure is unsupported')
+        name = row.get('name') or path.rsplit('node_modules/', 1)[1]
+        if not isinstance(row.get('resolved'), str) or not isinstance(row.get('integrity'), str):
+            _fail('license-transitive-coverage', 'production lock source/integrity is missing')
+        expected.setdefault(row['resolved'], []).append({'name': name, 'version': row.get('version'),
+            'resolved': row['resolved'], 'integrity': row['integrity'], 'lock_path': path})
+    return expected
+
+
+def _possible_evidence(root, record, files, members, prefix, metadata, entries, proof, proof_raw, source_proofs, *, now=None):
+    """Qualify possible source closure; never assert exact binary inclusion."""
+    from .security_action_npm import verify_source
+    from .security_licenses import ALLOWED, _select_expression, _license_evidence
+    required = {'schema_version', 'kind', 'coverage_basis', 'exact_runtime_membership_proved', 'artifact_sha256',
+                'metadata_sha256', 'lock_sha256', 'entrypoints', 'npm_sources'}
+    if (set(proof) != required or type(proof['schema_version']) is not int or proof['schema_version'] != 1
+            or proof['kind'] != 'action-source-possible-closure/v1'
+            or proof['coverage_basis'] != 'source-declared-possible-runtime-components'
+            or proof['exact_runtime_membership_proved'] is not False or proof['artifact_sha256'] != record['sha256']
+            or proof['metadata_sha256'] != _sha(files[metadata]) or proof['lock_sha256'] != _sha(files.get('package-lock.json', b''))
+            or proof['entrypoints'] != entries or not entries or not isinstance(proof['npm_sources'], list)):
+        _fail('license-transitive-coverage', 'possible closure needs its distinct exact source-data assurance and bindings')
+    expected = _possible_lock(files)
+    sources = proof['npm_sources']
+    if (len(sources) != len(expected) or any(not isinstance(row, dict) for row in sources)
+            or {row.get('url') for row in sources} != set(expected)):
+        _fail('license-transitive-coverage', 'possible closure omits or adds locked npm source objects')
+    package = _json(files.get('package.json', b'{}'))
+    expression = package.get('license')
+    if not all(isinstance(package.get(key), str) and package[key] for key in ('name', 'version')):
+        _fail('license-metadata-missing', 'root Action source package identity is incomplete')
+    chosen, identifiers = _select_expression(expression, list(ALLOWED))
+    retained, terms, notices = {}, [], []
+    root_id = 'source/' + record['sha256']
+    for name, body in files.items():
+        if '/' in name or not name.lower().startswith(('license', 'licence', 'copying', 'notice', 'copyright', 'authors')):
+            continue
+        path = root_id + '/' + name
+        retained[path] = body
+        (notices if name.lower().startswith(('notice', 'copyright', 'authors')) else terms).append(path)
+    root_component = {'id': root_id, 'name': package.get('name'), 'version': package.get('version'),
+                      'source_artifact_sha256': record['sha256'], 'source_url': record['origin']['artifact_url'],
+                      'metadata_path': 'package.json', 'expression': expression, 'requires': [],
+                      'files': [{'path': path, 'sha256': _sha(retained[path]), 'bytes': len(retained[path])} for path in terms + notices],
+                      'license_paths': terms, 'notice_paths': notices}
+    from .security_license_texts import recognized_license, reviewed_ancillary
+    for path in notices:
+        text = retained[path].decode('utf-8')
+        if recognized_license(text) is None and reviewed_ancillary(text) is None:
+            _fail('license-text-review', 'root Action notice/attribution needs closed complete-file review')
+    _license_evidence(retained, root_component, identifiers, chosen)
+    proofs = list(source_proofs) + [{'path': record['components']['path'], 'sha256': record['components']['sha256'], 'bytes': len(proof_raw)}]
+    components = [root_component]
+    for source in sources:
+        try:
+            checked = verify_source(root, source, expected[source['url']], now=now)
+        except ArtifactError as exc:
+            if exc.code != 'license-obligation-missing':
+                raise
+            from .security_action_npm import source_custody, _qualify_source
+            custody = source_custody(root, source, expected[source['url']], now=now)
+            supplemental, cache_proofs = _licensed_fallback(files, record, source, custody, prefix)
+            checked = _qualify_source(custody, source, supplemental=supplemental)
+            proofs.extend(cache_proofs)
+        retained.update(checked['files'])
+        components.extend(checked['components'])
+        proofs.extend(checked['proofs'])
+    record_time = datetime.fromisoformat(record['acquired_at'].replace('Z', '+00:00'))
+    if any(record_time > datetime.fromisoformat(source['acquired_at'].replace('Z', '+00:00')) for source in sources):
+        _fail('artifact-npm-stale', 'family timestamp must not renew older original npm acquisition')
+    root_component['requires'] = [row['id'] for row in components[1:]]
+    ids = [row['id'] for row in components]
+    identity = family_identity(record)
+    return {'artifact_id': identity, 'members': members, 'files': retained, 'components': components,
+            'binding': {'artifact_id': identity, 'artifact_sha256': record['sha256'], 'artifact_size': record['bytes'],
+                        'subject': record['subject'], 'context': record['context'], 'proofs': proofs,
+                        'composition_assurance': 'source-declared-possible-runtime-components',
+                        'exact_runtime_membership_proved': False,
+                        'composition_scope': 'action-source-and-declared-production-npm-closure',
+                        'possible_components_by_bundle': {path: ids for path in entries},
+                        'possible_components': [{key: component[key] for key in
+                            ('id', 'name', 'version', 'expression', 'source_artifact_sha256', 'source_url', 'metadata_path')}
+                            for component in components]},
+            'bound_bytes': record['bytes'] + sum(row['bytes'] for row in proofs)}
+
+
+def _licensed_fallback(files, record, source, custody, prefix):
+    """Bind only approved missing-term identities to their own exact Git cache."""
+    package = custody['package']
+    key = (record['subject']['reference'], package['name'], package['version'])
+    witness = _LICENSED_FALLBACKS.get(key)
+    if witness is None:
+        _fail('license-obligation-missing', 'no closed same-Action cache witness for missing npm terms')
+    path, expected_hash = witness
+    raw = files.get(path)
+    if raw is None or _sha(raw) != expected_hash:
+        _fail('license-conflict', 'original same-Action license cache container is missing or changed')
+    value = _yaml(raw)
+    if (not isinstance(value, dict) or (value.get('name'), value.get('version')) != (package['name'], package['version'])
+            or value.get('type') != 'npm' or str(value.get('license')).lower() != str(package.get('license')).lower()
+            or not isinstance(value.get('licenses'), list) or not value['licenses'] or value.get('notices') != []):
+        _fail('license-conflict', 'same-Action cache identity/expression/whole-term contract differs')
+    supplemental, proofs = [], []
+    for index in range(len(value['licenses'])):
+        selector = f'licenses/{index}/text'
+        text = licensed_text(raw, selector).encode('utf-8')
+        derived = f'derived/npm/{source["sha256"]}/git-cache/{index}/LICENSE'
+        supplemental.append((derived, text))
+        proofs.append({'path': prefix + '/' + path, 'sha256': expected_hash, 'bytes': len(raw),
+                       'container_kind': 'git-source-archive-member', 'artifact_path': record['path'],
+                       'artifact_sha256': record['sha256'], 'selector': selector, 'text_sha256': _sha(text),
+                       'derived_path': derived})
+    return supplemental, proofs
