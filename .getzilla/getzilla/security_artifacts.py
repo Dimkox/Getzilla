@@ -495,6 +495,9 @@ def _image_source(record: dict, payload: bytes) -> tuple[dict, dict, list[dict]]
 def family_evidence(root: Path, record: dict) -> dict:
     """One byte-bound reader shared by license evaluation and receipt projection."""
     identity = family_identity(record)
+    if record['kind'] == 'action' and record['origin'].get('kind') == 'github-action-source/v1':
+        from .security_action_inputs import verify_family
+        return verify_family(root, record)
     payload = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
     if len(payload) != record['bytes'] or hashlib.sha256(payload).hexdigest() != record['sha256']:
         raise ArtifactError('artifact-hash', 'family payload differs from its exact bytes')
