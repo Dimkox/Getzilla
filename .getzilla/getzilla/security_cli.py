@@ -26,7 +26,7 @@ from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _cov
 from .security_inventory import collect_inventory, declared_inventory, read_image_selection, canonical_digest
 from .security_license_acquisition import acquire_pypi
 from .security_licenses import ALLOWED, _select_expression, _repository_identity, evaluate_artifacts, load_policy
-from .security_artifacts import MAX_INDEX_BYTES, read_file
+from .security_artifacts import MAX_INDEX_BYTES, read_file, ArtifactError
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
 from .security_oci import source_bindings, bound_fault, _bound_detail
 from .public_security_context import current_context, bind_context, validate_context
@@ -37,6 +37,77 @@ REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev'
                    'opengrep', 'secret-scan', 'bandit', 'trivy-config')
 _INPUT_BOOTSTRAP = ('import sys;sys.path.insert(0,sys.argv.pop(1));'
                     'from getzilla.security_cli import main;raise SystemExit(main())')
+_PREPARATION_SEAL = object()
+_PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration', 'profile-validation',
+    'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
+    'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result'))
+_PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory', 'os',
+    'key', 'type', 'value', 'runtime', 'other'))
+_PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'artifact-size',
+    'artifact-identity', 'artifact-hash', 'artifact-inventory-binding', 'artifact-manifest',
+    'artifact-path', 'artifact-platform', 'artifact-publication-uncertain', 'artifact-stale',
+    'artifact-target-unknown', 'artifact-fetch', 'artifact-fetch-timeout', 'other'))
+
+
+def _preparation_detail(value):
+    """Closed refusal observations only; never authority, exception text or paths."""
+    if (type(value) is not dict or set(value) != {'stage', 'error_kind', 'error_code', 'errno'}
+            or type(value['stage']) is not str or value['stage'] not in _PREPARATION_STAGES
+            or type(value['error_kind']) is not str or value['error_kind'] not in _PREPARATION_KINDS
+            or value['error_code'] is not None and (type(value['error_code']) is not str
+                or value['error_code'] not in _PREPARATION_CODES)
+            or value['error_kind'] != 'artifact' and value['error_code'] is not None
+            or value['errno'] is not None and (type(value['errno']) is not int or not 0 <= value['errno'] <= 4095)):
+        return {}
+    return dict(value)
+
+
+def _preparation_fault(error):
+    value = getattr(error, '_getzilla_preparation', None)
+    if type(value) is not tuple or len(value) != 2 or value[0] is not _PREPARATION_SEAL:
+        return {}
+    return _preparation_detail(value[1])
+
+
+@contextmanager
+def _preparation_step(stage):
+    if type(stage) is not str or stage not in _PREPARATION_STAGES:
+        raise ValueError('unknown fixed preparation step')
+    try:
+        yield
+    except Exception as error:
+        if not _preparation_fault(error):
+            from .security_oci import OCIError
+            kind = {ArtifactError: 'artifact', SecurityDataError: 'security-data', OCIError: 'oci',
+                VulnerabilityError: 'inventory', KeyError: 'key', TypeError: 'type', ValueError: 'value',
+                RuntimeError: 'runtime'}.get(type(error), 'os' if isinstance(error, OSError) else 'other')
+            code = (error.code if type(error) is ArtifactError and type(error.code) is str
+                    and error.code in _PREPARATION_CODES else 'other')
+            number = getattr(error, 'errno', None)
+            error._getzilla_preparation = (_PREPARATION_SEAL, dict(stage=stage, error_kind=kind,
+                error_code=code if kind == 'artifact' else None,
+                errno=number if type(number) is int and 0 <= number <= 4095 else None))
+        raise
+
+
+def _input_fault(error):
+    detail = bound_fault(error)
+    preparation = _preparation_fault(error)
+    if preparation:
+        detail['preparation'] = preparation
+    return detail
+
+
+def _input_fault_detail(value):
+    if type(value) is not dict or 'preparation' not in value:
+        return _bound_detail(value)
+    preparation = _preparation_detail(value['preparation'])
+    if not preparation:
+        return {}
+    rest = {key: item for key, item in value.items() if key != 'preparation'}
+    detail = _bound_detail(rest) if rest else {}
+    detail['preparation'] = preparation
+    return detail
 
 
 def _image_refusal(code: str, message: str) -> SecurityDataError:
@@ -207,29 +278,33 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         raise SecurityDataError('profile declaration cannot execute acquisition')
     if os.name != 'posix':
         raise SecurityDataError('public snapshot preparation requires a qualified POSIX reader; platform unavailable')
-    root = root.resolve()
-    roots = {key: str(path.absolute()) for key, path in
-                                  (('database', database), ('artifacts', artifacts), ('tools', tools))}
-    tools.mkdir(parents=True, exist_ok=True, mode=0o700)
-    env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
-           'GETZILLA_SECURITY_TOOLS': roots['tools']}
-    catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
-    selection = read_image_selection(image_selection)
-    if selection is not None:
-        env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
-    inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
-    policy = _policy_digest(root)
+    with _preparation_step('setup'):
+        root = root.resolve()
+        roots = {key: str(path.absolute()) for key, path in
+                                      (('database', database), ('artifacts', artifacts), ('tools', tools))}
+        tools.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env = {'GETZILLA_SECURITY_DB': roots['database'], 'GETZILLA_SECURITY_ARTIFACTS': roots['artifacts'],
+               'GETZILLA_SECURITY_TOOLS': roots['tools']}
+        catalog = _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) if image_artifacts else None
+        selection = read_image_selection(image_selection)
+        if selection is not None:
+            env['GETZILLA_SECURITY_IMAGE_SELECTION'] = str(Path(image_selection).absolute())
+        inventory = declared_inventory(root, selection) if selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
+        policy = _policy_digest(root)
     with tempfile.TemporaryDirectory(prefix='input-binding-', dir=tools) as temporary:
-        before = source_binding(root, TRUSTED_ROOT, Path(temporary))
+        with _preparation_step('source-binding'):
+            before = source_binding(root, TRUSTED_ROOT, Path(temporary))
         if write_profile:
-            declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
-            if source_bindings(catalog):
-                refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
-                if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
-                        or source_binding(root, TRUSTED_ROOT, Path(temporary)) != before):
-                    raise SecurityDataError('Source or OCI selection changed during declaration')
+            with _preparation_step('profile-declaration'):
+                declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
+                if source_bindings(catalog):
+                    refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
+                    if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
+                            or source_binding(root, TRUSTED_ROOT, Path(temporary)) != before):
+                        raise SecurityDataError('Source or OCI selection changed during declaration')
             return declared
-        validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
+        with _preparation_step('profile-validation'):
+            validate_input_profile(profile, before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection)
         if refresh and inventory['images'] and image_artifacts is None:
             raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations are not qualified artifacts')
         if families is not None:
@@ -245,30 +320,39 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             env['GETZILLA_SECURITY_INPUT_PROFILE'] = json.dumps(profile, sort_keys=True)
         acquisitions = []
         if provision:
-            acquisitions.extend(provision_tools(tools))
+            with _preparation_step('tool-provision'):
+                acquisitions.extend(provision_tools(tools))
         if refresh:
             if inventory['dependencies'] or inventory['images']:
-                acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
+                with _preparation_step('feeds'):
+                    acquisitions.extend(refresh_feeds(database, sorted({item['ecosystem'] for item in inventory['dependencies']}), now=now))
             if inventory['dependencies'] or inventory['tools'] or inventory['images']:
-                bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, families=families)
-                acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
+                with _preparation_step('package-artifacts'):
+                    bundle = acquire_pypi(inventory['dependencies'], artifacts, inventory_digest=inventory['digest'], now=now, families=families)
+                    acquisitions.append({'kind': 'artifact-acquisition', 'status': 'fail' if bundle['gaps'] else 'pass', 'gaps': bundle['gaps']})
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
-                acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
+                with _preparation_step('image-artifacts'):
+                    acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
                 if image_artifacts is not None:
-                    acquisitions.extend(refresh_image_database(tools, now=now))
+                    with _preparation_step('image-database'):
+                        acquisitions.extend(refresh_image_database(tools, now=now))
         elif families is not None:
             raise SecurityDataError('family publication requires explicit refresh selection')
-        obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
-        licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
-        if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
-            raise SecurityDataError('Selected OCI catalog changed during preparation')
-        after_selection = read_image_selection(image_selection)
-        after_inventory = declared_inventory(root, after_selection) if after_selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
-        after = source_binding(root, TRUSTED_ROOT, Path(temporary))
-        if after_inventory != inventory or after_selection != selection:
-            raise SecurityDataError('source inventory changed during public input preparation')
-        return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
+        with _preparation_step('obligations'):
+            obligations = security_obligations(root, inventory, environ=env, now=now, policy_root=root)
+        with _preparation_step('licenses'):
+            licenses = evaluate_artifacts(inventory, artifacts, load_policy(root), now=now)
+        with _preparation_step('final-binding'):
+            if image_artifacts is not None and _json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog:
+                raise SecurityDataError('Selected OCI catalog changed during preparation')
+            after_selection = read_image_selection(image_selection)
+            after_inventory = declared_inventory(root, after_selection) if after_selection is not None else collect_inventory(root, image_bindings=source_bindings(catalog))
+            after = source_binding(root, TRUSTED_ROOT, Path(temporary))
+            if after_inventory != inventory or after_selection != selection:
+                raise SecurityDataError('source inventory changed during public input preparation')
+        with _preparation_step('prepare-result'):
+            return preparation_result(profile, before, after, obligations, acquisitions, licenses, now=now)
 
 
 def _output_identity(path):
@@ -292,7 +376,7 @@ def _failed_input_fault(path, previous):
                 or report.get('kind') != 'public-security-input-refusal'
                 or report.get('status') != 'fail' or report.get('qualification') != 'UNVERIFIED'):
             return {}
-        return _bound_detail(report.get('fault'))
+        return _input_fault_detail(report.get('fault'))
     except (OSError, ValueError, TypeError, RuntimeError):
         return {}
 
@@ -884,7 +968,7 @@ def main(argv=None) -> int:
     except (OSError, ValueError, RuntimeError) as error:
         report = {'kind': 'public-security-input-refusal', 'status': 'fail', 'qualification': 'UNVERIFIED',
                   'gaps': ['input-preparation-unavailable'], 'reason': 'selected public input/profile/source validation refused'}
-        fault = bound_fault(error)
+        fault = _input_fault(error)
         if fault:
             report['fault'] = fault
     body = (json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n').encode()
