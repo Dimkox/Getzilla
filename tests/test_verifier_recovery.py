@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from getzilla import state
-from tests._support import write_current_verification
 
 import contextlib
 import hashlib
