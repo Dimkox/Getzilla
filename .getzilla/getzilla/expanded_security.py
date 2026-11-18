@@ -27,6 +27,20 @@ CHECK_FAMILIES = {
 _SOURCE_FIELDS = ('source_id', 'source_url', 'content_sha256', 'payload_size', 'acquisition', 'coverage')
 
 
+def _license_target(environ):
+    env = os.environ if environ is None else environ
+    raw = env.get('GETZILLA_SECURITY_INPUT_PROFILE')
+    if raw is None:
+        return {}
+    from .security_artifacts import MAX_INDEX_BYTES
+    from .security_data import _json
+    from .security_python_target import binding
+    if type(raw) is not str or len(raw.encode()) > MAX_INDEX_BYTES:
+        raise SecurityDataError('Python artifact target input profile unavailable or excessive')
+    value = binding(_json(raw.encode()))
+    return {'target_binding':value} if value is not None else {}
+
+
 def _clock(now: datetime | None) -> datetime:
     current = datetime.now(timezone.utc) if now is None else now
     if current.tzinfo is None or current.utcoffset() is None:
@@ -134,8 +148,12 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
              'artifacts': str(Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts').absolute()),
              'tools': str(Path(env.get('GETZILLA_SECURITY_TOOLS') or root / '.getzilla/runtime/security-tools').absolute())}
     from .security_tools import TRUSTED_ROOT
+    package_pins=None
+    if 'python_source_pins' in profile:
+        from .security_python_target import source_pins,validate_target
+        package_pins=source_pins(root,inventory,validate_target(profile['python_target']))
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
-                           now=now, image_artifacts=catalog, image_selection=selection)
+                           now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins)
     if catalog is not None:
         validate_selection(catalog, inventory, profile['image_profile'])
     after, after_run = _selection_authority(root, env)
@@ -180,7 +198,7 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         inventory = selected_inventory(root, environ=env, now=now)
-        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now)
+        proof = artifact_catalog_source(inventory, artifacts, load_policy(policy_root or root), now=now, **_license_target(env))
         if proof != binding:
             raise SecurityDataError('license catalog differs from the frozen required source')
         return True
@@ -221,7 +239,7 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         try:
             descriptors['artifact-license-catalog'] = artifact_catalog_source(
-                inventory, artifacts, load_policy(policy_root or root), now=current)
+                inventory, artifacts, load_policy(policy_root or root), now=current, **_license_target(environ))
         except (OSError, ValueError, RuntimeError):
             descriptors['artifact-license-catalog'] = {'database': str(artifacts.absolute()),
                                                        'source_id': 'artifact-license-catalog', 'unavailable': True}
@@ -397,9 +415,9 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                 from .security_licenses import artifact_catalog_source, evaluate_artifacts, load_policy
                 artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
                 license_policy = load_policy(policy_root or root)
-                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current)
+                report = evaluate_artifacts(inventory, artifacts, license_policy, now=current, **_license_target(env))
                 outcome = 'pass' if report['status'] == 'pass' else 'blocked'
-                proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current)
+                proof = artifact_catalog_source(inventory, artifacts, license_policy, now=current, **_license_target(env))
                 if [proof] != obligation['data_sources']:
                     raise SecurityDataError('license artifact inputs changed during evaluation')
                 results.append(_result(name, outcome, report['summary'], inventory, policy,

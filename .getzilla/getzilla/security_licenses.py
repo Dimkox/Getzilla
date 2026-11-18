@@ -237,9 +237,20 @@ def _select_expression(expression: str, allowed: list[str], *, require_all: bool
     return choose(tree), identifiers
 
 
-def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[str], chosen: list[str]) -> tuple[list[dict], list[dict]]:
+def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[str], chosen: list[str], *,
+                      final_wheel: bool = False) -> tuple[list[dict], list[dict]]:
     if metadata.get('dynamic'):
-        raise ArtifactError('license-metadata-dynamic', 'dynamic source metadata requires a qualified built-artifact review')
+        dynamic=metadata['dynamic']
+        fields={'platform','supported-platform','summary','description','description-content-type','keywords',
+            'home-page','download-url','author','author-email','maintainer','maintainer-email','license',
+            'license-expression','license-file','classifier','requires-dist','provides-dist','obsoletes-dist',
+            'requires-python','requires-external','project-url','provides-extra','requires','provides','obsoletes',
+            'import-name','import-namespace'}
+        if (final_wheel is not True or metadata.get('metadata_version') not in {'2.2','2.3','2.4','2.5','2.6'}
+                or type(dynamic) is not list or len(dynamic)>128
+                or any(type(value) is not str or len(value)>128 or value.strip().lower() not in fields for value in dynamic)
+                or len({value.strip().lower() for value in dynamic})!=len(dynamic)):
+            raise ArtifactError('license-metadata-dynamic', 'source or forbidden Dynamic metadata has no qualified final-wheel interpretation')
     classifiers = {
         'License :: OSI Approved :: MIT License': {'MIT'},
         'License :: OSI Approved :: Apache Software License': {'Apache-2.0'},
@@ -289,6 +300,19 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
 
 
 def _satisfies(version: str, constraints: str, ecosystem: str) -> bool:
+    if ecosystem == 'PyPI':
+        if (type(version) is not str or len(version)>512 or type(constraints) is not str
+                or len(constraints)>4096 or constraints.count(',')>128):
+            raise ArtifactError('license-transitive-coverage', 'Python requirement exceeds the bounded resolver contract')
+        text=constraints.strip()
+        if text.startswith('(') and text.endswith(')'):
+            text=text[1:-1]
+        try:
+            from pip._vendor.packaging.specifiers import SpecifierSet
+            from pip._vendor.packaging.version import Version
+            return Version(version) in SpecifierSet(text)
+        except (ImportError, ValueError):
+            raise ArtifactError('license-transitive-coverage', 'Python requirement has no qualified PEP440 interpretation') from None
     key = _pypi_key if ecosystem == 'PyPI' else _semver_key
     target = key(version)
     if not constraints.strip():
@@ -344,26 +368,45 @@ def _validate_extra_scope(metadata: dict, dep: dict) -> None:
 
 
 def _marker_required(marker: str, dep: dict, environment: dict) -> bool:
-    """Small explicit marker subset. Unknown target conditions stay unresolved."""
-    match = re.fullmatch(r'''\s*([a-z_]+)\s*(==|!=|>=|<=|>|<)\s*(['"])([^'"\n]*)\3\s*''', marker)
-    if match is None:
-        raise ArtifactError('license-transitive-coverage', 'complex dependency marker needs a qualified target resolver')
-    variable, operator, _, expected = match.groups()
-    if variable == 'extra':
-        extras = _extras(dep.get('extras', []))
-        expected = _extra_name(expected, allow_empty=True)
-        if operator not in {'==', '!='}:
-            raise ArtifactError('license-transitive-coverage', 'unsupported extras marker')
-        values = extras or ['']
-        return any((value == expected) if operator == '==' else (value != expected) for value in values)
-    observed = environment.get(variable)
-    if not isinstance(observed, str):
-        raise ArtifactError('license-transitive-coverage', f'target marker {variable} is unknown')
-    if variable in {'python_version', 'python_full_version', 'implementation_version'}:
-        return _satisfies(observed, operator + expected, 'PyPI')
-    if operator not in {'==', '!='}:
-        raise ArtifactError('license-transitive-coverage', 'unsupported non-version target marker ordering')
-    return observed == expected if operator == '==' else observed != expected
+    """Bounded PEP508 evaluation with every referenced target variable explicit."""
+    if (type(marker) is not str or len(marker)>4096 or marker.count('(')>32
+            or type(environment) is not dict):
+        raise ArtifactError('license-transitive-coverage', 'target marker exceeds the bounded resolver contract')
+    try:
+        from pip._vendor.packaging.markers import Marker, Variable, _evaluate_markers
+        expression=Marker(marker)
+        pending=[expression._markers]
+        variables=set()
+        count=0
+        while pending:
+            node=pending.pop()
+            count+=1
+            if count>256:
+                raise ValueError('marker node bound')
+            if isinstance(node,list):
+                pending.extend(node)
+            elif isinstance(node,tuple) and len(node)==3:
+                variables.update(value.value for value in (node[0],node[2]) if isinstance(value,Variable))
+                if isinstance(node[0],Variable) and isinstance(node[2],Variable):
+                    raise ValueError('two-variable comparison is unresolved')
+                extra_left=isinstance(node[0],Variable) and node[0].value=='extra'
+                extra_right=isinstance(node[2],Variable) and node[2].value=='extra'
+                if extra_left or extra_right:
+                    if node[1].value not in {'==','!='}:
+                        raise ValueError('unsupported extra ordering')
+                    literal=node[2] if extra_left else node[0]
+                    literal.value=_extra_name(literal.value,allow_empty=True)
+            elif node not in {'and','or'}:
+                raise ValueError('marker shape')
+        if any(key!='extra' and (key not in environment or type(environment[key]) is not str
+                or len(environment[key])>512) for key in variables):
+            raise ValueError('unobserved target variable')
+        values=_extras(dep.get('extras',[])) or {''}
+        # The private evaluator consumes this explicit map directly. Marker.evaluate
+        # would fill omitted fields from the ambient host, which cannot prove a target.
+        return any(_evaluate_markers(expression._markers,{**environment,'extra':value}) for value in values)
+    except (ImportError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        raise ArtifactError('license-transitive-coverage', 'marker requires explicit qualified target values and extras') from None
 
 
 def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: dict) -> None:
@@ -397,7 +440,8 @@ def _closure(metadata: dict, dep: dict, dependencies: list[dict], environment: d
             raise ArtifactError('license-transitive-coverage', f'{name} extras are not covered by the inventory')
 
 
-def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None) -> dict:
+def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
+                       target_binding: dict | None = None) -> dict:
     """Evaluate exact package artifacts; expose every unsupported/missing obligation."""
     result = {'status': 'fail', 'summary': '', 'details': [], 'gaps': [], 'assurance': 'artifact-integrity-only',
               'inventory_digest': inventory.get('digest') if isinstance(inventory, dict) else None, 'policy_digest': None}
@@ -418,6 +462,17 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             return {**result, 'status': 'skip', 'summary': 'complete inventory has no applicable third-party artifacts'}
         policy = _policy(policy)
         result['policy_digest'] = policy['digest']
+        if target_binding is not None:
+            from .security_python_target import _binding
+            _binding(target_binding)
+            if target_binding['inventory_sha256'] != inventory.get('digest'):
+                raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
+            result['python_target_scope'] = {'target':target_binding['target'],
+                'assurance':'current-interpreter-only; no unobserved target or final-delivery credit'}
+            if policy.get('factory_offline_profile') and any(
+                    dep.get('manifest','').startswith('factory/') for dep in dependencies):
+                gap('artifact-target-scope-unobserved',
+                    'current interpreter observation does not qualify the separate Factory offline target and final delivery')
         raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
         bundle = _json(raw)
         if bundle.get('schema_version') != 1 or type(bundle.get('schema_version')) is not int:
@@ -493,7 +548,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('artifact-identity', 'artifact differs from the observed dependency artifact')
                 if dep.get('artifact_filename') and dep['artifact_filename'] != record['filename']:
                     raise ArtifactError('artifact-identity', 'artifact filename differs from the observed target')
-                if dep['ecosystem'] == 'PyPI' and not (dep.get('artifact_filename') or dep.get('artifact_sha256')):
+                observed = None
+                if dep['ecosystem'] == 'PyPI' and (target_binding is not None or 'python_target' in record):
+                    from .security_python_target import verify_record
+                    observed = verify_record(record,payload,target_binding,dependency=dep)
+                    if target_binding and 'source_pins' in target_binding and not target_binding['source_pins'][observed['subject_sha256']]['marker_active']:
+                        raise ArtifactError('artifact-target-use-unobserved', 'this source marker requires a separately observed target; current input bytes grant no other-target use credit')
+                if dep['ecosystem'] == 'PyPI' and observed is None and not (dep.get('artifact_filename') or dep.get('artifact_sha256')):
                     if not re.search(r'-(?:py3|py2\.py3)-none-any\.whl$', record['filename']):
                         raise ArtifactError('artifact-target-unknown', 'platform wheel or sdist requires an explicitly observed artifact target')
                 files = archive_files(payload, record['filename'])
@@ -511,7 +572,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     license_inputs = license_members(files, metadata)
                 else:
                     license_inputs = files
-                license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen)
+                license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen,
+                    final_wheel=dep['ecosystem']=='PyPI' and record['filename'].endswith('.whl'))
                 custody = None
                 context = dep.get('delivery_context')
                 if dep.get('delivery_kind') == 'factory-offline-archive' and context not in deliveries:
@@ -532,14 +594,15 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     delivered = read_file(artifacts, delivery, MAX_ARTIFACT_BYTES)
                     if hashlib.sha256(delivered).hexdigest() != record['sha256']:
                         raise ArtifactError('license-obligation-missing', 'modified delivery needs separate notice, attribution and license review')
-                _closure(metadata, dep, dependencies, inventory.get('marker_environment', {}))
+                markers = (target_binding['target']['marker_environment'] if observed is not None else inventory.get('marker_environment', {}))
+                _closure(metadata, dep, dependencies, markers)
                 if not scope_known:
                     continue
                 result['details'].append({'ecosystem': dep['ecosystem'], 'package': dep['name'], 'version': dep['version'],
                     'manifest': dep.get('manifest'), 'status': 'pass', 'expression': metadata['expression'],
                     'selected_expression': ' AND '.join(chosen), 'distribution': distribution,
                     'artifact_sha256': record['sha256'], 'artifact_id': artifact_identity(record),
-                    'context': record.get('context', {}), **({'delivery': custody} if custody else {}),
+                    'context': {**record.get('context', {}), **({'python_target_sha256':observed['target_sha256']} if observed else {})}, **({'delivery': custody} if custody else {}),
                     'origin': origin, 'license_files': license_files,
                     'notice_files': notice_files, 'obligations': ('retained in final extracted archive' if custody else 'retained in exact artifact')
                     if distribution == 'redistributed' else 'internal use; license evidence retained'})
@@ -560,7 +623,8 @@ def _family_age(record: dict, current: datetime, catalog_time: str) -> None:
         raise ArtifactError('artifact-stale', 'family acquisition is stale/future or catalog timestamp renews older evidence')
 
 
-def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None) -> dict:
+def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
+                            target_binding: dict | None = None) -> dict:
     """Freeze actual catalog bytes for final-receipt revalidation, without policy PASS.
 
     Recompute at receipt consumption and compare the whole source projection.
@@ -581,6 +645,11 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
         if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
             raise ArtifactError('artifact-inventory-binding', 'catalog needs the exact source inventory digest')
         selected_policy = _policy(policy)
+        if target_binding is not None:
+            from .security_python_target import _binding
+            _binding(target_binding)
+            if target_binding['inventory_sha256'] != digest:
+                raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
         current = _clock(now)
         raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
         bundle = _json(raw)
@@ -618,10 +687,16 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
             index = read_file(artifacts, origin.get('index_path'), MAX_INDEX_BYTES)
             verified = verify_origin(artifacts, record, payload, index_bytes=index)
+            observed = None
+            if record['ecosystem'] == 'PyPI' and (target_binding is not None or 'python_target' in record):
+                from .security_python_target import verify_record
+                observed = verify_record(record,payload,target_binding)
             bound = {'ecosystem': record['ecosystem'], 'name': record['name'], 'version': record['version'],
                      'path': record['path'], 'filename': record['filename'], 'artifact_size': len(payload),
                      'artifact_id': key, 'context': record.get('context', {}),
                      'index_path': origin['index_path'], 'index_size': len(index), **verified}
+            if observed is not None:
+                bound['python_target'] = observed
             total += len(payload) + len(index)
             if record.get('redistributed_path') is not None:
                 delivered = read_file(artifacts, record['redistributed_path'], MAX_ARTIFACT_BYTES)

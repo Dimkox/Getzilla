@@ -149,6 +149,11 @@ def artifact_identity(record: dict) -> str:
     value = {field: record[field] for field in ('ecosystem', 'name', 'version', 'filename', 'sha256')}
     value['context'] = context
     value['origin'] = {field: origin[field] for field in ('index_url', 'index_sha256', 'artifact_url')}
+    if 'python_target' in record:
+        from .security_python_target import observation
+        if record['ecosystem'] != 'PyPI':
+            raise ArtifactError('artifact-target-unknown', 'Python target attached to another artifact family')
+        value['python_target'] = observation(record['python_target'])
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -670,7 +675,7 @@ def verify_origin(root: Path, record: dict, payload: bytes, *, index_bytes: byte
 
 def _interesting(path: str) -> bool:
     name = PurePosixPath(path).name.lower()
-    return (name in {'metadata', 'pkg-info', 'package.json', 'composer.json'} or name.startswith(('license', 'copying', 'notice'))
+    return (name in {'metadata', 'wheel', 'pkg-info', 'package.json', 'composer.json'} or name.startswith(('license', 'copying', 'notice'))
             or any(part.lower() in {'licenses', 'licences'} for part in PurePosixPath(path).parts))
 
 

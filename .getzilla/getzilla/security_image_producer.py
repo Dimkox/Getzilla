@@ -384,6 +384,9 @@ def _pipeline(request, volume, builder):
     root = Path(request['root'])
     database, artifacts = (Path(request[key]) for key in ('database', 'artifacts'))
     tools = _pipeline_tools(request, volume)
+    with cli._preparation_step('package-target'):
+        from .security_python_target import observe_target
+        package_target = observe_target()
     with tempfile.TemporaryDirectory(prefix='source-', dir=volume) as directory:
         source = cli.source_binding(root, cli.TRUSTED_ROOT, Path(directory))
         cli.validate_selection_authority(source, request['run'])
@@ -391,7 +394,8 @@ def _pipeline(request, volume, builder):
             selection_path, catalog_path = volume / 'selection.json', volume / 'catalog.json'
             _write(volume, selection_path.name, canonical(selection))
             _write(volume, catalog_path.name, canonical(catalog))
-            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path)
+            options = dict(run=request['run'], image_artifacts=catalog_path, image_selection=selection_path,
+                           package_target=package_target)
             _event('declare')
             profile = cli.prepare_inputs(root, database, artifacts, tools, write_profile=True, **options)
             cli._atomic(Path(request['profile']), canonical(profile))

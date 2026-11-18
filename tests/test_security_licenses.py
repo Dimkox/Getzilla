@@ -377,8 +377,10 @@ class ArtifactLicenseTests(unittest.TestCase):
         manifest(self.root, inv, [record])
         self.assertEqual(licenses.evaluate_artifacts(inv, self.root, POLICY, now=NOW)['status'], 'fail')
 
-    def test_dynamic_license_or_conflicting_classifier_requires_review(self) -> None:
-        for headers in ('Dynamic: License-Expression\n', 'Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)\n'):
+    def test_final_wheel_dynamic_is_concrete_but_identity_and_classifier_conflicts_refuse(self) -> None:
+        self.assertEqual(self.evaluate(payload=wheel(headers='Dynamic: License-Expression\n'))['status'],'pass')
+        for headers in ('Dynamic: Name\n','Dynamic: Version\n','Dynamic: Metadata-Version\n',
+                        'Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)\n'):
             with self.subTest(headers=headers):
                 self.assertEqual(self.evaluate(payload=wheel(headers=headers))['status'], 'fail')
 
