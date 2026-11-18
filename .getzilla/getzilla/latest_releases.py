@@ -369,14 +369,14 @@ def python_source(fetch: Fetch) -> Target:
     page = f'https://www.python.org/downloads/release/python-{version.replace(".", "")}/'
     detail = fetch(page)
     _, rows = _ReleaseHTML.read(detail)
-    artifact = f'https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz'
+    artifact = f'https://www.python.org/ftp/python/{version}/Python-{version}.tgz'
     hashes = []
     for row in rows:
         if artifact in [urllib.parse.urljoin(page, link) for link in row['urls']]:
-            hashes.extend(re.findall('[a-f0-9]{64}', ''.join(row['code']).replace(' ', '').replace('\n', '')))
+            hashes.extend(re.findall(r'(?<![A-Za-z0-9])[a-f0-9]{64}(?![A-Za-z0-9])', ''.join(row['code']).replace(' ', '').replace('\n', '')))
     if len(hashes) != 1:
         raise ValueError('Python current source SHA256 unavailable/ambiguous')
-    return Target('python', version, artifact, sha256=hashes[0], filename=f'Python-{version}.tar.xz',
+    return Target('python', version, artifact, sha256=hashes[0], filename=f'Python-{version}.tgz',
                   metadata_url=page, metadata_sha256=hashlib.sha256(raw+detail).hexdigest(),
                   requirements={'route': 'per-user source build; compiler/OpenSSL/venv prerequisites required',
                                 'signature_material': artifact+'.sigstore', 'signature_verified': False})
@@ -390,7 +390,7 @@ def git_source(fetch: Fetch) -> Target:
     if len(versions) != 1:
         raise ValueError('Git official global stable release unavailable/ambiguous')
     version = versions[0]
-    filename = f'git-{version}.tar.xz'
+    filename = f'git-{version}.tar.gz'
     sums_url = 'https://www.kernel.org/pub/software/scm/git/sha256sums.asc'
     sums = fetch(sums_url)
     if len(sums) > MAX_METADATA_BYTES:
@@ -438,7 +438,7 @@ def php_source(fetch: Fetch) -> Target:
         raise ValueError('PHP official current final release unavailable')
     selected = max(rows, key=lambda r: stable(r['version']))
     version = selected['version']
-    filename = 'php-'+version+'.tar.xz'
+    filename = 'php-'+version+'.tar.gz'
     assets = [a for a in selected.get('source', []) if type(a) is dict and a.get('filename') == filename]
     if len(assets) != 1 or not re.fullmatch('[a-f0-9]{64}', assets[0].get('sha256', '')):
         raise ValueError('PHP newest exact source SHA256 unavailable; no old release fallback')
