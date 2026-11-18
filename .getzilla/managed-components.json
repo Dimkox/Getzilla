@@ -2767,7 +2767,7 @@
         },
         ".getzilla/getzilla/verification.py": {
           "mode": 420,
-          "sha256": "a9bb0b75c92fc11d9fe8ef3a25ceb5439b5504a9d7eb04973c102342e530091d"
+          "sha256": "02fac5cb0e3e2fb3f5297d21208b723959d5dc499700a4659df4efb718b46856"
         },
         ".getzilla/getzilla/verification_dispositions.py": {
           "mode": 420,
@@ -2779,7 +2779,7 @@
         },
         ".getzilla/getzilla/verification_plan.py": {
           "mode": 420,
-          "sha256": "be309da30081c4d09913f8563e2c9dad5fb8350a0348e9d9512484e71cda9a6d"
+          "sha256": "4297fbc66b46da3ee1a8e9f77def24e51b293139f2dcf6d4d53c0c166973b5ec"
         },
         ".getzilla/getzilla/verification_scope.py": {
           "mode": 420,
