@@ -454,7 +454,12 @@ class SourceCoverageBindingTests(unittest.TestCase):
         report = ast.parse((root / '.getzilla/getzilla/security_cli.py').read_text())
         functions = [node for node in report.body if isinstance(node, ast.FunctionDef)
                      and node.name in {'_detail_consistent', '_findings_consistent'}]
-        namespace = {'CHECK_FAMILIES': {}, 'datetime': datetime}
+        engine = str(root/'.getzilla')
+        if engine not in sys.path:
+            sys.path.insert(0, engine)
+            cls.addClassCleanup(lambda: sys.path.remove(engine))
+        namespace = {'__name__': 'getzilla.security_cli', '__package__': 'getzilla',
+                     'CHECK_FAMILIES': {}, 'datetime': datetime}
         exec(compile(ast.Module(body=functions, type_ignores=[]), 'accepted-pure-marker', 'exec'), namespace)
         cls.marker_consistent = staticmethod(namespace['_detail_consistent'])
 

@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'.getzilla'))
 
-from getzilla.managed_environment import install_environment
+from getzilla.managed_environment import failure_details, install_environment
 from getzilla.updater import _release_fetch, home_dir
 
 
@@ -37,6 +37,9 @@ def main(argv=None):
             result = install_software(home_dir(), args.home, agent=args.agent, tools=args.tool, verify_only=args.verify_only)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError, zipfile.BadZipFile) as exc:
         result = dict(status='incomplete', error=str(exc))
+        diagnostic = failure_details(exc)
+        if diagnostic is not None:
+            result['diagnostic'] = diagnostic
     if args.result:
         from getzilla.updater import _replace_bytes
         _replace_bytes(args.result, (json.dumps(result, indent=2)+'\n').encode(), mode=0o600)

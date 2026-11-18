@@ -86,7 +86,7 @@ class CacheCleanupTests(unittest.TestCase):
                 failure.winerror=5
                 raise failure
             return actual_unlink(path,*args,**kwargs)
-        with patch.object(baseline,'_CACHE_WINDOWS',True,create=True),patch.object(os,'unlink',side_effect=unlink),patch.object(os,'fchmod',side_effect=AssertionError('must not clear nonReadOnly permissions')):
+        with patch.object(baseline,'_CACHE_WINDOWS',True,create=True),patch.object(os,'unlink',side_effect=unlink),patch.object(os,'fchmod',side_effect=AssertionError('must not clear nonReadOnly permissions'),create=True):
             result=self.invoke()
         self.assertIsNotNone(result,'permission failure must be reported as a failed cache step')
         self.assertEqual(result[0].status,'fail')

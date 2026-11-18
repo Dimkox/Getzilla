@@ -55,3 +55,17 @@ if ($script:reads -ne 6) { throw 'rerun did not resolve authoritative metadata' 
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
             self.assertIn('owned-current-resolvers:PASS', result.stdout)
+
+
+    def test_installer_failure_rethrows_without_exiting_the_caller(self):
+        footer = (ROOT/'scripts/install.ps1').read_text().split('\ntry {\n    Install-Getzilla', 1)[1]
+        with tempfile.TemporaryDirectory(prefix='owned-installer-caller-') as directory:
+            path = Path(directory)/'footer.ps1'
+            path.write_text('try {\n    Install-Getzilla'+footer, encoding='utf-8')
+            command = ("$ErrorActionPreference='Stop'; function Install-Getzilla { throw 'owned failure' }; "
+                       f"try {{ Invoke-Expression ([IO.File]::ReadAllText('{path}')) }} "
+                       "catch { if ($_.Exception.Message -cne 'owned failure') { throw } }; 'owned-caller-alive'")
+            result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', command],
+                                    capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('owned-caller-alive', result.stdout)

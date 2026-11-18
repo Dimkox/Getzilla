@@ -49,7 +49,9 @@ def read_response(response, *, deadline: float, maximum: int = MAX_RESPONSE_BYTE
     try:
         blocks, length = [], 0
         while True:
-            sock.settimeout(remaining())
+            timeout = remaining()
+            if stream.fp is not None:
+                sock.settimeout(timeout)
             requested = min(65536, maximum - length + 1)
             block = stream.read1(requested)
             remaining()  # Reject EOF or partial data returned after interruption.
@@ -59,6 +61,8 @@ def read_response(response, *, deadline: float, maximum: int = MAX_RESPONSE_BYTE
             if length > maximum:
                 raise ResponseLimitError('response byte budget exceeded')
             if not block:
+                if getattr(stream, 'length', None) not in (None, 0):
+                    raise ResponseLimitError('truncated response body')
                 return b''.join(blocks)
             blocks.append(block)
     finally:

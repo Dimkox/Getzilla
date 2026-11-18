@@ -11,6 +11,7 @@ pwsh when that is available on the host.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -228,24 +229,23 @@ class InstallScriptContractTests(unittest.TestCase):
         self.assertIsNone(re.search(r'(?im)^\s*exit\b', text))
         self.assertTrue(text.rstrip().endswith('}'))
         self.assertIn('    Install-Getzilla\n', text)
-        # The vendor installer runs in a child process, not via iex in this session.
-        self.assertIn("-Command 'irm https://x.ai/cli/install.ps1 | iex'", text)
+        # The selected managed installer is a child; no vendor code runs via iex.
+        self.assertIn("Join-Path $GetzillaHome 'scripts/getzilla_install_managed.py'", text)
+        self.assertIn('Invoke-Python $Python $arguments', text)
+        self.assertNotIn("-Command 'irm https://x.ai/cli/install.ps1 | iex'", text)
 
     def test_powershell_installer_uses_the_toolchain_package_ids(self) -> None:
         text = POWERSHELL.read_text(encoding='utf-8')
-        self.assertIn("'Git.Git'", text)
         self.assertIn('--id Git.Git', _toolchain_windows_install('git'))
-        # Python comes per user from the pinned python.org installer, never through winget: winget's
-        # install waited on a hidden elevation prompt in a clean Windows Sandbox.
         self.assertNotRegex(text, r"Invoke-Winget 'Python\.Python")
-        self.assertIn('/python-3.13.16-amd64.exe', text)
-        # Only needed MSI packages (each signature check can wait ~2 minutes on a fresh Windows), a
-        # 30-minute ceiling with progress, and a log for diagnosis.
-        for switch in ('InstallAllUsers=0', 'Include_launcher=0', 'InstallLauncherAllUsers=0', 'Include_tcltk=0',
-                       'Include_dev=0',
-                       "'/log'", 'while (-not $process.WaitForExit(30000))', 'New-TimeSpan -Minutes 30'):
-            self.assertIn(switch, text)
-        self.assertNotIn('Start-Process -FilePath $installer -Wait', text)
+        # Bootstrap component identities now select verified per-user current ZIPs.
+        for component, function in (('git','Install-Git'), ('python','Install-Python'), ('pwsh','Install-PowerShell7')):
+            self.assertRegex(text, rf"function {function} \{{[^\n]*Install-CurrentRuntime '{component}'")
+        self.assertIn("$metadataUrl = 'https://www.python.org/ftp/python/index-windows.json'", text)
+        self.assertIn("Expand-ToUserPrograms (Get-PinnedDownload", text)
+        self.assertIn('actual version probe failed', text)
+        self.assertIn('PATH conflict: expected', text)
+        self.assertIn('no old-family fallback', text)
 
     def test_both_installers_offer_the_same_agents_and_settings(self) -> None:
         shell = SHELL.read_text(encoding='utf-8')
@@ -253,32 +253,39 @@ class InstallScriptContractTests(unittest.TestCase):
         for text in (shell, powershell):
             for name in ('GETZILLA_AGENT', 'GETZILLA_PROVIDER', 'GETZILLA_MODEL', 'OPENROUTER_API_KEY',
                          'GETZILLA_SKIP_AGENT', 'GETZILLA_NONINTERACTIVE', 'getzilla_setup_agent.py', '--key-stdin',
-                         '@qwen-code/qwen-code@latest', '@openai/codex@latest', 'https://openrouter.ai/keys',
-                         '@google/gemini-cli@latest', '@github/copilot@latest', 'GEMINI_API_KEY',
-                         'COPILOT_GITHUB_TOKEN', 'qwen, codex, claude, gemini, copilot or grok',
-                         'scripts/getzilla_update.py', 'getzilla_baseline.py'):
+                         'https://openrouter.ai/keys', 'GEMINI_API_KEY', 'COPILOT_GITHUB_TOKEN',
+                         'qwen, codex, claude, gemini, copilot or grok', 'scripts/getzilla_update.py',
+                         'getzilla_baseline.py', 'scripts/getzilla_install_managed.py'):
                 self.assertIn(name, text)
-        self.assertIn('https://claude.ai/install.sh', shell)
-        self.assertIn("-Command 'irm https://claude.ai/install.ps1 | iex'", powershell)
+        # Current exact package resolution replaces @latest and vendor shell pipes.
+        tree = ast.parse((ROOT/'.getzilla/getzilla/managed_software.py').read_text())
+        packages = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                        and any(isinstance(v, ast.Name) and v.id == 'AGENT_PACKAGES' for v in n.targets))
+        self.assertEqual(packages, {'qwen':'@qwen-code/qwen-code', 'codex':'@openai/codex',
+                                   'gemini':'@google/gemini-cli', 'copilot':'@github/copilot'})
+        for text in (shell, powershell):
+            self.assertNotRegex(text, r'npm install[^\n]*@latest')
+            self.assertNotIn('irm https://claude.ai/install.ps1 | iex', text)
         self.assertIn('-AsSecureString', powershell)
-        self.assertIn("$MinimumPowerShell = [version]'7.4'", powershell)
-        self.assertIn("Invoke-Winget 'Microsoft.PowerShell'", powershell)
-        toolchain = json.loads((ROOT / '.getzilla/config/toolchain.json').read_text(encoding='utf-8'))
-        pwsh = next(item for item in toolchain['tools'] if item['id'] == 'pwsh')
-        self.assertEqual(pwsh['minimum'], '7.4')
-        self.assertIn('Microsoft.PowerShell', pwsh['install']['windows'])
-        node = next(item for item in toolchain['tools'] if item['id'] == 'node')
-        self.assertEqual(node['minimum'], '20.0')
         self.assertIn('read -rs key </dev/tty', shell)
+        toolchain = json.loads((ROOT/'.getzilla/config/toolchain.json').read_text())
+        tools = {item['id']:item for item in toolchain['tools']}
+        self.assertEqual(tools['pwsh']['minimum'], '7.4')
+        self.assertEqual(tools['node']['minimum'], '20.0')
+        self.assertIn('Microsoft.PowerShell', tools['pwsh']['install']['windows'])
 
     def test_powershell_installer_installs_winget_or_falls_back_to_direct_downloads(self) -> None:
         text = POWERSHELL.read_text(encoding='utf-8')
-        for needle in ('    Initialize-Winget\n', 'releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle',
-                       'releases/download/v1.29.380/DesktopAppInstaller_Dependencies.zip',
-                       'Add-AppxPackage -Path $package -DependencyPath $paths', 'GETZILLA_SKIP_WINGET',
-                       'https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip'):
-            self.assertIn(needle, text)
-        self.assertLess(text.index('    Initialize-Winget\n'), text.index('    if (-not (Get-Command git'))
+        main = text[text.index('function Install-Getzilla {'):text.index('function Write-Step')]
+        # The non-admin direct path is now primary, including reruns with winget present.
+        self.assertNotIn('Initialize-Winget', main)
+        self.assertNotIn('Invoke-Winget', main)
+        for call in ('    Install-Git\n', '$Python = @(Install-Python)', '    Install-PowerShell7\n'):
+            self.assertIn(call, main)
+        self.assertLess(main.index('Install-Git'), main.index('Get-GetzillaSource -Repo'))
+        self.assertIn('function Initialize-Winget', text)  # Existing explicit helper remains available.
+        self.assertIn('GETZILLA_SKIP_WINGET', text)
+        self.assertIn('function Expand-ToUserPrograms', text)
 
     def test_both_installers_always_refresh_vulnerability_data(self) -> None:
         # The CVE database, OpenGrep and the pinned workflow baseline are part of a working install:
@@ -297,39 +304,33 @@ class InstallScriptContractTests(unittest.TestCase):
             self.assertNotIn('WARNING: vulnerability data is not up to date', text)
 
     def test_shell_installer_prefers_pinned_node_archive_over_old_distro_packages(self) -> None:
-        # Ubuntu 24.04 ships Node.js 18: a bare install never got an agent CLI from apt.
         text = SHELL.read_text(encoding='utf-8')
-        digests = re.findall(r'node-v24\.20\.0-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz ([0-9a-f]{64})', text)
-        self.assertEqual(len(digests), 4)
-        self.assertIn('checksum_ok "$tmp/$name" "$digest"', text)
-        self.assertIn('npm config set prefix "$HOME/.local"', text)
-        body = text[text.index('ensure_node() {'):]
-        self.assertLess(body.index('install_node_archive'), body.index('apt-get install -y nodejs npm'))
+        # The pin is freshly resolved and hash-qualified; old distro Node cannot replace it.
+        body = text[text.index('install_agent() {'):text.index('configure_agent() {')]
+        self.assertIn('scripts/getzilla_install_managed.py', body)
+        self.assertIn('Current selected managed software is incomplete', body)
+        self.assertNotIn('apt-get install -y nodejs npm', text)
+        self.assertNotIn('node-v24.20.0', text)
+        managed = (ROOT/'.getzilla/getzilla/managed_software.py').read_text()
+        self.assertIn("releases.node_release(fetch, system, arch)", managed)
+        self.assertIn('install_runtime', managed)
+        self.assertIn("root/'bin'", (ROOT/'.getzilla/getzilla/managed_npm.py').read_text())
 
     def test_powershell_fallback_downloads_are_pinned_and_verified(self) -> None:
-        # Unauthenticated GitHub API calls hit the 60/hour per-IP limit behind shared NAT and fetched
-        # an unreviewed "latest" build; every fallback is now an exact release with its SHA-256.
         text = POWERSHELL.read_text(encoding='utf-8')
-        self.assertNotIn('api.github.com', text)
-        self.assertNotIn('releases/latest', text)
-        self.assertNotIn('nodejs.org/dist/index.json', text)
-        pins = re.findall(r"'([a-z0-9-]+)'\s*=\s*@\{ Url = '(https://[^']+)'; Sha256 = '([0-9a-f]*)' \}", text)
-        self.assertEqual({key for key, _, _ in pins}, {
-            'winget', 'winget-dependencies', 'git-x64', 'git-arm64', 'python-x64', 'python-arm64',
-            'pwsh-x64', 'pwsh-arm64', 'node-x64', 'node-arm64',
-        })
-        for key, url, digest in pins:
-            with self.subTest(pin=key):
-                self.assertRegex(digest, r'^[0-9a-f]{64}$')
-                self.assertNotIn('latest', url)
+        target = text[text.index('function Get-CurrentRuntimeTarget'):text.index('function Install-CurrentRuntime')]
+        # Official stable metadata creates an exact URL and hash before acquisition.
+        for needle in ('api.github.com/repos/', 'nodejs.org/dist/index.json', 'SHASUMS256.txt',
+                       '$target = @{ Url = $url; Sha256 = $sha; Version = $version; Metadata = $metadataUrl }',
+                       'no older compatible fallback', 'current stable identity is invalid'):
+            self.assertIn(needle, text)
+        self.assertIn("$script:ResolvedRuntimeTargets = @{}", text)
+        self.assertIn('Get-CurrentRuntimeTarget $Key', text)
         self.assertIn('(Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLowerInvariant()', text)
+        self.assertIn('if ($actual -ne $pin.Sha256)', text)
+        self.assertIn('Remove-Item -Force $path', text)
+        self.assertIn("$sha -notmatch '^[a-f0-9]{64}$'", target)
         self.assertNotRegex(text, r'Get-Download \$[a-z]+\.browser_download_url')
-        for call in ("Get-PinnedDownload ('git-' + (Get-WindowsArchitecture))",
-                     "Get-PinnedDownload ('python-' + (Get-WindowsArchitecture))",
-                     "Get-PinnedDownload ('pwsh-' + (Get-WindowsArchitecture))",
-                     "Get-PinnedDownload ('node-' + (Get-WindowsArchitecture))",
-                     "Get-PinnedDownload 'winget'", "Get-PinnedDownload 'winget-dependencies'"):
-            self.assertIn(call, text)
 
     def test_powershell_5_native_calls_avoid_quote_stripping_and_mojibake(self) -> None:
         # Windows PowerShell 5.1 strips double quotes inside native arguments and decodes piped
@@ -374,16 +375,19 @@ class InstallScriptContractTests(unittest.TestCase):
 
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_minimum_version_check_accepts_the_host_pwsh(self) -> None:
-        command = (
-            f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{POWERSHELL}', [ref]$null, [ref]$null); "
-            '$ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | '
-            'ForEach-Object { Invoke-Expression $_.Extent.Text }; '
-            "$MinimumPowerShell = [version]'7.4'; "
-            'function Test-Winget { $false }; Install-PowerShell7'
-        )
-        result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True, timeout=120)
+        # Even a sufficient host must route through fresh exact resolution. The child
+        # substitutes that effect, so this contract never installs onto the test host.
+        library = POWERSHELL.read_text(encoding='utf-8').split('\ntry {\n    Install-Getzilla')[0]
+        with tempfile.TemporaryDirectory(prefix='owned-pwsh-current-wrapper-') as directory:
+            path = Path(directory)/'library.ps1'
+            path.write_text(library, encoding='utf-8')
+            command = (f". '{path}'; $script:calls=0; "
+                       "function Install-CurrentRuntime($Component) { if ($Component -cne 'pwsh') { throw 'wrong component' }; $script:calls++ }; "
+                       "Install-PowerShell7; Install-PowerShell7; if ($script:calls -ne 2) { throw 'rerun skipped current resolution' }; "
+                       "'owned-current-pwsh:PASS'")
+            result = subprocess.run(['pwsh', '-NoProfile', '-Command', command], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertRegex(result.stdout, r'==> PowerShell: 7\.\d+')
+        self.assertIn('owned-current-pwsh:PASS', result.stdout)
 
     @unittest.skipIf(shutil.which('pwsh') is None, 'pwsh is not installed')
     def test_powershell_installer_parses(self) -> None:

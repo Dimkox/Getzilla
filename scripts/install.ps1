@@ -9,7 +9,8 @@
 #
 # Minimum versions: Windows PowerShell 5.1 can run this installer; Getzilla itself needs
 # PowerShell 7.4 or newer (pwsh), which this installer resolves and stages per user,
-# because agent hooks use the && and || operators that Windows PowerShell 5.1 lacks.
+# Native hook launchers support Windows PowerShell 5.1. Installing pwsh does not
+# change the parent shell of an already running client.
 #
 # Optional environment variables (set them before the command above):
 #   $env:GETZILLA_HOME = 'D:\Tools\Getzilla'   where Getzilla is kept (default: $HOME\Getzilla)
@@ -814,5 +815,5 @@ try {
     Install-Getzilla
 } catch {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
-    exit 1
+    throw
 }

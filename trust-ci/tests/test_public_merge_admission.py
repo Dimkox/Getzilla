@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -103,7 +104,12 @@ class CanonicalProducerFixture(unittest.TestCase):
         functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names]
         required = next(ast.literal_eval(node.value) for node in parsed.body if isinstance(node, ast.Assign)
                         and any(isinstance(t, ast.Name) and t.id == 'REQUIRED_CHECKS' for t in node.targets))
-        namespace = {'datetime': datetime, 'timezone': timezone, 'timedelta': timedelta, 're': re,
+        engine = str(source.parents[1])
+        if engine not in sys.path:
+            sys.path.insert(0, engine)
+            self.addCleanup(lambda: sys.path.remove(engine))
+        namespace = {'__name__': 'getzilla.security_cli', '__package__': 'getzilla',
+                     'datetime': datetime, 'timezone': timezone, 'timedelta': timedelta, 're': re,
                      'CHECK_FAMILIES': {}, 'REQUIRED_CHECKS': required, 'MAX_AGE_SECONDS': 259200}
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), namespace)
         self.pure_report = namespace

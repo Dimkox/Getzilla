@@ -300,9 +300,8 @@ node_ok() {
   have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= ${1:-20} ? 0 : 1)" >/dev/null 2>&1
 }
 
-# Pinned official Node.js archives with their published SHA-256 (nodejs.org SHASUMS256.txt).
-# Distribution packages are often too old (Ubuntu 24.04 ships Node.js 18) and pull in hundreds
-# of node-* packages; the archive installs for the current user without root.
+# Current managed Node archives use exact official hashes. Old distribution
+# Node packages cannot replace the resolved runtime.
 
 
 

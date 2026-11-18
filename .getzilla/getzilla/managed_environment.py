@@ -63,6 +63,69 @@ def _wheel(row, fetch):
     return name, version, filename, sha, raw
 
 
+class EnvironmentFailure(ValueError):
+    """An incomplete operation with bounded private diagnostic data, never admission credit."""
+    def __init__(self, message, report=None):
+        super().__init__(message)
+        self._diagnostic = json.dumps(report, ensure_ascii=False, sort_keys=True) if report is not None else None
+
+
+def failure_details(error):
+    if type(error) is not EnvironmentFailure or type(error._diagnostic) is not str:
+        return None
+    if len(error._diagnostic.encode('utf-8')) > 65536:
+        return None
+    try:
+        value = json.loads(error._diagnostic)
+    except (ValueError, RecursionError):
+        return None
+    return value if type(value) is dict else None
+
+
+def _redact_urls(text):
+    def redact(match):
+        try:
+            parsed = urlsplit(match.group())
+        except ValueError:
+            return '[invalid URL redacted]'
+        authority = parsed.netloc.rsplit('@', 1)[-1]
+        suffix = '?[redacted]' if parsed.query else ''
+        suffix += '#[redacted]' if parsed.fragment else ''
+        return parsed.scheme+'://'+authority+parsed.path+suffix
+    return re.sub(r'https?://[^\s\'"<>]+', redact, str(text))
+
+
+def _failure_record(stage, command, phase, result):
+    """Private bounded first/last output; no ambient environment or credentials."""
+    report = {'schema_version': 1, 'phase': phase,
+              'command': [_redact_urls(value) for value in command], 'returncode': result.returncode,
+              'environment_policy': {'ambient_pip_overrides': False, 'config_file': 'disabled',
+                                     'keyring': 'disabled', 'private_home': True}}
+    for key in ('stdout', 'stderr'):
+        original = str(getattr(result, key) or '').encode('utf-8', 'replace')
+        safe = _redact_urls(original.decode('utf-8', 'replace')).encode('utf-8')
+        kept = safe if len(safe) <= 8192 else safe[:4096]+b'\n[output omitted]\n'+safe[-4096:]
+        report[key] = {'retained': kept.decode('utf-8', 'replace'), 'bytes': len(original),
+                       'sha256': hashlib.sha256(original).hexdigest(),
+                       'omitted_bytes': max(0, len(safe)-8192), 'urls_redacted': safe != original}
+    raw = (json.dumps(report, ensure_ascii=False, sort_keys=True)+'\n').encode('utf-8')
+    # Remain below a fixed diagnostic bound without changing process/output limits.
+    while len(raw) > 65536 and any(len(report[key]['retained']) > 512 for key in ('stdout', 'stderr')):
+        for key in ('stdout', 'stderr'):
+            text = report[key]['retained']
+            if len(text) > 512:
+                report[key]['retained'] = text[:128]+'\n[output omitted]\n'+text[-128:]
+                report[key]['omitted_bytes'] += max(0, len(text.encode('utf-8'))-256)
+        raw = (json.dumps(report, ensure_ascii=False, sort_keys=True)+'\n').encode('utf-8')
+    if len(raw) > 65536:
+        raise ValueError('managed failure diagnostic exceeds bound')
+    path = stage/'failure.json'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(raw)
+    return path, report
+
+
 def install_environment(home: Path, python: str, *, fetch, run=execute, projects=PROJECTS) -> Path:
     targets = {_name(name): pypi_version(name, fetch) for name in projects}
     base = home/'.getzilla/runtime/environments'
@@ -80,7 +143,13 @@ def install_environment(home: Path, python: str, *, fetch, run=execute, projects
     def checked(command, phase):
         result = run(command, home, env=environment)
         if result.returncode:
-            raise ValueError(f'{phase}: latest exact targets incompatible or operation failed: {(result.stderr or result.stdout)[-500:]}')
+            try:
+                path, details = _failure_record(stage, command, phase, result)
+                diagnostic = str(path.relative_to(home))
+            except (OSError, ValueError):
+                diagnostic, details = 'unavailable', None
+            cause = _redact_urls(result.stderr or result.stdout)[-500:]
+            raise EnvironmentFailure(f'{phase}: latest exact targets incompatible or operation failed: {cause}; diagnostic={diagnostic}', details)
         return result
 
     checked([python, '-m', 'venv', str(stage)], 'create managed environment')

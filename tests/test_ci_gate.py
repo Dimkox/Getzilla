@@ -420,6 +420,22 @@ class WorkflowTemplateTests(unittest.TestCase):
 
 
 class SourceWorkflowSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML not installed')
+    def test_windows_job_executes_current_native_security_and_installer_controls(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / ci_gate.SOURCE_WORKFLOW_PATH).read_text())
+        job = workflow['jobs']['windows']
+        self.assertEqual(job['runs-on'], 'windows-latest')
+        step = next(item for item in job['steps'] if item.get('name') == 'Windows-ported tests')
+        modules = set(step['run'].split())
+        existing = {'tests.test_fsx', 'tests.test_install_scripts', 'tests.test_workflow_sources',
+                    'tests.test_ci_gate', 'tests.test_review_source', 'tests.test_neutral_hooks'}
+        native = {'tests.test_windows_snapshot_store', 'tests.test_windows_hook_launchers',
+                  'tests.test_installer_cache_cleanup', 'tests.test_installer_windows_current',
+                  'tests.test_installer_windows_nonadmin'}
+        self.assertTrue(existing <= modules)
+        self.assertTrue(native <= modules, sorted(native-modules))
+
     @unittest.skipUnless(importlib.util.find_spec('yaml') and os.name == 'posix', 'requires YAML and POSIX')
     def test_own_native_macos_probe_uses_separate_artifact_path(self):
         import yaml

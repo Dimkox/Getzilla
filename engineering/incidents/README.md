@@ -394,3 +394,5 @@ Original prose is retained byte-for-byte inside each record. [Provenance](proven
 - [2026-10-02-engineering-10](2026-10-02-engineering-10.md)
 
 - [Architecture progress gap, 2026-11-17](20261117-architecture-progress-gap.md)
+
+- [Windows installer and transport joins](20261118-windows-installer-contract-joins.md)
