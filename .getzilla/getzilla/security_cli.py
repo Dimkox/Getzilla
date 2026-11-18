@@ -154,6 +154,24 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
     if isinstance(inventory, dict) and inventory.get('builds'):
         from .security_image_producer import require_builds
         require_builds(inventory, source, run)
+    if package_ci_uses is not None:
+        from .security_image_producer import validate_ci_uses
+        package_ci_uses=validate_ci_uses(package_ci_uses,source,run)
+    public=current_context()
+    declared=_profile_declaration(source,inventory,roots,run,policy,now=now,image_artifacts=image_artifacts,
+        image_selection=image_selection,package_target=package_target,package_pins=package_pins,
+        factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses,
+        public_execution=canonical_digest(public) if public is not None else None)
+    if image_artifacts is not None:
+        from .security_oci import validate_selection
+        validate_selection(image_artifacts,inventory,declared['image_profile'])
+    return declared
+
+
+def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_artifacts=None,image_selection=None,
+                         package_target=None,package_pins=None,factory_inputs=None,package_graphs=None,
+                         package_ci_uses=None,public_execution=None,image_limits=None):
+    """Pure normalized declaration; never grants native/build observation credit."""
     if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not _digest(inventory.get('digest')) or not _digest(policy)):
         raise SecurityDataError('input profile needs complete source declarations and policy identity')
@@ -191,12 +209,14 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         platforms = {item.get('platform') for item in inventory['images']}
         if len(platforms) != 1 or not platforms <= {'linux/amd64', 'linux/arm64'}:
             raise SecurityDataError('image input platform remains unproved')
-        from .security_oci import active_limits
-        body['image_profile'] = dict(active_limits(), images=sorted({item['reference'] for item in inventory['images']}),
+        from .security_oci import active_limits,LIMITS,CI_BYTES
+        limits=active_limits() if image_limits is None else image_limits
+        ci_limits={**LIMITS,**{key:CI_BYTES for key in ('max_compressed_bytes','max_unpacked_bytes','max_storage_bytes')}}
+        if limits not in (LIMITS,ci_limits):
+            raise SecurityDataError('image limits differ from a supported declaration')
+        body['image_profile'] = dict(limits, images=sorted({item['reference'] for item in inventory['images']}),
                                      platform=next(iter(platforms)))
     if image_artifacts is not None:
-        from .security_oci import validate_selection
-        validate_selection(image_artifacts, inventory, body['image_profile'])
         body['image_artifacts_sha256'] = hashlib.sha256(json.dumps(image_artifacts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if image_selection is not None:
         body['image_selection_sha256'] = canonical_digest(image_selection)
@@ -219,11 +239,11 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
         if body['python_closure_graphs']['inventory_sha256']!=inventory['digest']:
             raise SecurityDataError('Python closure graphs belong to another inventory')
     if package_ci_uses is not None:
-        from .security_image_producer import validate_ci_uses
-        body['python_ci_uses']=validate_ci_uses(package_ci_uses,source,run)
-    public = current_context()
-    if public is not None:
-        body['public_execution_sha256'] = canonical_digest(public)
+        body['python_ci_uses']=package_ci_uses
+    if public_execution is not None:
+        if not _digest(public_execution):
+            raise SecurityDataError('public execution declaration digest is malformed')
+        body['public_execution_sha256']=public_execution
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
 

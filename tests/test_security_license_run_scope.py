@@ -20,6 +20,47 @@ NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
 
 
 class SelectedRunLicenseTests(unittest.TestCase):
+    def test_build_requirement_ids_do_not_depend_on_a_caller_consumer_subset(self):
+        host,future,inactive,inv,source,run,binding=self.fixture()
+        dep=dependency(name='setuptools',manifest='trust-ci/pyproject.toml',usage='build')
+        inv['dependencies'].append(dep)
+        inv['builds']=[dict(dockerfile='trust-ci/Dockerfile.test',build_sha256='9'*64)]
+        binding['source_pins'][target.digest(target._subject(dep))]={
+            **binding['source_pins'][target.digest(target._subject(host))],
+            'context_sha256':target._context_key(dep)}
+        binding['ci_uses']={'consumers':[]}
+        required,_,_=self.module().requirements(inv,binding)
+        self.assertIn('ci-install:'+'9'*64,required)
+        self.assertIn('build-input:'+'9'*64+':'+target.digest(target._subject(dep)),required)
+
+    def test_envelope_reobserves_source_profile_and_cannot_choose_subset(self):
+        module=self.module()
+        host,future,inactive,inv,source,run,binding=self.fixture()
+        graphs=target.closure_graphs(self.root,inv)
+        profile=cli.input_profile(source,inv,{key:str(self.root/key) for key in ('database','artifacts','tools')},
+            run,'f'*64,now=NOW,package_target=binding['target'],package_pins=binding['source_pins'],package_graphs=graphs)
+        inputs=dict(schema_version=1,profile=profile,inventory=inv,selection=None,catalog=None)
+        with mock.patch('getzilla.security_inventory.declared_inventory',return_value=inv), \
+                mock.patch('getzilla.security_cli._policy_digest',return_value='f'*64), \
+                mock.patch('getzilla.security_licenses.load_policy',return_value=POLICY):
+            expected=module.declaration_expectation(self.root,self.root,inputs,source,run,now=NOW,scratch=self.root)
+            self.assertEqual(expected['claim']['required_ids'],['host:'+target.digest(target._subject(host))])
+            for variant in ('inventory','pins','source','profile'):
+                altered=copy.deepcopy(inputs)
+                if variant=='inventory':
+                    altered['inventory']['dependencies'].pop()
+                elif variant=='pins':
+                    altered['profile']['python_source_pins'][target.digest(target._subject(host))]['marker_active']=False
+                elif variant=='source':
+                    altered['profile']['source']['head_sha']='0'*40
+                else:
+                    altered['profile']['profile_sha256']='0'*64
+                with self.subTest(variant=variant),self.assertRaises(Exception):
+                    module.declaration_expectation(self.root,self.root,altered,source,run,now=NOW,scratch=self.root)
+            (self.root/host['manifest']).write_text('example==2.0.0\n',encoding='utf-8')
+            with self.assertRaises(Exception):
+                module.declaration_expectation(self.root,self.root,inputs,source,run,now=NOW,scratch=self.root)
+
     def test_preparation_uses_sealed_current_run_not_global_future_coverage(self):
         from getzilla.expanded_security import CHECK_FAMILIES
 
@@ -87,6 +128,28 @@ class SelectedRunLicenseTests(unittest.TestCase):
         report = cli.finalize_report(source, source, checks, inv["digest"], "f" * 64, now=NOW)
         self.assertEqual(report["status"], "pass-for-selected-run", report["qualification_gaps"])
         self.assertIs(report["overall_coverage_complete"], False)
+        from getzilla.ci_admission import _selected_scope,_security
+        record=dict(report=report,run_id=run['run_id'],attempt=run['run_attempt'],
+            scope_expectation=dict(claim=context.claim,conditions=context.required),
+            checker=dict(head=source['checker_sha'],tree=source['checker_tree_sha'],selected_ref=source['checker_sha'],
+                selection='operator-variable',boundary='separate-checkout'))
+        self.assertTrue(_selected_scope(record,NOW))
+        self.assertEqual(_security(record,source['head_sha'],source['tree_sha'],NOW),[])
+        globalized=copy.deepcopy(record)
+        globalized['report']['status']='pass'
+        self.assertTrue(_security(globalized,source['head_sha'],source['tree_sha'],NOW))
+        for field in ('conditions','profile_sha256','source'):
+            with self.subTest(admission=field):
+                altered=copy.deepcopy(record)
+                altered['report']['acceptance_scope'][field]=[] if field=='conditions' else '0'*64 if field=='profile_sha256' else {}
+                self.assertFalse(_selected_scope(altered,NOW))
+        missing=copy.deepcopy(record)
+        missing.pop('scope_expectation')
+        self.assertFalse(_selected_scope(missing,NOW))
+        missing=copy.deepcopy(record)
+        missing['scope_expectation']['conditions']={}
+        missing['scope_expectation']['claim']['required_ids']=[]
+        self.assertFalse(_selected_scope(missing,NOW))
         detail["selected_run"]["status"] = "pass"
         self.assertNotEqual(
             cli.finalize_report(source, source, checks, inv["digest"], "f" * 64, now=NOW)["status"],

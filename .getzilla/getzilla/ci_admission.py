@@ -38,8 +38,12 @@ def _security(record, head, tree, now):
     problems = []
     report, checker = record.get("report") or {}, record.get("checker") or {}
     if (report.get("schema_version") != 1 or report.get("kind") != "security-expanded"
-            or report.get("status") != "pass"):
+            or report.get("status") not in {"pass","pass-for-selected-run"}):
         problems.append("security report missing or failed")
+    scoped=('acceptance_scope' in report or 'overall_coverage_complete' in report
+        or report.get('status') in {'pass-for-selected-run','fail-for-selected-run'})
+    if scoped and (report.get('status')!='pass-for-selected-run' or not _selected_scope(record,now)):
+        problems.append('selected-run applicability is missing, changed or incomplete')
     if report.get("assurance") != "local-input-integrity-only":
         problems.append("security assurance boundary missing or unsupported")
     checker_sha, checker_tree = checker.get("head", ""), checker.get("tree", "")
@@ -89,6 +93,47 @@ def _security(record, head, tree, now):
                 and evidence.get("reason") == "complete-inventory-no-objects"):
             problems.append(f"{check['name']}: required check unavailable or failed")
     return problems
+
+
+def _selected_scope(record,now):
+    """Consume the source-reobserved expectation; JSON is still not attestation."""
+    from .security_python_target import digest
+    try:
+        report=record['report']
+        expected=record['scope_expectation']
+        selected=report['acceptance_scope']
+        claim=expected['claim']
+        conditions=expected['conditions']
+        if (not conditions or claim['required_ids']!=sorted(conditions)
+                or report.get('overall_coverage_complete') is not False
+                or claim.get('overall_coverage_complete') is not False
+                or any(selected.get(key)!=value for key,value in claim.items())
+                or claim['source']!=report['source'] or claim['inventory_sha256']!=report['inventory_sha256']
+                or claim['run']['run_id']!=record['run_id'] or claim['run']['run_attempt']!=record['attempt']
+                or claim['run']['head_sha']!=report['source']['head_sha']
+                or selected.get('status')!='pass-for-selected-run' or selected.get('gaps')):
+            return False
+        body={key:value for key,value in claim.items() if key!='context_sha256'}
+        if digest(body)!=claim['context_sha256'] or not HEX64.fullmatch(claim['profile_sha256']):
+            return False
+        actual=selected['conditions']
+        if (len(actual)!=len(conditions) or {row['id'] for row in actual}!=set(conditions)
+                or any(row!={**conditions[row['id']],'id':row['id'],'status':'pass',
+                    'evidence_sha256':row.get('evidence_sha256')} or not HEX64.fullmatch(row.get('evidence_sha256','')) for row in actual)):
+            return False
+        markers=[detail for check in report['checks'] if check['name']=='security-licenses'
+            for detail in check['details'] if detail.get('kind')=='security-result']
+        if len(markers)!=1:
+            return False
+        marker=markers[0]
+        return (marker.get('selected_run')==selected and marker.get('findings')==selected['details']
+            and marker['raw_coverage'].get('complete') is False
+            and digest(marker['raw_coverage'])==selected['raw_coverage_sha256']
+            and type(marker['raw_license_diagnostics']) is list
+            and digest(marker['raw_license_diagnostics'])==selected['raw_diagnostics_sha256']
+            and timedelta(0)<=now-_timestamp(selected['checked_at_utc'])<=timedelta(hours=72))
+    except (KeyError,TypeError,ValueError,AttributeError):
+        return False
 
 
 def _factory_unit_source(root):
@@ -290,6 +335,22 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
         "event_sha": os.environ.get("GITHUB_SHA"), "base_sha": os.environ.get("GETZILLA_BASE_SHA"),
         "workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"), "workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF"),
         "authority": BOUNDARY, "primary_phase": phase, "event_provenance": phase_inputs.get("event")}
+    if report.get('status')=='pass-for-selected-run':
+        try:
+            from .security_license_scope import declaration_expectation
+            from .security_cli import ci_run_context
+            env,_=selected_run_environment(os.environ,source['head'])
+            raw_inputs=_bytes(report_path.parent/'security-run-inputs.json')
+            if len(raw_inputs)>2*1024*1024:
+                raise ValueError('Selected-run declaration exceeds its finite evidence budget')
+            inputs=json.loads(raw_inputs)
+            actual_source={**{key:report['source'][key] for key in ('candidate_clean','checker_clean','same_project')},
+                'head_sha':source['head'],'tree_sha':source['tree'],'checker_sha':identity['head'],'checker_tree_sha':identity['tree']}
+            record['scope_expectation']=declaration_expectation(root,checker,inputs,actual_source,ci_run_context(env),
+                now=datetime.now(timezone.utc),scratch=output)
+            (output/'security-run-inputs.json').write_bytes(raw_inputs)
+        except (KeyError,ValueError,TypeError,OSError,RuntimeError):
+            record['scope_expectation']=None
     problems = _security(record, source["head"], source["tree"], datetime.now(timezone.utc))
     if source["head"] != os.environ.get("GETZILLA_EXPECTED_HEAD") or _git(root, "status", "--porcelain"):
         problems.append("candidate changed or expected head mismatch")

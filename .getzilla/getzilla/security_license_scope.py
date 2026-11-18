@@ -50,6 +50,7 @@ def activate(root,profile,*,_entry=None):
     state['license_profile']=json.loads(json.dumps(profile))
     state['license_scope']=None
     state['license_results']={}
+    return dict(schema_version=1,profile=json.loads(json.dumps(profile)),inventory=json.loads(json.dumps(inventory)))
 
 
 def current(root,inventory,binding):
@@ -66,39 +67,42 @@ def current(root,inventory,binding):
     return scope
 
 
+def requirements(inventory,binding):
+    """Pure applicability from reobserved declarations; this grants no evidence."""
+    required,host,inactive={},[],[]
+    for dep in inventory['dependencies']:
+        if dep.get('ecosystem')=='PyPI':
+            pin=_pin_for(dep,binding)
+            if type(pin.get('marker_active')) is not bool:
+                _refuse()
+            if not pin['marker_active']:
+                inactive.append(digest(_subject(dep)))
+            if dep.get('usage')=='build-ci':
+                if dep['manifest'] not in _HOST:
+                    required['unsupported-host:'+digest(_subject(dep))]={'kind':'consumer','subject':dep}
+                elif pin['marker_active']:
+                    host.append(dep)
+                    required['host:'+digest(_subject(dep))]={'kind':'host','subject':dep}
+    for kind,rows in [('tool',inventory['tools']),('image',inventory['images'])]:
+        for row in rows:
+            required['family:'+kind+':'+digest(row)]={'kind':'family','subject':row}
+    if 'factory_inputs' in binding:
+        required['factory-output']={'kind':'output'}
+    for build in inventory.get('builds',[]):
+        required['ci-install:'+build['build_sha256']]={'kind':'consumer','recipe':build['dockerfile']}
+        if build['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test'}:
+            for dep in inventory['dependencies']:
+                if dep.get('manifest')=='trust-ci/pyproject.toml' and dep.get('usage')=='build':
+                    required['build-input:'+build['build_sha256']+':'+digest(_subject(dep))]={'kind':'build-input','subject':dep}
+    return required,host,inactive
+
+
 class Scope:
     def __init__(self,seal,root,inventory,binding,state):
         if seal is not _SEAL:
             _refuse()
         self.root,self.inventory,self.binding,self.state=Path(root),inventory,binding,state
-        self.required={}
-        self.host=[]
-        self.inactive=[]
-        for dep in inventory['dependencies']:
-            if dep.get('ecosystem')=='PyPI':
-                pin=_pin_for(dep,binding)
-                if type(pin.get('marker_active')) is not bool:
-                    _refuse()
-                if not pin['marker_active']:
-                    self.inactive.append(digest(_subject(dep)))
-                if dep.get('usage')=='build-ci':
-                    if dep['manifest'] not in _HOST:
-                        self.required['unsupported-host:'+digest(_subject(dep))]={'kind':'consumer','subject':dep}
-                    elif pin['marker_active']:
-                        self.host.append(dep)
-                        self.required['host:'+digest(_subject(dep))]={'kind':'host','subject':dep}
-        for kind,rows in [('tool',inventory['tools']),('image',inventory['images'])]:
-            for row in rows:
-                self.required['family:'+kind+':'+digest(row)]={'kind':'family','subject':row}
-        if 'factory_inputs' in binding:
-            self.required['factory-output']={'kind':'output'}
-        consumers=binding.get('ci_uses',{}).get('consumers',[])
-        for build in inventory.get('builds',[]):
-            self.required['ci-install:'+build['build_sha256']]={'kind':'consumer','recipe':build['dockerfile']}
-        for dep in inventory['dependencies']:
-            if dep.get('manifest')=='trust-ci/pyproject.toml' and dep.get('usage')=='build':
-                for consumer in consumers:
-                    self.required['build-input:'+consumer['build_sha256']+':'+digest(_subject(dep))]={'kind':'build-input','subject':dep}
+        self.required,self.host,self.inactive=requirements(inventory,binding)
         self.claim=dict(schema_version=1,kind='selected-native-security-run',source=binding['source'],run=binding['run'],
             profile_sha256=binding['profile_sha256'],inventory_sha256=inventory['digest'],
             required_ids=sorted(self.required),overall_coverage_complete=False)
@@ -207,3 +211,79 @@ def validate_result(value,*,profile=None,inventory_sha256=None,now=None,diagnost
         return True
     except (ArtifactError,ValueError,TypeError,KeyError):
         return False
+
+
+def declaration_expectation(root,checker,inputs,source,run,*,now,scratch):
+    """Reobserve source applicability outside the native job; never restore its seals."""
+    from .security_cli import _profile_declaration,validate_selection_authority,_policy_digest
+    from .security_inventory import declared_inventory
+    from .security_python_target import validate_target,source_pins,closure_graphs
+    from .security_licenses import load_policy
+    from .security_factory_inputs import declaration
+    from .security_data import _timestamp,MAX_AGE_SECONDS
+    from .security_oci import LIMITS,validate_selection
+    if (type(inputs) is not dict or set(inputs)!={'schema_version','profile','inventory','selection','catalog'}
+            or type(inputs['schema_version']) is not int or inputs['schema_version']!=1):
+        _refuse()
+    profile=inputs['profile']
+    selection=inputs['selection']
+    validate_selection_authority(source,run,selection,now=now)
+    inventory=declared_inventory(root,selection)
+    if inventory!=inputs['inventory']:
+        _refuse()
+    target=validate_target(profile['python_target'])
+    pins=source_pins(root,inventory,target)
+    graphs=closure_graphs(root,inventory)
+    factory=declaration(root,inventory,load_policy(checker),scratch=scratch)
+    uses=profile.get('python_ci_uses')
+    if inventory.get('builds'):
+        if (type(uses) is not dict or uses.get('source')!=source or uses.get('run')!=run
+                or uses.get('inventory_sha256')!=inventory['digest'] or uses.get('closure_graphs_sha256')!=digest(graphs)):
+            _refuse()
+        mapping={'trust-ci/Dockerfile.api':'trust-ci/requirements.txt','trust-ci/Dockerfile.worker':'trust-ci/requirements.txt',
+            'trust-ci/Dockerfile.test':'trust-ci/requirements-test.txt'}
+        expected={row['build_sha256']:row for row in inventory['builds'] if row['dockerfile'] in mapping}
+        consumers=uses.get('consumers')
+        if (type(consumers) is not list or len(consumers)!=len(expected)
+                or {row.get('build_sha256') for row in consumers}!=set(expected)):
+            _refuse()
+        for consumer in consumers:
+            build=expected[consumer['build_sha256']]
+            requirements_path=mapping[build['dockerfile']]
+            images=[row for row in inventory['images'] if row['manifest']==build['manifest'] and row['line']==build['line']]
+            if (consumer.get('recipe')!=build['dockerfile'] or consumer.get('recipe_sha256')!=build['recipe_sha256']
+                    or consumer.get('requirements')!=requirements_path
+                    or consumer.get('requirements_sha256')!=graphs['evidence'].get(requirements_path)
+                    or len(images)!=1 or consumer.get('image')!=images[0]['reference']
+                    or consumer.get('distribution')!='internal' or consumer.get('purpose')!='isolated-public-ci'):
+                _refuse()
+            if consumer.get('image_target_observed') is True:
+                observed=validate_target(consumer['target'])
+                if consumer.get('source_pins')!=source_pins(root,inventory,observed):
+                    _refuse()
+    elif uses is not None:
+        _refuse()
+    limits={key:profile['image_profile'][key] for key in LIMITS} if inventory['images'] else None
+    created=_timestamp(profile['created_at'])
+    if not 0<=(now-created).total_seconds()<=MAX_AGE_SECONDS:
+        _refuse()
+    normalized=_profile_declaration(source,inventory,profile['roots'],run,_policy_digest(checker),now=created,
+        image_artifacts=inputs['catalog'],image_selection=selection,package_target=target,package_pins=pins,
+        factory_inputs=factory,package_graphs=graphs,package_ci_uses=uses,
+        public_execution=profile.get('public_execution_sha256'),image_limits=limits)
+    if profile!=normalized:
+        _refuse()
+    if inventory['images']:
+        # Declaration geometry only. This neither imports OCI bytes nor restores
+        # the measured native authority needed to consume the larger profile.
+        validate_selection(inputs['catalog'],inventory,{**profile['image_profile'],**LIMITS})
+    binding=dict(target=target,source=source,run=run,inventory_sha256=inventory['digest'],
+        profile_sha256=profile['profile_sha256'],source_pins=pins,closure_graphs=graphs)
+    if factory is not None:
+        binding['factory_inputs']=factory
+    required,_,_=requirements(inventory,binding)
+    claim=dict(schema_version=1,kind='selected-native-security-run',source=source,run=run,
+        profile_sha256=profile['profile_sha256'],inventory_sha256=inventory['digest'],
+        required_ids=sorted(required),overall_coverage_complete=False)
+    claim['context_sha256']=digest(claim)
+    return dict(claim=claim,conditions=required)
