@@ -590,12 +590,12 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
         return None
     frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['range_mode'], head_sha=head)
     try:
-        from .verification_plan import _compile_required_plan, _report_plan_gaps
-        current = _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+        from .verification_plan import _compile_required_plan, _report_plan_gaps, requested_profiles_from_report
+        current = _compile_required_plan(root, mode=report.get('mode'), profiles=requested_profiles_from_report(report),
                                          docs_scope=None, route=route, ranges=frozen)
         if _report_plan_gaps(root, report, current):
             return None
-        if _compile_required_plan(root, mode=report.get('mode'), profiles=report.get('profiles'),
+        if _compile_required_plan(root, mode=report.get('mode'), profiles=requested_profiles_from_report(report),
                                   docs_scope=None, route=route, ranges=frozen) != current:
             return None
         spec = _active_spec_binding(root, route, 'verification')
