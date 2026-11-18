@@ -4,6 +4,7 @@ import json
 import base64
 import binascii
 import copy
+import hashlib
 import os
 import re
 import tomllib
@@ -145,6 +146,7 @@ def _command(script: str, harness: str, *, windows: bool = False) -> str:
     # The probe alone redirects and closes stdin. No hook result causes a retry.
     powershell = (
         f"# {target}\n"
+        "$ProgressPreference='SilentlyContinue';"
         "$ErrorActionPreference='Stop';"
         "foreach($name in @('python3.exe','python.exe','py.exe')){"
         "$cmd=Get-Command $name -CommandType Application -ErrorAction SilentlyContinue;"
@@ -475,7 +477,15 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
                 continue
             problems.append(f'stale {relative}')
             changes.append((relative, content, current))
-        record_owned(manifest, relative, content, 0o644)
+        mode = 0o644
+        proof = owned_proof(manifest, relative)
+        if (current is not None and current.content == content and mode_matches(current.mode, mode)
+                and proof is not None and proof['sha256'] == hashlib.sha256(content).hexdigest()
+                and mode_matches(proof['mode'], mode)):
+            # Windows preserves writability rather than POSIX permission bits.
+            # Keep already matched metadata instead of creating a no-op write.
+            mode = proof['mode']
+        record_owned(manifest, relative, content, mode)
     for record in manifest['components'].values():
         for relative, proof in list(record.get('owned', {}).items()):
             if relative in expected or relative in kept or agent_of(relative) not in selected or not _GENERATED_PATH.fullmatch(relative):

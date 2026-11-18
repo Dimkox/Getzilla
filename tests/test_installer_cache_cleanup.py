@@ -206,7 +206,12 @@ class CacheCleanupTests(unittest.TestCase):
         self.pack.chmod(0o400)
         original_unlink=os.unlink
         original_lstat=os.lstat
+        original_replace=os.replace
         swapped=[]
+        def windows_replace(source,destination):
+            if not Path(destination).stat().st_mode&stat.S_IWUSR:
+                raise PermissionError(errno.EACCES,'owned Windows readonly destination')
+            return original_replace(source,destination)
         def lstat(path,*args,**kwargs):
             info=original_lstat(path,*args,**kwargs)
             if Path(path).name=='owned.pack':
@@ -219,6 +224,9 @@ class CacheCleanupTests(unittest.TestCase):
                 user=self.home/'new-user-file'
                 user.write_bytes(b'user replacement')
                 user.chmod(0o400)
+                # Model an attacker replacing this inert fixture leaf. Native
+                # Windows first requires clearing the owned destination bit.
+                self.pack.chmod(0o600)
                 os.replace(user,self.pack)
                 swapped.append(True)
                 failure=PermissionError(errno.EACCES,'inert swapped leaf')
@@ -226,10 +234,12 @@ class CacheCleanupTests(unittest.TestCase):
                 raise failure
             return original_unlink(path,*args,**kwargs)
         with patch.object(baseline,'_CACHE_WINDOWS',True),patch.object(os,'unlink',side_effect=unlink), \
-             patch.object(os,'lstat',side_effect=lstat):
+             patch.object(os,'lstat',side_effect=lstat),patch.object(os,'replace',side_effect=windows_replace), \
+             patch.object(baseline,'_cache_readonly',side_effect=AssertionError('replacement must not be chmoded')):
             result=self.invoke()
         self.assertIsNotNone(result)
         self.assertEqual(result[0].status,'fail')
+        self.assertEqual(swapped,[True],'fixture must reach the replacement before testing identity refusal')
         self.assertEqual(self.pack.read_bytes(),b'user replacement')
         self.assertFalse(self.pack.stat().st_mode&stat.S_IWUSR)
         self.assertFalse(self.cloned)

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,7 +33,7 @@ class HookLauncherTests(unittest.TestCase):
             "sys.stderr.write('policy denied')\n"
             "raise SystemExit(2)\n", encoding='utf-8')
 
-    @unittest.skipUnless(shutil.which('bash'), 'Bash unavailable')
+    @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'POSIX Bash host required; native Windows contract below')
     def test_posix_deny_runs_once_and_preserves_json_bytes(self):
         with tempfile.TemporaryDirectory(prefix="hook ' Ю ") as directory:
             root = Path(directory)
@@ -51,6 +53,80 @@ class HookLauncherTests(unittest.TestCase):
         self.assertNotIn('||', code)
         self.assertIn('ProcessStartInfo', code)
         self.assertIn('ExitCode', code)
+
+    @unittest.skipUnless(os.name != 'nt' and shutil.which('pwsh'), 'Portable PowerShell host required')
+    def test_optional_startup_progress_cannot_wrap_inherited_hook_streams(self):
+        with tempfile.TemporaryDirectory(prefix="hook ' Ю ") as directory:
+            root = Path(directory)
+            self.fixture(root)
+            binaries = root/'bin'
+            binaries.mkdir()
+            (binaries/'python3.exe').symlink_to(sys.executable)
+            encoded = _command('probe.py', 'copilot', windows=True).rsplit(' ', 1)[1]
+            code = base64.b64decode(encoded).decode('utf-16le')
+            # Model optional first-use module progress at the actual constructor
+            # boundary, without replacing the child launch or its byte handles.
+            code = code.replace('$info=New-Object',
+                                "Write-Progress -Activity 'owned startup' -Status 'owned progress';$info=New-Object")
+            payload = '{"text":"Юникод 😀"}'.encode()
+            result = subprocess.run([shutil.which('pwsh'), '-NoProfile', '-NonInteractive', '-EncodedCommand',
+                                     base64.b64encode(code.encode('utf-16le')).decode('ascii')],
+                                    cwd=root, env={**os.environ, 'PATH': str(binaries)+os.pathsep+os.environ['PATH']},
+                                    input=payload, capture_output=True, timeout=15)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (2, payload, b'policy denied'))
+            self.assertEqual((root/'calls').read_text(), '1')
+
+    def test_equivalent_owned_windows_mode_is_idempotent_without_adopting_foreign_bytes(self):
+        import getzilla.harnesses as harnesses
+        from getzilla.component_state import BoundRoot, component_transaction, encode_manifest, read_state, MANIFEST
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('hook_mode_installer', ROOT/'scripts/install_into.py')
+        installer = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = installer
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)/'consumer'
+            installer._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
+                                       selection=installer.PayloadSelection(('qwen',)))
+            settings = target/'.qwen/settings.json'
+            content = settings.read_bytes()
+            state = read_state(target)
+            state.manifest['components']['agent:qwen']['owned']['.qwen/settings.json']['mode'] = 0o666
+            with component_transaction(target) as transaction:
+                transaction.write(MANIFEST, encode_manifest(state.manifest), 0o644, expected=transaction.read(MANIFEST))
+            before = (target/MANIFEST).read_bytes()
+            # Exact portable Windows mode semantics, without changing the native
+            # filesystem implementation or trusting a candidate container/value.
+            def windows_mode(actual, expected):
+                return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR)
+
+            with mock.patch.object(harnesses, 'mode_matches', side_effect=windows_mode):
+                self.assertEqual(harnesses.write(target), [])
+                self.assertEqual((target/MANIFEST).read_bytes(), before)
+                for field, value in (('sha256', '0'*64), ('mode', 0o400)):
+                    with self.subTest(unmatched=field), BoundRoot(target) as binding:
+                        proposal = copy.deepcopy(read_state(target, binding=binding))
+                        proof = proposal.manifest['components']['agent:qwen']['owned']['.qwen/settings.json']
+                        proof[field] = value
+                        _problems, _changes, _retirements, manifest = harnesses._generation_plan(
+                            binding, proposal, ('qwen',))
+                        self.assertEqual(manifest['components']['agent:qwen']['owned']['.qwen/settings.json']['mode'],
+                                         0o644, 'unmatched metadata cannot retain an old platform mode')
+                    self.assertEqual((target/MANIFEST).read_bytes(), before, 'proposal must not publish')
+                settings.write_bytes(b'{"foreign":true}\n')
+                foreign = settings.read_bytes()
+                with self.assertRaisesRegex(ValueError, 'conflict'):
+                    harnesses.write(target)
+                self.assertEqual(settings.read_bytes(), foreign)
+                self.assertEqual((target/MANIFEST).read_bytes(), before)
+                settings.write_bytes(content)
+                settings.chmod(0o400)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'conflict'):
+                        harnesses.write(target)
+                    self.assertEqual((target/MANIFEST).read_bytes(), before)
+                finally:
+                    settings.chmod(0o644)
 
     @unittest.skipUnless(shutil.which('bash') and os.name != 'nt', 'POSIX Bash required')
     def test_discovery_fallback_and_absence_do_not_run_hook_twice(self):
