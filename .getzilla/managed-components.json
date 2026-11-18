@@ -2192,7 +2192,7 @@
         },
         ".getzilla/getzilla/_policy_legacy.py": {
           "mode": 420,
-          "sha256": "5367333febb4a9053c37430d1cf0a7b789666430108780b678232a6ab09a2fac"
+          "sha256": "e54aa53f3a30e3d6bf6e3b4729349bd0432c56d70cfa416414552688a46df0ed"
         },
         ".getzilla/getzilla/adapter_removal.py": {
           "mode": 420,
@@ -2360,7 +2360,7 @@
         },
         ".getzilla/getzilla/diff_risk.py": {
           "mode": 420,
-          "sha256": "fb5ec00b85c8e8de6d3286895de4e71a891c4d3b8f2ce42205c71967983e8b07"
+          "sha256": "a36236bee6977e199798cbbc18f5ebcb98dd2fdcfb492d75e3ae08a9ce0a29a0"
         },
         ".getzilla/getzilla/disposable_resources.py": {
           "mode": 420,
@@ -2444,7 +2444,7 @@
         },
         ".getzilla/getzilla/live_acceptance.py": {
           "mode": 420,
-          "sha256": "756f25e7fda30ee339e4f92096618adab4c79f3374594486c81a88e5bd275fc1"
+          "sha256": "4ad1801aefeeacd1b34252a96cc3635801b7ac9aab06a55c5f8a8cdd8d10fe09"
         },
         ".getzilla/getzilla/live_lifecycle.py": {
           "mode": 420,
@@ -7056,7 +7056,7 @@
         },
         "factory/tests/run_disposable_exit.py": {
           "mode": 420,
-          "sha256": "026f426e358e4dbc4e7a944cd74278e7c8431cfcc37f125069f496ad2f174e44"
+          "sha256": "f7a3b7eed232eb35afa66ed23f1b3b2c911f101d806fada665446853a6481484"
         },
         "factory/tests/run_live_suite.py": {
           "mode": 420,
@@ -7104,7 +7104,7 @@
         },
         "factory/tests/test_disposable_exit.py": {
           "mode": 420,
-          "sha256": "b49c1c9a667758e9c61d721863be3f67bb30bca6ac15535b571560a634285909"
+          "sha256": "b4958018e7d30daedc78bfcb7a5e3c185effd72f3747185d3caac170af7f70a9"
         },
         "factory/tests/test_execution_contracts.py": {
           "mode": 420,
