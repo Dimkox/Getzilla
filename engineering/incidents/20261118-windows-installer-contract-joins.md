@@ -72,3 +72,14 @@ The legacy full-discovery guard must honor validated current native absence of
 Python only with bound skips for discovery, coverage, Ruff and Bandit; testless
 Python and explicit Python requests still refuse. Positive Stop fixtures provide
 a real app, unittest and measured app coverage using a bounded one-worker subjob.
+
+During the 11ca repair batch, custody found one incoming test at0664. A shell
+sequence continued after that failed precondition and a refused scope ACK, so
+the owner-approved archive commit merged before the ACK. Preserve that history
+and the failed checks. Compare the parent's actual0644 held bytes with the exact
+approved Git objects, then complete the original pending ACK under the same
+owner/task/epoch. This does not qualify the incoming mode or create a receipt.
+Await each dependent action and require its successful exit before the next
+mutation. Do not combine a precondition and its dependent merge in an unchecked
+shell sequence. Read stability checks must compare identity, mode, size and
+modification time; access time can change solely because the file was read.
