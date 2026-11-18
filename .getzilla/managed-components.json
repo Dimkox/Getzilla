@@ -2599,7 +2599,7 @@
         },
         ".getzilla/getzilla/security_cli.py": {
           "mode": 420,
-          "sha256": "504311857e026530c52081fa7d0f0c04151349427d3964a94031dd570563aa5a"
+          "sha256": "57afbb92066375349a880c90616ec75cc2eab463b631c8ea2b5f6d685a836998"
         },
         ".getzilla/getzilla/security_data.py": {
           "mode": 420,
@@ -2615,7 +2615,7 @@
         },
         ".getzilla/getzilla/security_inventory.py": {
           "mode": 420,
-          "sha256": "c2d38a436b025fc32ee68f21fedbb6af7513e7d75108b277b55493e33e734b6e"
+          "sha256": "0330139235697b1bb4bba271161251e6eb26fddd5ebc2859ef58b389165f4014"
         },
         ".getzilla/getzilla/security_license_acquisition.py": {
           "mode": 420,
@@ -2779,7 +2779,7 @@
         },
         ".getzilla/getzilla/verification_plan.py": {
           "mode": 420,
-          "sha256": "45363a569d08d3bed1a69fe1f9f2f8c1ec9e0e872498602a3af2b84c3b88eb64"
+          "sha256": "be309da30081c4d09913f8563e2c9dad5fb8350a0348e9d9512484e71cda9a6d"
         },
         ".getzilla/getzilla/verification_scope.py": {
           "mode": 420,
