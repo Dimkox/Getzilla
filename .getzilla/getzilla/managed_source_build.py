@@ -13,6 +13,7 @@ import stat
 import tempfile
 from pathlib import Path
 
+from . import fsx
 from .latest_releases import Target
 from .managed_environment import execute
 from .managed_runtime import directory, entries, MAX_FILES, MAX_BYTES, MAX_FILE_BYTES
@@ -55,18 +56,13 @@ def probe_git_https(executable, stage, env):
 def _require_git_curl(source):
     failure = 'Git HTTPS requires libcurl development headers/libraries; generated source configuration must enable curl'
     try:
-        fd = os.open(source/'config.mak.autogen', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_size > 65536:
-                raise ValueError(failure)
-            raw = stream.read(65537)
-            after = os.fstat(stream.fileno())
-            fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
-            if len(raw) > 65536 or any(getattr(before, key) != getattr(after, key) for key in fields):
-                raise ValueError(failure)
-    except OSError:
+        with fsx.ReadOnlyBoundRoot(source) as root:
+            snapshot = root.read('config.mak.autogen', limit=65536)
+    except (fsx.ComponentStateError, OSError):
         raise ValueError(failure) from None
+    if snapshot is None:
+        raise ValueError(failure)
+    raw = snapshot.content
     values = re.findall(rb'(?m)^NO_CURL[ \t]*=[ \t]*([^\r\n]*)', raw)
     if [value.strip() for value in values] != [b'']:
         raise ValueError(failure)
