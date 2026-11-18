@@ -265,6 +265,18 @@ def scanner_identity(report, image):
         root.close()
 
 
+def _platform_variant(value):
+    variant = value.get('variant')
+    if variant in (None, ''):
+        return None
+    architecture = value.get('architecture')
+    allowed = {'arm': ('v6', 'v7'), 'arm64': ('v8',)}
+    if (not isinstance(architecture, str) or not isinstance(variant, str)
+            or variant not in allowed.get(architecture, ())):
+        raise OCIError('Unsupported OCI architecture/variant combination')
+    return variant
+
+
 def _descriptor(value, *, opaque_attestation=False):
     if (not isinstance(value, dict) or not {'mediaType', 'digest', 'size'} <= value.keys()
             or (value['mediaType'] not in INDEX_MEDIA | MANIFEST_MEDIA | LAYER_MEDIA | {CONFIG, DOCKER_CONFIG}
@@ -387,13 +399,17 @@ def _import_one(record, profile, stage, budget):
                     raise OCIError('OCI image config is unsupported')
                 config_path = blob(config_desc)
                 config = document(config_path.read_bytes())
+                config_variant = _platform_variant(config)
                 platform = config.get('os', '') + '/' + config.get('architecture', '')
                 claim = desc.get('platform')
                 if claim is not None and (not isinstance(claim, dict)
                         or claim.get('os', '') + '/' + claim.get('architecture', '') != platform
-                        or claim.get('variant') not in (None, '', 'v8')
                         or claim.get('os.features') or claim.get('features')):
                     raise OCIError('OCI descriptor/config platform differs')
+                if claim is not None:
+                    claim_variant = _platform_variant(claim)
+                    if config_variant is not None and config_variant != claim_variant:
+                        raise OCIError('OCI descriptor/config variant differs')
                 layers = value.get('layers')
                 rootfs = config.get('rootfs')
                 if (not isinstance(layers, list) or not layers or not isinstance(rootfs, dict)
