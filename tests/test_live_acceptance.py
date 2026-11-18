@@ -352,6 +352,14 @@ class ParserApplicabilityTests(unittest.TestCase):
                 target.parent.mkdir(parents=True)
                 target.write_text(ast.unparse(owned)+'\n')
                 (root/'factory/pyproject.toml').write_bytes(metadata)
+                owned_python=root/'owned-venv/bin/python3'
+                owned_python.parent.mkdir(parents=True)
+                owned_python.write_bytes(b'owned interpreter fixture, never executed')
+                wrong_alias=owned_python.with_name('python')
+                wrong_venv=root/'other-venv/bin/python3'
+                wrong_venv.parent.mkdir(parents=True)
+                for other in (wrong_alias,wrong_venv):
+                    other.hardlink_to(owned_python)
                 namespace=types.ModuleType('factory.tests.test_landing_pdf_worker')
                 namespace.__file__=str(target)
                 namespace.__dict__.update(unittest=unittest,CHILD_PYPDF_VERSION=version,owned_executed=[])
@@ -366,11 +374,15 @@ class ParserApplicabilityTests(unittest.TestCase):
                         patch('socket.socket.connect',side_effect=AssertionError('unmocked network forbidden')), \
                         patch.object(module,'execute',side_effect=probe), \
                         patch.dict(sys.modules,{namespace.__name__:namespace}):
-                    observation=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    observation=module.observe_parser_applicability(root,binding,python=owned_python)
                     report=module.record_suite(suite,expected_ids=expected,required_ids=expected,loader_errors=(),
                         binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                    final=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                    final=module.observe_parser_applicability(root,binding,python=owned_python)
                     self.assertTrue(module.accepted_suite(report,binding,parser_observation=final))
+                    for other in (wrong_alias,wrong_venv):
+                        mismatched=module.observe_parser_applicability(root,binding,python=other)
+                        self.assertEqual(mismatched.data['python_identity'],final.data['python_identity'])
+                        self.assertFalse(module.accepted_suite(report,binding,parser_observation=mismatched),str(other))
                     self.assertEqual(len(report['expected_ids']),7)
                     self.assertEqual(len(report['started']),7)
                     self.assertEqual(len(report['executed']),actual)
@@ -389,6 +401,10 @@ class ParserApplicabilityTests(unittest.TestCase):
                         changed=copy.deepcopy(report)
                         changed['applicability']['observations'][1][dimension]=value
                         self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),dimension)
+                    for identity in ('named','target'):
+                        changed=copy.deepcopy(report)
+                        changed['applicability']['observations'][1]['python_identity'][identity][1]+=1
+                        self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final),identity)
                     changed=copy.deepcopy(report)
                     changed['applicability']['policy']['canonical_policy_sha256']='0'*64
                     self.assertFalse(module.accepted_suite(changed,binding,parser_observation=final))
@@ -401,12 +417,12 @@ class ParserApplicabilityTests(unittest.TestCase):
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":"foreign"}'),
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":null}',cleanup_metadata=CleanupMetadata(unavailable=True))):
                         with patch.object(module,'execute',return_value=invalid),self.assertRaises(ValueError):
-                            module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                            module.observe_parser_applicability(root,binding,python=owned_python)
                     if version is None:
                         with self.assertRaises(ValueError):
-                            module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                            module.observe_parser_applicability(root,binding,python=owned_python,required=True)
                     else:
-                        required=module.observe_parser_applicability(root,binding,python=Path(sys.executable),required=True)
+                        required=module.observe_parser_applicability(root,binding,python=owned_python,required=True)
                         self.assertTrue(required.policy['required_parser'])
                     applicable=getattr(namespace,'PdfWorkerWithoutParser' if version is None else 'PdfWorkerWithPinnedParser')
                     method=next(name for name in vars(applicable) if name.startswith('test_'))
@@ -418,14 +434,14 @@ class ParserApplicabilityTests(unittest.TestCase):
                         repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
                         refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
                             binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        latest=module.observe_parser_applicability(root,binding,python=owned_python)
                         self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest),'after-body module fact conflict')
                     namespace.CHILD_PYPDF_VERSION=version
                     with patch.object(applicable,method,side_effect=RuntimeError('owned body did not return')):
                         repeated=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(namespace,cls.name)) for cls in classes)
                         refused=module.record_suite(repeated,expected_ids=expected,required_ids=expected,loader_errors=(),
                             binding=binding,source_stable=lambda:True,stream=io.StringIO(),parser_observation=observation)
-                        latest=module.observe_parser_applicability(root,binding,python=Path(sys.executable))
+                        latest=module.observe_parser_applicability(root,binding,python=owned_python)
                         self.assertFalse(module.accepted_suite(refused,binding,parser_observation=latest))
 
     def test_required_database_skip_and_forged_allowance_never_become_na(self):
@@ -678,12 +694,12 @@ class FactoryControllerTests(unittest.TestCase):
                     self.assertTrue(path.is_dir())
                     paths.append(path)
                     (path/'bin').mkdir()
-                    (path/'bin/python').write_text('owned interpreter fixture, never executed')
+                    (path/'bin/python3').write_text('owned interpreter fixture, never executed')
                     order.append('observe')
                     return {'status':'pass' if primary=='passed' else 'fail','primary_outcome':primary,
                             'child_exit_confirmed':confirmed,'python':'/foreign/report-selected-python'}
                 def measured(_root,_binding,*,python,**kwargs):
-                    self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python'))
+                    self.assertEqual(python,paths[0]/('Scripts/python.exe' if __import__('os').name=='nt' else 'bin/python3'))
                     self.assertTrue(paths[0].is_dir())
                     order.append('final-measurement')
                     self.assertTrue(kwargs['required'])

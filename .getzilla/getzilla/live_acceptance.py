@@ -27,6 +27,8 @@ from . import live_contracts
 from .disposable_resources import image_pins, runtime_image_id
 
 OUTPUT_LIMIT = 2 * 1024 * 1024
+# Child execution and parent measurement must name the same owned alias.
+FACTORY_PYTHON_RELATIVE = 'Scripts/python.exe' if os.name == 'nt' else 'bin/python3'
 CELLS = {'factory': ('factory-postgres-exit',),
          'trust-ci': ('trust-ci-postgres', 'trust-ci-postgres-restart'),
          'lifecycle': ('factory-lifecycle',)}
@@ -793,7 +795,7 @@ class _FactoryEnvironment:
             self.parent.check()
             self.directory=fsx.ReadOnlyBoundRoot(self.path).__enter__()
             self.birth=_directory_birth(fsx.fstat_dir(self.directory.handle))
-            self.python=self.path/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+            self.python=self.path/FACTORY_PYTHON_RELATIVE
             self.outcome=None
         except BaseException:
             self.parent.close()

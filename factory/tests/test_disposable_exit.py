@@ -1,4 +1,4 @@
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 import io
 import tempfile
 from pathlib import Path
@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from factory.tests import run_disposable_exit as runner
 from getzilla.disposable_resources import CleanupUnconfirmed
+from getzilla import live_acceptance
 
 
 CONTAINER_ID = "a" * 64
@@ -28,10 +29,11 @@ class LiveProducerSourceTests(unittest.TestCase):
         owner.nonce, owner.namespace = binding['nonce'], binding['namespace']
         owner.network.return_value = {'identity': {'Id': 'e'*64}}
         commands = []
-        with tempfile.TemporaryDirectory() as raw:
+        with tempfile.TemporaryDirectory() as raw, ExitStack() as owned:
             output = Path(raw)
-            environment = output / 'factory-live-venv-owned'
-            environment.mkdir(mode=0o700)
+            controller = live_acceptance._FactoryEnvironment(output)
+            owned.callback(lambda: self.assertEqual(controller.cleanup(child_exit_confirmed=True)['status'], 'removed'))
+            environment = controller.path
             owner.manifest = output / 'factory-resources.json'
             with patch.dict(runner.os.environ, {'GETZILLA_LIVE_BINDING': 'owned',
                     'GETZILLA_LIVE_ARTIFACTS': raw, 'UV_PROJECT_ENVIRONMENT': str(environment)}), \
@@ -46,9 +48,11 @@ class LiveProducerSourceTests(unittest.TestCase):
                     patch('subprocess.Popen', side_effect=AssertionError('unexpected native effect')):
                 self.assertEqual(runner._live_main(), 0)
             self.assertEqual(len(commands), 4)
+            self.assertEqual(controller.python,
+                environment / ('Scripts/python.exe' if runner.os.name == 'nt' else 'bin/python3'))
             for command, options in commands:
                 self.assertEqual(command[:7], ['uv', 'run', '--python', runner.sys.executable,
-                                               '--project', str(runner.ROOT/'factory'), 'python'])
+                                               '--project', str(runner.ROOT/'factory'), str(controller.python)])
                 self.assertEqual(options['environment']['UV_PROJECT_ENVIRONMENT'], str(environment))
             self.assertEqual(commands[2][1]['timeout'], runner._FULL_SUITE_TIMEOUT_SECONDS)
             owner.cleanup.assert_called_once()
