@@ -47,3 +47,10 @@ scratch parent; socket fixture directories declare private0700 explicitly under
 umask022. Linux handle/cgroup models declare their platform, while portable
 grammar, HTTP and managed-runtime controls remain enabled. Verify fixture setup
 from a fresh native snapshot without externally preparing ignored directories.
+
+Normal BuildKit failures retained a hash but omitted their diagnostic, and the
+shared diagnostic clipped raw input before selecting its tail. Retain the same
+bounded closed diagnostic for ordinary failures, hash the complete capped
+capture, and redact before choosing first/last text so boundary fragments cannot
+leak. Bound serialized Unicode/control text within the existing worker IPC limit.
+The owned failure regression uses a real tail beyond4097bytes and mocked effects.

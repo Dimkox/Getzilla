@@ -41,13 +41,21 @@ class BackendUnavailable(ValueError):
 
 
 def _diagnostic(raw):
-    raw = bytes(raw[:4097])
+    raw = bytes(raw)  # Callers already cap complete captures at no more than 1 MiB.
     def redact(value):
         value = value.decode('utf-8', errors='replace')
         value = re.sub(r'https?://\S+|/[A-Za-z0-9_./:-]+', '<path-or-url>', value)
         return re.sub(r'[A-Za-z0-9_+/=-]{48,}', '<opaque>', value)
+    # Redact before slicing so a boundary cannot expose a URL/token fragment.
+    safe = redact(raw)
+    def retain(value, *, tail=False):
+        # Bound serialized text too: Unicode/control escaping must fit the
+        # existing nested 4096-byte worker IPC, without changing that cap.
+        while len(json.dumps(value, ensure_ascii=True).encode('utf-8')) > 512:
+            value = value[1:] if tail else value[:-1]
+        return value
     return {'captured_bytes': len(raw), 'captured_sha256': hashlib.sha256(raw).hexdigest(),
-            'first': redact(raw[:512]), 'last': redact(raw[-512:])}
+            'first': retain(safe[:512]), 'last': retain(safe[-512:], tail=True)}
 
 
 def _filesystem(path):
@@ -556,9 +564,7 @@ class BuildKit:
             raise BackendUnavailable('owned image build incomplete') from None
         if code:
             detail = dict(phase='build', command_id='buildctl-build', exit_code=code, errno=None,
-                          stderr_captured_sha256=hashlib.sha256(stderr).hexdigest())
-            if offline_control:
-                detail['stderr'] = _diagnostic(stderr)  # Only the fixed owned scratch fixture.
+                          stderr_captured_sha256=hashlib.sha256(stderr).hexdigest(), stderr=_diagnostic(stderr))
             raise BackendUnavailable('owned image build failed; no build proof was issued', detail=detail)
         if not self._daemon_alive():
             raise BackendUnavailable('owned daemon ended before build completion was observed')
