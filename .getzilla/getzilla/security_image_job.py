@@ -64,7 +64,7 @@ def _observe_memory(parent):
     remaining = int(available[0]) * 1024
     rows = []
     current = parent
-    while current != mount:
+    while True:
         if len(rows) >= 64:
             raise BackendUnavailable('memory ancestry exceeds finite depth')
         held = _Root(current)
@@ -79,16 +79,26 @@ def _observe_memory(parent):
                     return raw.decode('ascii').strip()
                 finally:
                     os.close(fd)
-            maximum = read('memory.max')
-            used = read('memory.current')
-            used_after = read('memory.current')
-            if maximum != read('memory.max') or any(not re.fullmatch(r'[0-9]{1,20}', v) for v in (used, used_after)):
-                raise BackendUnavailable('memory controls changed or are malformed')
-            used = max(int(used), int(used_after))
-            if maximum != 'max':
-                if not re.fullmatch(r'[0-9]{1,20}', maximum) or used > int(maximum):
-                    raise BackendUnavailable('finite memory remaining is unobservable')
-                remaining = min(remaining, int(maximum) - used)
+            try:
+                maximum = read('memory.max')
+            except FileNotFoundError:
+                if current != mount:
+                    raise
+                # The full cgroup2 kernel root has no memory.max. A visible
+                # root control, including a finite namespaced root, is read.
+                maximum = None
+            if maximum is None:
+                used, maximum = 0, 'kernel-root-unlimited'
+            else:
+                used = read('memory.current')
+                used_after = read('memory.current')
+                if maximum != read('memory.max') or any(not re.fullmatch(r'[0-9]{1,20}', v) for v in (used, used_after)):
+                    raise BackendUnavailable('memory controls changed or are malformed')
+                used = max(int(used), int(used_after))
+                if maximum != 'max':
+                    if not re.fullmatch(r'[0-9]{1,20}', maximum) or used > int(maximum):
+                        raise BackendUnavailable('finite memory remaining is unobservable')
+                    remaining = min(remaining, int(maximum) - used)
             after = os.stat(current, follow_symlinks=False)
             if (identity.st_dev, identity.st_ino) != (after.st_dev, after.st_ino):
                 raise BackendUnavailable('memory allocation ancestor changed identity')
@@ -96,6 +106,8 @@ def _observe_memory(parent):
                              device=identity.st_dev, inode=identity.st_ino))
         finally:
             held.close()
+        if current == mount:
+            break
         current = current.parent
     if (_memory_read(Path('/proc/self/cgroup'), 1024 * 1024) != membership
             or _memory_read(Path('/proc/self/mountinfo'), 1024 * 1024) != mountinfo):

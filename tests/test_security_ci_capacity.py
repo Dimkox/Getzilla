@@ -120,6 +120,12 @@ class CapacityControls(unittest.TestCase):
                 admitted = job._memory_admission(parent)
                 self.assertEqual(admitted["remaining_bytes"], 14 * GIB)
                 self.assertEqual(admitted["reserve_bytes"], 2 * GIB)
+                (mount / "memory.max").write_text(str(13 * GIB))
+                (mount / "memory.current").write_text("0")
+                with self.assertRaises(backend.BackendUnavailable):
+                    job._memory_admission(parent)
+                (mount / "memory.max").unlink()
+                (mount / "memory.current").unlink()
                 memory[0] = "MemAvailable: 14680063 kB\n"
                 with self.assertRaises(backend.BackendUnavailable):
                     job._memory_admission(parent)
