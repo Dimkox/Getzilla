@@ -240,6 +240,66 @@ class MemoryNative:
                 del node['children'][name]
 
 
+class OwnerRightsPolicyTests(unittest.TestCase):
+    USER = 'S-1-5-21-1-2-3-500'
+    SYSTEM = 'S-1-5-18'
+    ADMINS = 'S-1-5-32-544'
+    OWNER_RIGHTS = 'S-1-3-4'
+    TRUSTED = {USER, SYSTEM, ADMINS}
+
+    def test_exact_1079_owner_rights_acl_is_bound_to_already_trusted_owner(self):
+        aces = tuple((0, 3, 2032127, sid) for sid in (self.SYSTEM, self.ADMINS, self.OWNER_RIGHTS))
+        trusted = self.TRUSTED.copy()
+        W.check_acl(self.USER, aces, trusted, owned=False)
+        W.check_acl(self.USER, aces, trusted, owned=True)
+        self.assertEqual(trusted, self.TRUSTED)
+        self.assertNotIn(self.OWNER_RIGHTS, trusted)
+
+    def test_unknown_networkservice_and_owner_rights_owners_refuse_first(self):
+        for owner in ('S-1-5-20', 'S-1-5-21-1-2-3-9999', self.OWNER_RIGHTS):
+            for aces in ((), ((0, 3, 2032127, self.OWNER_RIGHTS),), ((0, 0, 0, self.OWNER_RIGHTS),)):
+                with self.subTest(owner=owner, aces=aces), self.assertRaisesRegex(SD.SecurityDataError, 'owner'):
+                    W.check_acl(owner, aces, self.TRUSTED, owned=False)
+
+    def test_creator_owner_and_other_principals_keep_existing_destructive_refusals(self):
+        for principal in ('S-1-3-0', 'S-1-3-1', 'S-1-1-0', 'S-1-5-20'):
+            for owned in (False, True):
+                masks = (0x40, 0x40000, 0x80000, 0x10000, 0x100, 0x10, 0x40000000, 0x10000000)
+                for mask in masks + ((2, 4) if owned else ()):
+                    aces = ((0, 3, 2032127, self.OWNER_RIGHTS), (0, 0, mask, principal))
+                    with self.subTest(principal=principal, owned=owned, mask=mask), self.assertRaisesRegex(SD.SecurityDataError, 'DACL'):
+                        W.check_acl(self.USER, aces, self.TRUSTED, owned=owned)
+
+    def test_owner_rights_deny_inheritance_or_empty_grants_do_not_invent_access(self):
+        for kind, flags, mask in ((1, 0, 2032127), (0, 8, 2032127), (0, 0, 0)):
+            W.check_acl(self.USER, ((kind, flags, mask, self.OWNER_RIGHTS),), self.TRUSTED, owned=False)
+            with self.assertRaisesRegex(SD.SecurityDataError, 'DACL'):
+                W.check_acl(self.USER, ((kind, flags, mask, self.OWNER_RIGHTS),
+                                       (0, 0, 0x40000, 'S-1-1-0')), self.TRUSTED, owned=False)
+        with self.assertRaisesRegex(SD.SecurityDataError, 'ACE'):
+            W.check_acl(self.USER, ((9, 8, 0, self.OWNER_RIGHTS),), self.TRUSTED, owned=False)
+
+    def test_changed_trusted_descriptor_owner_still_refuses_held_publication(self):
+        native = MemoryNative()
+        native.trusted = self.TRUSTED.copy()
+        native.ancestors = self.TRUSTED.copy()
+        security = (self.USER, ((0, 3, 2032127, self.OWNER_RIGHTS),), True)
+        native.nodes[native.root_id]['security'] = security
+        original_node = native.node
+        native.node = lambda directory, **kwargs: original_node(directory, security=security)
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            store.write(('snapshot.json',), b'owned')
+            node = native.nodes[native.handles[store.relative[()].handle][0]]
+            node['security'] = (self.SYSTEM, security[1], True)
+            try:
+                with self.assertRaisesRegex(SD.SecurityDataError, 'identity or security changed'):
+                    store.write(('not-published.json',), b'never')
+                self.assertNotIn('not-published.json', node['children'])
+            finally:
+                node['security'] = security
+        self.assertEqual(native.handles, {})
+
+
 class AclDiagnosticTests(unittest.TestCase):
     USER = 'S-1-5-21-1-2-3-1001'
     OTHER = 'S-1-5-21-1-2-3-9999'
