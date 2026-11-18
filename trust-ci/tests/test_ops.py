@@ -255,6 +255,8 @@ class OperationsTests(unittest.TestCase):
             self.assertEqual(report['status'], 'pass')
             self.assertEqual(report['restarts'][0]['cluster'], '123456789')
             self.assertNotEqual(report['restarts'][0]['before'], report['restarts'][0]['after'])
+            self.assertEqual(state.image_proofs,
+                [(ROOT, state.pins[key]) for key in ('postgres', 'python', 'python')])
 
     def test_postgres_restart_refuses_changed_cluster_job_or_unchanged_postmaster(self) -> None:
         for drift in ('cluster', 'job', 'postmaster'):
@@ -264,21 +266,43 @@ class OperationsTests(unittest.TestCase):
                 self.assertEqual(state.cleanup_calls, 1)
                 self.assertFalse((output / 'trust-ci-restart.json').exists())
 
+    def test_trust_image_configuration_mismatch_refuses_before_suite_or_restart(self) -> None:
+        for key in ('postgres', 'python'):
+            with self.subTest(image=key), self._trust_ci_harness(image_drift=key) as (live, state, output):
+                with self.assertRaisesRegex(ValueError, 'Runtime image store identity'):
+                    live._trust_ci(ROOT, output, state.binding)
+                self.assertEqual(state.cleanup_calls, 1)
+                self.assertFalse((output / 'trust-ci-suite.json').exists())
+                self.assertFalse((output / 'trust-ci-restart.json').exists())
+                self.assertFalse(any('tests/run_postgres_suite.py' in command for command in state.commands))
+                self.assertFalse(any(command[:2] == ['docker', 'restart'] for command in state.commands))
+
     @contextmanager
-    def _trust_ci_harness(self, *, primary=None, cleanup_error=None, drift=None):
+    def _trust_ci_harness(self, *, primary=None, cleanup_error=None, drift=None, image_drift=None):
         # Closed current-protocol orchestration fixture. No real input, DB,
         # allocation, discovery or execution qualification is asserted.
         from getzilla import live_acceptance as live
         from getzilla import live_contracts
+        from getzilla import disposable_resources as resources
         binding = dict(head='a'*40, tree='b'*40, run_id='local', attempt='1', cell='trust-ci',
                        namespace='gz-test', nonce='c'*32, producer_sha256='d'*64)
         expected = ['test_postgres_integration.Owned.test_case']
         inventory = {'trust-ci/tests/test_postgres_integration.py': 'e'*64}
         pins = live.image_pins(ROOT)
-        state = SimpleNamespace(commands=[], volumes={}, containers={}, cleanup_calls=0,
+        state = SimpleNamespace(commands=[], volumes={}, containers={}, cleanup_calls=0, pins=pins, image_proofs=[],
             postmaster_reads=0, network={'identity': {'Id': 'd'*64}}, binding=binding)
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as raw:
             output = Path(raw)
+            def image_proof(root, pin):
+                self.assertEqual(root, ROOT)
+                self.assertIn(pin, (pins['postgres'], pins['python']))
+                state.image_proofs.append((root, dict(pin)))
+                inspection = {'Id': pin['image_id'], 'RepoDigests': [pin['reference']],
+                              'Os': 'linux', 'Architecture': 'amd64'}
+                if image_drift is not None and pin == pins[image_drift]:
+                    inspection['Id'] = 'sha256:' + '0'*64
+                # Retain actual saved manifest/configuration/platform validation.
+                return resources.runtime_image_id(root, pin, inspection=inspection)
             def volume(suffix):
                 item = {'kind':'volume', 'name':'gz-test-'+suffix}
                 state.volumes[suffix] = item
@@ -329,6 +353,10 @@ class OperationsTests(unittest.TestCase):
                  patch.object(live_contracts, 'trust_source_contract', return_value=(inventory,expected)), \
                  patch.object(live, 'OwnedDocker', return_value=owner), \
                  patch.object(live, 'owned_postgres_endpoint', return_value=('172.28.0.2',5432)), \
+                 patch.object(live, 'runtime_image_id', side_effect=image_proof), \
+                 patch.object(resources, '_docker', side_effect=AssertionError('unmocked Docker forbidden')), \
+                 patch('subprocess.Popen', side_effect=AssertionError('unmocked child forbidden')), \
+                 patch('socket.socket', side_effect=AssertionError('unmocked network forbidden')), \
                  patch.object(live, '_run', side_effect=command):
                 yield live, state, output
 
