@@ -13,6 +13,7 @@ import itertools
 import json
 import os
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
@@ -26,6 +27,8 @@ _WRITE = 0x13019F  # FILE_GENERIC_READ|FILE_GENERIC_WRITE|DELETE
 _DESTRUCTIVE = 0xD0150  # DELETE, WRITE_DAC/OWNER, DELETE_CHILD, WRITE_EA/ATTRIBUTES
 _OWNED_WRITE = _DESTRUCTIVE | 0x6  # also add-file/add-subdirectory (write/append)
 _ROOT_SELF = 0x10110  # DELETE, WRITE_EA/ATTRIBUTES on the proven volume root itself
+_RENAME_LOCK = threading.Lock()
+_INCOMPLETE_RENAME = None  # at most one tiny request; never free in-flight kernel memory
 
 
 class _Unicode(C.Structure):
@@ -37,8 +40,13 @@ class _Attributes(C.Structure):
                 ('Attributes', U32), ('SecurityDescriptor', HANDLE), ('SecurityQualityOfService', HANDLE)]
 
 
+class _StatusValue(C.Union):
+    _fields_ = [('Status', C.c_int32), ('Pointer', HANDLE)]
+
+
 class _Status(C.Structure):
-    _fields_ = [('Status', HANDLE), ('Information', C.c_size_t)]
+    _anonymous_ = ('Value',)
+    _fields_ = [('Value', _StatusValue), ('Information', C.c_size_t)]
 
 
 class _FileId(C.Structure):
@@ -176,6 +184,8 @@ class Native:
             (self.k, 'SetFilePointerEx', [HANDLE, C.c_int64, HANDLE, U32], C.c_int),
             (self.k, 'FlushFileBuffers', [HANDLE], C.c_int),
             (self.k, 'SetFileInformationByHandle', [HANDLE, C.c_int, HANDLE, U32], C.c_int),
+            (self.k, 'WaitForSingleObject', [HANDLE, U32], U32),
+            (self.k, 'CancelIoEx', [HANDLE, HANDLE], C.c_int),
             (self.a, 'OpenProcessToken', [HANDLE, U32, C.POINTER(HANDLE)], C.c_int),
             (self.a, 'GetTokenInformation', [HANDLE, C.c_int, HANDLE, U32, C.POINTER(U32)], C.c_int),
             (self.a, 'ConvertSidToStringSidW', [HANDLE, C.POINTER(HANDLE)], C.c_int),
@@ -185,6 +195,7 @@ class Native:
             (self.a, 'GetSecurityDescriptorControl', [HANDLE, C.POINTER(U16), C.POINTER(U32)], C.c_int),
             (self.a, 'GetAce', [HANDLE, U32, C.POINTER(HANDLE)], C.c_int),
             (self.n, 'NtCreateFile', [C.POINTER(HANDLE), U32, C.POINTER(_Attributes), C.POINTER(_Status), HANDLE, U32, U32, U32, U32, HANDLE, U32], C.c_int32),
+            (self.n, 'NtSetInformationFile', [HANDLE, C.POINTER(_Status), HANDLE, U32, C.c_int], C.c_int32),
             (self.n, 'RtlNtStatusToDosError', [C.c_int32], U32),
         ):
             fn = getattr(dll, name)
@@ -253,9 +264,10 @@ class Native:
                             self.sd if create else None, None)
         result, status = HANDLE(), _Status()
         access = _DIRECTORY if directory else (_WRITE if temporary else _READ)
-        # No write/delete sharing on directories pins ancestry and reparse state.
-        # Child creation uses the held parent, not a new writable directory handle.
-        share = 1 if directory else (7 if inspect else 5)
+        # Keep LIST_DIRECTORY access and deny DELETE sharing to pin ancestry.
+        # Relative rename internally opens this directory for FILE_ADD_FILE;
+        # allow that sharing, without granting any additional ACL rights.
+        share = 3 if directory else (7 if inspect else 5)
         code = self.n.NtCreateFile(C.byref(result), access, C.byref(attrs), C.byref(status), None,
                                    0x10 if directory else 0x80, share, 2 if create else 1,
                                    0x200020 | (1 if directory else 0x40), None, 0)
@@ -356,13 +368,39 @@ class Native:
         self._ok(self.k.FlushFileBuffers(handle))
 
     def rename(self, handle, parent, name, *, replace):
+        global _INCOMPLETE_RENAME
         _component(name)
         encoded = name.encode('utf-16-le')
-        buffer = C.create_string_buffer(max(C.sizeof(_Rename), _Rename.Name.offset + len(encoded)))
+        buffer = C.create_string_buffer(C.sizeof(_Rename) + len(encoded))
         info = _Rename.from_buffer(buffer)
         info.Replace, info.Root, info.Length = bool(replace), parent, len(encoded)
         C.memmove(C.addressof(buffer) + _Rename.Name.offset, encoded, len(encoded))
-        self._ok(self.k.SetFileInformationByHandle(handle, 3, buffer, len(buffer)))
+        with _RENAME_LOCK:
+            if _INCOMPLETE_RENAME is not None:
+                raise SecurityDataError('snapshot native rename has an unresolved prior request')
+            status = _Status()
+            status.Status = 0x103
+            code = self.n.NtSetInformationFile(handle, C.byref(status), buffer, len(buffer), 10)
+            if code == 0x103:
+                # open() guarantees synchronous non-alertable I/O. Defensive
+                # handling of a contract violation stays bounded, not async I/O.
+                waited = self.k.WaitForSingleObject(handle, 1000)
+                if waited != 0 or status.Status == 0x103:
+                    self.k.CancelIoEx(handle, None)  # only this owned temporary
+                    waited = self.k.WaitForSingleObject(handle, 1000)
+                if waited != 0 or status.Status == 0x103:
+                    # Cancellation is not completion. Retain at most one request
+                    # until process exit, refuse future renames, and prevent the
+                    # caller from deleting an object that might commit late.
+                    _INCOMPLETE_RENAME = status, buffer
+                    error = SecurityDataError('snapshot native rename completion is unresolved')
+                    error.native_rename_unresolved = True
+                    raise error
+                code = status.Status
+            if code < 0:
+                raise C.WinError(self.n.RtlNtStatusToDosError(code))
+            if code != 0:
+                raise SecurityDataError('snapshot native rename did not complete successfully')
 
     def discard(self, handle):
         delete = U8(1)
@@ -548,6 +586,7 @@ class SnapshotStore:
         temporary = f'.{name}.{uuid.uuid4().hex}.partial'
         handle = self.native.open(parent.handle, temporary, directory=False, create=True, temporary=True)
         committed = False
+        unresolved = False
         try:
             offset = 0
             while offset < len(payload):
@@ -569,11 +608,18 @@ class SnapshotStore:
             finally:
                 self.native.close(probe)
             self.confirm()
-            self.native.rename(handle, parent.handle, name, replace=previous is not None)
-            committed = True
             key = parent.handle, name
             if previous:
+                # Ordinary native replacement refuses an open destination.
+                # Release only our verified witness, retaining every parent
+                # and unrelated reader. On failure _file() reopens the old name.
                 self.native.close(self.files.pop(key).handle)
+            try:
+                self.native.rename(handle, parent.handle, name, replace=previous is not None)
+            except SecurityDataError as error:
+                unresolved = bool(getattr(error, 'native_rename_unresolved', False))
+                raise
+            committed = True
             metadata = self._metadata(handle, owned=True, directory=False)
             self.files[key] = Held(handle, parent.handle, name, metadata.identity(), True)
             handle = None  # held file now owns it
@@ -581,7 +627,7 @@ class SnapshotStore:
             self.native.flush(self.files[key].handle)
         finally:
             if handle is not None:
-                if not committed:
+                if not committed and not unresolved:
                     try:
                         with contextlib.suppress(OSError):
                             self.native.discard(handle)  # delete only the exact owned object

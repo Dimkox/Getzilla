@@ -240,6 +240,169 @@ class MemoryNative:
                 del node['children'][name]
 
 
+class NativePublicationApiTests(unittest.TestCase):
+    def native(self, setter):
+        native = W.Native.__new__(W.Native)
+        native.n = SimpleNamespace(NtSetInformationFile=setter, RtlNtStatusToDosError=lambda status: 5)
+        native.k = SimpleNamespace(SetFileInformationByHandle=lambda *args: self.fail('rename must use native relative-handle API'))
+        return native
+
+    def test_relative_rename_uses_native_class_root_utf16_and_full_buffer(self):
+        import ctypes as C
+        found = []
+        def setter(handle, iosb, buffer, size, kind):
+            info = W._Rename.from_buffer(buffer)
+            self.assertEqual((handle, kind, info.Root, info.Replace), (37, 10, 91, 1))
+            encoded = 'pointer-😀.json'.encode('utf-16-le')
+            self.assertEqual(info.Length, len(encoded))
+            self.assertGreaterEqual(size, C.sizeof(W._Rename) + len(encoded))
+            self.assertEqual(C.string_at(C.addressof(buffer) + W._Rename.Name.offset, info.Length), encoded)
+            self.assertEqual(buffer.raw[W._Rename.Name.offset + info.Length:][:2], b'\0\0')
+            found.append(True)
+            return 0
+        self.native(setter).rename(37, 91, 'pointer-😀.json', replace=True)
+        self.assertEqual(found, [True])
+
+    def test_invalid_components_refuse_before_any_rename_api(self):
+        native = self.native(lambda *args: self.fail('invalid component reached API'))
+        for name in ('../outside', r'child\outside', 'a:b', '', 'NUL'):
+            with self.subTest(name=name), self.assertRaises(SD.SecurityDataError):
+                native.rename(37, 91, name, replace=False)
+
+    def test_native_error_status_is_signed_and_uses_return_not_iosb(self):
+        import ctypes as C
+        def setter(handle, iosb, buffer, size, kind):
+            C.cast(iosb, C.POINTER(W._Status))[0].Status = 0
+            return -1073741790
+        native = self.native(setter)
+        converted = []
+        native.n.RtlNtStatusToDosError = lambda code: converted.append(code) or 5
+        with mock.patch.object(C, 'WinError', side_effect=lambda code: OSError(code, 'native denied'), create=True):
+            with self.assertRaisesRegex(OSError, 'native denied'):
+                native.rename(37, 91, 'pointer', replace=False)
+        self.assertEqual(converted, [-1073741790])
+
+    def test_pending_waits_for_final_iosb_and_never_counts_pending_as_success(self):
+        import ctypes as C
+        for completion in (0, -1073741790, 0x103):
+            events, pending = [], []
+            def setter(handle, iosb, buffer, size, kind):
+                pending.append(C.cast(iosb, C.POINTER(W._Status)))
+                events.append('set')
+                return 0x103
+            native = self.native(setter)
+            def wait(handle, duration):
+                self.assertEqual((handle, duration), (37, 1000))
+                pending[0][0].Status = completion
+                events.append('wait')
+                return 0
+            native.k.WaitForSingleObject = wait
+            native.k.CancelIoEx = lambda handle, overlapped: events.append('cancel') or 1
+            with self.subTest(completion=completion), mock.patch.object(W, '_INCOMPLETE_RENAME', None, create=True), mock.patch.object(C, 'WinError', side_effect=lambda code: OSError(code, 'native denied'), create=True):
+                if completion == 0:
+                    native.rename(37, 91, 'pointer', replace=False)
+                else:
+                    with self.assertRaises((OSError, SD.SecurityDataError)):
+                        native.rename(37, 91, 'pointer', replace=False)
+            self.assertEqual(events, ['set', 'wait'] if completion != 0x103 else ['set', 'wait', 'cancel', 'wait'])
+
+    def test_unresolved_request_is_bounded_retained_and_never_discarded_as_temp(self):
+        import ctypes as C
+        calls = []
+        def setter(handle, iosb, buffer, size, kind):
+            calls.append('set')
+            return 0x103
+        native = self.native(setter)
+        native.k.WaitForSingleObject = lambda handle, duration: calls.append(('wait', duration)) or 258
+        native.k.CancelIoEx = lambda handle, overlapped: calls.append(('cancel', handle, overlapped)) or 0
+        with mock.patch.object(W, '_INCOMPLETE_RENAME', None, create=True):
+            with self.assertRaisesRegex(SD.SecurityDataError, 'unresolved') as caught:
+                native.rename(37, 91, 'pointer', replace=True)
+            self.assertTrue(caught.exception.native_rename_unresolved)
+            self.assertIsNotNone(W._INCOMPLETE_RENAME)
+            self.assertEqual(calls, ['set', ('wait', 1000), ('cancel', 37, None), ('wait', 1000)])
+            with self.assertRaisesRegex(SD.SecurityDataError, 'unresolved'):
+                native.rename(38, 91, 'other', replace=True)
+            self.assertEqual(calls.count('set'), 1)
+            retained_status, retained_buffer = W._INCOMPLETE_RENAME
+            self.assertEqual(retained_status.Status, 0x103)
+            self.assertGreater(C.sizeof(retained_buffer), C.sizeof(W._Rename))
+            # A late successful rename must not cause failure cleanup to delete
+            # the now-published object through its formerly-temporary handle.
+            model = MemoryNative()
+            ordinary = model.rename
+            def late(handle, parent, name, *, replace):
+                ordinary(handle, parent, name, replace=replace)
+                raise caught.exception
+            with W.SnapshotStore('C:\\database', create=True, _native=model) as store:
+                store.write(('pointer',), b'old')
+                model.rename = late
+                with self.assertRaisesRegex(SD.SecurityDataError, 'unresolved'):
+                    store.write(('pointer',), b'new')
+                self.assertEqual(model.discarded, [])
+                self.assertEqual(store.read(('pointer',), 3), b'new')
+            self.assertEqual(model.handles, {})
+
+    def test_directory_share_allows_internal_add_but_keeps_data_delete_pin(self):
+        import ctypes as C
+        observed = []
+        def create(output, access, attrs, status, allocation, attributes, share, disposition, options, ea, ea_size):
+            observed.append((access, share, options))
+            C.cast(output, C.POINTER(W.HANDLE))[0] = 73
+            return 0
+        native = self.native(None)
+        native.sd = None
+        native.n.NtCreateFile = create
+        native.open(91, 'directory', directory=True)
+        native.open(91, 'file', directory=False)
+        native.open(91, 'temporary', directory=False, temporary=True)
+        native.open(91, 'inspection', directory=False, inspect=True)
+        self.assertEqual([share for _, share, _ in observed], [3, 5, 5, 7])
+        self.assertEqual(observed[0][0], W._DIRECTORY)
+        self.assertTrue(observed[0][0] & 1)  # LIST participates in share checks
+        self.assertFalse(observed[0][1] & 4)  # no DELETE sharing
+        self.assertTrue(all(access & 0x100000 and options & 0x20 for access, _, options in observed))
+
+    def test_discard_marks_only_exact_held_object_with_boolean_abi(self):
+        import ctypes as C
+        calls = []
+        native = self.native(None)
+        def setter(handle, kind, buffer, size):
+            calls.append((handle, kind, C.string_at(buffer, size)))
+            return 1
+        native.k.SetFileInformationByHandle = setter
+        native.discard(37)
+        self.assertEqual(calls, [(37, 4, b'\1')])
+
+    def test_classic_replace_releases_only_own_old_witness_and_recovers_failure(self):
+        native = MemoryNative()
+        original_rename = native.rename
+        def classic(handle, parent, name, *, replace):
+            entries = native.nodes[native.handles[parent][0]]['children']
+            target = entries.get(name)
+            if target is not None and any(node == target for node, offset in native.handles.values()):
+                raise PermissionError('destination still open')
+            return original_rename(handle, parent, name, replace=replace)
+        native.rename = classic
+        with W.SnapshotStore('C:\\database', create=True, _native=native) as store:
+            store.write(('pointer',), b'old')
+            store.write(('pointer',), b'new')
+            self.assertEqual(store.read(('pointer',), 3), b'new')
+            reader = native.open(store.relative[()].handle, 'pointer', directory=False)
+            try:
+                with self.assertRaisesRegex(PermissionError, 'still open'):
+                    store.write(('pointer',), b'bad')
+                self.assertEqual(store.read(('pointer',), 3), b'new')
+                self.assertTrue(native.discarded)
+            finally:
+                native.close(reader)
+            native.fail_rename = True
+            with self.assertRaisesRegex(OSError, 'before rename'):
+                store.write(('pointer',), b'bad')
+            self.assertEqual(store.read(('pointer',), 3), b'new')
+        self.assertEqual(native.handles, {})
+
+
 class OwnerRightsPolicyTests(unittest.TestCase):
     USER = 'S-1-5-21-1-2-3-500'
     SYSTEM = 'S-1-5-18'
@@ -739,6 +902,103 @@ class NativeWindowsTests(unittest.TestCase):
             if descriptor:
                 native.k.LocalFree(descriptor)
             native.shutdown()
+
+    def test_native_primitive_relative_handle_rename_new(self):
+        # No publish()/SnapshotStore.write prerequisite: qualify the API itself.
+        with W.SnapshotStore(self.database, create=True) as store:
+            native, parent = store.native, store.relative[()].handle
+            handle = native.open(parent, 'rename.partial', directory=False, create=True, temporary=True)
+            try:
+                self.assertEqual(native.write(handle, b'owned'), 5)
+                native.flush(handle)
+                before = native.metadata(handle).file_id
+                native.rename(handle, parent, 'renamed', replace=False)
+                self.assertEqual(native.metadata(handle).file_id, before)
+                native.seek(handle)
+                self.assertEqual(native.read(handle, 10), b'owned')
+                self.assertFalse((self.database / 'rename.partial').exists())
+            finally:
+                native.close(handle)
+            self.assertEqual((self.database / 'renamed').read_bytes(), b'owned')
+
+    def test_native_primitive_replace_refuses_held_target_then_replaces_closed_target(self):
+        with W.SnapshotStore(self.database, create=True) as store:
+            native, parent = store.native, store.relative[()].handle
+            old = native.open(parent, 'pointer', directory=False, create=True, temporary=True)
+            try:
+                self.assertEqual(native.write(old, b'old'), 3)
+                native.flush(old)
+            finally:
+                native.close(old)
+            reader = native.open(parent, 'pointer', directory=False)
+            candidate = native.open(parent, 'replace.partial', directory=False, create=True, temporary=True)
+            try:
+                self.assertEqual(native.write(candidate, b'new'), 3)
+                native.flush(candidate)
+                with self.assertRaises(OSError):
+                    native.rename(candidate, parent, 'pointer', replace=True)
+                native.seek(reader)
+                self.assertEqual(native.read(reader, 3), b'old')
+                self.assertEqual((self.database / 'pointer').read_bytes(), b'old')
+                native.close(reader)
+                reader = None
+                native.rename(candidate, parent, 'pointer', replace=True)
+                native.seek(candidate)
+                self.assertEqual(native.read(candidate, 3), b'new')
+                self.assertFalse((self.database / 'replace.partial').exists())
+            finally:
+                if reader is not None:
+                    native.close(reader)
+                native.close(candidate)
+            self.assertEqual((self.database / 'pointer').read_bytes(), b'new')
+
+    def test_native_primitive_discard_removes_only_exact_temporary(self):
+        with W.SnapshotStore(self.database, create=True) as store:
+            native, parent = store.native, store.relative[()].handle
+            keep = native.open(parent, 'keep', directory=False, create=True, temporary=True)
+            doomed = None
+            try:
+                self.assertEqual(native.write(keep, b'keep'), 4)
+                native.flush(keep)
+                doomed = native.open(parent, 'discard.partial', directory=False, create=True, temporary=True)
+                native.discard(doomed)
+                native.close(doomed)
+                doomed = None
+                self.assertFalse((self.database / 'discard.partial').exists())
+                native.seek(keep)
+                self.assertEqual(native.read(keep, 4), b'keep')
+            finally:
+                if doomed is not None:
+                    native.close(doomed)
+                native.close(keep)
+            self.assertEqual((self.database / 'keep').read_bytes(), b'keep')
+
+    def test_native_primitive_readonly_target_refuses_replacement(self):
+        import stat
+        with W.SnapshotStore(self.database, create=True) as store:
+            native, parent = store.native, store.relative[()].handle
+            path = self.database / 'readonly'
+            old = native.open(parent, 'readonly', directory=False, create=True, temporary=True)
+            try:
+                self.assertEqual(native.write(old, b'old'), 3)
+                native.flush(old)
+            finally:
+                native.close(old)
+            path.chmod(stat.S_IREAD)
+            candidate = None
+            try:
+                candidate = native.open(parent, 'readonly.partial', directory=False, create=True, temporary=True)
+                self.assertEqual(native.write(candidate, b'new'), 3)
+                native.flush(candidate)
+                with self.assertRaises(OSError):
+                    native.rename(candidate, parent, 'readonly', replace=True)
+                self.assertEqual(path.read_bytes(), b'old')
+                native.discard(candidate)
+            finally:
+                if candidate is not None:
+                    native.close(candidate)
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
+            self.assertFalse((self.database / 'readonly.partial').exists())
 
     def test_native_public_roundtrip_copy_and_old_acquisition(self):
         self.publish()
