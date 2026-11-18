@@ -32,10 +32,10 @@ class ClaudePhpTests(unittest.TestCase):
         self.assertEqual(sum(u.endswith('/latest') for u in calls),2)
 
     def test_php_source_uses_global_latest_official_sha_not_old_compatible(self):
-        catalog={'8':dict(version='8.9.9',source=[]),'9':dict(version='9.0.0',source=[dict(filename='php-9.0.0.tar.xz',sha256='b'*64)])}
+        catalog={'8':dict(version='8.9.9',source=[]),'9':dict(version='9.0.0',source=[dict(filename='php-9.0.0.tar.gz',sha256='b'*64)])}
         target=releases.php_source(lambda _:json.dumps(catalog).encode())
         self.assertEqual(target.version,'9.0.0')
-        self.assertEqual(target.url,'https://www.php.net/distributions/php-9.0.0.tar.xz')
+        self.assertEqual(target.url,'https://www.php.net/distributions/php-9.0.0.tar.gz')
         catalog['9']['source'][0]['sha256']='missing'
         with self.assertRaises(ValueError):
             releases.php_source(lambda _:json.dumps(catalog).encode())

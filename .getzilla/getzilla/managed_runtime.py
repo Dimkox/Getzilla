@@ -36,6 +36,17 @@ def directory(path: Path, *, mode=0o700):
 
 def entries(target: Target, data: bytes):
     target.verify(data)
+    try:
+        return _entries(target, data)
+    except (tarfile.TarError, zipfile.BadZipFile, EOFError) as exc:
+        # Do not echo parser text, archive members or URLs into installer logs.
+        def label(value):
+            return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,160}', value) else 'invalid'
+        raise ValueError(f'{label(target.component)} {label(target.filename)}: archive-decode '
+                         f'failed ({type(exc).__name__})') from exc
+
+
+def _entries(target: Target, data: bytes):
     files, links, total = {}, {}, 0
 
     def add(name, body, mode, *, file_limit=MAX_FILE_BYTES):
