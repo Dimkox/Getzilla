@@ -49,7 +49,7 @@ class ReleaseTransportTests(unittest.TestCase):
                     run=lambda *_: self.fail('refused metadata must not run an artifact'))
             self.assertEqual(len(result), 1)
             self.assertEqual((result[0].component, result[0].status), ('tool:opengrep', 'fail'))
-            self.assertEqual(result[0].detail, 'official release request refused: source=github-api status=403 reason=quota-exhausted remaining=0 reset=1795020000 retry_after=120')
+            self.assertEqual(result[0].detail, 'official release request refused: source=github-api status=403 reason=quota-exhausted endpoint=latest-release remaining=0 reset=1795020000 retry_after=120')
             self.assertEqual(opened.call_count, 1, 'refusals must not retry')
             self.assertFalse(list(root.iterdir()), 'refusal must not activate or cache anything')
         self.assertTrue(body.closed)
@@ -70,7 +70,7 @@ class ReleaseTransportTests(unittest.TestCase):
                 self.assertTrue(body.closed)
         error, body = self.refusal(403)
         detail = self.observed_refusal(error, 'https://github.com/owned/tool/releases/download/v1/owned')
-        self.assertEqual(detail, 'official release request refused: source=official-release status=403 reason=forbidden')
+        self.assertEqual(detail, 'official release request refused: source=official-release status=403 reason=forbidden endpoint=release-asset')
         self.assertTrue(body.closed)
 
     def test_invalid_duplicate_and_hostile_budget_headers_do_not_escape(self):
@@ -78,13 +78,13 @@ class ReleaseTransportTests(unittest.TestCase):
             with self.subTest(value=value):
                 error, body = self.refusal(403, tuple((name, value) for name in (
                     'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Retry-After')))
-                self.assertEqual(self.observed_refusal(error), 'official release request refused: source=github-api status=403 reason=forbidden')
+                self.assertEqual(self.observed_refusal(error), 'official release request refused: source=github-api status=403 reason=forbidden endpoint=latest-release')
                 self.assertTrue(body.closed)
         error, body = self.refusal(403, (
             ('X-RateLimit-Remaining', '0'), ('x-ratelimit-remaining', '5'),
             ('X-RateLimit-Reset', '10'), ('X-RateLimit-Reset', '20'),
             ('Retry-After', '1'), ('retry-after', '2')))
-        self.assertEqual(self.observed_refusal(error), 'official release request refused: source=github-api status=403 reason=forbidden')
+        self.assertEqual(self.observed_refusal(error), 'official release request refused: source=github-api status=403 reason=forbidden endpoint=latest-release')
         self.assertTrue(body.closed)
         error, body = self.refusal(403, (('X-RateLimit-Reset', str(2**63-1)),))
         self.assertIn(f'reset={2**63-1}', self.observed_refusal(error))
@@ -99,6 +99,7 @@ class ReleaseTransportTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 404)
         error.close()
         self.assertTrue(body.closed)
+
         from getzilla.latest_releases import github_release
         error, body = self.refusal(404)
 
@@ -114,6 +115,23 @@ class ReleaseTransportTests(unittest.TestCase):
             self.assertEqual(opened.call_count, 1)
         error.close()
         self.assertTrue(body.closed)
+
+    def test_endpoint_kinds_are_closed_and_never_echo_request_data(self):
+        for url, endpoint in (
+            ('https://api.github.com/repos/owned/tool/releases/latest', 'latest-release'),
+            ('https://api.github.com/repos/owned/tool/git/matching-refs/tags/', 'tag-refs'),
+            ('https://api.github.com/repos/owned/tool/releases/tags/v1.0.0', 'tagged-release'),
+            ('https://github.com/owned/tool/releases/download/v1.0.0/owned', 'release-asset'),
+            ('https://api.github.com/private-path-marker?private-query-marker=private-token-marker', 'other'),
+            ('https://api.github.com/repos/owned/tool/releases/latest/private-suffix-marker', 'other'),
+        ):
+            with self.subTest(endpoint=endpoint, url=url):
+                error, body = self.refusal(403)
+                detail = self.observed_refusal(error, url)
+                self.assertIn('endpoint=' + endpoint, detail)
+                for marker in ('private', 'https://', 'owned', 'v1.0.0'):
+                    self.assertNotIn(marker, detail)
+                self.assertTrue(body.closed)
 
     def test_complete_compressed_catalog_and_truncated_stream_refusal(self):
         body = b'{"info":{"name":"owned"},"releases":{"1.0.0":[{}]}}'

@@ -199,9 +199,18 @@ def _release_refusal(error, origin):
                 and re.fullmatch(r'[0-9]{1,19}', rows[0]) and int(rows[0]) < 2**63):
             values[field] = int(rows[0])
     source = 'github-api' if origin.netloc == 'api.github.com' else 'official-release'
+    repository = r'/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+    kinds = (('latest-release', repository + r'/releases/latest'),
+             ('tag-refs', repository + r'/git/(?:matching-refs/tags/|ref/tags/[^/]+|tags/[a-f0-9]{40})'),
+             ('tagged-release', repository + r'/releases/tags/[^/]+'))
+    endpoint = next((kind for kind, pattern in kinds
+                     if source == 'github-api' and re.fullmatch(pattern, origin.path)), 'other')
+    if (origin.netloc == 'github.com' and re.fullmatch(
+            r'/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[^/]+/[^/]+', origin.path)):
+        endpoint = 'release-asset'
     reason = ('quota-exhausted' if values.get('remaining') == 0 else
               'rate-limited' if error.code == 429 else 'forbidden')
-    detail = f'official release request refused: source={source} status={error.code} reason={reason}'
+    detail = f'official release request refused: source={source} status={error.code} reason={reason} endpoint={endpoint}'
     return detail + ''.join(f' {name}={value}' for name, value in values.items())
 
 
