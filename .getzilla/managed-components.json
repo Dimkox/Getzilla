@@ -2604,7 +2604,7 @@
         },
         ".getzilla/getzilla/security_cli.py": {
           "mode": 420,
-          "sha256": "57afbb92066375349a880c90616ec75cc2eab463b631c8ea2b5f6d685a836998"
+          "sha256": "477932fd461db61c288b1654e884021237570f854e13506b56f2fce643926820"
         },
         ".getzilla/getzilla/security_data.py": {
           "mode": 420,
@@ -2640,7 +2640,7 @@
         },
         ".getzilla/getzilla/security_tools.py": {
           "mode": 420,
-          "sha256": "7fa1091005b8db10dda2049e9e7c294000ebd95dd9f5535a1916e6066ed84348"
+          "sha256": "a19700d34bb42099df7ccb1b6d0200df8fcf77b494e6dd033eed7007f3935a8d"
         },
         ".getzilla/getzilla/session_progress.py": {
           "mode": 420,
