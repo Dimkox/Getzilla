@@ -359,7 +359,7 @@ class OfflineMirrorTests(unittest.TestCase):
         (self.mirror_dir / 'osv/PyPI/snapshot.json').unlink()
         results = self._update(self._mirror())
         self.assertEqual(results['osv:PyPI'].status, 'fail')
-        self.assertIn('refresh', results['osv:PyPI'].detail)
+        self.assertIn('legacy PyPI/all.zip is insufficient', results['osv:PyPI'].detail)
         self.assertFalse((self.root / 'osv/PyPI/snapshot.json').exists())
         self.assertEqual(results['osv:npm'].status, 'ok')
 

@@ -191,16 +191,24 @@ class StackPlanTests(unittest.TestCase):
         self.assertEqual(by_name['python-unittest']['applicability'], 'not_applicable')
         self.assertEqual(by_name['ruff']['applicability'], 'not_applicable')
         self.assertEqual(by_name['bandit']['applicability'], 'not_applicable')
+        from getzilla.util import tree_fingerprint
         plan = verification_plan.build_required_plan(self.root, mode='pr', context={},
-            source={}, inventory={}, risk={}, selection={}, extra_obligations=obligations)
+            source={'fingerprint': tree_fingerprint(self.root)}, inventory={}, risk={},
+            selection={'requested_profiles': None}, extra_obligations=obligations)
         checks = []
         for item in obligations:
             check = {'name': item['check_id'], 'status': 'skip' if item['applicability'] == 'not_applicable' else 'pass',
                      'summary': 'structural fixture', 'details': []}
             verification_plan.bind_result(plan, check)
             checks.append(check)
+        queried_sources = []
+        def reject_unexpected_source(*args, **_kwargs):
+            queried_sources.append(args)
+            raise AssertionError('native applicability fixture has no external data sources')
         decision = evaluate_quality_gate(mode='pr', checks=checks, required_plan=plan,
-            current_binding=plan['binding'], now_utc=datetime(2026, 11, 3, tzinfo=timezone.utc))
+            current_binding=plan['binding'], now_utc=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            data_source_validator=reject_unexpected_source)
+        self.assertEqual(queried_sources, [])
         self.assertEqual(decision.status, 'pass', decision.details)
 
 

@@ -479,7 +479,10 @@ def offline_mirror(base: Path) -> Path:
         archive = mirror / 'osv' / ecosystem / 'all.zip'
         archive.parent.mkdir(parents=True)
         with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': []}))
+            bundle.writestr('GZ-FIXTURE-1.json', json.dumps({'id': 'GZ-FIXTURE-1', 'affected': [{
+                'package': {'ecosystem': ecosystem, 'name': 'example/owned' if ecosystem in {'Go', 'Packagist'} else 'owned-fixture'},
+                'versions': ['1.0.0'],
+            }]}))
         archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
     def fetch_owned_archive(url, body=None):
         if body is not None or url not in archives:

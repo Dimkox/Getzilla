@@ -68,3 +68,7 @@ Use native qualified owned OSV snapshots, isolate frozen-source CLI execution,
 keep observer I/O outside strict pure controls, and select the exact loader loop.
 Keep explicit profile provenance distinct from inferred task domains while real
 Node markers still require checks; preserve explicit missing-manifest refusals.
+The legacy full-discovery guard must honor validated current native absence of
+Python only with bound skips for discovery, coverage, Ruff and Bandit; testless
+Python and explicit Python requests still refuse. Positive Stop fixtures provide
+a real app, unittest and measured app coverage using a bounded one-worker subjob.

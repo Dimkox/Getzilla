@@ -23,6 +23,21 @@ import subprocess
 from tests._support import observed_context, prepare_review_source, project_copy, run_hook
 
 
+def _real_hook_application(root: Path) -> None:
+    """An actual tiny app/discovery/coverage world; installed engine stays framework."""
+    (root / 'owned_hook_app.py').write_text('def value():\n    return "observed"\n', encoding='utf-8', newline='\n')
+    tests = root / 'tests'
+    tests.mkdir()
+    (tests / '__init__.py').write_text('', encoding='utf-8', newline='\n')
+    (tests / 'test_owned_hook_app.py').write_text(
+        'import unittest\nfrom owned_hook_app import value\n'
+        'class OwnedHookApplicationTests(unittest.TestCase):\n'
+        '    def test_observed_value(self):\n        self.assertEqual(value(), "observed")\n',
+        encoding='utf-8', newline='\n')
+    (root / '.coveragerc').write_text('[run]\nbranch = True\nsource = owned_hook_app\n'
+                                   '[report]\nfail_under = 100\nshow_missing = True\n', encoding='utf-8', newline='\n')
+
+
 class HookTests(unittest.TestCase):
     def test_linked_worktree_patch_uses_only_target_grant(self) -> None:
         with project_copy(git=True) as root:
@@ -1437,7 +1452,8 @@ class HookTests(unittest.TestCase):
             self.assertTrue(receipt['stale'])
 
     def test_stop_keeps_unfinished_task_despite_current_evidence(self) -> None:
-        with project_copy(git=True, source_only_runtime=True) as root:
+        with project_copy(git=True, source_only_runtime=True) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '1'}):
+            _real_hook_application(root)
             from tests.test_package_status import PackageStatusTests
             from getzilla.receipts import validate_evidence
             _, _, _, package = PackageStatusTests().prepare(root, complete=True)
@@ -1463,7 +1479,8 @@ class HookTests(unittest.TestCase):
 
 
     def test_parent_contract_stop_allows_current_evidence(self) -> None:
-        with project_copy(git=True, source_only_runtime=True) as root:
+        with project_copy(git=True, source_only_runtime=True) as root, patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': '1'}):
+            _real_hook_application(root)
             from tests.test_package_status import PackageStatusTests
             from getzilla.continuity import scope_gaps
             from getzilla.package_status import inspect_package
