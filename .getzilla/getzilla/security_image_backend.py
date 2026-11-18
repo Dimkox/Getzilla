@@ -656,6 +656,7 @@ class BuildKit:
     def __init__(self, volume, *, archive, deadline):
         self.volume, self.deadline, self.process, self.log = Path(volume), deadline, None, None
         self.owner_pid, self.pidfd = os.getpid(), None
+        self._in_build, self.last_prune_usage = False, {}
         if _GUARD is None or _GUARD[0] != self.volume:
             raise BackendUnavailable('BuildKit requires a measured live namespace volume')
         self.guard = _GUARD
@@ -725,9 +726,51 @@ class BuildKit:
         for path in (self.volume, self.volume / 'home', self.volume / 'tmp', self.socket):
             os.chown(path, uid, gid, follow_symlinks=False)
 
+    def _volume_usage(self):
+        """Diagnostic integers only; CI capacity still requires the live native proof."""
+        if self.guard is not _GUARD:
+            raise BackendUnavailable('owned volume diagnostic lifetime ended')
+        if not (isinstance(self.guard, tuple) and len(self.guard) > 3
+                and self.guard[3].get('ci_corpus')):
+            return {}  # Default/local controls have no held CI proof descriptor.
+        proof = self.guard[3]
+        if not measured_ci_profile():
+            raise BackendUnavailable('owned volume diagnostic proof unavailable')
+        fd = proof['volume_fd']
+        identity = os.fstat(fd)
+        if (identity.st_dev, identity.st_ino) != proof['volume_identity']:
+            raise BackendUnavailable('owned volume diagnostic descriptor changed')
+        info = os.fstatvfs(fd)
+        capacity, free, available = (info.f_blocks * info.f_frsize,
+                                    info.f_bfree * info.f_frsize, info.f_bavail * info.f_frsize)
+        if capacity != CI_BYTES or not 0 <= available <= free <= capacity:
+            raise BackendUnavailable('owned volume diagnostic counters refused')
+        return dict(capacity_bytes=capacity, used_bytes=capacity - free, free_bytes=available)
+
+    def prune(self):
+        """Retire this private daemon's unused cache after its export is retained."""
+        from .architecture_diff import _run_capped, ArchitectureError
+        if self.guard is not _GUARD or not self._daemon_alive() or self._in_build:
+            raise BackendUnavailable('owned idle BuildKit required for cache retirement')
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise BackendUnavailable('image producer aggregate deadline exceeded')
+        try:
+            code, _, stderr = _run_capped([self.client, '--addr', self.address, 'prune', '--all'],
+                cwd=_ROOT, env=self.env, stdin_data=None, stdout_limit=65536,
+                stderr_limit=4096, timeout=remaining)
+        except (OSError, ArchitectureError):
+            raise BackendUnavailable('owned BuildKit cache retirement incomplete') from None
+        self.last_prune_usage = self._volume_usage()
+        if code or not self._daemon_alive():
+            raise BackendUnavailable('owned BuildKit cache retirement refused', detail=dict(
+                phase='build-cache', command_id='buildctl-prune-owned', exit_code=code, errno=None,
+                volume_after_prune=self.last_prune_usage, stderr=_diagnostic(stderr)))
+        return self.last_prune_usage
+
     def build(self, recipe, context, output, *, offline_control=False):
         from .architecture_diff import _run_capped, ArchitectureError
-        if self.guard is not _GUARD or not self._daemon_alive():
+        if self.guard is not _GUARD or not self._daemon_alive() or getattr(self, '_in_build', False):
             raise BackendUnavailable('owned BuildKit lifetime ended')
         arguments = [self.client, '--addr', self.address, 'build', '--frontend', 'dockerfile.v0',
                      '--local', 'context=' + str(context), '--local', 'dockerfile=' + str(context),
@@ -739,14 +782,21 @@ class BuildKit:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise BackendUnavailable('image producer aggregate deadline exceeded')
+        usage_before = self._volume_usage()
+        self._in_build = True
         try:
             code, _, stderr = _run_capped(arguments, cwd=context, env=self.env, stdin_data=None,
                 stdout_limit=1024 * 1024, stderr_limit=1024 * 1024, timeout=remaining)
         except (OSError, ArchitectureError):
             raise BackendUnavailable('owned image build incomplete') from None
+        finally:
+            self._in_build = False
         if code:
             detail = dict(phase='build', command_id='buildctl-build', exit_code=code, errno=None,
                           stderr_captured_sha256=hashlib.sha256(stderr).hexdigest(), stderr=_diagnostic(stderr))
+            if usage_before:
+                detail.update(volume_before_build=usage_before, volume_at_failure=self._volume_usage(),
+                              volume_after_previous_prune=getattr(self, 'last_prune_usage', {}))
             raise BackendUnavailable('owned image build failed; no build proof was issued', detail=detail)
         if not self._daemon_alive():
             raise BackendUnavailable('owned daemon ended before build completion was observed')
