@@ -111,6 +111,15 @@
           "sha256": "dc86be06df2eb0425376fda1d7dc12c887c883e0e0c3b4d9247808ba85fd345c"
         }
       }
+    },
+    "retrieval-research": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/retrieval-research/0.1.0/module.json",
+          "sha256": "b6b337b7dd2f275c5972d710dc96c61c6369bce1c8782e3eb1505e71f92590d7"
+        }
+      }
     }
   }
 }

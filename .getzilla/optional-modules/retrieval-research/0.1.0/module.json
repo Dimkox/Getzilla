@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "retrieval-research",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {
+    "context-retrieval": "0.1.0"
+  },
+  "permissions": [],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "profile.json",
+      "sha256": "b9821106466378fb1c45aed374c8bcf9c6af56389a5eae6719a3016f53d7ce13",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}
