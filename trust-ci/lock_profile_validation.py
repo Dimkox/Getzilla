@@ -287,4 +287,3 @@ def check(root: Path) -> list[str]:
     except (OSError, ValueError, KeyError, StopIteration, TypeError, AttributeError) as exc:
         errors.append(f"lock profile validation failed: {exc}")
     return errors
-
