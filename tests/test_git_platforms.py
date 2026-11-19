@@ -81,6 +81,8 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(entries['entire-native']['capabilities']['merge'], 'unsupported')
         self.assertEqual(entries['gitlab']['capabilities']['checks'], 'unsupported')
         self.assertEqual(entries['entire-mirror']['contract_version'], '0.12.2')
+        self.assertFalse(entries['entire-native']['protected_ci_bridge']['default_enabled'])
+        self.assertEqual(entries['entire-mirror']['protected_ci_bridge']['external_acceptance'], 'NOT_TESTED')
         self.assertIsNone(entries['entire-mirror']['tested_version'])
 
     def test_inspection_works_without_network_or_optional_provider(self):
