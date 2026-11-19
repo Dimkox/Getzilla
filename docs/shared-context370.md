@@ -77,10 +77,10 @@ At startup, the hook emits only a brief disabled/present/missing/unverified stat
 | Arbitrary compatible stdin client without tools | Tested with inert local executable | NOT_TESTED | NOT_TESTED / unknown |
 | Arbitrary compatible prompt-file client | Tested with inert local executable, private modes and cleanup | NOT_TESTED | NOT_TESTED / unknown |
 | Strict free/local/closed-egress model sink | Refused without actual backend proof; refusal tested | NOT_TESTED | NOT_TESTED / unknown |
-| Qwen0.24.7 + Ollamav0.40.16 + Qwen3:1.7b | Separate #277 preflight only; pinned runtime acquisition exceeded its900s bound; runtime/model incomplete | NOT_TESTED; no generation | NOT_TESTED / unknown |
+| Qwen0.24.7 + Ollamav0.40.16 + Qwen3:1.7b | Runtime/model acquired and hash-verified after retained earlier failures; fixed two-CPU/4 GiB qualification attempted twice | FAILED: requests timed out at 280 s and 700 s; no response, tool call or patch; ordinary eligibility remains disabled | Retrieval/UDS pairs NOT_TESTED; usage and savings unknown |
 | Remote/cloud or private enterprise sources/sinks | Unsupported by this narrow profile | NOT_TESTED | NOT_TESTED / unknown |
 
-The #277 preflight observed Qwen version execution and isolation/resource checks. It did not establish a coding result, model usage, retrieval prefill, or a savings comparison. Do not count an incomplete runtime download as a tested backend.
+The #277 observations retain acquisition and metadata failures, followed by verified runtime/model acquisition and two failed normal-workflow trials. Combined generation time was 980.235 s within the 1200 s cap; both workspaces stayed unchanged and trial processes terminated. Filesystem/network controls held, but no coding result or token usage was established. Cause remains unresolved: the qualification proxy forced non-streaming upstream responses and buffered complete JSON, while roughly 3900 prompt tokens used a 4096-token context. Generated tokens, effective thinking and server output-cap mapping were not observed. CPU saturation does not prove a universal hardware limitation. These trials did not exercise retrieval or the new #151/#235 UDS handoff and cannot establish savings or ordinary Factory admission.
 
 ## Fixed paired-comparison protocol
 
@@ -88,4 +88,4 @@ Before any model run, pin small and large source snapshots, public tasks and jud
 
 Record initial build and update time, query time, local reads/bytes, graph parsing/link work, retrieval parsing, CPU/memory/disk, tool output bytes, actual provider input/output usage and cache input separately. Keep unavailable API counters unknown. Record solution quality, citation correctness, regressions and failures for each exact CLI/model combination. Include initial construction/update costs in totals. A tokenizer estimate is not billed usage. Reject an enablement recommendation when quality falls or total cost rises under the fixed criteria.
 
-All paired small/large project model runs, two-provider comparisons, local-model runs, actual usage and savings measurements in this checkpoint are **NOT_TESTED**. No result is extrapolated between combinations. This document is a protocol and an honest capability matrix, not a full issue370 or release acceptance receipt.
+All paired small/large project model runs, two-provider comparisons, local-model retrieval/UDS runs, actual usage and savings measurements in this checkpoint are **NOT_TESTED**. No result is extrapolated between combinations. This document is a protocol and an honest capability matrix, not a full issue370 or release acceptance receipt.
