@@ -18,7 +18,8 @@ TMPFS_OPTIONS = frozenset({'rw', 'noexec', 'nosuid', 'nodev', 'size=67108864', '
 def resource_profile():
     """Fresh data projection; never a process, execution or resource permit."""
     return {'schema_version': 1, 'profile': 'issue162-owned-offline-v1',
-            'cpu_count': 2, 'memory_bytes': MEMORY_BYTES, 'swap_bytes': 0,
+            'cpu_count': 2, 'cpu_quota_cores': 2, 'runtime': 'runc',
+            'cgroup_namespace': 'private', 'memory_bytes': MEMORY_BYTES, 'swap_bytes': 0,
             'pids': 128, 'uid': 65532, 'gid': 65532, 'network': 'none',
             'read_only_root': True, 'mounts': ['/model', '/software', '/worker'],
             'mounts_read_only': True, 'mount_propagation': 'rprivate',
@@ -54,7 +55,8 @@ def validate_container_readback(observed, *, image_id, cpu_ids, command, mounts)
         actual_command = tuple(config['Entrypoint'] or []) + tuple(config['Cmd'] or [])
         fixed = {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False,
                  'Memory': MEMORY_BYTES, 'MemorySwap': MEMORY_BYTES, 'PidsLimit': 128,
-                 'CpusetCpus': ','.join(map(str, cpu_ids)), 'PidMode': '', 'IpcMode': 'none'}
+                 'CpusetCpus': ','.join(map(str, cpu_ids)), 'PidMode': '', 'IpcMode': 'none',
+                 'NanoCpus': 2000000000, 'Runtime': 'runc', 'CgroupnsMode': 'private'}
         if (observed['Image'] != image_id or config['User'] != '65532:65532'
                 or actual_command != command
                 or any(type(host[key]) is not type(value) or host[key] != value
