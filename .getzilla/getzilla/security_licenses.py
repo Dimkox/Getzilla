@@ -598,6 +598,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     run_context.auxiliary('ci-install:'+consumer['build_sha256'],output)
                     if output['status'] == 'pass':
                         run_context.build_inputs(auxiliary['binding'],output)
+        if run_context is not None and any(row['kind'] == 'checker-tool' for row in run_context.required.values()):
+            result['checker_tools'] = run_context.checker_inputs(artifacts, policy, now=now)
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
             selected_required=run_context is not None and run_context.family_required(subject,kind)

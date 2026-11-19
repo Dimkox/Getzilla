@@ -21,6 +21,48 @@ NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
 
 
 class SelectedRunLicenseTests(unittest.TestCase):
+    def test_checker_licence_gaps_cannot_reuse_previous_private_bindings(self):
+        _, _, _, inv, source, run, binding = self.fixture()
+        key = 'checker-tool:trivy:' + 'a' * 64
+        context = self.live(inv, source, run, binding,
+                            checker_tool_conditions={key: {'kind': 'checker-tool'}})
+        context.state['license_checker_tools'] = {'stale': 'old proof'}
+        output = {'status': 'fail', 'gaps': [{'code': 'go-native-unresolved'}], 'details': []}
+        with mock.patch('getzilla.security_go_tool_inputs.checker_inventory', return_value={}) as inventory_of, \
+                mock.patch.object(licenses, 'evaluate_artifacts', return_value=output) as evaluate, \
+                mock.patch('getzilla.security_go_tool_inputs.qualified_tool_bindings') as qualify:
+            result = context.checker_inputs(self.root, POLICY, now=NOW)
+        self.assertEqual(result, output)
+        self.assertNotIn('license_checker_tools', context.state)
+        self.assertNotIn(key, context.passed)
+        self.assertIn(output['gaps'][0], context.gaps)
+        inventory_of.assert_called_once()
+        evaluate.assert_called_once_with({}, self.root / 'checker-tools', POLICY, now=NOW)
+        qualify.assert_not_called()
+
+    def test_checker_licence_credit_needs_exact_independent_pair_binding(self):
+        _, _, _, inv, source, run, binding = self.fixture()
+        conditions = {'checker-tool:' + role + ':' + str(i) * 64: {'kind': 'checker-tool', 'role': role}
+                      for i, role in enumerate(('trivy', 'buildkit'), 1)}
+        context = self.live(inv, source, run, binding, checker_tool_conditions=conditions)
+        output = {'status': 'pass', 'gaps': [], 'details': [
+            {'kind': 'tool', 'family_record': {'owned_id': str(i) * 64}} for i in (1, 2)]}
+        exact = {key: {'source_pins': value, 'family_artifact_id': str(i) * 64}
+                 for i, (key, value) in enumerate(conditions.items(), 1)}
+        with mock.patch('getzilla.security_go_tool_inputs.checker_inventory', return_value={}), \
+                mock.patch.object(licenses, 'evaluate_artifacts', return_value=output), \
+                mock.patch('getzilla.security_go_tool_inputs.qualified_tool_bindings', return_value=exact) as qualify, \
+                mock.patch('getzilla.security_artifacts.artifact_identity', side_effect=lambda record: record['owned_id']):
+            self.assertEqual(context.checker_inputs(self.root, POLICY, now=NOW), output)
+            self.assertEqual(set(context.passed), set(conditions))
+            qualify.assert_called_once()
+            context.begin()
+            qualify.return_value = {next(iter(exact)): exact[next(iter(exact))]}
+            with self.assertRaises(licenses.ArtifactError):
+                context.checker_inputs(self.root, POLICY, now=NOW)
+        self.assertNotIn('license_checker_tools', context.state)
+        self.assertFalse(context.passed)
+
     def test_selected_checker_source_preparation_retains_gaps_outside_raw_inventory(self):
         _, _, _, inv, source, run, binding = self.fixture()
         required = {'checker-tool:trivy:' + 'a' * 64: {'kind': 'checker-tool'}}
