@@ -1014,7 +1014,7 @@ def _extension_context(root: Path) -> tuple[dict, dict]:
                 or scope_gaps(root, route)):
             raise ValueError('unqualified context')
         return route, {
-            'repository': _repository_identity(root), 'route_id': route['route_id'],
+            'repository': _grant_repository_identity(root, 'protected-path'), 'route_id': route['route_id'],
             'logical_task_id': task_identity(route), 'authority_epoch': route['authority_epoch'],
             'owner_session_id': route['session_id'], 'session_id': current_session(),
             'change_id': _active_change_id(root), 'git_head': head, 'git_branch': branch,

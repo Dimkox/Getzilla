@@ -799,4 +799,3 @@ def synchronize_review_accounting(root: Path, route: dict[str, Any], required: l
         if get_active_change(root) != active or (active and _route_document(root, root / active['path'] / 'state.json') != expected):
             raise ValueError('selected package changed during reconciliation')
     return assert_current
-

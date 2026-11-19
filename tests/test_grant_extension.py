@@ -59,6 +59,18 @@ class GrantExtensionTests(unittest.TestCase):
             self.assertTrue(self.valid(root, B))
             self.assertFalse(self.valid(root, C))
 
+    def test_local_repository_extension_keeps_current_local_grant_identity(self):
+        with github_project() as root:
+            subprocess.run(['git', 'remote', 'remove', 'origin'], cwd=root, check=True)
+            parent = self.parent(root)
+            self.assertTrue(parent['repository'].startswith('local-git-v1:'))
+            child = self.extend(root, parent)['grant']
+            self.assertEqual(child['repository'], parent['repository'])
+            self.assertEqual(child['session_id'], parent['session_id'])
+            self.assertTrue(self.valid(root, A))
+            self.assertTrue(self.valid(root, B))
+            self.assertFalse(self.valid(root, C))
+
     def test_editing_new_path_before_extension_cannot_repair_parent(self):
         with github_project() as root:
             parent = self.parent(root)
