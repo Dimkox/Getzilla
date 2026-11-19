@@ -183,7 +183,7 @@ class CIInstallRecipeTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py',
+            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py', 'lock_profile_validation.py',
                          'lock-profiles.json', 'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt'):
                 path = root / 'trust-ci' / name
                 path.parent.mkdir(exist_ok=True)
@@ -591,7 +591,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
             requirements = "trust-ci/requirements-runtime.txt"
             (root / "trust-ci").mkdir()
             source = Path(__file__).resolve().parents[1]
-            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py',
+            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py', 'lock_profile_validation.py',
                          'lock-profiles.json', 'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt'):
                 shutil.copyfile(source / 'trust-ci' / name, root / 'trust-ci' / name)
             inventory = collect_inventory(root)
