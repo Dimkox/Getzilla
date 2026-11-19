@@ -96,6 +96,11 @@ RECORD_V2_SCHEMA = _object({
         'handle_kind': {'enum': ['linux-pidfd-unreaped-group', None]},
     }), 'type': ['object', 'null']},
 })
+RECORD_V2_SCHEMA['properties']['supervisor'] = _object({
+    'profile': {'const': 'linux-pinned-local-v1'},
+    'host_pid': {'type': 'integer', 'minimum': 1},
+    'start_ticks': _string(32, pattern=r'^[0-9]+$'),
+})
 REGISTRY_SCHEMA = _object({'schema_version': {'type': 'integer', 'const': 1},
                            'revision': {'type': 'integer', 'minimum': 0},
                            'records': {'type': 'object', 'maxProperties': MAX_RECORDS},
@@ -193,7 +198,15 @@ def _prepare(root: Path) -> None:
 def load_registry(root: Path) -> dict:
     """Read-only; missing state never creates a runtime, lock, or record."""
     try:
-        raw = read_package_file(root, REGISTRY_PATH, limit=MAX_REGISTRY_BYTES, single_link=True)
+        # A concurrent committed COW rename can invalidate a safe read. Retry
+        # only that observation, finitely; every attempt keeps full custody.
+        for attempt in range(3):
+            try:
+                raw = read_package_file(root, REGISTRY_PATH, limit=MAX_REGISTRY_BYTES, single_link=True)
+                break
+            except InspectionError as changed:
+                if changed.code != 'file_changed' or attempt == 2:
+                    raise
         # The stable reader brackets inode identity. A multiply linked ledger is not authority.
         if (root / REGISTRY_PATH).lstat().st_nlink != 1:
             raise RegistryError('registry_unavailable')

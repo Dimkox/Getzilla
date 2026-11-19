@@ -73,6 +73,24 @@ class ExecutionStoreTests(unittest.TestCase):
             store.commit_registry(self.root, 1, first)
         self.assertEqual(caught.exception.code, 'registry_conflict')
 
+    def test_changed_read_retries_finitely_without_bypassing_custody(self):
+        from getzilla.package_status import InspectionError
+        original = store.read_package_file
+        self.initial()
+        with patch.object(store, 'read_package_file', side_effect=[
+                InspectionError('file_changed', 'synthetic sibling rename'),
+                original(self.root, store.REGISTRY_PATH, limit=store.MAX_REGISTRY_BYTES, single_link=True)]) as reader:
+            self.assertEqual(store.load_registry(self.root)['revision'], 1)
+            self.assertEqual(reader.call_count, 2)
+        with patch.object(store, 'read_package_file', side_effect=InspectionError('file_changed', 'changed')) as reader:
+            with self.assertRaises(store.RegistryError):
+                store.load_registry(self.root)
+            self.assertEqual(reader.call_count, 3)
+        with patch.object(store, 'read_package_file', side_effect=InspectionError('file_unsafe', 'unsafe')) as reader:
+            with self.assertRaises(store.RegistryError):
+                store.load_registry(self.root)
+            self.assertEqual(reader.call_count, 1)
+
     def test_concurrent_processes_have_one_cas_winner(self):
         self.initial()
         context = multiprocessing.get_context('spawn')
