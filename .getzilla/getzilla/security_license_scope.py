@@ -139,7 +139,7 @@ def requirements(inventory,binding,*,checker_tool_conditions=None):
         required['factory-output']={'kind':'output'}
     for build in inventory.get('builds',[]):
         required['ci-install:'+build['build_sha256']]={'kind':'consumer','recipe':build['dockerfile']}
-        if build['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test'}:
+        if build['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test','trust-ci/runner.Dockerfile'}:
             for dep in inventory['dependencies']:
                 if dep.get('manifest')=='trust-ci/pyproject.toml' and dep.get('usage')=='build':
                     required['build-input:'+build['build_sha256']+':'+digest(_subject(dep))]={'kind':'build-input','subject':dep}
@@ -209,6 +209,52 @@ class Scope:
                 self._checker_output(output)
             self.passed[key]=digest(output)
             self.details.extend(row for row in output.get('details',[]) if row not in self.details)
+
+    def build_inputs(self,binding,output):
+        """Credit only each exact backend in its sealed actual CI installation."""
+        self.validate(self.inventory,self.binding)
+        from .security_ci_inputs import scope, validated_evaluation
+        consumer=validated_evaluation(binding,output)
+        if binding['source']!=self.binding['source'] or binding['run']!=self.binding['run']:
+            _refuse()
+        inventory,_=scope(binding,binding['ci_consumer'])
+        installed=consumer['install_requirements']
+        backend='trust-ci/requirements-build.txt'
+        if backend not in installed:
+            _refuse()
+        prefix='build-input:'+consumer['build_sha256']+':'
+        for key,condition in self.required.items():
+            if not key.startswith(prefix):
+                continue
+            subject=condition['subject']
+            matches=[dep for dep in inventory['dependencies'] if _subject(dep)==_subject(subject)]
+            if len(matches)!=1:
+                _refuse()
+            dep=matches[0]
+            pin=binding['source_pins'][digest(_subject(subject))]
+            required=[item for item in inventory['dependencies'] if item['manifest']==backend
+                and item['name']==dep['name'] and item['version']==dep['version']]
+            if len(required)!=1:
+                _refuse()
+            required_pin=binding['source_pins'][digest(_subject(required[0]))]
+            if required_pin['manifest_sha256']!=installed[backend] or not set(pin['hashes']) & set(required_pin['hashes']):
+                _refuse()
+            details=[row for row in output['details'] if row.get('ecosystem')==dep['ecosystem']
+                and row.get('package')==dep['name'] and row.get('version')==dep['version']
+                and row.get('manifest')==dep['manifest'] and row.get('context',{}).get('usage')==dep['usage']]
+            if len(details)!=1:
+                _refuse()
+            detail=details[0]
+            delivery=detail.get('delivery',{})
+            members=delivery.get('members',{})
+            if (detail.get('status')!='pass' or detail.get('distribution')!='internal'
+                    or detail.get('artifact_sha256') not in set(pin['hashes']) & set(required_pin['hashes'])
+                    or delivery.get('image')!=consumer['image'] or not members or not detail.get('license_files')
+                    or not any(path.endswith('.dist-info/WHEEL') for path in members)
+                    or any(not any(path.endswith('/'+term['path']) for path in members)
+                           for term in detail.get('license_files',[])+detail.get('notice_files',[]))):
+                _refuse()
+            self.passed_condition(key,detail)
 
     def _checker_output(self,output):
         self.validate(self.inventory,self.binding)
@@ -313,8 +359,8 @@ def declaration_expectation(root,checker,inputs,source,run,*,now,scratch,checker
         if (type(uses) is not dict or uses.get('source')!=source or uses.get('run')!=run
                 or uses.get('inventory_sha256')!=inventory['digest'] or uses.get('closure_graphs_sha256')!=digest(graphs)):
             _refuse()
-        mapping={'trust-ci/Dockerfile.api':'trust-ci/requirements.txt','trust-ci/Dockerfile.worker':'trust-ci/requirements.txt',
-            'trust-ci/Dockerfile.test':'trust-ci/requirements-test.txt'}
+        from .security_python_target import CI_INSTALL_RECIPES, ci_install_context
+        mapping={recipe:value[0] for recipe,value in CI_INSTALL_RECIPES.items()}
         expected={row['build_sha256']:row for row in inventory['builds'] if row['dockerfile'] in mapping}
         consumers=uses.get('consumers')
         if (type(consumers) is not list or len(consumers)!=len(expected)
@@ -323,10 +369,15 @@ def declaration_expectation(root,checker,inputs,source,run,*,now,scratch,checker
         for consumer in consumers:
             build=expected[consumer['build_sha256']]
             requirements_path=mapping[build['dockerfile']]
+            context=ci_install_context(root,build['dockerfile'])
+            if context is None:
+                _refuse()
             images=[row for row in inventory['images'] if row['manifest']==build['manifest'] and row['line']==build['line']]
             if (consumer.get('recipe')!=build['dockerfile'] or consumer.get('recipe_sha256')!=build['recipe_sha256']
                     or consumer.get('requirements')!=requirements_path
                     or consumer.get('requirements_sha256')!=graphs['evidence'].get(requirements_path)
+                    or consumer.get('install_requirements')!=context['install_requirements']
+                    or any(graphs['evidence'].get(path)!=sha for path,sha in context['install_requirements'].items())
                     or len(images)!=1 or consumer.get('image')!=images[0]['reference']
                     or consumer.get('distribution')!='internal' or consumer.get('purpose')!='isolated-public-ci'):
                 _refuse()

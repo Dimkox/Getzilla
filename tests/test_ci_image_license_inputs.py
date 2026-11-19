@@ -121,6 +121,72 @@ class RequestedImageMembersTests(unittest.TestCase):
             read(dict(reference="claim"), ["site/LICENSE"])
 
 
+class CIInstallRecipeTests(unittest.TestCase):
+    def setUp(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
+
+    def test_four_real_recipes_expose_exact_complete_install_file_hashes(self):
+        from pathlib import Path
+        from getzilla import security_python_target as target
+        root = Path(__file__).resolve().parents[1]
+        operation = getattr(target, 'ci_install_context', None)
+        self.assertTrue(callable(operation), 'missing closed actual install-context adapter')
+        for recipe in ('trust-ci/Dockerfile.api', 'trust-ci/Dockerfile.worker',
+                       'trust-ci/Dockerfile.test', 'trust-ci/runner.Dockerfile'):
+            actual = operation(root, recipe)
+            self.assertIsNotNone(actual, recipe)
+            self.assertIn('trust-ci/requirements-build.txt', actual['install_requirements'])
+            self.assertEqual('trust-ci/requirements-test.txt' if 'test' in recipe or 'runner' in recipe
+                             else 'trust-ci/requirements.txt', actual['requirements'])
+            for path, digest in actual['install_requirements'].items():
+                self.assertEqual(hashlib.sha256((root / path).read_bytes()).hexdigest(), digest)
+            self.assertEqual('runner' in recipe, 'trust-ci/requirements-runner.txt' in actual['install_requirements'])
+        self.assertIsNone(operation(root, 'arbitrary/Dockerfile'))
+
+
+    def test_raw_inventory_declares_runner_versions_and_hash_locked_backend(self):
+        from pathlib import Path
+        from getzilla.security_inventory import collect_inventory, _logical_requirements
+        from getzilla import security_python_target as target
+        root = Path(__file__).resolve().parents[1]
+        inventory = collect_inventory(root)
+        runner = {row['name']: row['version'] for row in inventory['dependencies']
+                  if row['manifest'] == 'trust-ci/requirements-runner.txt'}
+        self.assertEqual(len(runner), 17)
+        for name, version in {'coverage':'7.15.4', 'pytest':'9.1.1', 'pytest-xdist':'3.8.0',
+                              'pytest-cov':'7.1.0', 'ruff':'0.16.2', 'bandit':'1.9.4', 'tomli':'2.4.1'}.items():
+            self.assertEqual(version, runner[name])
+        backend = [row for row in inventory['dependencies'] if row['manifest'] == 'trust-ci/requirements-build.txt']
+        self.assertEqual([(row['name'], row['version']) for row in backend], [('setuptools', '84.1.0')])
+        for path in ('trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt'):
+            for line in _logical_requirements((root / path).read_text()):
+                self.assertRegex(line, r'^[A-Za-z0-9_.-]+(?:\[toml\])?==[^ ]+ --hash=sha256:[a-f0-9]{64}')
+        graphs = target.closure_graphs(root, inventory)
+        self.assertEqual([['trust-ci/requirements-build.txt']], graphs['graphs']['trust-ci/pyproject.toml#build'])
+        runner_graph = ['trust-ci/requirements-test.txt', 'trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt']
+        self.assertIn(runner_graph, graphs['graphs']['trust-ci/pyproject.toml#runtime'])
+        self.assertIn(runner_graph, graphs['graphs']['trust-ci/pyproject.toml#optional'])
+
+    def test_changed_recipe_cannot_claim_trusted_install_join(self):
+        from pathlib import Path
+        import tempfile
+        from getzilla import security_python_target as target
+        source = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('Dockerfile.api', 'requirements.txt', 'requirements-build.txt'):
+                path = root / 'trust-ci' / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes((source / 'trust-ci' / name).read_bytes())
+            recipe = 'trust-ci/Dockerfile.api'
+            self.assertIsNotNone(target.ci_install_context(root, recipe))
+            path = root / recipe
+            path.write_text(path.read_text().replace('--no-build-isolation', '--build-isolation'))
+            self.assertIsNone(target.ci_install_context(root, recipe))
+
+
 class CIImageTargetBindingTests(unittest.TestCase):
     def setUp(self):
         import sys
@@ -168,6 +234,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
             image="getzilla.local/build@sha256:" + "1" * 64,
             requirements="trust-ci/requirements.txt",
             requirements_sha256="2" * 64,
+            install_requirements={"trust-ci/requirements.txt": "2" * 64},
             distribution="internal",
             purpose="isolated-public-ci",
             image_target_observed=True,
@@ -221,6 +288,56 @@ class CIImageTargetBindingTests(unittest.TestCase):
         from getzilla import security_ci_inputs
 
         return security_ci_inputs
+
+    def backend_context(self):
+        consumer = self.uses['consumers'][0]
+        backend = dict(self.dep, name='setuptools', version='84.1.0',
+                       manifest='trust-ci/requirements-build.txt')
+        project = dict(backend, manifest='trust-ci/pyproject.toml', usage='build')
+        consumer['dependencies'].extend([backend, project])
+        consumer['install_requirements']['trust-ci/requirements-build.txt'] = '8' * 64
+        for dep, manifest_hash, hashes in ((backend, '8' * 64, ['9' * 64]), (project, 'a' * 64, [])):
+            consumer['source_pins'][self.target.digest(self.target._subject(dep))] = dict(
+                context_sha256=self.target._context_key(dep), manifest_sha256=manifest_hash,
+                hashes=hashes, files=[], marker_active=True)
+        return project, self.inputs().scope(self.parent, 0)
+
+    def test_backend_project_use_requires_exact_actual_hashed_install_file(self):
+        import copy
+        project, (inventory, binding) = self.backend_context()
+        self.assertEqual(len(inventory['dependencies']), 3)
+        selected = binding['source_pins'][self.target.digest(self.target._subject(project))]
+        self.assertEqual(['9' * 64], selected['hashes'])
+        self.assertIn('trust-ci/requirements-build.txt', binding['ci_uses']['consumers'][0]['install_requirements'])
+        consumer = self.uses['consumers'][0]
+        original = copy.deepcopy(consumer)
+        for failure in ('missing-backend-lock', 'hash-mismatch', 'wrong-version'):
+            consumer.clear()
+            consumer.update(copy.deepcopy(original))
+            if failure == 'missing-backend-lock':
+                consumer['install_requirements'].pop('trust-ci/requirements-build.txt')
+            elif failure == 'hash-mismatch':
+                consumer['install_requirements']['trust-ci/requirements-build.txt'] = 'f' * 64
+            else:
+                consumer['dependencies'][1]['version'] = '84.1.1'
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                self.inputs().scope(self.parent, 0)
+
+    def test_ci_evaluation_seal_rejects_json_copy_changes_and_wrong_entry(self):
+        import copy
+        api = self.inputs()
+        _project, (inventory, binding) = self.backend_context()
+        output = dict(status='pass', gaps=[], inventory_digest=inventory['digest'],
+                      policy_digest='b' * 64, details=[])
+        with self.assertRaises(ValueError):
+            api.seal_evaluation(binding, output)
+        api.seal_evaluation(binding, output, _entry=api._EVALUATION_ENTRY)
+        self.assertEqual(api.validated_evaluation(binding, output), self.uses['consumers'][0])
+        with self.assertRaises(ValueError):
+            api.validated_evaluation(binding, copy.deepcopy(output))
+        output['details'].append({'changed': True})
+        with self.assertRaises(ValueError):
+            api.validated_evaluation(binding, output)
 
     def test_image_scope_selects_its_actual_cp312_wheel_without_host_substitution(self):
         api = self.inputs()
@@ -466,9 +583,12 @@ class CIImageTargetBindingTests(unittest.TestCase):
             recipe = "trust-ci/Dockerfile.api"
             requirements = "trust-ci/requirements.txt"
             (root / "trust-ci").mkdir()
-            (root / recipe).write_bytes(b"owned exact recipe\n")
+            (root / recipe).write_bytes((Path(__file__).resolve().parents[1] / recipe).read_bytes())
             (root / requirements).write_text("owned==1.0 --hash=sha256:" + "4" * 64 + "\n")
-            hashes = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in (recipe, requirements)}
+            backend = 'trust-ci/requirements-build.txt'
+            (root / backend).write_text('setuptools==84.1.0 --hash=sha256:' + '8' * 64 + '\n')
+            backend_dep = dict(self.dep, name='setuptools', version='84.1.0', manifest=backend)
+            hashes = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in (recipe, requirements, backend)}
             row = dict(
                 dockerfile=recipe,
                 recipe_sha256=consumer["recipe_sha256"],
@@ -480,13 +600,13 @@ class CIImageTargetBindingTests(unittest.TestCase):
             inventory = dict(
                 digest="5" * 64,
                 builds=[row],
-                dependencies=[self.dep],
-                manifests=[dict(path=requirements, sha256=hashes[requirements])],
+                dependencies=[self.dep, backend_dep],
+                manifests=[dict(path=path, sha256=hashes[path]) for path in (requirements, backend)],
                 images=[
                     dict(manifest=row["manifest"], line=1, source_reference="${IMAGE}", reference=consumer["image"])
                 ],
             )
-            graphs = dict(graphs={"trust-ci/pyproject.toml#runtime": [[requirements]]}, evidence=hashes)
+            graphs = dict(graphs={"trust-ci/pyproject.toml#runtime": [[requirements, backend]]}, evidence=hashes)
             self.live.update(
                 build_inputs=[row],
                 builds={row["build_sha256"]: consumer["image"]},
@@ -502,7 +622,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
             with patch("getzilla.security_cli.validate_selection_authority"):
                 observed = producer.ci_use_observations(root, inventory, self.source, self.run, graphs)
             self.assertTrue(observed["consumers"][0]["image_target_observed"])
-            self.assertEqual(observed["consumers"][0]["dependencies"], [self.dep])
+            self.assertEqual(observed["consumers"][0]["dependencies"], [self.dep, backend_dep])
             parent = dict(self.parent, ci_uses=observed)
             derived, binding = self.inputs().scope(parent, 0)
             self.assertEqual(derived["dependencies"][0]["name"], "owned")

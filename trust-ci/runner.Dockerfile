@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/ci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md requirements-test.txt ./
+COPY pyproject.toml README.md requirements-test.txt requirements-build.txt requirements-runner.txt ./
 COPY src ./src
 
 ARG OPENGREP_VERSION=1.30.1
@@ -18,16 +18,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 ci \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/ci ci \
-    && python -m pip install --no-cache-dir --require-hashes -r requirements-test.txt \
-    && python -m pip install --no-cache-dir --no-deps ".[test]" \
-    && python -m pip install --no-cache-dir \
-        coverage==7.15.4 \
-        pytest==9.1.1 \
-        pytest-xdist==3.8.0 \
-        pytest-cov==7.1.0 \
-        ruff==0.16.2 \
-        bandit==1.9.4 \
-        tomli==2.4.1 \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements-test.txt -r requirements-build.txt -r requirements-runner.txt \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation ".[test]" \
     && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/opengrep')" \
         "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86" \
     && echo "${OPENGREP_SHA256}  /usr/local/bin/opengrep" | sha256sum -c - \

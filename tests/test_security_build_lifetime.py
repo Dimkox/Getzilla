@@ -233,17 +233,36 @@ class BuildLifetimeControls(unittest.TestCase):
             self.assertEqual((contexts[0].parent / 'export.tar').read_bytes(), b'owned model export')
             builder.prune.assert_called_once_with()
 
+    def test_all_four_recipes_pin_wheel_backend_before_local_project_build(self):
+        recipes = ('Dockerfile.api', 'Dockerfile.worker', 'Dockerfile.test', 'runner.Dockerfile')
+        for recipe in recipes:
+            with self.subTest(recipe=recipe):
+                text = (ROOT / 'trust-ci' / recipe).read_text()
+                self.assertIn('--only-binary=:all: --require-hashes', text)
+                self.assertIn('-r requirements-build.txt', text)
+                self.assertIn('--no-deps --no-build-isolation', text)
+                self.assertNotIn('coverage==7.15.4', text)
+                self.assertLess(text.index('--require-hashes'), text.index('--no-build-isolation'))
+        build = ROOT / 'trust-ci/requirements-build.txt'
+        runner = ROOT / 'trust-ci/requirements-runner.txt'
+        self.assertTrue(build.is_file(), 'missing exact wheel backend lock')
+        self.assertTrue(runner.is_file(), 'missing exact runner tool closure')
+        self.assertIn('setuptools==84.1.0', build.read_text())
+        for pin in ('coverage[toml]==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
+                    'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
+            self.assertIn(pin, runner.read_text())
+
     def test_runner_installs_after_exact_inputs_and_preserves_final_runtime(self):
         statements = [value for _, value in _instructions((ROOT / "trust-ci/runner.Dockerfile").read_text())]
         copy = [value for value in statements if value.startswith("COPY ")]
-        self.assertEqual(copy, ["COPY pyproject.toml README.md requirements-test.txt ./", "COPY src ./src"])
+        self.assertEqual(copy, ["COPY pyproject.toml README.md requirements-test.txt requirements-build.txt requirements-runner.txt ./", "COPY src ./src"])
         run = [value for value in statements if value.startswith("RUN ")]
         self.assertEqual(len(run), 1, "avoid native full-rootfs copies between heavy install steps")
         self.assertLess(statements.index(copy[1]), statements.index(run[0]))
         self.assertLess(statements.index("WORKDIR /opt/adaptive-trust-ci"), statements.index(copy[0]))
-        self.assertLess(run[0].index("apt-get update"), run[0].index("pip install --no-cache-dir --require-hashes"))
+        self.assertLess(run[0].index("apt-get update"), run[0].index("pip install --no-cache-dir --only-binary=:all: --require-hashes"))
         self.assertLess(
-            run[0].index("pip install --no-cache-dir --require-hashes"), run[0].index("urllib.request.urlretrieve")
+            run[0].index("pip install --no-cache-dir --only-binary=:all: --require-hashes"), run[0].index("urllib.request.urlretrieve")
         )
         self.assertIn("sha256sum -c -", run[0])
         self.assertIn("opengrep --version", run[0])
