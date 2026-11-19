@@ -27,8 +27,15 @@ def _load(path: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="getzilla-factory")
     parser.add_argument("--socket", default="/run/getzilla-factory/control.sock")
-    parser.add_argument("--token-file", required=True)
+    parser.add_argument("--token-file")
     sub = parser.add_subparsers(dest="command", required=True)
+    local = sub.add_parser('run-local', help='run one explicit local TaskPacket in a separate worktree')
+    local.add_argument('--packet', required=True)
+    local.add_argument('--prompt-file', required=True)
+    local.add_argument('--repository', required=True, type=Path)
+    local.add_argument('--runtime', required=True, type=Path)
+    local.add_argument('--writer-command', required=True, help='JSON argv array for the explicitly selected client')
+    local.add_argument('--check-command', action='append', required=True, help='JSON argv array; repeat for each check')
     sub.add_parser("health")
     intake = sub.add_parser("intake")
     intake.add_argument("file")
@@ -83,6 +90,28 @@ def main(argv: list[str] | None = None) -> int:
     reconcile = sub.add_parser("reconcile")
     reconcile.add_argument("--limit", type=int, default=100)
     args = parser.parse_args(argv)
+    if args.command == 'run-local':
+        if sys.platform != 'linux':
+            parser.error('run-local currently supports Linux')
+        from .execution_contracts import TaskPacketV1
+        from .local_writer import LocalWriter
+        def command(value):
+            parsed = json.loads(value)
+            if not isinstance(parsed, list) or not parsed or any(not isinstance(item, str) or not item for item in parsed):
+                parser.error('commands must be nonempty JSON arrays of strings')
+            return tuple(parsed)
+        packet = TaskPacketV1.from_dict(_load(args.packet))
+        prompt = Path(args.prompt_file).read_text(encoding='utf-8')
+        runner = LocalWriter(args.repository, args.runtime, command(args.writer_command),
+                             tuple(command(value) for value in args.check_command))
+        result = runner.run(packet, prompt)
+        print(json.dumps({'status': result.status, 'qualification': 'review_required',
+                          'packet_digest': result.packet_digest, 'input_head_sha': result.input_head_sha,
+                          'result_head_sha': result.result_head_sha, 'patch': str(result.patch),
+                          'report': str(result.report), 'workspace': str(result.workspace)}, sort_keys=True))
+        return 0 if result.status == 'checks_passed' else 1
+    if args.token_file is None:
+        parser.error('--token-file is required for Factory service commands')
     token = read_token_file(Path(args.token_file))
     correlation = str(uuid.uuid4())
     key = str(uuid.uuid4())
