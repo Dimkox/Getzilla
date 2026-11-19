@@ -180,3 +180,92 @@ Missing, invalid, unsupported or regressed evidence fails that check. At most 16
 suites may be configured. Without this file, the verifier performs no agent eval
 work. Its other checks, review rules and exact-head external checks still apply.
 Standalone `evals run` supplies evidence only; it is not a second verifier.
+
+## Incident critic observations (#154)
+
+The same evaluator can project paired critic observations. It does not call a
+model, execute an oracle, start another reviewer, write telemetry, or accept a
+human decision. Keep the source-selected `review_plan` and its ordinary code
+reviewer. A trivial change does not acquire an extra critic/model call. Risk
+rules still select security, data and release reviewers where required.
+
+Run the public, handwritten algorithm control:
+
+```bash
+python scripts/getzilla_evals.py quality \
+  --manifest tests/fixtures/agent-evals/incidents-v1/manifest.json \
+  --outputs tests/fixtures/agent-evals/incidents-v1/outputs-control.json \
+  --study tests/fixtures/agent-evals/incidents-v1/study.json --json
+```
+
+This cohort has ten cases: five faulty/clean pairs from **three incident
+narratives**. Three faults share the queued #305 baseline-boundary incident:
+ancestor custody, numeric bounds and complete export bounds. Two further
+narratives record invented SHA expansion and shell-interpreted PR body text.
+Each study row names the exact narrative commit/path/SHA256 and the objective
+test. These are incident-derived algorithm fixtures, not five independent
+production detections. Unknown historical PR associations stay unknown. The
+source #305 dependency was extracted from unaccepted Core A
+`cceaa451951f018d107a3c9a72965f5fe375e4b8`; that extraction does not accept Core A.
+
+`study.json` schema1 is closed and bounded by the same evaluator input limits.
+It contains the manifest SHA256, exact case IDs, incident family/pair/variant,
+incident identities, oracle test references, judgments and measurements. Every
+pair must have one faulty and one clean case and matching incident/oracle
+identity. Judgments bind both the case SHA256 and the exact recording SHA256.
+They carry `synthetic`, `confirmed`, `disputed` or `pending` status, an oracle
+status and an evidence SHA256. Even a caller's `confirmed` label is a recorded
+declaration; it cannot authenticate independent adjudication. Freeze labels and
+oracles before collecting a real critic's output, and adjudicate the finding
+independently afterward. A critic cannot establish correctness with its own
+confidence or prose. A narrative alone is not a behavioral oracle.
+
+The quality output keeps planned faulty/clean cases, pairs and incident-family
+counts. It reports TP/FN/FP/TN once per case, pooled rates, family counts,
+resolved coverage and unresolved IDs/reasons. Faulty `detected` is TP; faulty
+`clear` is FN; clean `detected` is FP; clean `clear` is TN. Missing or malformed
+findings, disputed/pending judgments, nonpassing or unexecuted oracles, stale
+case/recording bindings and unresolved replay results are not negatives. They
+remain in the original planned denominator. Empty rate denominators yield null.
+Assertions within one case do not create extra independent detections. Report
+small dependent incident samples as regression evidence, without statistical
+generalization or a claim about unseen incidents.
+
+`quality_digest` binds the quality projection; the original `result_digest`
+continues to bind the replay's canonical result. Neither hash authenticates a
+human or model. Successful CLI exit means the declared algorithm projection is
+complete; it does not qualify a model, independence, a release or the whole
+issue. Every output retains `algorithm-only-recorded-judgments`, null
+`runtime_detection_quality`, `release_authority: false`, and human acceptance
+`not_observed`. Do not install this handwritten recording as universal quality
+qualification or silently treat absent suite configuration as #154 completion.
+
+To inspect existing native workflow evidence, supply all four optional arguments:
+`--reviewer-id`, `--reviewer-generation`, `--report` and `--reviewed-context`.
+The evaluator reads bounded native lifecycle metadata, requires the selected
+reviewer instance in the current route/task/workspace/epoch, and uses canonical
+`review_source` admission for the exact source/tree/context/report. It rechecks
+the lifecycle bytes after binding. Report publication by a coordinator is not
+critic authorship. Known writer overlap remains visible. Native history can be
+truncated and does not prove all source/cohort/recording authors, model-family
+diversity or label blinding. Thus independence stays unknown even for distinct
+observed workflow instances. No CLI string grants #150 authority or OS isolation.
+
+Measurements separate critic, oracle, adjudication and case-production seconds.
+An operation ID is counted once; conflicting repeated facts are invalid.
+Observed amounts retain their currency and source reference. Reservations and
+missing amounts/currency remain unknown spend. No observations means null total
+cost, not zero. Mixed currencies do not become USD. These are recorded
+declarations, not billing attestations. The existing #152 operation/run/attempt
+correlation, #153 budget admission, #159 continuity/censoring and #200 accounting
+producers remain the owners of actual native observations. Their coordinated
+integration remains pending; no new journal or ambient-current-task reassignment
+is introduced here. #162 owns retrieval benchmarks and labels.
+
+The full #154 scope still requires actual independent critic execution, confirmed
+objective case evidence, measured detection/false-positive quality, observed time
+and spend, exact-head external CI and genuine human final acceptance of the exact
+source/cohort/report and residual risks. Current human-gate design/production
+flags and local baseline `accept` are not that acceptance. Do not forge a human
+receipt or introduce a new blocking approval policy. Acceptable misses, false
+positives, cost and shared-model risk remain real decisions for the owner.

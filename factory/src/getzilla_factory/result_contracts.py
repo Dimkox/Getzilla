@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
-import re
 from typing import Any, Mapping
 import unicodedata
 from uuid import UUID
 
+from . import _payload_engine as _engine
 from .brokers import BrokerError, _redact
 from .contracts import ContractError, canonical_digest
 from .v15_contracts import FrozenWire, closed, digest, identity, integer, safe_text, version
@@ -42,15 +42,9 @@ RESULT_CHANNELS = frozenset(
     }
 )
 
-_SENSITIVE_KEY = re.compile(
-    r"(?i)(?:^|[_-])(?:authorization|api[_-]?key|access[_-]?token|"
-    r"session[_-]?token|client[_-]?secret|refresh[_-]?token|password|"
-    r"credentials?|secret[_-]?key|private[_-]?key|token|secret)(?:$|[_-])"
-)
-
-
 def sensitive_key(value: str) -> bool:
-    return bool(_SENSITIVE_KEY.search(value))
+    return _engine.sensitive_key(value)
+
 
 def _metadata_text(value: Any, name: str) -> str:
     try:
@@ -60,15 +54,10 @@ def _metadata_text(value: Any, name: str) -> str:
 
 
 def strict_json(value: str) -> Any:
-    def pairs(items):
-        result = {}
-        for key, child in items:
-            if key in result:
-                raise ContractError("duplicate_json_key")
-            result[key] = child
-        return result
-
-    return json.loads(value, object_pairs_hook=pairs)
+    try:
+        return _engine.strict_json(value)
+    except _engine.PayloadError as exc:
+        raise ContractError(exc.code) from None
 
 
 def _structured_payload(value: str) -> None:

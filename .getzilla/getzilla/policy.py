@@ -40,6 +40,30 @@ def _readings_differ(command: str) -> bool:
     return fsx.WINDOWS and '\\' in command
 
 
+@_legacy._bounded_invocation('Read protection resource budget exhausted.')
+def read_protection_reason(
+    root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
+) -> str | None:
+    """A read obligation for this policy root, independent of operation/grant routing."""
+    tool = str(event.get('tool_name', ''))
+    if tool != 'Bash' and not _legacy.is_read_tool(tool):
+        return None
+    inputs = event.get('tool_input') or {}
+    config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
+    patterns = _legacy_configured_patterns(config if isinstance(config, dict) else {},
+                                           'secret_read_paths', _LEGACY_SECRET_READ)
+    directory = _execution_directory(root, execution_cwd)
+    if tool == 'Bash':
+        command = str(inputs.get('command', '')) if isinstance(inputs, dict) else str(inputs)
+        hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+        if hit is None and _readings_differ(command):
+            with _legacy.posix_reading():
+                hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+    else:
+        hit = _legacy.read_secret_reference(root, tool, inputs, patterns, execution_cwd=directory)
+    return 'Read refused by the session project secret policy or unresolved execution directory.' if hit is not None else None
+
+
 @_legacy._bounded_invocation('secret-read')
 def sensitive_action(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
@@ -88,7 +112,7 @@ def _bash_sensitive_action(root: Path, command: str, *, execution_cwd: Path | No
         'secret_read_paths',
         _LEGACY_SECRET_READ,
     )
-    if _legacy_shell_secret_reference(root, command, secret_read) is not None:
+    if _legacy_shell_secret_reference(root, command, secret_read, execution_cwd=execution_cwd) is not None:
         return 'secret-read'
     if execution_cwd is None:
         control_plane = _legacy_configured_patterns(
@@ -120,8 +144,7 @@ def _shell_mutation(
     return protected_targets, opaque
 
 
-@_legacy._bounded_invocation((False, f'Policy resource budget exhausted: {_legacy._BUDGET_MARKER}'))
-def evaluate_pre_tool(
+def _evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
     from .task_intent import mutation_block_reason
@@ -147,7 +170,7 @@ def evaluate_pre_tool(
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':
-        return _legacy_evaluate_pre_tool(root, event, execution_cwd=directory)
+        return _legacy_evaluate_pre_tool(root, event, execution_cwd=directory, _execution_cwd=directory)
 
     config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
     if not isinstance(config, dict):
@@ -194,15 +217,83 @@ def evaluate_pre_tool(
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.
     # The structured target parser above supersedes only its old substring-based shell guard.
-    verdict = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+    verdict = _legacy_evaluate_pre_tool(
+        root, event, _skip_substring_control_plane_guard=True,
+        _execution_cwd=_execution_directory(root, execution_cwd),
+    )
     if verdict[0] and _readings_differ(command):
         # Claude Code runs Git Bash on Windows, where `cat .e\nv` reads .env: the union of
         # both readings is enforced, never the more permissive one.
         with _legacy.posix_reading():
-            posix = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+            posix = _legacy_evaluate_pre_tool(
+                root, event, _skip_substring_control_plane_guard=True,
+                _execution_cwd=_execution_directory(root, execution_cwd),
+            )
         if not posix[0]:
             return posix
     return verdict
+
+
+def _intake_effect(root: Path, event: dict[str, Any], execution_cwd: object) -> bool:
+    """Classify effects using existing target/command readers; unknown execution needs intake."""
+    tool = str(event.get('tool_name',''))
+    inputs = event.get('tool_input') or {}
+    if tool in {'apply_patch','Edit','Write'} or any(word in tool.lower() for word in ('write_file','edit_file','delete_file')):
+        targets = _legacy._extract_paths(inputs)
+        if tool == 'apply_patch':
+            for key in ('patch','input','command'):
+                targets += _legacy._extract_patch_paths(str(inputs.get(key,'')))
+        normalized = [_legacy.safe_relative_path(root,path) for path in targets]
+        return not normalized or any(path is None or not _legacy.agent_scratch(root,path) for path in normalized)
+    if tool == 'Bash':
+        command = str(inputs.get('command',''))
+        targets,opaque = _shell_mutation(root,command,['*'],execution_cwd=_execution_directory(root,execution_cwd))
+        if targets or opaque:
+            return True
+        commands = _legacy._simple_commands(command)
+        if len(commands)==1 and commands[0]:
+            argv = commands[0]
+            # The closed native repair APIs recheck owner, epoch and expected cut themselves.
+            if (argv[:3] in (['python3','scripts/getzilla_artifacts.py','intake'],['python','scripts/getzilla_artifacts.py','intake']) and
+                    len(argv)>3 and argv[3] in {'inspect','assess','apply','recover'} and
+                    _execution_directory(root,execution_cwd) == root):
+                return False
+            if argv[0] in {'pwd','cat','head','tail','wc'}:
+                return False
+            if argv[0] == 'rg' and not any(arg=='--pre' or arg.startswith('--pre=') for arg in argv[1:]):
+                return False
+            if argv[:2] in (['git','status'],['git','rev-parse']) and not any(arg.startswith('--output') for arg in argv[2:]):
+                return False
+        return True
+    return _legacy_mcp_side_effect(tool,root)
+
+
+@_legacy._bounded_invocation((False, f'Policy resource budget exhausted: {_legacy._BUDGET_MARKER}'))
+def evaluate_pre_tool(root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD) -> tuple[bool,str|None]:
+    affected = True
+    try:
+        affected = _intake_effect(root,event,execution_cwd)
+        verdict = _evaluate_pre_tool(root,event,execution_cwd=execution_cwd)
+        if not verdict[0] or not affected:
+            return verdict
+        route = _legacy.get_active_route(root)
+        if route is None:
+            from .state import route_authority_present
+            if route_authority_present(root):
+                return False,'Semantic intake authority is unavailable for this mutation.'
+            return verdict
+        if (route.get('context') or {}).get('version') != 2:
+            return verdict
+        from .intake_publication import require_intake_ready
+        first = require_intake_ready(root,route)
+        second = require_intake_ready(root)
+        if first != second:
+            return False,'Semantic intake changed before managed dispatch.'
+        return verdict
+    except Exception:
+        if affected:
+            return False,'Semantic intake does not admit this mutation; inspect or recover its current native cut.'
+        raise
 
 
 def __getattr__(name: str) -> Any:

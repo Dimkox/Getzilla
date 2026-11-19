@@ -211,16 +211,24 @@ def _pid_lock(lock: Path, deadline: float, *, allow_immediate: bool) -> Iterator
             if not fsx.WINDOWS:
                 raise
             _wait_for_lock(lock, deadline)
+    owner_pid = os.getpid()
     try:
-        os.write(fd, f'{os.getpid()}\n'.encode())
-        yield
+        os.write(fd, f'{owner_pid}\n'.encode())
+        yield fd
     finally:
-        os.close(fd)
-        _release_lock_file(lock)
+        if os.getpid() == owner_pid:
+            os.close(fd)
+            _release_lock_file(lock)
 
 
 @contextmanager
-def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Iterator[None]:
+def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0, *, anchor=None) -> Iterator[None]:
+    if anchor is not None:
+        anchor.check_root(root)
+        from .trace_storage import native_lock
+        with native_lock(anchor, name, timeout):
+            yield
+        return
     deadline = time.monotonic() + timeout
     lock = runtime_dir(root) / f'.{name}.lock'
     # Never unlink this file: every opener must lock the same retained inode.
@@ -229,6 +237,7 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
     descriptor = _open_lock_guard(guard)
     locked = False
     contended = False
+    lease = None
     try:
         while True:
             if contended and time.monotonic() >= deadline:
@@ -245,16 +254,25 @@ def runtime_lock(root: Path, name: str = 'state', timeout: float = 5.0) -> Itera
                 _wait_for_lock(lock, deadline)
         # Only an uncontended acquisition gets the timeout=0 immediate attempt.
         # A retry must still have budget when it reaches the PID stage.
-        with _pid_lock(lock, deadline, allow_immediate=not contended):
-            yield
+        with _pid_lock(lock, deadline, allow_immediate=not contended) as marker:
+            from .trace_storage import retain_guard
+            lease = retain_guard(root, name, descriptor, marker)
+            try:
+                yield
+            finally:
+                if lease is not None and os.getpid() == lease.pid:
+                    lease.invalidate()
     finally:
         try:
-            if locked:
+            if lease is not None:
+                lease.close()
+            elif locked:
                 # Windows needs an explicit unlock before close. Do it on POSIX
                 # too, keeping the guard held through removal of the PID marker.
                 fsx.unlock_file(descriptor)
         finally:
-            os.close(descriptor)
+            if lease is None:
+                os.close(descriptor)
 
 
 def active_route_path(root: Path) -> Path:
@@ -307,18 +325,50 @@ def _safe_parents(root: Path, relative: Path) -> tuple[list[fsx.DirHandle], list
         raise
 
 
-def durable_json(root: Path, path: Path, value: Any) -> None:
+def durable_json(root: Path, path: Path, value: Any, *, anchor=None) -> None:
     """Publish through pinned no-follow directories, with file and directory durability."""
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf-8')
-    durable_bytes(root, path, raw)
+    durable_bytes(root, path, raw, anchor=anchor)
 
 
-def durable_bytes(root: Path, path: Path, raw: bytes) -> None:
+def durable_bytes(root: Path, path: Path, raw: bytes, *, anchor=None) -> None:
     relative = path.relative_to(root)
+    if anchor is not None:
+        anchor.check_root(root)
+        anchor.write(relative, raw)
+        return
     handles, identities = _safe_parents(root, relative.parent)
     temporary = '.task-' + secrets.token_hex(16) + '.tmp'
     created = False
     try:
+        from .native_state_snapshot import metadata_limit,write as write_snapshot
+        limit = metadata_limit(relative)
+        if limit is not None:
+            def check_snapshot_parents():
+                for parent,name,device,inode in identities:
+                    info = fsx.lstat_at(parent,name)
+                    if fsx.is_link(info) or (info.st_dev,info.st_ino) != (device,inode):
+                        raise ValueError('state-directory-changed')
+            if fsx.effective_uid() is None:
+                # No POSIX owner/private-mode proof exists on this backend.
+                # Keep only the old unframed workflow behavior. This bounded
+                # format probe returns no contents or reader/ACL authority.
+                from .package_status import read_package_file
+                from .native_state_snapshot import HEADER,decode
+                decode(raw,limit=limit)
+                try:
+                    fsx.lstat_at(handles[-1],relative.name)
+                except FileNotFoundError:
+                    pass
+                else:
+                    existing = read_package_file(root,relative.as_posix(),limit=limit)
+                    if HEADER in existing:
+                        raise ValueError('native_state_snapshot_platform_unsupported')
+                    decode(existing,limit=limit)  # Also rejects partial/ambiguous framing.
+                    check_snapshot_parents()
+            elif write_snapshot(handles[-1],relative.name,raw,limit=limit,
+                                check=check_snapshot_parents,framed_only=True):
+                return
         descriptor = fsx.open_at(handles[-1], temporary,
                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
         created = True
@@ -348,17 +398,25 @@ def durable_bytes(root: Path, path: Path, raw: bytes) -> None:
 
 
 @contextmanager
-def task_transition(root: Path) -> Iterator[None]:
+def task_transition(root: Path, *, anchor=None, timeout=5.0) -> Iterator[None]:
     """Outer lock order: task transition, route, agents/approvals. Never hold over tools."""
-    key = str(root.resolve())
+    if anchor is not None:
+        anchor.check_root(root)
+    key = anchor.workspace if anchor is not None else str(root.resolve())
     active = _TRANSITIONS.get()
+    if anchor is not None and key in active:
+        from .trace_storage import held_guard
+        held_guard(anchor, 'task-transition')
+        yield
+        return
     if key in active:
         yield
         return
-    handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
-    for handle in reversed(handles):
-        fsx.close_dir(handle)
-    with runtime_lock(root, 'task-transition'):
+    if anchor is None:
+        handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+    with runtime_lock(root, 'task-transition', timeout=timeout, anchor=anchor):
         token = _TRANSITIONS.set((*active, key))
         try:
             yield
@@ -369,69 +427,84 @@ def task_transition(root: Path) -> Iterator[None]:
 def serialized_task(function):
     @wraps(function)
     def wrapped(root: Path, *args, **kwargs):
-        with task_transition(root):
+        with task_transition(root, anchor=kwargs.get('anchor')):
             return function(root, *args, **kwargs)
     return wrapped
 
 
-def _route_document(root: Path, path: Path, *, limit: int = 1_048_576) -> dict[str, Any]:
+def _route_document(root: Path, path: Path, *, limit: int = 1_048_576, anchor=None) -> dict[str, Any]:
     from .package_status import read_package_file
     from .spec import _pairs_object, _reject_constant
-    raw = read_package_file(root, path.relative_to(root).as_posix(), limit=limit)
+    if anchor is not None:
+        anchor.check_root(root)
+    raw = (anchor.read(path.relative_to(root).as_posix(), limit) if anchor is not None
+           else read_package_file(root, path.relative_to(root).as_posix(), limit=limit))
+    from .native_state_snapshot import metadata_limit,decode
+    allocated = metadata_limit(path.relative_to(root))
+    if allocated is not None:
+        raw = decode(raw,limit=min(limit,allocated))
     value = json.loads(raw, object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
     if not isinstance(value, dict):
         raise ValueError('invalid-route-document')
     return value
 
 
-def canonical_route(root: Path, route_id: str) -> dict[str, Any]:
+def canonical_route(root: Path, route_id: str, *, anchor=None) -> dict[str, Any]:
     from .continuity import validate_route
     if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
         raise ValueError('invalid-route-id')
-    route = _route_document(root, _runtime(root) / 'routes' / f'{route_id}.json')
+    route = _route_document(root, _runtime(root) / 'routes' / f'{route_id}.json', anchor=anchor)
     if route.get('route_id') != route_id:
         raise ValueError('canonical-route-mismatch')
-    validate_route(root, route)
+    validate_route(root, route, anchor=anchor)
     return route
 
 
-def discovered_route(root: Path) -> dict[str, Any] | None:
+def _present(root, path, anchor=None):
+    if anchor is not None:
+        anchor.check_root(root)
+    return anchor.exists(path.relative_to(root)) if anchor is not None else path.exists() or path.is_symlink()
+
+
+def discovered_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
     """Read-only global discovery never changes session or grants mutation authority."""
     from .continuity import has_task_context, validate_route
     path = _runtime(root) / 'active-route.json'
-    if not path.exists() and not path.is_symlink():
+    if not _present(root, path, anchor):
         return None
     try:
-        locator = _route_document(root, path)
+        locator = _route_document(root, path, anchor=anchor)
         route_id = locator.get('route_id')
         if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
             return None
         canonical = _runtime(root) / 'routes' / f'{route_id}.json'
-        if canonical.exists() or canonical.is_symlink():
-            return canonical_route(root, route_id)
+        if _present(root, canonical, anchor):
+            return canonical_route(root, route_id, anchor=anchor)
         if not has_task_context(locator):
-            validate_route(root, locator)
+            validate_route(root, locator, anchor=anchor)
             return locator
     except (OSError, ValueError):
         return None
     return None
 
 
-def route_authority_present(root: Path) -> bool:
+def route_authority_present(root: Path, *, anchor=None) -> bool:
     paths = [_runtime(root) / 'active-route.json']
     session = current_session()
     if session:
         paths.append(_session_pointer(root, session))
-    return any(path.exists() or path.is_symlink() for path in paths)
+    return any(_present(root, path, anchor) for path in paths)
 
 
-def require_route_owner(root: Path, route: dict[str, Any] | None = None) -> dict[str, Any]:
+def require_route_owner(root: Path, route: dict[str, Any] | None = None, *, anchor=None) -> dict[str, Any]:
     from .continuity import has_task_context
-    route = get_active_route(root) if route is None else route
+    route = get_active_route(root, anchor=anchor) if route is None else route
     if not route:
         raise ValueError('task authority unavailable; use explicit --session with --continue or --new-task')
     if has_task_context(route) and current_session() != route.get('session_id'):
         raise ValueError('task owner required; use explicit --session with --continue or --new-task')
+    if anchor is not None and canonical_route(root, route['route_id'], anchor=anchor) != route:
+        raise ValueError('canonical task context changed')
     return route
 
 
@@ -439,15 +512,15 @@ def _session_pointer(root: Path, session_id: str) -> Path:
     return _runtime(root) / 'sessions' / f'{session_id}.json'
 
 
-def get_active_route(root: Path) -> dict[str, Any] | None:
+def get_active_route(root: Path, *, anchor=None) -> dict[str, Any] | None:
     from .continuity import has_task_context
     session = current_session()
     if session:
         path = _session_pointer(root, session)
-        if path.exists() or path.is_symlink():
+        if _present(root, path, anchor):
             try:
-                pointer = _route_document(root, path, limit=4096)
-                route = canonical_route(root, pointer.get('route_id'))
+                pointer = _route_document(root, path, limit=4096, anchor=anchor)
+                route = canonical_route(root, pointer.get('route_id'), anchor=anchor)
                 fields = {'route_id', 'session_id', 'logical_task_id', 'authority_epoch'} if has_task_context(route) else {'route_id', 'session_id'}
                 if set(pointer) != fields or pointer.get('session_id') != session or route.get('session_id') != session:
                     return None
@@ -460,7 +533,7 @@ def get_active_route(root: Path) -> dict[str, Any] | None:
                 return route
             except (OSError, ValueError, TypeError):
                 return None
-    route = discovered_route(root)
+    route = discovered_route(root, anchor=anchor)
     if route and session and route.get('session_id') != session:
         legacy_owner = route.get('session_id')
         if has_task_context(route) or (isinstance(legacy_owner, str) and legacy_owner != 'manual' and _SESSION_ID.fullmatch(legacy_owner)):
@@ -484,19 +557,19 @@ class ActiveChangeConflict(RuntimeError):
         )
 
 
-def open_change_binding(root: Path) -> tuple[str, str] | None:
+def open_change_binding(root: Path, *, anchor=None) -> tuple[str, str] | None:
     """Return (change_id, route_id) of the active change package while it is still open."""
-    change = get_active_change(root)
+    change = get_active_change(root, anchor=anchor)
     if change is None:
         return None
     change_id, rel = change.get('change_id'), change.get('path')
     if not isinstance(change_id, str) or not isinstance(rel, str) or not rel:
         raise ValueError('selected change pointer is malformed')
     from .workflow_storage import valid_package_path
-    package = (root / rel).resolve()
-    if not valid_package_path(rel, change_id) or not package.is_relative_to(root.resolve()):
+    package = root / rel if anchor is not None else (root / rel).resolve()
+    if not valid_package_path(rel, change_id) or anchor is None and not package.is_relative_to(root.resolve()):
         raise ValueError('selected change path is unsafe')
-    state = _route_document(root, root / rel / 'state.json')
+    state = _route_document(root, root / rel / 'state.json', anchor=anchor)
     route_id = state.get('route_id')
     if not isinstance(route_id, str) or not _ROUTE_ID.fullmatch(route_id):
         raise ValueError('selected change state is malformed')
@@ -507,20 +580,25 @@ def open_change_binding(root: Path) -> tuple[str, str] | None:
     return change_id, route_id
 
 
-def _publish_route_projections(root: Path, route: dict[str, Any]) -> None:
+def _publish_route_projections(root: Path, route: dict[str, Any], *, anchor=None) -> None:
     from .continuity import has_task_context
     session = route.get('session_id')
     if isinstance(session, str) and session != 'manual' and _SESSION_ID.fullmatch(session):
         pointer = {'route_id': route['route_id'], 'session_id': session}
         if has_task_context(route):
             pointer.update(logical_task_id=route['logical_task_id'], authority_epoch=route['authority_epoch'])
-        durable_json(root, _session_pointer(root, session), pointer)
-    durable_json(root, active_route_path(root), route)
+        durable_json(root, _session_pointer(root, session), pointer, anchor=anchor)
+    durable_json(root, active_route_path(root), route, anchor=anchor)
     if has_task_context(route) and route.get('change_id') is None:
-        selected = get_active_change(root)
+        selected = get_active_change(root, anchor=anchor)
         if selected is not None:
-            if open_change_binding(root) is not None:
+            if open_change_binding(root, anchor=anchor) is not None:
                 raise ValueError('open package cannot be detached by route projection')
+            if anchor is not None:
+                if get_active_change(root, anchor=anchor) != selected:
+                    raise ValueError('package pointer changed before projection repair')
+                anchor.unlink('.getzilla/runtime/active-change.json')
+                return
             handles, _ = _safe_parents(root, Path('.getzilla/runtime'))
             try:
                 if get_active_change(root) != selected:
@@ -533,20 +611,45 @@ def _publish_route_projections(root: Path, route: dict[str, Any]) -> None:
 
 
 @serialized_task
-def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any] | None) -> dict[str, Any]:
+def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any] | None,
+                  observation_only: bool = False, native_claim=None, anchor=None, lock_timeout=5.0) -> dict[str, Any]:
     from .continuity import validate_route
-    validate_route(root, route)
-    with runtime_lock(root, 'route'):
+    if observation_only:
+        if expected is None or native_claim is not None:
+            raise ValueError('observation metadata requires canonical authority')
+        require_route_owner(root, expected, anchor=anchor)
+        allowed = {'observation_publication', 'observation_capture_failed', 'state_revision', 'updated_at'}
+        if ({key: value for key, value in route.items() if key not in allowed}
+                != {key: value for key, value in expected.items() if key not in allowed}
+                or route.get('state_revision') != expected.get('state_revision', -1)+1):
+            raise ValueError('observation metadata cannot change task authority')
+        from .observation_privacy import local_identity
+        local_identity(root, anchor=anchor)
+    validate_route(root, route, anchor=anchor)
+    with runtime_lock(root, 'route', anchor=anchor, timeout=lock_timeout):
         path = _runtime(root) / 'routes' / f"{route['route_id']}.json"
-        exists = path.exists() or path.is_symlink()
-        actual = canonical_route(root, route['route_id']) if exists else None
+        exists = _present(root, path, anchor)
+        actual = canonical_route(root, route['route_id'], anchor=anchor) if exists else None
         if actual != expected:
             raise ValueError('route changed before atomic update')
         if (actual is not None and 'execution_store_required' in actual
                 and route.get('execution_store_required') != actual['execution_store_required']):
             raise ValueError('canonical execution store requirement is monotone')
-        durable_json(root, path, route)
-        _publish_route_projections(root, route)
+        if actual and (actual.get('context') or {}).get('version') == 2 and (
+                (route.get('context') or {}).get('version') != 2 or
+                (route['context'].get('intake') or {}).get('required') is not True):
+            raise ValueError('required intake cannot be downgraded')
+        if ('sprint' in route or 'observation_publication' in route) and not observation_only:
+            from .sprint_lifecycle import prepare_transition
+            try:
+                route = prepare_transition(root, copy.deepcopy(route), actual, native_claim=native_claim, anchor=anchor)
+            except (OSError, ValueError, RuntimeError, TypeError, KeyError):
+                if actual is None or not ('sprint' in actual or 'observation_publication' in actual):
+                    raise ValueError('native_sprint_capture_unavailable') from None
+                route['observation_capture_failed'] = True
+        durable_json(root, path, route, anchor=anchor)
+        if not observation_only:
+            _publish_route_projections(root, route, anchor=anchor)
     return copy.deepcopy(route)
 
 
@@ -596,7 +699,8 @@ def update_route(root: Path, *, expected_route: dict[str, Any] | None = None, **
         from .continuity import assert_finishable
         assert_finishable(root, route, cancel=updates['status'] == 'cancelled')
     immutable = {'route_id', 'task', 'logical_task_id', 'origin_session_id', 'session_id', 'workspace',
-                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff', 'intent_state'}
+                 'task_context_version', 'authority_epoch', 'state_revision', 'context', 'handoff',
+                 'intent_state', 'sprint', 'observation_publication'}
     if has_task_context(route) and any(key in updates and updates[key] != route.get(key) for key in immutable | {'change_id'}):
         raise ValueError('immutable task authority requires an explicit task transition')
     changed = copy.deepcopy(route)
@@ -1066,11 +1170,11 @@ def set_active_change(root: Path, data: dict[str, Any]) -> None:
     durable_json(root, active_change_path(root), data)
 
 
-def get_active_change(root: Path) -> dict[str, Any] | None:
+def get_active_change(root: Path, *, anchor=None) -> dict[str, Any] | None:
     path = active_change_path(root)
-    if not path.exists() and not path.is_symlink():
+    if not _present(root, path, anchor):
         return None
-    return _route_document(root, path, limit=4096)
+    return _route_document(root, path, limit=4096, anchor=anchor)
 
 
 def stop_attempts_path(root: Path) -> Path:

@@ -66,7 +66,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'risk-terms': ('getzilla_risk_terms.py', 'risk vocabulary language packs: check, scaffold, languages'),
     'adopt': ('adopt_existing.py', 'adopt a folder without Git into a new local workspace (Zero-Git)'),
     'branches': ('branch_lifecycle.py', 'branch retention report and guarded delete (dry-run by default)'),
-    'graph': ('getzilla_graph.py', 'Python code graph: build, status, impact, export (read-only)'),
+    'graph': ('getzilla_graph.py', 'Python code graph: build, status, impact, export, history (read-only)'),
     'demo': ('getzilla_demo.py', 'open the local read-only demo dashboard'),
 }
 

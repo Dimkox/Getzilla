@@ -9,6 +9,21 @@ LEGACY_CHANGES = 'engineering/changes'
 CHANGE_ID = re.compile(r'[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9_-]{0,127}')
 
 
+def intake_package_target(value: str) -> bool:
+    return value in {'change-spec.yaml', 'requirements.md', 'workflow/projections/intake.json'} or bool(re.fullmatch(
+        r'workflow/projections/intake/(?:versions/[0-9a-f]{64}\.json|publications/[0-9a-f]{64}(?:\.json|/state\.json))', value))
+
+
+def cas_package_write(root: Path, change_id: str, target: str, data: bytes, expected_digest: str) -> str:
+    """Closed native publisher; public workflow CAS retains its narrower allowlist."""
+    from .state import require_route_owner
+    from .workflow_artifacts import _cas_write
+    route = require_route_owner(root)
+    if route.get('change_id') != change_id or not intake_package_target(target):
+        raise ValueError('native package write requires selected owner and closed target')
+    return _cas_write(root, change_id, target, data, expected_digest, package_target=True)
+
+
 def valid_package_path(relative: object, change_id: object) -> bool:
     return (isinstance(change_id, str) and bool(CHANGE_ID.fullmatch(change_id))
             and relative in {f'{RUNTIME_CHANGES}/{change_id}', f'{LEGACY_CHANGES}/{change_id}'})

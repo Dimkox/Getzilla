@@ -136,6 +136,8 @@ MANAGED_FILES = (
     "engineering/verification-dispositions.json",
     "engineering/vendor-custody/bmad-whitespace.json",
     "engineering/vendor-custody/bmad-whitespace.md",
+    "schemas/requirement-intake-v1.schema.json",
+    "schemas/intake-readiness-v1.schema.json",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {

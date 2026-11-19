@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fsx
-from .git_binding_guard import GuardUnavailable, LinuxGitGuard
+from .git_binding_guard import GuardUnavailable, LinuxGitGuard, NativeGitGraph
 from .architecture import (
     RULE_COLLECTIONS,
     ArchitectureError,
@@ -238,9 +238,22 @@ def _run_capped(
     stderr_limit: int,
     timeout: float,
     stdin_data: bytes | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[int, bytes, bytes]:
     """Run a process while enforcing limits before output is fully produced."""
-    input_stream = tempfile.TemporaryFile() if stdin_data is not None else None
+    input_stream = None
+    if stdin_data is not None:
+        if pass_fds:
+            if not hasattr(os,'memfd_create') or not getattr(os,'MFD_CLOEXEC',0):
+                raise ArchitectureError('native Git bounded input is unavailable',code='io')
+            descriptor = os.memfd_create('native-git-input',os.MFD_CLOEXEC)
+            try:
+                input_stream = os.fdopen(descriptor,'w+b')
+            except BaseException:
+                os.close(descriptor)
+                raise
+        else:
+            input_stream = tempfile.TemporaryFile()
     try:
         if input_stream is not None:
             input_stream.write(stdin_data)
@@ -249,6 +262,7 @@ def _run_capped(
             command, cwd=cwd, env=env,
             stdin=input_stream if input_stream is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
+            **({'pass_fds':pass_fds} if pass_fds else {}),
             **fsx.process_group_kwargs(),
         )
     except BaseException:
@@ -403,8 +417,10 @@ def _git_path_identity(path: Path) -> tuple[int, int, int, int, int, int]:
     return _stat_identity(path.lstat())
 
 
-def _git_pointer(path: Path) -> bytes:
+def _git_pointer(path: Path, *, _guard=None) -> bytes:
     """Read Git's small registration files without following a substituted name."""
+    if isinstance(_guard,NativeGitGraph):
+        return _guard.read(path)
     if fsx.WINDOWS:
         # No O_NOFOLLOW there: refuse a link or reparse point by lstat; the
         # identity comparison below catches a name swapped before the open.
@@ -444,7 +460,8 @@ class _GitBinding:
             guard.check()
         for path, identity, label in self.registrations:
             try:
-                current = _git_path_identity(path)
+                current = (_stat_identity(guard.stat(path)) if isinstance(guard,NativeGitGraph)
+                           else _git_path_identity(path))
             except OSError as exc:
                 raise ArchitectureError(f"Git {label} binding is unavailable", code="git") from exc
             # Objects were formerly checked by their strict parent's metadata.
@@ -457,13 +474,13 @@ class _GitBinding:
             if guard is not None and is_directory:
                 if not guard.covers(path, identity):
                     raise ArchitectureError(f"Git {label} binding guard is incomplete", code="git")
-                stable = True
+                stable = not isinstance(guard,NativeGitGraph) or path == self.objects_directory
             changed = current[:3] != identity[:3] if stable else current != identity
             if changed:
                 raise ArchitectureError(f"Git {label} binding changed", code="git")
         for path in self.absent_registrations:
             try:
-                path.lstat()
+                guard.stat(path) if isinstance(guard,NativeGitGraph) else path.lstat()
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -473,7 +490,17 @@ class _GitBinding:
             guard.check()
 
 
-def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> None:
+def _bounded_git_timeout(maximum: float, deadline: float | None = None) -> float:
+    if deadline is None:
+        return maximum
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
+    return min(maximum,remaining)
+
+
+def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard,
+                               *, _deadline: float | None = None) -> None:
     """Close a conservative read graph; let Git itself parse configuration syntax."""
     common = binding.common_directory
     objects = binding.objects_directory
@@ -502,7 +529,7 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
             continue
         if info.st_size > 4096:
             raise GuardUnavailable("reference-topology")
-        content = _git_pointer(path).removesuffix(b"\n")
+        content = _git_pointer(path,_guard=guard).removesuffix(b"\n")
         if _EXACT_SHA.fullmatch(content.decode("ascii", "replace")) is not None:
             continue
         if content.startswith(b"ref: refs/"):
@@ -526,12 +553,14 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
         return
     if info.st_size > 4096:
         raise GuardUnavailable("configuration-size")
-    content = _git_pointer(config)
+    content = _git_pointer(config,_guard=guard)
     guard.check()
     returncode, output, _error = _run_capped(
         _git_command(["config", "--null", "--no-includes", "--list", "--file=-"]),
-        cwd=Path("/"), env=_git_environment(), stdout_limit=16_384,
-        stderr_limit=16_384, timeout=min(_GIT_TIMEOUT_SECONDS, guard.remaining()), stdin_data=content,
+        cwd=guard.address(binding.root) if isinstance(guard,NativeGitGraph) else Path("/"),
+        pass_fds=guard.pass_fds() if isinstance(guard,NativeGitGraph) else (),
+        env=_git_environment(), stdout_limit=16_384,
+        stderr_limit=16_384, timeout=_bounded_git_timeout(min(_GIT_TIMEOUT_SECONDS, guard.remaining()),_deadline), stdin_data=content,
     )
     guard.check()
     if returncode or (output and not output.endswith(b"\0")):
@@ -557,20 +586,31 @@ def _qualify_git_configuration(binding: _GitBinding, guard: LinuxGitGuard) -> No
 class _GitOperation:
     """One explicit snapshot and admission point, including pending cache writes."""
 
-    def __init__(self, root: Path, *, relaxed: bool = True) -> None:
+    def __init__(self, root: Path, *, relaxed: bool = True, native_anchor=None,
+                 _budget_seconds: float = 120.0) -> None:
+        if not 0 < _budget_seconds <= 120.0:
+            raise ArchitectureError('Git operation binding guard limit exceeded',code='git')
         self.root = Path(os.path.abspath(root))
         self.guard: LinuxGitGuard | None = None
         self.binding: _GitBinding | None = None
         self.mode = "strict"
         self.reason = "unavailable"
         self._relaxed = relaxed
+        self._native_anchor = native_anchor
         self._owner = threading.get_ident()
         self._closed = False
         self._pending: dict[tuple[str, tuple[object, ...]], Any] = {}
-        self._deadline = time.monotonic() + 120.0
+        self._deadline = time.monotonic() + _budget_seconds
 
     def __enter__(self) -> "_GitOperation":
         try:
+            if self._native_anchor is not None:
+                self._native_anchor.check_root(self.root)
+                self.guard = NativeGitGraph(self._native_anchor)
+                self.binding = _git_binding(self.root,_guard=self.guard,_deadline=self._deadline)
+                self.mode,self.reason = self.guard.mode,'qualified'
+                self.check()
+                return self
             if not self._relaxed:
                 self.reason = "command"
                 self.binding = _git_binding(self.root)
@@ -590,13 +630,18 @@ class _GitOperation:
                 self.reason = str(exc)
                 self.binding = _git_binding(self.root)  # a fresh strict acquisition
             return self
+        except GuardUnavailable as exc:
+            if self.guard is not None:
+                self.guard.close()
+            self._closed = True
+            raise ArchitectureError('Git native binding is unavailable',code='git') from exc
         except BaseException:
             try:
                 if self.guard is not None:
-                    LinuxGitGuard.check(self.guard)
+                    self.guard.check()
             finally:
                 if self.guard is not None:
-                    LinuxGitGuard.close(self.guard)
+                    self.guard.close()
                 self._closed = True
             raise
 
@@ -655,7 +700,7 @@ class _GitOperation:
             self._pending.clear()
             self._closed = True
             if self.guard is not None:
-                LinuxGitGuard.close(self.guard)
+                self.guard.close()
 
 
 def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Path) -> bool:
@@ -673,20 +718,26 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
 
 
-def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBinding:
+def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
+                 _deadline: float | None = None) -> _GitBinding:
     try:
+        native = isinstance(_guard,NativeGitGraph)
+        def info(path):
+            return _guard.stat(path) if native else path.lstat()
+        def identity(path):
+            return _stat_identity(info(path))
         named_root = Path(os.path.abspath(root))
-        if not stat.S_ISDIR(named_root.lstat().st_mode):
+        if not native and not stat.S_ISDIR(named_root.lstat().st_mode):
             raise ArchitectureError("Git worktree root must be a non-symlink directory", code="git")
         repository = (named_root.resolve(strict=True) if _guard is None else
                       _guard.directory(named_root, "worktree root"))
         dot_git = repository / ".git"
         if _guard is not None:
             _guard.protect(repository, ".git", "worktree registration")
-        registration = dot_git.lstat()
+        registration = info(dot_git)
         registrations = [
-            (repository, _git_path_identity(repository), "worktree root"),
-            (dot_git, _git_path_identity(dot_git),
+            (repository, identity(repository), "worktree root"),
+            (dot_git, identity(dot_git),
              "directory" if stat.S_ISDIR(registration.st_mode) else "worktree registration"),
         ]
         absent_registrations: tuple[Path, ...] = ()
@@ -697,7 +748,7 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
             if _guard is not None:
                 _guard.protect(dot_git, "commondir", "common-directory registration")
         elif stat.S_ISREG(registration.st_mode):
-            content = _git_pointer(dot_git)
+            content = _git_pointer(dot_git,_guard=_guard)
             if not content.startswith(b"gitdir: ") or not content.endswith(b"\n") or b"\0" in content:
                 raise ArchitectureError("Git worktree registration is invalid", code="git")
             target = Path(os.fsdecode(content[8:-1]))
@@ -709,11 +760,11 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                 _guard.protect(git_directory, "gitdir", "worktree backlink")
                 _guard.protect(git_directory, "commondir", "common-directory registration")
             registrations.extend((
-                (git_directory, _git_path_identity(git_directory), "directory"),
-                (backlink, _git_path_identity(backlink), "worktree backlink"),
-                (common_registration, _git_path_identity(common_registration), "common-directory registration"),
+                (git_directory, identity(git_directory), "directory"),
+                (backlink, identity(backlink), "worktree backlink"),
+                (common_registration, identity(common_registration), "common-directory registration"),
             ))
-            common_content = _git_pointer(common_registration)
+            common_content = _git_pointer(common_registration,_guard=_guard)
             if not common_content.endswith(b"\n") or b"\0" in common_content:
                 raise ArchitectureError("Git common-directory registration is invalid", code="git")
             common_path = git_directory / Path(os.fsdecode(common_content[:-1]))
@@ -721,47 +772,67 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None) -> _GitBind
                                 _guard.directory(common_path, "common directory"))
             if git_directory.parent.name != "worktrees" or common_directory != git_directory.parent.parent:
                 raise ArchitectureError("Git common-directory relationship does not match registered worktree", code="git")
-            registrations.append((common_directory, _git_path_identity(common_directory), "common directory"))
-            backlink_content = _git_pointer(backlink)
+            registrations.append((common_directory, identity(common_directory), "common directory"))
+            backlink_content = _git_pointer(backlink,_guard=_guard)
             if not backlink_content.endswith(b"\n") or b"\0" in backlink_content:
                 raise ArchitectureError("Git worktree backlink is invalid", code="git")
             backlink_path = Path(os.fsdecode(backlink_content[:-1]))
+            backlink_parent = None
             if _guard is not None:
-                _guard.directory((git_directory / backlink_path).parent, "worktree root")
-            if (git_directory / backlink_path).resolve(strict=True) != dot_git:
+                backlink_parent = _guard.directory((git_directory / backlink_path).parent, "worktree root")
+            matches = (backlink_parent/backlink_path.name == dot_git if native else
+                       (git_directory / backlink_path).resolve(strict=True) == dot_git)
+            if not matches:
                 raise ArchitectureError("Git worktree backlink does not match root", code="git")
         else:
             raise ArchitectureError("Git worktree registration is not a directory or regular file", code="git")
-        if not stat.S_ISDIR(git_directory.lstat().st_mode):
+        if not stat.S_ISDIR(info(git_directory).st_mode):
             raise ArchitectureError("Git directory is not a non-symlink directory", code="git")
         objects_directory = common_directory / "objects"
         if _guard is not None:
             objects_directory = _guard.directory(objects_directory, "object store")
-        if not stat.S_ISDIR(objects_directory.lstat().st_mode):
+        if not stat.S_ISDIR(info(objects_directory).st_mode):
             raise ArchitectureError("Git object store is not a non-symlink directory", code="git")
         bound_registrations = (*registrations,
-                               (objects_directory, _git_path_identity(objects_directory), "object store"))
+                               (objects_directory, identity(objects_directory), "object store"))
         binding = _GitBinding(repository, git_directory, bound_registrations, absent_registrations,
                               common_directory, objects_directory)
         binding.verify(_guard, strict_directories=True)
         if _guard is not None:
-            _qualify_git_configuration(binding, _guard)
+            _qualify_git_configuration(binding, _guard,_deadline=_deadline)
             binding.verify(_guard, strict_directories=True)
             _guard.seal()
+        child = _native_git_child(binding,_guard) if native else None
         returncode, output, _error = _run_capped(
             _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
-                         safe_directory=repository, git_directory=git_directory),
-            cwd=repository, env=_git_environment(), stdout_limit=16_384,
-            stderr_limit=65_536, timeout=_GIT_TIMEOUT_SECONDS,
+                         safe_directory=child['root'] if native else repository,
+                         git_directory=child['git'] if native else git_directory,
+                         work_tree=child['root'] if native else None),
+            cwd=child['root'] if native else repository,
+            env=child['env'] if native else _git_environment(),
+            pass_fds=child['fds'] if native else (),stdout_limit=16_384,
+            stderr_limit=65_536, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS,_deadline),
         )
         binding.verify(_guard, strict_directories=True)
-        if returncode or not _reported_git_paths_match(output, git_directory, repository):
+        expected_git = Path(os.readlink(child['git'])) if native else git_directory
+        expected_root = Path(os.readlink(child['root'])) if native else repository
+        if returncode or not _reported_git_paths_match(output,expected_git,expected_root):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
         return binding
     except ArchitectureError:
         raise
     except (OSError, ValueError) as exc:
         raise ArchitectureError("Git worktree binding is unavailable", code="git") from exc
+
+
+def _native_git_child(binding,guard):
+    guard.check()
+    environment = _git_environment()
+    environment['GIT_COMMON_DIR'] = str(guard.address(binding.common_directory))
+    environment['GIT_OBJECT_DIRECTORY'] = str(guard.address(binding.objects_directory))
+    return {'root':guard.address(binding.root),'git':guard.address(binding.git_directory),
+            'env':environment,'fds':guard.pass_fds((binding.root,binding.git_directory,
+                                                  binding.common_directory,binding.objects_directory))}
 
 
 def _guarded_git_arguments(arguments: list[str], stdin_data: bytes | None) -> bool:
@@ -821,13 +892,17 @@ def run_git_bounded(
             return run_git_bounded(root, arguments, allow_failure=allow_failure, limit=limit,
                                    stdin_data=stdin_data, _scope=scope)
     binding = _scope.check(root)
-    if _scope.guard is not None and not guarded:
+    native = isinstance(_scope.guard,NativeGitGraph)
+    if _scope.guard is not None and not native and not guarded:
         raise ArchitectureError("Git operation binding read graph is unsupported", code="git")
     try:
+        child = _native_git_child(binding,_scope.guard) if native else None
         returncode, output, error = _run_capped(
-            _git_command(arguments, safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root, env=_git_environment(), stdout_limit=limit,
+            _git_command(arguments,safe_directory=child['root'] if native else binding.root,
+                         git_directory=child['git'] if native else binding.git_directory,
+                         work_tree=child['root'] if native else binding.root),
+            cwd=child['root'] if native else binding.root,env=child['env'] if native else _git_environment(),
+            pass_fds=child['fds'] if native else (),stdout_limit=limit,
             stderr_limit=65_536, timeout=_scope.remaining(), stdin_data=stdin_data,
         )
     except OSError as exc:
@@ -871,7 +946,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if _scope is None:
         with _GitOperation(root) as scope:
             return _exact_commit(root, value, label=label, _scope=scope)
-    binding = _scope.check(root)
+    _scope.check(root)
     object_id_length = _git_object_id_length(root, _scope=_scope)
     if not isinstance(value, str) or len(value) != object_id_length or _EXACT_SHA.fullmatch(value) is None:
         raise ArchitectureError(f"{label} must match the exact repository commit format", code="git")
@@ -880,19 +955,7 @@ def _exact_commit(root: Path, value: str, *, label: str, _scope: _GitOperation |
     if cached is True:
         _scope.check()
         return value
-    try:
-        returncode, kind, _error = _run_capped(
-            _git_command(["cat-file", "-t", value], safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root, env=_git_environment(), stdout_limit=64,
-            stderr_limit=65_536, timeout=_scope.remaining(),
-        )
-    except OSError as exc:
-        raise ArchitectureError("Git object operation is unavailable", code="git") from exc
-    finally:
-        _scope.check()
-    if returncode:
-        kind = None
+    kind = _git(root,["cat-file","-t",value],allow_failure=True,limit=64,_scope=_scope)
     if kind != b"commit\n":
         raise ArchitectureError(f"{label} is not an available commit object", code="git")
     _scope.stage("commit", key, True)

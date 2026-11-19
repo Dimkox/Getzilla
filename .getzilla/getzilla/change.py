@@ -212,6 +212,12 @@ def transition(root: Path, change_id: str, target: str, reason: str, *,
     require_route_owner(root, route)
     if route.get('change_id') != change_id:
         raise ValueError('package transition requires its canonical task owner')
+    if target in {'implementing','verifying','reviewing','ready','released'} and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            require_intake_ready(root,route,operation_class='implementation-transition')
+        except Exception as error:
+            raise ValueError('semantic intake does not admit this transition') from error
     if target in {'verifying', 'reviewing', 'ready', 'released'}:
         gaps = scope_gaps(root, route)
         if gaps:

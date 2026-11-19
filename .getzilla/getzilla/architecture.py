@@ -258,8 +258,12 @@ def _absolute_shape_unsafe(raw: str) -> bool:
     return "//" in raw or raw.endswith("/") or any(part in {".", ".."} for part in raw.split("/"))
 
 
-def _document_relative(root: Path, path: Path | str, *, label: str) -> str:
-    root_real = root.resolve(strict=True)
+def _document_relative(root: Path, path: Path | str, *, label: str, anchor=None) -> str:
+    if anchor is None:
+        root_real = root.resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        root_real = Path(anchor.workspace)
     # A path object names its parts with the platform separator; the repository
     # form is always POSIX. Backslashes in caller-supplied strings stay refused.
     raw = path.as_posix() if isinstance(path, PurePath) else os.fspath(path)
@@ -312,7 +316,23 @@ def _secure_open_flags(*, label: str) -> tuple[int, int, int]:
 def _read_regular_bytes(
     root: Path, relative: str, *, label: str,
     identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
 ) -> bytes:
+    if anchor is not None:
+        try:
+            anchor.check_root(root)
+            with anchor.file(relative, public_source=True, limit=MAX_DOCUMENT_BYTES) as (descriptor,_parent):
+                before = os.fstat(descriptor)
+                if identities is not None:
+                    identity = before.st_dev,before.st_ino
+                    if identity in identities and identities[identity] != relative:
+                        raise ArchitectureError(f'{label}: filesystem alias of {identities[identity]}',code='path')
+                    identities[identity] = relative
+                return anchor.read(relative,MAX_DOCUMENT_BYTES,public_source=True)
+        except ArchitectureError:
+            raise
+        except (OSError,ValueError) as exc:
+            raise ArchitectureError('native architecture input unavailable',code='io') from exc
     parts = PurePosixPath(relative).parts
     directories: list[fsx.DirHandle] = []
     descriptors: list[int] = []
@@ -498,9 +518,10 @@ def parse_adoption_marker(data: bytes, *, label: str = "architecture adoption") 
 
 def _load_schema(
     root: Path, relative: Path, *, identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
 ) -> dict[str, Any]:
     label = relative.as_posix()
-    value = _parse_json(_read_regular_bytes(root, label, label=label, identities=identities), label=label)
+    value = _parse_json(_read_regular_bytes(root, label, label=label, identities=identities,anchor=anchor), label=label)
     try:
         _schema_preflight(value)
     except SpecError as exc:
@@ -720,27 +741,32 @@ def load_architecture(
     rules_path: Path | str | None = None,
     *,
     _input_identities: dict[tuple[int, int], str] | None = None,
+    anchor=None,
 ) -> ArchitectureSnapshot:
     repository = Path(root)
-    try:
-        repository = repository.resolve(strict=True)
-    except OSError as exc:
-        raise ArchitectureError(f"repository root is unavailable: {exc}", code="io") from exc
-    if not repository.is_dir():
-        raise ArchitectureError("repository root must be a directory", code="io")
+    if anchor is None:
+        try:
+            repository = repository.resolve(strict=True)
+        except OSError as exc:
+            raise ArchitectureError(f"repository root is unavailable: {exc}", code="io") from exc
+        if not repository.is_dir():
+            raise ArchitectureError("repository root must be a directory", code="io")
+    else:
+        anchor.check_root(repository)
+        repository = Path(anchor.workspace)
 
     system_relative = _document_relative(
-        repository, SYSTEM_PATH if system_path is None else system_path, label="architecture system"
+        repository, SYSTEM_PATH if system_path is None else system_path, label="architecture system",anchor=anchor
     )
     rules_relative = _document_relative(
-        repository, RULES_PATH if rules_path is None else rules_path, label="architecture rules"
+        repository, RULES_PATH if rules_path is None else rules_path, label="architecture rules",anchor=anchor
     )
     if system_relative == rules_relative:
         raise _at_document(ArchitectureError("duplicate normalized model document path", code="path"), rules_relative)
     counter = [0]
     identities = _input_identities if _input_identities is not None else {}
-    system_data = _read_regular_bytes(repository, system_relative, label="architecture system", identities=identities)
-    rules_data = _read_regular_bytes(repository, rules_relative, label="architecture rules", identities=identities)
+    system_data = _read_regular_bytes(repository, system_relative, label="architecture system", identities=identities,anchor=anchor)
+    rules_data = _read_regular_bytes(repository, rules_relative, label="architecture rules", identities=identities,anchor=anchor)
     system = _parse_json(
         system_data,
         label=system_relative,
@@ -756,8 +782,8 @@ def load_architecture(
     system_text, rules_text = system_data.decode("utf-8"), rules_data.decode("utf-8")
     _validate_declared_paths(system, document=system_relative, text=system_text)
     _validate_declared_paths(rules, document=rules_relative, text=rules_text)
-    system_schema = _load_schema(repository, SYSTEM_SCHEMA_PATH, identities=identities)
-    rules_schema = _load_schema(repository, RULES_SCHEMA_PATH, identities=identities)
+    system_schema = _load_schema(repository, SYSTEM_SCHEMA_PATH, identities=identities,anchor=anchor)
+    rules_schema = _load_schema(repository, RULES_SCHEMA_PATH, identities=identities,anchor=anchor)
     _validate_against_schema(system, system_schema, label=system_relative, text=system_text)
     _validate_against_schema(rules, rules_schema, label=rules_relative, text=rules_text)
     if system["schema_version"] != 1 or rules["schema_version"] != 1:
@@ -921,14 +947,19 @@ def preflight_architecture(root: Path | str) -> tuple[ArchitectureFinding, ...]:
 def contract_inventory(
     root: Path | str,
     snapshot: ArchitectureSnapshot,
+    *, anchor=None,
 ) -> tuple[ContractRecord, ...]:
-    repository = Path(root).resolve(strict=True)
+    if anchor is None:
+        repository = Path(root).resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        repository = Path(anchor.workspace)
     if len(snapshot.system["contracts"]) > MAX_CONTRACTS:
         raise ArchitectureError("contract inventory limit exceeded", code="limit")
     records: list[ContractRecord] = []
     for contract in snapshot.system["contracts"]:
         path = _safe_relative_path(contract["path"], label=f"contract {contract['id']}")
-        data = _read_regular_bytes(repository, path, label=f"contract {contract['id']}")
+        data = _read_regular_bytes(repository, path, label=f"contract {contract['id']}",anchor=anchor)
         document = _parse_json(data, label=f"contract {contract['id']}")
         records.append(
             ContractRecord(
@@ -3746,10 +3777,15 @@ def architecture_fingerprint(
     base_sha: str,
     head_sha: str,
     contract_digests: Mapping[str, str],
+    anchor=None,
 ) -> str:
-    repository = Path(root).resolve(strict=True)
+    if anchor is None:
+        repository = Path(root).resolve(strict=True)
+    else:
+        anchor.check_root(root)
+        repository = Path(anchor.workspace)
     for model_path in (snapshot.system_path, snapshot.rules_path):
-        _document_relative(repository, model_path, label="architecture model")
+        _document_relative(repository, model_path, label="architecture model",anchor=anchor)
     contracts = [
         {"path": _safe_relative_path(path, label="contract digest"), "digest": digest}
         for path, digest in contract_digests.items()

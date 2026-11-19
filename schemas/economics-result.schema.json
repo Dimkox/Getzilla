@@ -1,0 +1,1446 @@
+{
+  "$comment": "Closed calculation result; no source/access authority. Semantic consistency, bounds and requested-view minimization are enforced by route_metrics.ReportResult. Protected reads remain unavailable without actual150151 integration.",
+  "$defs": {
+    "Attempt": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "attempt_id",
+        "head",
+        "operation_refs",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "CachePairResult": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            null,
+            "actual_pair",
+            "explicit_scenario"
+          ]
+        },
+        "long": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "normal": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "operation_sets_observed": {
+          "type": "boolean"
+        },
+        "pair_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "savings": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8193,
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "partial"
+          ]
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "basis",
+        "long",
+        "normal",
+        "operation_sets_observed",
+        "pair_ref",
+        "savings",
+        "source_refs",
+        "status",
+        "unknown_reasons"
+      ],
+      "type": "object"
+    },
+    "ComputedResult": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_comparison": {
+          "items": {
+            "$ref": "#/$defs/CachePairResult"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "calculation_only": {
+          "const": true
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "definition_version": {
+          "const": "task-economics-v1"
+        },
+        "friction138": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Friction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fx_totals": {
+          "items": {
+            "$ref": "#/$defs/FxTotal"
+          },
+          "maxItems": 48,
+          "type": "array"
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/Group"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "limitations": {
+          "const": [
+            "protected_read_unavailable",
+            "actual_producer_integration_pending"
+          ]
+        },
+        "query": {
+          "$ref": "#/$defs/Query"
+        },
+        "ratios": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratios"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/Reconciliation"
+        },
+        "snapshot_ref": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8193,
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "partial"
+          ]
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskRow"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "totals": {
+          "$ref": "#/$defs/Totals"
+        }
+      },
+      "required": [
+        "cache_comparison",
+        "calculation_only",
+        "coverage",
+        "definition_version",
+        "friction138",
+        "fx_totals",
+        "groups",
+        "limitations",
+        "query",
+        "ratios",
+        "reconciliation",
+        "snapshot_ref",
+        "source_refs",
+        "status",
+        "tasks",
+        "totals"
+      ],
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "census_known": {
+          "type": "boolean"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "gaps": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unsupported"
+            ]
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "source_cut_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "census_known",
+        "complete",
+        "gaps",
+        "source_cut_digest"
+      ],
+      "type": "object"
+    },
+    "Friction": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_count_per_commit": {
+          "type": "null"
+        },
+        "defect_catch_latency": {
+          "type": "null"
+        },
+        "evidence_added_lines": {
+          "type": "null"
+        },
+        "fast_path_coverage": {
+          "type": "null"
+        },
+        "human_decision_count": {
+          "anyOf": [
+            {
+              "maximum": 4096,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "human_decision_known_subtotal": {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "human_minutes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "human_minutes_known_subtotal": {
+          "$ref": "#/$defs/Rational"
+        },
+        "review_round_known_subtotal": {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "approval_count_per_commit",
+        "defect_catch_latency",
+        "evidence_added_lines",
+        "fast_path_coverage",
+        "human_decision_count",
+        "human_decision_known_subtotal",
+        "human_minutes",
+        "human_minutes_known_subtotal",
+        "review_round_known_subtotal",
+        "unknown_reasons"
+      ],
+      "type": "object"
+    },
+    "FxTotal": {
+      "additionalProperties": false,
+      "properties": {
+        "amounts": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "from_currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "AUD",
+                "CAD",
+                "CHF",
+                "CNY",
+                "EUR",
+                "GBP",
+                "JPY",
+                "USD"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8193,
+          "type": "array"
+        },
+        "to_currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "AUD",
+                "CAD",
+                "CHF",
+                "CNY",
+                "EUR",
+                "GBP",
+                "JPY",
+                "USD"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "view": {
+          "enum": [
+            "task_lifetime",
+            "cohort_period_spend",
+            "scope_period_spend"
+          ]
+        }
+      },
+      "required": [
+        "amounts",
+        "from_currency",
+        "source_refs",
+        "to_currency",
+        "unknown_reasons",
+        "view"
+      ],
+      "type": "object"
+    },
+    "Group": {
+      "additionalProperties": false,
+      "properties": {
+        "amounts": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "dimensions": {
+          "additionalProperties": false,
+          "maxProperties": 2,
+          "properties": {
+            "cache_mode": {
+              "enum": [
+                null,
+                "none",
+                "normal",
+                "long",
+                "unknown"
+              ]
+            },
+            "disposition": {
+              "enum": [
+                null,
+                "accepted",
+                "rejected",
+                "abandoned",
+                "revoked",
+                "reopened",
+                "unknown"
+              ]
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runner_kind": {
+              "enum": [
+                null,
+                "managed",
+                "self_hosted",
+                "unknown"
+              ]
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            }
+          },
+          "type": "object"
+        },
+        "view": {
+          "enum": [
+            "task_lifetime",
+            "cohort_period_spend"
+          ]
+        }
+      },
+      "required": [
+        "amounts",
+        "dimensions",
+        "view"
+      ],
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "confirmed_billed",
+            "tariff_estimate"
+          ]
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "AUD",
+                "CAD",
+                "CHF",
+                "CNY",
+                "EUR",
+                "GBP",
+                "JPY",
+                "USD"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "known_subtotal": {
+          "$ref": "#/$defs/Rational"
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8192,
+          "type": "array"
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "basis",
+        "currency",
+        "known_subtotal",
+        "source_refs",
+        "unknown_reasons",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Query": {
+      "additionalProperties": false,
+      "properties": {
+        "accounting_interval": {
+          "$ref": "#/$defs/TimeRange"
+        },
+        "as_of": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "cache_pair_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "cohort": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "task_ids"
+                },
+                "tasks": {
+                  "items": {
+                    "$ref": "#/$defs/TaskRef"
+                  },
+                  "maxItems": 256,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind",
+                "tasks"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "selection_window"
+                },
+                "selection_interval": {
+                  "$ref": "#/$defs/TimeRange"
+                }
+              },
+              "required": [
+                "kind",
+                "selection_interval"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "verified_pr_ids"
+                },
+                "pr_numbers": {
+                  "items": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxItems": 256,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "repository_digest": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "repository_digest",
+                "pr_numbers"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "fx_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "group_by": {
+          "items": {
+            "enum": [
+              "task",
+              "provider",
+              "model",
+              "cache_mode",
+              "runner_kind",
+              "disposition"
+            ]
+          },
+          "maxItems": 2,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "money_bases": {
+          "items": {
+            "enum": [
+              "confirmed_billed",
+              "tariff_estimate"
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scope_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "snapshot_ref": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "views": {
+          "items": {
+            "enum": [
+              "task_lifetime",
+              "period_spend",
+              "cache_comparison",
+              "friction138"
+            ]
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "accounting_interval",
+        "as_of",
+        "cache_pair_refs",
+        "cohort",
+        "fx_refs",
+        "group_by",
+        "money_bases",
+        "scope_ids",
+        "views",
+        "snapshot_ref"
+      ],
+      "type": "object"
+    },
+    "Ratio": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "confirmed_billed",
+            "tariff_estimate"
+          ]
+        },
+        "cohort_definition": {
+          "enum": [
+            "task_ids",
+            "selection_window",
+            "verified_pr_ids"
+          ]
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "AUD",
+                "CAD",
+                "CHF",
+                "CNY",
+                "EUR",
+                "GBP",
+                "JPY",
+                "USD"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "denominator": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "denominator_definition": {
+          "enum": [
+            "accepted_tasks",
+            "selected_cohort_lifetime_spend",
+            "accepted_task_lifetime_spend"
+          ]
+        },
+        "known_subtotal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "numerator_definition": {
+          "enum": [
+            "accepted_task_lifetime_spend",
+            "selected_cohort_lifetime_spend",
+            "rejected_abandoned_lifetime_spend",
+            "failed_cancelled_attempt_spend_inside_accepted_tasks"
+          ]
+        },
+        "numerator_known_subtotal": {
+          "$ref": "#/$defs/Rational"
+        },
+        "numerator_value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8192,
+          "type": "array"
+        },
+        "unit": {
+          "enum": [
+            "currency_per_task",
+            "fraction"
+          ]
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "basis",
+        "cohort_definition",
+        "currency",
+        "denominator",
+        "denominator_definition",
+        "known_subtotal",
+        "numerator_definition",
+        "numerator_known_subtotal",
+        "numerator_value",
+        "source_refs",
+        "unit",
+        "unknown_reasons",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Rational": {
+      "additionalProperties": false,
+      "properties": {
+        "denominator": {
+          "pattern": "^[1-9]\\d{0,99}$",
+          "type": "string"
+        },
+        "numerator": {
+          "pattern": "^-?\\d{1,100}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "denominator",
+        "numerator"
+      ],
+      "type": "object"
+    },
+    "Ratios": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_task_mean": {
+          "items": {
+            "$ref": "#/$defs/Ratio"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "accepted_tasks": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cohort_spend_per_accepted": {
+          "items": {
+            "$ref": "#/$defs/Ratio"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "rejected_abandoned_share": {
+          "items": {
+            "$ref": "#/$defs/Ratio"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "unsuccessful_attempt_share": {
+          "items": {
+            "$ref": "#/$defs/Ratio"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "unsuccessful_attempt_spend": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "accepted_task_mean",
+        "accepted_tasks",
+        "cohort_spend_per_accepted",
+        "reasons",
+        "rejected_abandoned_share",
+        "unsuccessful_attempt_share",
+        "unsuccessful_attempt_spend"
+      ],
+      "type": "object"
+    },
+    "Reconciliation": {
+      "additionalProperties": false,
+      "properties": {
+        "coalesced_observations": {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "conflict_count": {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "conflict_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "type": "array"
+        },
+        "unallocated": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "coalesced_observations",
+        "conflict_count",
+        "conflict_refs",
+        "unallocated"
+      ],
+      "type": "object"
+    },
+    "TaskRef": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "core_native"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^task:[0-9a-f]{32}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "factory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "domain": {
+          "enum": [
+            "core_native",
+            "factory"
+          ]
+        },
+        "project_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain",
+        "project_digest",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TaskRow": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/Attempt"
+          },
+          "maxItems": 4096,
+          "type": "array"
+        },
+        "completion": {
+          "enum": [
+            null,
+            "completed",
+            "not_completed",
+            "unknown"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            null,
+            "accepted",
+            "rejected",
+            "abandoned",
+            "revoked",
+            "reopened",
+            "unknown"
+          ]
+        },
+        "merged": {
+          "enum": [
+            null,
+            true
+          ]
+        },
+        "money": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "selected_at": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "usage": {
+          "items": {
+            "$ref": "#/$defs/Usage"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "workflow_end": {
+          "enum": [
+            null,
+            "succeeded",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "attempts",
+        "completion",
+        "disposition",
+        "merged",
+        "money",
+        "selected_at",
+        "task",
+        "usage",
+        "workflow_end"
+      ],
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_exclusive": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        },
+        "start": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{6})?Z$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end_exclusive"
+      ],
+      "type": "object"
+    },
+    "Totals": {
+      "additionalProperties": false,
+      "properties": {
+        "cohort_period_spend": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "scope_period_spend": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "task_lifetime": {
+          "items": {
+            "$ref": "#/$defs/Money"
+          },
+          "maxItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "cohort_period_spend",
+        "scope_period_spend",
+        "task_lifetime"
+      ],
+      "type": "object"
+    },
+    "Unavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_version": {
+          "const": "task-economics-v1"
+        },
+        "reason": {
+          "enum": [
+            "protected_read_unavailable",
+            "invalid_report_query",
+            "input_unavailable",
+            "input_limit",
+            "snapshot_unavailable"
+          ]
+        },
+        "status": {
+          "enum": [
+            "unavailable",
+            "invalid_request"
+          ]
+        }
+      },
+      "required": [
+        "definition_version",
+        "reason",
+        "status"
+      ],
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "enum": [
+            "cache_read",
+            "cache_write",
+            "ci_runner",
+            "cpu",
+            "elapsed",
+            "energy",
+            "gpu",
+            "human_approval",
+            "human_review",
+            "human_unblocking",
+            "input_total",
+            "output",
+            "peak_rss",
+            "reasoning_output",
+            "uncached_input"
+          ]
+        },
+        "known_subtotal": {
+          "$ref": "#/$defs/Rational"
+        },
+        "source_refs": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 8193,
+          "type": "array"
+        },
+        "unit": {
+          "enum": [
+            "token",
+            "cpu_ns",
+            "gpu_ns",
+            "elapsed_ns",
+            "microjoule",
+            "byte",
+            "runner_ns",
+            "human_ns"
+          ]
+        },
+        "unknown_reasons": {
+          "items": {
+            "enum": [
+              "ambiguous",
+              "capture_gap",
+              "conflicted",
+              "currency_missing",
+              "history_gap",
+              "not_applicable",
+              "not_observed",
+              "outcome_unknown",
+              "redacted",
+              "source_unqualified",
+              "tariff_missing",
+              "unallocated",
+              "unknown_denominator",
+              "unsupported",
+              "zero_denominator"
+            ]
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 4096000000000000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "category",
+        "known_subtotal",
+        "source_refs",
+        "unit",
+        "unknown_reasons",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:getzilla:report:economics-result:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ComputedResult"
+    },
+    {
+      "$ref": "#/$defs/Unavailable"
+    }
+  ]
+}
