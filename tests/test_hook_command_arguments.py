@@ -6,7 +6,7 @@ from tests._support import PROJECT, project_copy, run_hook
 
 
 def load_hook(name):
-    hooks = PROJECT / '.grok/hooks'
+    hooks = PROJECT / '.getzilla/hooks'
     sys.path.insert(0, str(hooks))
     spec = importlib.util.spec_from_file_location('argument_probe_' + name, hooks / (name + '.py'))
     module = importlib.util.module_from_spec(spec)

@@ -825,3 +825,5 @@ Explicit owner overrides of local workflow rules must record the exact rule, sco
 New workflow state stays under ignored runtime and can move to `ready` without changing source. Reports bind exact reviewed HEAD/tree and content hashes. No report-only or workflow freeze commit is needed. Historical tracked evidence remains unchanged.
 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+
+For signature or holdout digest failures, preserve evidence and use the [security recovery handoff](../engineering/runbooks/security-handoff.md).

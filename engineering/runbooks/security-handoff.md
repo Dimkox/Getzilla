@@ -1,6 +1,6 @@
 # Security and operator handoff
 
-Getzilla source is a 2.2.2 release candidate. Published v2.2.1 stays immutable.
+This handoff describes source security checks. Read VERSION for the current source version. Published releases stay immutable.
 Read [the current reference](../../docs/REFERENCE.md) and [the engineering contract](../../AGENTS.md).
 
 ## Threats and authority
