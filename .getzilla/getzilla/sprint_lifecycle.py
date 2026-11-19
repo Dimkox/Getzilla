@@ -137,7 +137,7 @@ def prepare_transition(root, route, previous, *, native_claim=None, anchor=None)
             or len(publication['events']) > MAX_PENDING):
         raise ValueError('invalid_native_publication')
     for existing in publication['events']:
-        validate_v3(existing)
+        validate(existing)
     native = local_identity(root, anchor=anchor)
     at = datetime.fromisoformat(route.get('updated_at') or now_utc()).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     publication.setdefault('enrolled_at', at)

@@ -76,9 +76,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--import-observations', help='Bounded repository-relative JSON offline observation file')
     parser.add_argument('--sprint-start', help='UTC start of a 14-day canonical-root sprint projection')
     parser.add_argument('--as-of', help='UTC as-known cutoff; required with --sprint-start')
+    parser.add_argument('--economics-query-stdin', action='store_true', help='protected native-local typed economic query; no imports or writes')
     parser.add_argument('--trace-operation', help='Read local source-bound observations for a native operation ID')
     args = parser.parse_args(argv)
     root = find_root()
+    if args.economics_query_stdin:
+        if args.import_observations or args.trace_operation or args.sprint_start or args.as_of or args.since != '7d':
+            parser.error('economics mode cannot import, mutate or combine report scopes')
+        from getzilla.route_metrics import decode_report_query, read_report, _unavailable_economics, render_report_json, render_report_text
+        from getzilla.economics_reader import local_report_reader, is_protected_report, emit_report
+        try:
+            raw = sys.stdin.buffer.read(65537)
+            request = decode_report_query(raw)
+            with local_report_reader(root) as handle:
+                result = read_report(request, handle=handle)
+                if is_protected_report(result, handle=handle):
+                    emit_report(result, handle=handle, as_json=args.json)
+                    return 0
+                result = _unavailable_economics('snapshot_unavailable')
+        except (OSError, ValueError, TimeoutError) as error:
+            if str(error) == 'disclosure_outcome_unknown':
+                sys.stderr.write('Economic report disclosure outcome unknown; no retry.\n')
+                return 3
+            result = _unavailable_economics()
+        sys.stdout.write(render_report_json(result) if args.json else render_report_text(result))
+        return 3
     if args.trace_operation is not None:
         if args.sprint_start is not None or args.as_of is None or args.import_observations:
             parser.error('trace mode requires cutoff and cannot select a sprint or import')
