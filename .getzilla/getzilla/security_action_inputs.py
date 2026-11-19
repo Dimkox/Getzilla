@@ -514,14 +514,11 @@ def prepare_actions(inventory, artifacts, *, fetch=None, now=None, component_map
                         if not isinstance(npm_sources, dict):
                             _fail('action-npm-source-missing', 'original npm source map must be an object')
                         selected_map = npm_sources
+                        from .security_action_supplements import source_receipts
                         receipts = []
                         for url in sorted(expected_npm):
-                            if url not in selected_map:
-                                continue
-                            source = selected_map[url]
-                            receipts.append({key: source[key] for key in ('url', 'path', 'sha256', 'bytes', 'acquired_at')})
-                            if source['strong_metadata'] is not None:
-                                receipts.append(dict(source['strong_metadata'], acquired_at=source['acquired_at']))
+                            if url in selected_map:
+                                receipts.extend(source_receipts(selected_map[url]))
                     selected_sources = [selected_map[url] for url in sorted(expected_npm) if url in selected_map]
                     facts['npm_sources'] = selected_sources
                     facts['npm_responses'] = receipts
@@ -708,12 +705,14 @@ def validate_source_facts(artifacts, report, *, now=None, inventory_digest=None,
                         from urllib.parse import quote
                         expected_npm = _possible_lock(files)
                         admitted_urls = set(expected_npm)
+                        from .security_action_supplements import admitted_urls as supplement_urls, source_receipts
+                        admitted_urls.update(supplement_urls(expected_npm))
                         for rows in expected_npm.values():
                             for row in rows:
                                 if row['integrity'].startswith('sha1-'):
                                     admitted_urls.add('https://registry.npmjs.org/' + quote(row['name'], safe='@') + '/' + quote(row['version'], safe=''))
                         receipts = fact.get('npm_responses')
-                        if not isinstance(receipts, list) or len(receipts) > 272:
+                        if not isinstance(receipts, list) or len(receipts) > len(admitted_urls):
                             _fail('artifact-action-source-provider', 'npm response receipts are missing or unbounded')
                         seen_urls = set()
                         for response in receipts:
@@ -727,7 +726,7 @@ def validate_source_facts(artifacts, report, *, now=None, inventory_digest=None,
                                     continue
                                 _, proof = _saved_proof(Path(artifacts), record['components']['path'], record['components']['sha256'])
                                 for source in proof.get('npm_sources', []):
-                                    descriptors = [source] + ([source['strong_metadata']] if source['strong_metadata'] is not None else [])
+                                    descriptors = source_receipts(source)
                                     if any((row['path'], row['sha256']) == (response.get('path'), response.get('sha256')) for row in descriptors):
                                         paid.add(key)
                             count = sum(row['reference'] == reference and key not in paid for key, row in expected.items())
@@ -743,7 +742,7 @@ def validate_source_facts(artifacts, report, *, now=None, inventory_digest=None,
                             _fail('artifact-action-source-provider', 'npm facts do not cover the source-declared possible closure')
                         for source in sources:
                             source_custody(Path(artifacts), source, expected_npm[source['url']], now=now or datetime.now(timezone.utc))
-                            required_receipts = [source] + ([source['strong_metadata']] if source['strong_metadata'] is not None else [])
+                            required_receipts = source_receipts(source)
                             if any(not any((receipt.get('url'), receipt.get('path'), receipt.get('sha256')) == (row['url'], row['path'], row['sha256'])
                                            for receipt in receipts) for row in required_receipts):
                                 gap('original npm source has no exact receipt in provider costs')

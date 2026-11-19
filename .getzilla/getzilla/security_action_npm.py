@@ -113,7 +113,8 @@ def source_members(payload):
 
 def source_custody(root, source, expected, *, now=None):
     """Verify original bytes/lock/strong metadata; does not qualify any license."""
-    if (not isinstance(source, dict) or set(source) != {'url', 'path', 'sha256', 'bytes', 'strong_metadata', 'acquired_at'}
+    if (not isinstance(source, dict) or set(source) not in ({'url', 'path', 'sha256', 'bytes', 'strong_metadata', 'acquired_at'},
+            {'url', 'path', 'sha256', 'bytes', 'strong_metadata', 'acquired_at', 'term_supplement'})
             or not registry_url(source['url']) or type(source['bytes']) is not int or not 0 < source['bytes'] <= MAX_NPM_BYTES
             or not isinstance(expected, list) or not expected
             or any(row.get('resolved') != source['url'] for row in expected)):
@@ -166,14 +167,22 @@ def source_custody(root, source, expected, *, now=None):
         bound += len(raw)
     elif source['strong_metadata'] is not None:
         _fail('artifact-npm-origin', 'unneeded extra metadata is outside this closed source proof')
+    supplemental = None
+    if 'term_supplement' in source:
+        from .security_action_supplements import verify
+        extra = verify(root, source, payload, files, now=now)
+        supplemental = extra['terms']
+        proofs.extend(extra['proofs'])
+        bound += extra['bound_bytes']
     return {'payload': payload, 'files': files, 'members': members, 'aliases': aliases,
-            'package': package, 'archive_root': archive_root, 'proofs': proofs, 'bound_bytes': bound}
+            'package': package, 'archive_root': archive_root, 'proofs': proofs, 'bound_bytes': bound,
+            'supplemental_terms': supplemental}
 
 
 def verify_source(root, source, expected, *, now=None):
     """Qualify every included component's actual complete terms and notices."""
     result = source_custody(root, source, expected, now=now)
-    return _qualify_source(result, source)
+    return _qualify_source(result, source, supplemental=result['supplemental_terms'])
 
 
 def _qualify_source(result, source, *, supplemental=None):
