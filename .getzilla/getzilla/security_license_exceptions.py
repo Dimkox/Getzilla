@@ -301,14 +301,30 @@ def _refuse(message):
     raise ArtifactError("license-exception-conditions", message)
 
 
+def condition_profile(name):
+    profile = PROFILES.get(name) if type(name) is str else None
+    if profile is None and type(name) is str and name.startswith("retrieval-research162-"):
+        from .security_research_catalog import condition_profile as research_profile
+        profile = research_profile(name)
+    return profile
+
+
 def validate_exceptions(entries):
     if type(entries) is not list or len(entries) > 128 or len(json.dumps(entries).encode()) > 60000:
         _refuse("dependency exceptions must be a bounded list")
     seen = set()
+    research = None
     for entry in entries:
         if type(entry) is not dict or set(entry) != {"subject", "condition_profile"}:
             _refuse("exception must contain only an exact subject and reviewed condition profile")
-        profile = PROFILES.get(entry["condition_profile"]) if type(entry["condition_profile"]) is str else None
+        name = entry["condition_profile"]
+        if type(name) is str and name.startswith('retrieval-research162-'):
+            if research is None:
+                from .security_research_catalog import load_catalog
+                research = load_catalog()['profiles']
+            profile = research.get(name)
+        else:
+            profile = PROFILES.get(name) if type(name) is str else None
         subject = entry["subject"]
         if profile is None or type(subject) is not dict or set(subject) != SUBJECT_FIELDS:
             _refuse("unsupported or incomplete dependency exception")
@@ -343,6 +359,9 @@ def validate_exceptions(entries):
             or subject["usage"] not in profile["usages"]
         ):
             _refuse("internal CI conditions cannot authorize another use or redistribution")
+        if profile.get("internal_research"):
+            from .security_research_catalog import validate_subject
+            validate_subject(subject)
         url = urlsplit(subject["artifact_url"])
         if (
             url.scheme != "https"
@@ -366,7 +385,7 @@ def retention_paths(policy, dep):
     for entry in policy.get("dependency_exceptions", []):
         subject = entry["subject"]
         if all(dep.get(key) == subject[key] for key in ("ecosystem", "name", "version", "manifest", "usage")):
-            profile = PROFILES[entry["condition_profile"]]
+            profile = condition_profile(entry["condition_profile"])
             paths.update(profile["terms"])
             paths.update(profile["notices"])
             paths.update(profile["unchanged"])
@@ -400,8 +419,17 @@ def matching_profile(policy, dep, record, distribution, scope):
 
 def verify_exception(policy, dep, record, files, metadata, distribution, scope, *, supplements=None):
     entry = _matching_entry(policy, dep, record, distribution, scope)
-    actual = entry["subject"]
-    profile = PROFILES[entry["condition_profile"]]
+    profile = condition_profile(entry["condition_profile"])
+    return _verify_profile(entry, profile, files, metadata, supplements=supplements)
+
+
+def _verify_profile(entry, profile, files, metadata, *, supplements=None):
+    """Exact member checks shared with the private tiny source-composition tests.
+
+    Public evaluation always selects the entry/profile through _matching_entry.
+    This pure member checker itself grants no source, target or model authority.
+    """
+    actual = entry['subject']
     if metadata.get("expression") != profile["expression"] or set(metadata.get("license_paths", [])) != set(
         profile.get("declared_terms", profile["terms"])
     ):
@@ -499,7 +527,7 @@ def detail_consistent(finding):
             return False
         entry = dict(subject=detail["subject"], condition_profile=detail["condition_profile"])
         validate_exceptions([entry])
-        profile = PROFILES[entry["condition_profile"]]
+        profile = condition_profile(entry["condition_profile"])
         subject = entry["subject"]
         if (
             detail["exception_sha256"] != _digest(entry)
