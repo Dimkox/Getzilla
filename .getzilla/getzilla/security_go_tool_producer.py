@@ -12,6 +12,7 @@ import time
 from urllib.parse import unquote, urlsplit
 
 from . import security_go_tool_inputs as reader
+from .security_go_contracts import MODULES_KEY
 from .security_artifacts import ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, MAX_METADATA_BYTES, read_file
 from .security_data import MAX_AGE_SECONDS, _clock, _json
 from .security_license_acquisition import MAX_BATCH_BYTES, _write
@@ -533,16 +534,16 @@ def _assemble(checker, inventory, declarations, store):
             + str(row["buildinfo"]["settings"].get("vcs.revision"))
             for row in observations[role]["executables"].values()
         }
-        proof = dict(
-            schema_version=1,
-            kind="go-checker-components/v1",
-            tool_id=declaration["id"],
-            release=releases[role],
-            modules={key: modules[key] for key in needed},
-            source_locks={key: lock_descs[key] for key in selected_locks if key in lock_descs},
-            runtime={version: runtime[version] for version in versions},
-            expressions={},
-        )
+        proof = {
+            "schema_version": 1,
+            "kind": "go-checker-components/v1",
+            "tool_id": declaration["id"],
+            "release": releases[role],
+            MODULES_KEY: {key: modules[key] for key in needed},
+            "source_locks": {key: lock_descs[key] for key in selected_locks if key in lock_descs},
+            "runtime": {version: runtime[version] for version in versions},
+            "expressions": {},
+        }
         raw = canonical(proof)
         desc = store.generated_object(raw, roles=[role])
         acquired = min(row["fetched_at"] for row in store.facts if role in row["roles"])

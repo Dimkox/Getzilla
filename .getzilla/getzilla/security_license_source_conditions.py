@@ -206,9 +206,7 @@ PROFILES = [{'artifact_sha256': '70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2
                            'prove selected internal use and custody'],
   'accepted_additional_terms': ['LGPL-2.1-only']}]
 
-TEXTS = {'20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331': ('LGPL-2.1-only',),
- '2c7c5d22ed5a8ee968c64757710979afcd77438c48b4a265b94e615babd8a901': ('BlueOak-1.0.0',),
- '8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004': ('BlueOak-1.0.0',)}
+from .security_license_texts import _SOURCE_CONDITIONAL_TEXTS as TEXTS  # noqa: F401 compatibility identity
 
 ACTION_PROFILES = [{'action_reference': 'actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0',
   'artifact_sha256': '468cad919bce0d61e2d7d96942d95babf8b3f470c94e55ae6d6b243467949161',
@@ -299,5 +297,6 @@ def action_allowed_for(record, component, allowed, *, selected_internal):
                 or set(component.get('license_paths',[]))!=set(profile['terms'])
                 or len(component.get('license_paths',[]))!=len(profile['terms']) or component.get('notice_paths')!=[]):
             continue
-        if 'BlueOak-1.0.0' not in result:result.append('BlueOak-1.0.0')
+        if 'BlueOak-1.0.0' not in result:
+            result.append('BlueOak-1.0.0')
     return result

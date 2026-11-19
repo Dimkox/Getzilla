@@ -47,7 +47,9 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
 
     def observe(self, *, folder='owned/src/pkg', ownership=None, extra=None,
                 consumer=None, helper=None, missing=False, initializer=True):
-        root = Path('closed-queue-src-fixture')
+        temporary = tempfile.TemporaryDirectory(prefix='closed-queue-src-fixture-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
         path = folder + '/consumer.py'
         sources = {path: self.consumer if consumer is None else consumer,
                    folder + '/helper.py': None if missing else self.helper if helper is None else helper}
@@ -3958,12 +3960,21 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
         object_id = repo.git("rev-parse", f"{head}:{paths[0]}").encode("ascii")
         negative = b"100644 blob " + object_id + b" -1\t" + paths[0].encode() + b"\0"
-        with patch.object(DIFF, "_git", return_value=negative):
+        actual_git = DIFF._git
+        def negative_metadata(project, arguments, **options):
+            return negative if 'ls-tree' in arguments else actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=negative_metadata):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "invalid Git blob size"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
         metadata = b"100644 blob " + object_id + b" 10\t" + paths[0].encode() + b"\0"
         malformed = object_id + b" blob 9\0VALUE = 1\n\0"
-        with patch.object(DIFF, "_git", side_effect=(metadata, malformed)):
+        def malformed_batch(project, arguments, **options):
+            if 'ls-tree' in arguments:
+                return metadata
+            if any(argument.startswith('--batch') for argument in arguments):
+                return malformed
+            return actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=malformed_batch):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "unexpected Git blob batch header"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
 
@@ -9710,7 +9721,7 @@ class QueueDiagnosticProvenanceTests(unittest.TestCase):
         python = SimpleNamespace(tree=tree or (lambda path: ast.parse('pass')))
         read = reader or (lambda root, diff, path, side: b'import celery\n')
         with patch.object(FIT, '_python_paths', return_value=paths), \
-                patch.object(FIT, '_queue_module_inventory', return_value=SimpleNamespace(paths=())), \
+                patch.object(FIT, '_queue_module_inventory', return_value=FIT._QueueResolutionCache((), (), {}, {})), \
                 patch.object(FIT, '_module_package', return_value=''), \
                 patch.object(FIT, 'read_diff_file', side_effect=read), \
                 patch.object(FIT, '_queue_signals', side_effect=signals), \

@@ -26,9 +26,19 @@ def _refuse(code='artifact-factory-input'):
 
 
 def _app_members(root,scratch):
-    from .public_security_context import _git
+    from .python_test_runner import execute
+    from .security_tools import _environment
+    from .security_data import SecurityDataError
+    from .verification_actions import retain_stop, stop_details, updated_stop
     with tempfile.TemporaryDirectory(prefix='factory-source-',dir=scratch) as directory:
-        paths=_git(root,['ls-files','factory/src/getzilla_factory'],Path(directory)).splitlines()
+        current = Path(directory)
+        result = execute(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(root),
+                          'ls-files', 'factory/src/getzilla_factory'], current, _environment(current), timeout=30)
+        if result.returncode or result.terminal_state != 'completed' or result.cleanup_error:
+            error = SecurityDataError('cannot establish source identity using a completed Git observation; stop=' + json.dumps(stop_details(result), sort_keys=True))
+            retain_stop(error, updated_stop(result))
+            raise error
+        paths=result.stdout.strip().splitlines()
     if not 1 <= len(paths) <= 10000:
         _refuse()
     members={}
