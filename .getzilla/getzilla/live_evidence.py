@@ -342,4 +342,3 @@ def _cleanup_ack(output, owner, namespace):
         raise ValueError('Cleanup ledger original invocation is unavailable')
     return live_contracts.ledger_ack(read_document(output / 'lifecycle-cleanup-ledger.json'), binding,
                                     path.name, {'namespace': owner.namespace, 'nonce': owner.nonce})
-

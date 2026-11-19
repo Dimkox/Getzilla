@@ -627,4 +627,3 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
         raise
     except (ValueError, TypeError, KeyError) as exc:
         raise ArtifactError('artifact-catalog-unavailable', str(exc)) from exc
-

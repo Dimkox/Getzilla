@@ -291,4 +291,3 @@ def accept_baseline(path: Path, report: dict, *, reason: str, scope: str) -> dic
             check()
             return {'status': 'accepted', 'baseline_id': entry['acceptance_digest'], 'result_digest': report['result_digest'],
                     'previous_digest': previous, 'release_authority': False}
-

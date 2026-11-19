@@ -212,5 +212,3 @@ def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]
     # replaced file, not a change clock; the identity omits it there.
     change = 0 if fsx.WINDOWS else value.st_ctime_ns
     return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, change)
-
-
