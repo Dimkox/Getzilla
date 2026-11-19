@@ -9,6 +9,8 @@ from pilot.profile import exact_landing_profile
 from pilot.store import PilotStore
 from pilot.tests.test_contracts import HEX64_A, HEX64_B
 from pilot.tests.support import issue_snapshot, make_control
+
+from pilot.tests.support import issue_snapshot, posix_runtime
 from pilot.validation import (
     BubblewrapTestRunner,
     CandidateValidator,
@@ -71,6 +73,7 @@ def candidate(issue) -> CandidateChangeV1:
 
 
 def semantic_fixture(root: Path) -> None:
+    # LF bytes as the landing checkout holds them (Windows text mode would write CRLF).
     script = b'{"@context":"https://schema.org","@type":"SoftwareSourceCode","version":"2.0.14"}'
     # Independently derived with OpenSSL over the literal script bytes above.
     public_csp_digest = "5LMeRiDxuvLWdAoIIfcRC8fSEylkqAjIPg+W1KGh2hg="
@@ -87,6 +90,7 @@ def semantic_fixture(root: Path) -> None:
     (root / "tests/test_landing.py").write_text(
         "EXPECTED='2.0.14 v2.0.14 Latest published release Governed Agentic Software Factory — Offline Technical Preview'\n",
         encoding="utf-8",
+        newline="\n",
     )
     (root / ".htaccess").write_text(
         "Header always set Content-Security-Policy \"default-src 'self'; script-src 'self' 'sha256-"
@@ -95,6 +99,7 @@ def semantic_fixture(root: Path) -> None:
         "media-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; "
         "base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests\"\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -182,6 +187,7 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(rejected.decision, "rejected")
             self.assertIn("semantic_non_pass", rejected.reason_codes)
 
+    @posix_runtime
     def test_fixed_test_and_semantic_pass_persist_one_exact_validation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -213,6 +219,7 @@ class ValidationTests(unittest.TestCase):
             self.assertNotEqual(result.writer_id, result.evaluator_id)
             store.close()
 
+    @posix_runtime
     def test_tree_mutation_is_terminal_even_when_test_exit_is_zero(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pilot.cli import main
+from pilot.tests.support import posix_runtime
 
 
 def write_config(root: Path, *, provider_mode: str = "app_server_chatgpt") -> Path:
@@ -52,6 +54,7 @@ class PilotCliTests(unittest.TestCase):
             self.assertEqual(main([phase, "--live"], stdout=output), 2)
             self.assertEqual(json.loads(output.getvalue())["reason"], "live_config_required")
 
+    @posix_runtime
     def test_closed_config_dispatches_three_live_phases_and_read_only_status(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -87,6 +90,7 @@ class PilotCliTests(unittest.TestCase):
             self.assertFalse(calls[0][1].profile.live_default)
             self.assertEqual(calls[0][1].validation_root, root / "validation")
 
+    @posix_runtime
     def test_main_has_a_built_in_host_runner_not_an_adapter_placeholder(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -103,6 +107,21 @@ class PilotCliTests(unittest.TestCase):
                 "runtime_path_unavailable",
             )
 
+
+    def test_non_posix_host_is_refused_before_the_config_is_read(self) -> None:
+        calls = []
+        with tempfile.TemporaryDirectory() as raw, patch("pilot.cli.POSIX_HOST", False):
+            missing = str(Path(raw) / "absent.json")
+            for argv in (
+                ["prepare", "--live", "--config", missing],
+                ["publish-branch", "--live", "--config", missing],
+                ["publish-proposal", "--live", "--config", missing],
+                ["status", "--config", missing],
+            ):
+                output = io.StringIO()
+                self.assertEqual(main(argv, phase_runner=lambda *call: calls.append(call) or {}, stdout=output), 2)
+                self.assertEqual(json.loads(output.getvalue()), {"status": "unavailable", "reason": "posix_host_required"})
+        self.assertEqual(calls, [])
 
 if __name__ == "__main__":
     unittest.main()

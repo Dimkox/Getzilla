@@ -9,7 +9,10 @@ import unittest
 from pilot.store import PilotStore, PilotStoreError
 from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
 
+from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
 
+
+@posix_runtime
 class PilotStoreTests(unittest.TestCase):
     def test_state_rejects_control_paths_and_symlink_alias(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

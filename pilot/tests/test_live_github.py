@@ -12,6 +12,8 @@ from pilot.github import GitHubPublication
 from pilot.live_github import CommandResult, PinnedGitHubTransport
 from pilot.store import PilotStore
 from pilot.tests.support import make_control, utc_time
+
+from pilot.tests.support import posix_runtime, utc_time
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, gate_passed, grant
 
 
@@ -32,6 +34,7 @@ def result(value, *, returncode: int = 0, stderr: bytes = b"") -> CommandResult:
     return CommandResult(returncode, stdout, stderr)
 
 
+@posix_runtime
 class PinnedGitHubTransportTests(unittest.TestCase):
     def _transport(self, root: Path, results: list[CommandResult]):
         gh = root / "gh"
