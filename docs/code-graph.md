@@ -9,6 +9,7 @@ getzilla graph build  --root DIR [--cache FILE] [--config graph.json]
 getzilla graph status --root DIR [--cache FILE]
 getzilla graph impact --root DIR [--changed PATH ...]
 getzilla graph export --root DIR
+getzilla graph history --root DIR [--base COMMIT] [--end COMMIT]
 ```
 
 ## Scope and identity
@@ -63,6 +64,112 @@ The cache is `<root>/.getzilla/index/graph.sqlite` (or `--cache`). A generation 
 read back inside one transaction; the active pointer moves only if it still names the generation
 the writer started from. A corrupt cache or another store schema is moved aside and rebuilt.
 Zero-Git writes `.getzilla/index/` into `.git/info/exclude`, and this repository ignores it.
+
+## Committed-history evidence
+
+`history` reads committed Git objects and metadata independently of the Python parser. It branches before
+the graph cache and working-set discovery, so it creates no index, cache, graph generation or
+repository files. It never imports repository code, executes hooks/text converters/external
+diffs, fetches objects or follows a parent repository for a selected plain folder.
+
+```text
+getzilla graph history --root . --base BASE_SHA --end END_SHA
+getzilla graph history --root . --history-window 1704067200 1704240000 --history-window 1704240000 1704412800
+getzilla graph history --root . --history-exclude vendor --history-exclude generated --history-bulk-components 5
+```
+
+The range excludes the resolved base and includes the resolved end (default `HEAD`). The report
+records both object IDs, end tree and object format. All reachable commits are traversed before
+time filtering, including histories with nonmonotonic dates. Windows use **committer** Unix
+timestamps, UTC, start inclusive/end exclusive. Merge diffs are excluded; reachable side-branch
+commits still count. Root commits compare with the empty tree. Renames count as deletion plus
+addition, without heuristic rename detection. Tabs, newlines and Unicode in file paths use NUL
+records; authors, messages, source and absolute source paths do not enter the report.
+
+Revision inputs are full object IDs or literal refs (`HEAD`, branch/tag names, full refs).
+Ancestry/reflog expressions such as `HEAD~10` refuse: Git's mutable interpretation cannot choose
+an unverified range. Annotated tag chains are independently verified before peeling. Every
+consumed commit, tree, blob and tag is hashed with the repository's SHA1/SHA256 format over
+its exact type, decimal byte length, NUL header and raw payload. Wrong-hash objects or wrong
+types yield explicit incomplete coverage; a readable object name is not integrity proof.
+
+Parents, committer times, range membership and tree changes come from those verified raw bytes,
+not Git `rev-list`, merge-base, grafts or replacement interpretation. Ordinary small ranges close
+with a positive bounded reachability proof; ambiguous side branches require a bounded verified
+base-ancestor closure. Unclosed range membership never produces full trends. The original finite
+commit limit plus one metadata lookahead remains; object bytes/time share the original budgets.
+Immutable cached bytes prevent a later metadata rewrite from relabeling already admitted facts.
+This is object identity verification, not a signature, author authentication or human approval.
+
+Mappings reuse the existing `architecture/system.yaml` and `architecture/rules.yaml` loader and
+longest declared path binding, including deleted paths. The architecture digest, explicit history
+config digest, extractor version and fixed policy strings bind numerical evidence. Missing or
+ambiguous mappings stay unknown. Exclusions are explicit relative prefixes; no vendor/generated
+path is silently inferred. A component's `touches` counts distinct touching commits;
+`file_touches` counts file entries. Insertions/deletions are line counts, separate from touches.
+Binary changes count touches and `binary_touches`; `line_churn_complete:false` means unknown
+binary line churn, not zero churn.
+
+Line churn uses a declared independent algorithm: LF records retain their terminators, exact
+common prefixes/suffixes are anchored, then Python `difflib.SequenceMatcher(autojunk=False)`
+counts inserted/deleted records. It does **not** claim Git-Myers-equivalent counts. Binary means
+a NUL in the first8000 raw blob bytes. Raw old/new objects are admitted with `cat-file blob`
+before counting; missing objects cannot borrow working-tree files. Blob bytes stay private and
+never enter exported reports or model packets. Local Git attributes, diff drivers and custom
+function-name regexes do not choose this line algorithm. Binary tree names are parsed directly,
+including NUL framing and SHA1/SHA256 object widths; source working-tree content is not used.
+Identical referenced subtree IDs prove no change without scanning unrelated contents. Changed
+objects must pass admission before counters publish.
+
+Co-change pairs count distinct commits touching both components. A commit touching more than
+the configured component threshold retains touches/churn but contributes no pairs. The report
+lists bulk SHAs and the denominator: all considered non-bulk, non-merge commits, including
+empty/excluded diffs. No percentage or dependency strength is inferred from those populations.
+
+`coverage.complete` applies only to the declared available range and mappings. Reasons include
+`NO_GIT_HISTORY`, `UNBORN_HISTORY`, `SHALLOW_HISTORY`, `PARTIAL_HISTORY`, `EMPTY_RANGE`,
+`EMPTY_WINDOW`, `MAPPING_UNAVAILABLE`, `UNSUPPORTED_MAPPING`, `UNMAPPED_PATHS`,
+`AMBIGUOUS_MAPPING`, `COMMIT_BUDGET`, `BYTE_BUDGET`, `TIME_BUDGET`, `OBJECT_ID_MISMATCH`,
+`OBJECT_TYPE_MISMATCH`, `INVALID_COMMIT` and `INVALID_TREE`. No-Git or incomplete
+history never means clean risk. A normal JSON response exits0 even for incomplete coverage;
+callers must inspect coverage. Invalid CLI/config arguments refuse (exit2/3). For example:
+
+```json
+{"coverage":{"complete":false,"reasons":["NO_GIT_HISTORY"],"risk_assessment":"not_performed"},"facts":[]}
+```
+
+Defaults cap metadata/diff reads at1000 commits,8MiB cumulative Git output and30 seconds;
+`--history-max-commits`, `--history-max-bytes` and `--history-max-seconds` set finite limits.
+`--history-max-file-touches` (50000) and `--history-max-pair-observations` (20000) also bound
+parsed entries and total pair/commit evidence, including combinatorial cross-component changes.
+`--history-max-line-records` (50000) bounds a changed pair's parsed line records;
+`--history-max-line-comparisons` (1000000) bounds the product of unmatched old/new line counts
+after anchoring. An over-budget pair reports `LINE_DIFF_BUDGET`; it does not publish that
+commit's partial counters. This is a finite prototype, not an arbitrary-history performance SLA.
+The stdout probe can retain one extra byte to detect overflow; both pipes share the byte budget.
+Each pipe has a bounded transient read chunk (at most64KiB); refused overflow reads can consume
+detection chunks beyond the threshold but cannot publish complete over-budget facts.
+Raw stdout is separate from discarded diagnostics, so warnings cannot become object bytes.
+The deadline also covers per-file
+analysis; bounded process cleanup may follow it. Only fully analysed commits publish counters.
+Reported wall time, Git command/read counts, peak retained Git buffer and observed process-lifetime
+RSS are separate observations outside `metrics_digest`. RSS is not attributed solely to mining
+and is explicitly unavailable where the platform does not expose it. Prehistory is not recorded.
+
+Facts are advisory. Hotspots mean observed touch frequency; co-change never proves causation,
+a dependency, a defect or developer performance. An increase fact requires at least two equal,
+nonoverlapping, nonempty UTC windows and complete comparable coverage. Each fact carries its
+metric, window bounds and commit SHAs. Numerical evidence and deterministic facts do not replace
+the existing architecture/code-graph checks or any security, review or test obligation.
+
+The Python API provides `interpretation_packet(report)` and
+`validate_model_selection(report, response)`. A model-facing packet freezes only existing fact
+IDs, values and SHAs. The closed response contains the exact `packet_digest` and selected
+`claims:[{"id":"existing fact ID","commits":["exact SHAs"]}]`. Translation reconstructs
+canonical claims and rejects extra prose, invented facts, stale packets and changed citations.
+These are recorded-adapter translation controls. This component performs **zero model calls**;
+actual provider interpretation, efficacy, token usage and model cost remain **NOT_RUN** until
+separately exercised. It does not complete the model-interpretation acceptance of issue#163.
 
 ## Incremental updates
 
