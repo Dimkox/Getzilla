@@ -33,13 +33,17 @@ class LocalWriterResult:
 
 class LocalWriter:
     def __init__(self, repository: Path, runtime: Path, command: tuple[str, ...],
-                 checks: tuple[tuple[str, ...], ...]):
+                 checks: tuple[tuple[str, ...], ...], *, tcp_connect_ports: tuple[int, ...] | None = None):
         if not command or not checks or any(not check for check in checks):
             raise ValueError('writer and verification commands are required')
         self.repository = Path(repository).resolve(strict=True)
         self.runtime = Path(runtime).absolute()
         self.command = tuple(command)
         self.checks = tuple(tuple(check) for check in checks)
+        if tcp_connect_ports is not None:
+            from .local_network import validate_tcp_ports
+            validate_tcp_ports(tcp_connect_ports)
+        self.tcp_connect_ports = tcp_connect_ports
 
     @staticmethod
     def _git(root: Path, *args: str) -> bytes:
@@ -62,6 +66,9 @@ class LocalWriter:
         os.replace(temporary, path)
 
     def _process(self, command, workspace, run, phase, packet, deadline, input_file=None):
+        if (not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'WEXITED', 'WNOHANG'))
+                or signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL):
+            raise ValueError('owned child wait identity is unavailable')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return {'phase': phase, 'returncode': None, 'status': 'timeout'}
@@ -70,6 +77,9 @@ class LocalWriter:
         environment.update(PATH=environment.get('PATH', os.defpath), HOME=str(run / 'home'),
                            PYTHONDONTWRITEBYTECODE='1', GIT_TERMINAL_PROMPT='0')
         def child_limits():
+            if self.tcp_connect_ports is not None:
+                from .local_network import restrict_tcp_ports
+                restrict_tcp_ports(self.tcp_connect_ports)
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
             limit = packet.limits.max_output_bytes
             resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
@@ -79,18 +89,30 @@ class LocalWriter:
             child = subprocess.Popen(command, cwd=workspace, env=environment,
                                      stdin=input_file or subprocess.DEVNULL,
                                      stdout=output, stderr=subprocess.STDOUT,
-                                     start_new_session=True, preexec_fn=child_limits)
+                                     start_new_session=True, close_fds=True, preexec_fn=child_limits)
             status = 'completed'
             try:
                 code = child.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 status = 'timeout'
+                # The timed-out leader remains our unreaped child. WNOWAIT
+                # retains its PID through the final group signal, including
+                # when TERM already made it a zombie. A foreign reaper fails
+                # this observation instead of authorizing a stale group kill.
+                os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                 os.killpg(child.pid, signal.SIGTERM)
+                grace = time.monotonic() + 1
+                while time.monotonic() < grace:
+                    if os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+                        break
+                    time.sleep(0.01)
+                os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                 try:
-                    code = child.wait(timeout=1)
-                except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                    code = child.wait()
+                except ProcessLookupError:
+                    pass
+                # Reap only after the last signal to the owned group.
+                code = child.wait()
         return {'phase': phase, 'returncode': code, 'status': status,
                 'log': log.name, 'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest()}
 
@@ -103,7 +125,10 @@ class LocalWriter:
         if self._git(self.repository, 'rev-parse', expected + '^{commit}').decode().strip() != expected:
             raise ValueError('packet source commit unavailable')
         identity = hashlib.sha256((packet.task_id + '\0' + packet.run_id).encode()).hexdigest()
-        command_digest = hashlib.sha256(json.dumps([self.command, self.checks]).encode()).hexdigest()
+        command_identity = [self.command, self.checks]
+        if self.tcp_connect_ports is not None:
+            command_identity.append({'tcp_connect_ports': self.tcp_connect_ports})
+        command_digest = hashlib.sha256(json.dumps(command_identity).encode()).hexdigest()
         self.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
         run = self.runtime / identity
         run.mkdir(mode=0o700, exist_ok=True)

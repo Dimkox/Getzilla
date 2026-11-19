@@ -90,6 +90,80 @@ class LocalWriterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'input'):
             different.run(self.packet, 'Return 42')
 
+    def test_native_child_port_boundary_and_cached_identity(self):
+        import socket
+        from getzilla_factory.local_writer import LocalWriter
+        listeners = [socket.socket() for _ in range(2)]
+        for listener in listeners:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(2)
+            self.addCleanup(listener.close)
+        proxy, backend = [listener.getsockname()[1] for listener in listeners]
+        self.writer.write_text(self.writer.read_text() +
+                               'import socket,errno\n'
+                               f's=socket.socket();s.settimeout(2);assert s.connect_ex(("127.0.0.1",{proxy}))==0;s.close()\n'
+                               f's=socket.socket();s.settimeout(2);assert s.connect_ex(("127.0.0.1",{backend}))==errno.EACCES;s.close()\n')
+        ordinary = self.runner()
+        restricted = LocalWriter(self.repo, self.root / 'runs', ordinary.command,
+                                 ordinary.checks, tcp_connect_ports=(proxy,))
+        self.assertEqual(restricted.run(self.packet, 'Return 42').status, 'checks_passed')
+        changed = LocalWriter(self.repo, self.root / 'runs', ordinary.command,
+                              ordinary.checks, tcp_connect_ports=(backend,))
+        with self.assertRaisesRegex(ValueError, 'input'):
+            changed.run(self.packet, 'Return 42')
+
+    def test_timeout_stops_term_resistant_descendant_and_preserves_partial_work(self):
+        import os
+        import signal
+        import time
+        pid_file = self.root / 'owned-child.pid'
+        child_code = ('import os,signal,time;from pathlib import Path;'
+                      'signal.signal(signal.SIGTERM,signal.SIG_IGN);'
+                      f'Path({str(pid_file)!r}).write_text(str(os.getpid()));time.sleep(30)')
+        self.writer.write_text(
+            'import subprocess,sys,time\nfrom pathlib import Path\n'
+            'Path("answer.py").write_text("def answer():\\n    return 41\\n")\n'
+            f'subprocess.Popen([sys.executable,"-c",{child_code!r}])\n'
+            'time.sleep(30)\n')
+        packet = self.packet.to_dict()
+        packet.pop('packet_digest')
+        packet['limits']['wall_seconds'] = 4
+        for stage in packet['plan']['stages']:
+            stage['wall_seconds'] = 1
+        self.packet = TaskPacketV1.from_dict(packet)
+        from unittest.mock import patch
+        real_killpg = os.killpg
+        owned_signals = []
+        def signal_owned_group(pgid, number):
+            # A live or zombie leader must still be our waitable child before
+            # either destructive signal. WNOWAIT deliberately does not reap it.
+            os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            owned_signals.append(number)
+            return real_killpg(pgid, number)
+        try:
+            with patch('getzilla_factory.local_writer.os.killpg', side_effect=signal_owned_group):
+                result = self.runner().run(self.packet, 'Return 42')
+            self.assertEqual(result.status, 'writer_failed')
+            self.assertEqual(owned_signals, [signal.SIGTERM, signal.SIGKILL])
+            self.assertIn(b'return 41', result.patch.read_bytes())
+            pid = int(pid_file.read_text())
+            def stopped():
+                try:
+                    return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+                except FileNotFoundError:
+                    return True
+            deadline = time.monotonic() + 1
+            while not stopped() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(stopped(), 'owned descendant remained live after task timeout')
+            self.assertIn('return 0', (self.repo / 'answer.py').read_text())
+        finally:
+            if pid_file.exists():
+                try:
+                    os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_out_of_scope_change_is_refused(self):
         self.writer.write_text(self.writer.read_text() + 'Path("outside.py").write_text("bad")\n')
         result = self.runner().run(self.packet, 'Return 42')
