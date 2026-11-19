@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import harnesses, verification_plan, verification_tool_workspace
+from getzilla import harnesses, verification_plan, verification_tool_workspace, verification_policy_source
 from tests.test_batch_composition_joins import _Registry, pure
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,9 +36,9 @@ class HookCompositionJoinTests(unittest.TestCase):
             def stat(self): return SimpleNamespace(st_size=len(sources[self.name]))
             def read_bytes(self): return sources[self.name]
         with mock.patch.object(verification_tool_workspace, 'checked_path', side_effect=lambda root, name:Source(name)), \
-                mock.patch.object(verification_plan.importlib, 'import_module',
+                mock.patch.object(verification_policy_source.importlib, 'import_module',
                                   side_effect=lambda name, package:SimpleNamespace(filename=name.removeprefix('.')+'.py')), \
-                mock.patch.object(verification_plan, '_module_source',
+                mock.patch.object(verification_policy_source, '_module_source',
                                   side_effect=lambda module:modules.get(module.filename,module.filename.encode())), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             baseline = verification_plan.policy_binding(Path('owned-hook-root'))

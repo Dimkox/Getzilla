@@ -557,7 +557,7 @@ class CIExceptionCustodyTests(unittest.TestCase):
             def held_members(_uses, _source, _run, _index, requested):
                 return {path: actual[path] for path in requested if path in actual}
 
-            with patch("getzilla.security_image_producer.ci_member_evidence", side_effect=held_members):
+            with patch("getzilla.security_image_authority.ci_member_evidence", side_effect=held_members):
                 result = licenses.evaluate_artifacts(inv, artifacts, policy, now=now, target_binding=binding)
                 self.assertEqual(result["status"], "pass", result["gaps"])
                 for path in ("cffi/_cffi_gen_src.py", "typing_extensions.py"):

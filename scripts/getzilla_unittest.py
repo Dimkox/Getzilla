@@ -31,7 +31,7 @@ def _journal_observer():
         archive = sdk / 'getzilla.zip'
         paths = ([str(archive / 'getzilla')] if archive.is_file() else []) + [str(sdk / 'getzilla')]
         selected = []
-        for leaf in ('fsx', 'queue_refusal', 'verification_journal'):
+        for leaf in ('fsx', 'queue_refusal', 'verification_actions', 'verification_journal'):
             identity = name + '.' + leaf
             spec = importlib.machinery.PathFinder.find_spec(identity, paths)
             if spec is None or spec.loader is None or type(spec.origin) is not str:

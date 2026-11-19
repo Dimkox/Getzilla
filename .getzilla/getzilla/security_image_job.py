@@ -45,7 +45,8 @@ def _memory_admission(parent):
 def _observe_memory(parent):
     """Observe the selected allocation ancestors before creating any job resource."""
     from . import _cpu_capacity
-    from .security_image_backend import _Root, _filesystem
+    from .security_oci import _Root
+    from .security_image_authority import _filesystem
     parent = Path(parent)
     membership = _memory_read(Path('/proc/self/cgroup'), 1024 * 1024)
     mountinfo = _memory_read(Path('/proc/self/mountinfo'), 1024 * 1024)

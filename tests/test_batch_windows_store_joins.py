@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import security_data as data, security_data_windows as windows
+from getzilla import security_data as data, security_data_windows as windows, verification_policy_source
 from getzilla import security_osv_diagnostics  # noqa: F401
 from getzilla import security_osv_snapshot as snapshot, verification_plan
 from tests.test_batch_composition_joins import _Registry, pure
@@ -24,9 +24,9 @@ class WindowsStoreJoinTests(unittest.TestCase):
         model = json.loads((Path(__file__).resolve().parents[1]/'architecture/system.yaml').read_bytes())
         content = [b'owned native interpreter one']
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module',
+                mock.patch.object(verification_policy_source.importlib, 'import_module',
                                   side_effect=lambda name, package: SimpleNamespace(filename=name.removeprefix('.')+'.py')), \
-                mock.patch.object(verification_plan, '_module_source', side_effect=lambda module:
+                mock.patch.object(verification_policy_source, '_module_source', side_effect=lambda module:
                     content[0] if module.filename=='security_data_windows.py' else module.filename.encode()), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             owners = [n['id'] for n in model['nodes']

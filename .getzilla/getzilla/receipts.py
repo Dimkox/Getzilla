@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 from . import fsx
 from .review_source import review_source_binding
+from .git_ranges import _qualified_architecture_comparison  # noqa: F401 compatibility
 from .state import serialized_task, require_route_owner
 from .architecture import (
     ArchitectureError,
@@ -537,122 +538,6 @@ def _history_is_shallow(root: Path) -> bool:
     return raw == b"true\n"
 
 
-def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: str):
-    """Reuse an exact completed qualification, never a reconcile-only assessment.
-
-    This reads existing workflow evidence; it grants no new PASS or independent
-    authority. Git ancestry/model/ref currentness is revalidated by the selector.
-    """
-    route_id = route.get('route_id')
-    if not isinstance(route_id, str):
-        return None
-    try:
-        stored_identity = _receipt_storage_identity(root, route_id)
-        receipt = get_receipt(root, route_id, 'verification')
-        if stored_identity is None or _receipt_storage_identity(root, route_id) != stored_identity:
-            return None
-    except (OSError, RuntimeError):
-        return None
-    required = {'schema_version', 'route_id', 'kind', 'status', 'created_at', 'tree_fingerprint',
-                'report', 'details', 'criterion_ids', 'spec_digest', 'spec_fingerprint'}
-    if (not isinstance(receipt, dict) or not required.issubset(receipt)
-            or type(receipt.get('schema_version')) is not int or receipt['schema_version'] != 1
-            or not isinstance(receipt.get('created_at'), str) or not isinstance(receipt.get('criterion_ids'), list)
-            or receipt.get('status') != 'pass' or receipt.get('stale') is True):
-        return None
-    from .continuity import receipt_context_current
-    if (receipt.get('route_id') != route_id or receipt.get('kind') != 'verification'
-            or receipt.get('git_head') != head or receipt.get('tree_fingerprint') != tree_fingerprint(root)
-            or receipt.get('architecture_route_base_sha') != route.get('base_commit')
-            or not receipt_context_current(root, route, receipt)
-            or receipt.get('review_plan_digest') != (route.get('review_plan') or {}).get('digest')):
-        return None
-    report = receipt.get('details')
-    if (not isinstance(report, dict) or report.get('status') != 'pass'
-            or report.get('mode') not in ('pr', 'release') or report.get('terminal_state') != 'completed'):
-        return None
-    architecture = report.get('architecture')
-    if (not isinstance(architecture, dict) or architecture.get('status') != 'pass'
-            or architecture.get('fitness_status') != 'pass'):
-        return None
-    witness = receipt.get('architecture_comparison_witness')
-    if witness is None:
-        return None
-    from .architecture_diff import ArchitectureBaseSelection, _comparison_model_digest, _comparison_ranges_digest, _git
-    names = set(ArchitectureBaseSelection.__dataclass_fields__)
-    if (type(witness) is not dict or set(witness) != names
-            or architecture.get('architecture_comparison_witness') != witness
-            or witness.get('candidate_sha') != head or witness.get('route_base_sha') != route.get('base_commit')
-            or witness.get('base_kind') != 'accepted_target' or witness.get('bootstrap_baseline') is not False
-            or witness.get('range_mode') != report['mode']
-            or witness.get('range_mode') != receipt.get('architecture_range_mode')
-            or witness.get('range_mode') != architecture.get('architecture_range_mode')
-            or 'architecture_invocation_ranges_digest' in receipt
-            or 'architecture_invocation_ranges_digest' in architecture
-            or witness.get('comparison_base_sha') != witness.get('target_sha')
-            or witness.get('comparison_base_sha') == head
-            or receipt.get('architecture_base_sha') != witness.get('comparison_base_sha')
-            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', witness[key])
-                       for key in ('route_base_sha', 'comparison_base_sha', 'candidate_sha', 'target_sha'))
-            or not all(isinstance(witness.get(key), str) and re.fullmatch(r'[0-9a-f]{64}', witness[key])
-                       for key in ('ranges_digest', 'model_digest'))
-            or not isinstance(witness.get('target_ref'), str)
-            or not witness['target_ref'].startswith(('refs/remotes/origin/', 'refs/heads/'))):
-        raise ArchitectureError('qualified architecture comparison witness is malformed', code='git')
-    old_range = {'bases': [
-        {'kind': 'route', 'source': 'route.base_commit', 'target_sha': witness['route_base_sha'],
-         'comparison_base_sha': witness['route_base_sha']},
-        {'kind': 'pr-target', 'source': witness['target_ref'], 'target_sha': witness['target_sha'],
-         'comparison_base_sha': witness['comparison_base_sha']}], 'findings': []}
-    anchor = _git(root, ['merge-base', '--all', witness['route_base_sha'], witness['target_sha']])
-    contained = _git(root, ['merge-base', '--all', witness['target_sha'], head])
-    if (anchor is None or anchor.decode().splitlines() != [witness['route_base_sha']]
-            or contained is None or contained.decode().splitlines() != [witness['target_sha']]
-            or _comparison_ranges_digest(ArchitectureBaseSelection(**witness)) != witness['ranges_digest']
-            or _comparison_model_digest(root, (witness['route_base_sha'], witness['target_sha'], head)) != witness['model_digest']):
-        raise ArchitectureError('qualified architecture comparison identity is stale', code='git')
-    for name in ('architecture_base_sha', 'architecture_base_kind', 'architecture_bootstrap_baseline',
-                 'architecture_route_base_sha', 'architecture_head_commit'):
-        if architecture.get(name) != receipt.get(name):
-            raise ArchitectureError('qualification architecture bindings disagree', code='git')
-    # Prove live acceptance separately from the frozen plan's binding ranges.
-    # This lower-level compiler never calls the range/witness reader again.
-    from .verification import GitRangeBase, GitRangeSelection, _select_local_pr_target, _resolve_commit
-    target = _select_local_pr_target(root)
-    if not isinstance(target, tuple) or target[0] != witness['target_ref']:
-        return None
-    accepted = _git(root, ['merge-base', '--all', head, target[1]])
-    if accepted is None or accepted.decode().splitlines() != [head]:
-        return None
-    frozen = GitRangeSelection([GitRangeBase(**row) for row in old_range['bases']], mode=witness['range_mode'], head_sha=head)
-    try:
-        from .verification_plan import _compile_required_plan, _report_plan_gaps, requested_profiles_from_report
-        current = _compile_required_plan(root, mode=report.get('mode'), profiles=requested_profiles_from_report(report),
-                                         docs_scope=None, route=route, ranges=frozen)
-        if _report_plan_gaps(root, report, current):
-            return None
-        if _compile_required_plan(root, mode=report.get('mode'), profiles=requested_profiles_from_report(report),
-                                  docs_scope=None, route=route, ranges=frozen) != current:
-            return None
-        spec = _active_spec_binding(root, route, 'verification')
-        if spec is not None and any(receipt.get(key) != value for key, value in spec.items()):
-            return None
-    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-        return None
-    if (_exact_head(root) != head or _select_local_pr_target(root) != target
-            or _resolve_commit(root, witness['target_ref']) != target[1]
-            or tree_fingerprint(root) != receipt['tree_fingerprint']
-            or not receipt_context_current(root, route, receipt)):
-        raise ArchitectureError('qualified comparison changed during validation', code='git')
-    try:
-        if (get_receipt(root, route_id, 'verification') != receipt
-                or _receipt_storage_identity(root, route_id) != stored_identity):
-            return None
-    except (OSError, RuntimeError):
-        return None
-    return ArchitectureBaseSelection(**witness)
-
-
 @git_binding_scope()
 def _active_architecture_binding(
     root: Path,
@@ -1015,7 +900,7 @@ def _publish_receipt(path: Path, data: dict[str, Any], interrupt_check: Callable
 def _verification_architecture_options(root: Path, route: dict[str, Any], kind: str, details: Any) -> dict[str, Any]:
     if kind != 'verification' or not isinstance(details, dict) or 'mode' not in details:
         return {}
-    from .verification import _git_range_selection, _RANGE_MODES
+    from .git_ranges import _git_range_selection, _RANGE_MODES
     if type(details['mode']) is not str or details['mode'] not in {'fast', *_RANGE_MODES}:
         raise RuntimeError('verification invocation mode is unavailable')
     return {'_trusted_ranges': _git_range_selection(root, route, details['mode'])}
@@ -1170,7 +1055,7 @@ def write_receipt(
     finally:
         if publication is not None:
             publication.close()
-    from .route_metrics import record_receipt
+    from .metrics_journal import record_receipt
     from .metrics_journal import digest
     record_receipt(root, route.get('route_id'), kind, status, identity=digest(data))
     return path

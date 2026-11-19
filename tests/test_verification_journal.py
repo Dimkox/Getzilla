@@ -137,7 +137,7 @@ finally:writer.close()
 
 class JournalColocatedSDKTests(unittest.TestCase):
     def colocated_worlds(self, archive, external=False):
-        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'queue_refusal.py', 'python_test_runner.py', 'process_limits.py',
+        members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py', 'python_test_runner.py', 'process_limits.py',
                    'pytest_progress.py', '_cpu_capacity.py', 'verification_scope.py')
         with tempfile.TemporaryDirectory(prefix='owned-colocated-sdk-', dir=ROOT / '.getzilla/runtime') as temporary:
             fixture = Path(temporary)
@@ -256,7 +256,7 @@ class JournalDecoderBoundaryTests(unittest.TestCase):
         from getzilla import python_test_runner as runner
         with self.owned_run() as run:
             with journal.activate(run), patch.object(journal.json, 'loads', side_effect=RecursionError('owned-decoder')):
-                with patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                with patch.object(runner, 'owned_popen', side_effect=OSError('owned')) as launch:
                     result = self.observe(lambda: runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1))
             self.assertIsInstance(result, runner.ProcessResult)
             self.assertEqual(result.returncode, 127)
@@ -343,7 +343,7 @@ class JournalClosedMetadataTests(unittest.TestCase):
                     'duplicate': dict(good, expected=['worker-0', 'worker-0'])}[shape]
                 index.write_text(json.dumps(bad))
                 before = index.read_bytes()
-                with journal.activate(run), patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned')) as launch:
+                with journal.activate(run), patch.object(runner, 'owned_popen', side_effect=OSError('owned')) as launch:
                     try:
                         result = runner.execute(['owned-command'], run.root, {'PATH': os.defpath}, timeout=1)
                     except Exception as exc:
@@ -446,7 +446,7 @@ class JournalPostStartLossTests(unittest.TestCase):
         environment = {'PATH': os.defpath, 'OWNED_FLAG': 'kept'}
         for lost in (False, True):
             with self.subTest(lost=lost), self.owned_run(lost) as (root, run), journal.activate(run), \
-                    patch.object(runner.fsx, 'owned_popen', side_effect=OSError('owned backend sentinel')) as launch:
+                    patch.object(runner, 'owned_popen', side_effect=OSError('owned backend sentinel')) as launch:
                 try:
                     result = runner.execute(command, root, environment, timeout=1)
                 except OSError as exc:
@@ -507,7 +507,7 @@ class JournalRuntimeRepairTests(unittest.TestCase):
             'Path(__file__).with_name("initializer-ran").write_text("owned")\n'
             'def unused_application_branch():\n return 9\n')
         members = {name: (ROOT / '.getzilla/getzilla' / name).read_bytes()
-                   for name in ('fsx.py', 'queue_refusal.py', 'verification_journal.py')}
+                   for name in ('fsx.py', 'queue_refusal.py', 'verification_actions.py', 'verification_journal.py')}
         if archive:
             with zipfile.ZipFile(sdk / '.getzilla/getzilla.zip', 'w') as stream:
                 for name, content in members.items():
@@ -527,6 +527,7 @@ class JournalRuntimeRepairTests(unittest.TestCase):
         with patch.object(python_test_runner, 'STACK_DIR', sdk / '.getzilla'), \
                 patch.object(python_test_runner.fsx, '__file__', str(origins / 'fsx.py')), \
                 patch.object(python_test_runner.diagnostics, '__file__', str(origins / 'verification_journal.py')), \
+                patch.object(python_test_runner.actions, '__file__', str(origins / 'verification_actions.py')), \
                 patch.object(__import__('getzilla.queue_refusal', fromlist=['owned']), '__file__', str(origins / 'queue_refusal.py')):
             overlay = python_test_runner._application_coverage_config(config, output, root=project)
         run = journal.Run(project, None, 'owned-tests')

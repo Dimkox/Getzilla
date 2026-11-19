@@ -16,6 +16,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_go_tool_inputs as reader
 from getzilla.security_artifacts import ArtifactError
 
@@ -45,9 +46,8 @@ class GoToolProducerTests(unittest.TestCase):
             calls.append((url, maximum))
             raise OSError(errno.ENETUNREACH, "PRIVATE_MARKER")
 
-        from getzilla import security_image_producer as images
 
-        before = images._LIVE
+        before = image_authority._LIVE
         result = producer.prepare_tools(ROOT, self.root, inventory_digest="a" * 64, now=NOW, fetch=unavailable)
         self.assertEqual(result["status"], "incomplete-source-inputs")
         self.assertEqual(result["inventory"], reader.checker_inventory(ROOT))
@@ -57,7 +57,7 @@ class GoToolProducerTests(unittest.TestCase):
         self.assertTrue(all(gap["stage"] in {"archive", "release"} for gap in result["gaps"]))
         self.assertEqual(len(calls), 4)
         self.assertTrue(all(url.startswith("https://") for url, _ in calls))
-        self.assertIs(images._LIVE, before)
+        self.assertIs(image_authority._LIVE, before)
         self.assertNotIn("PRIVATE_MARKER", str(result))
 
     def test_default_transport_rejects_foreign_origins_before_opening_a_socket(self):

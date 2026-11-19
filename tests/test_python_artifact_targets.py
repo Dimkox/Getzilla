@@ -16,6 +16,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'.getzilla'))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_license_acquisition as acquisition, security_artifacts as artifacts
 from getzilla import security_licenses as licenses, security_cli as cli
 from getzilla import security_image_producer as producer, expanded_security as expanded
@@ -30,11 +31,11 @@ class PythonArtifactTargetTests(unittest.TestCase):
         source={'head_sha':'a'*40}
         run={'provider':'github-actions'}
         claimed=dict(schema_version=1,source=source,run=run,subjects={'b'*64:[0]},consumers=[{'distribution':'internal'}])
-        with mock.patch.object(producer,'_LIVE',None),self.assertRaises(producer.BackendUnavailable):
+        with mock.patch.object(image_authority, '_LIVE',None),self.assertRaises(producer.BackendUnavailable):
             producer.validate_ci_uses(claimed,source,run)
 
     def test_ci_consumer_fact_requires_same_owned_guard_build_inputs_source_and_run(self):
-        from getzilla import security_image_backend as native,security_python_target as target
+        from getzilla import security_python_target as target
         source=dict(head_sha='a'*40,tree_sha='b'*40,checker_sha='c'*40,checker_tree_sha='d'*40,
             candidate_clean=True,checker_clean=True,same_project=True)
         run=dict(provider='github-actions',repository='owned/project',run_id='42',run_attempt='1',head_sha='a'*40)
@@ -52,7 +53,7 @@ class PythonArtifactTargetTests(unittest.TestCase):
             evidence={recipe:hashlib.sha256(raw).hexdigest(),requirements:'4'*64})
         guard=object()
         live=dict(source=source,run=run,builds={'2'*64:'owned@sha256:'+'3'*64},build_inputs=[row],native_guard=guard)
-        with mock.patch.object(native,'_GUARD',guard),mock.patch.object(producer,'_LIVE',live):
+        with mock.patch.object(image_authority, '_GUARD',guard),mock.patch.object(image_authority, '_LIVE',live):
             observed=producer.ci_use_observations(self.root,inventory,source,run,graphs)
             self.assertEqual(observed['subjects'],{target.digest(target._subject(dep)):[0]})
             self.assertEqual(observed['consumers'][0]['distribution'],'internal')
@@ -65,7 +66,7 @@ class PythonArtifactTargetTests(unittest.TestCase):
                 producer.validate_ci_uses(bad,source,run)
             with self.assertRaises(producer.BackendUnavailable):
                 producer.validate_ci_uses(observed,source,{**run,'run_attempt':'2'})
-            with mock.patch.object(native,'_GUARD',object()),self.assertRaises(producer.BackendUnavailable):
+            with mock.patch.object(image_authority, '_GUARD',object()),self.assertRaises(producer.BackendUnavailable):
                 producer.validate_ci_uses(observed,source,run)
             substituted=copy.deepcopy(inventory)
             substituted['builds'][0]['recipe_sha256']='5'*64

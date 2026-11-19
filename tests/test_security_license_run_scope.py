@@ -13,8 +13,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_licenses as licenses, security_cli as cli, security_image_producer as producer
-from getzilla import security_image_backend as native, security_python_target as target
+from getzilla import security_python_target as target
 from tests.test_security_licenses import artifact, wheel, manifest, inventory, dependency, POLICY
 
 NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
@@ -207,7 +208,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             run,'f'*64,now=NOW,package_target=binding['target'],package_pins=binding['source_pins'],package_graphs=graphs)
         inputs=dict(schema_version=1,profile=profile,inventory=inv,selection=None,catalog=None)
         with mock.patch('getzilla.security_inventory.declared_inventory',return_value=inv), \
-                mock.patch('getzilla.security_cli._policy_digest',return_value='f'*64), \
+                mock.patch('getzilla.expanded_security._policy_digest',return_value='f'*64), \
                 mock.patch('getzilla.security_licenses.load_policy',return_value=POLICY), \
                 mock.patch.object(module,'checker_tools',return_value={}):
             expected=module.declaration_expectation(self.root,self.root,inputs,source,run,now=NOW,scratch=self.root)
@@ -438,7 +439,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
             inventory_sha256=inv["digest"],
         )
         profile["profile_sha256"] = target.digest(profile)
-        with mock.patch.object(producer, "_LIVE", state), mock.patch.object(native, "_GUARD", guard):
+        with mock.patch.object(image_authority, "_LIVE", state), mock.patch.object(image_authority, "_GUARD", guard):
             with self.assertRaises(Exception):
                 module.activate(self.root, profile)
             module.activate(self.root, profile, _entry=producer._LICENSE_ENTRY)
@@ -465,10 +466,10 @@ class SelectedRunLicenseTests(unittest.TestCase):
             license_profile=dict(profile_sha256=binding["profile_sha256"], source=source),
             license_checker_declarations=dict(checker_tool_conditions or {}),
         )
-        effects = mock.patch.multiple(producer, _LIVE=state)
+        effects = mock.patch.multiple(image_authority, _LIVE=state)
         effects.start()
         self.addCleanup(effects.stop)
-        effect = mock.patch.object(native, "_GUARD", guard)
+        effect = mock.patch.object(image_authority, "_GUARD", guard)
         effect.start()
         self.addCleanup(effect.stop)
         return module.current(self.root, inv, binding)
@@ -490,7 +491,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
         module = self.module()
         host, future, inactive, inv, source, run, binding = self.fixture()
         self.catalog(host, inv, binding)
-        with mock.patch.object(producer, "_LIVE", None):
+        with mock.patch.object(image_authority, "_LIVE", None):
             self.assertIsNone(module.current(self.root, inv, binding))
             result = licenses.evaluate_artifacts(inv, self.root, POLICY, now=NOW, target_binding=binding)
         self.assertEqual(result["status"], "fail")
@@ -554,7 +555,7 @@ class SelectedRunLicenseTests(unittest.TestCase):
         for variant in ("guard", "inventory", "profile"):
             with self.subTest(variant=variant):
                 if variant == "guard":
-                    with mock.patch.object(native, "_GUARD", object()), self.assertRaises(Exception):
+                    with mock.patch.object(image_authority, "_GUARD", object()), self.assertRaises(Exception):
                         context.validate(inv, binding)
                 elif variant == "inventory":
                     changed = copy.deepcopy(inv)

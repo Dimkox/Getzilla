@@ -122,7 +122,7 @@ def verify_environment(home, fetch):
 
 def install_software(root, home, *, agent=None, tools=(), fetch=None, run=execute, which=shutil.which,
                      system=None, architecture=None, verify_only=False):
-    from .updater import _release_fetch
+    from .release_transport import _release_fetch
     fetch = fetch or _release_fetch
     system, arch = _host(system, architecture)
     targets, records = plan(fetch, system=system, arch=arch, agent=agent, tools=tools)

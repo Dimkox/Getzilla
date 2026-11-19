@@ -241,7 +241,7 @@ class VerifyBaselineTests(unittest.TestCase):
                                      for detail in evaluate_quality_gate(mode='pr', checks=[check]).details))
                 (project / '.getzilla').mkdir()
                 (project / '.getzilla' / 'AGBP_SYNC.json').write_text('{}', encoding='utf-8')
-                with mock.patch('getzilla.updater.home_dir', return_value=project / 'home'):
+                with mock.patch('getzilla.release_transport.home_dir', return_value=project / 'home'):
                     failing, metadata = verification._workflow_baseline_check(project, 'pr')
                     warning, _ = verification._workflow_baseline_check(project, 'fast')
                 self.assertEqual(failing.status, 'fail')

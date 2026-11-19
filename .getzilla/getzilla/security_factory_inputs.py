@@ -26,7 +26,7 @@ def _refuse(code='artifact-factory-input'):
 
 
 def _app_members(root,scratch):
-    from .security_cli import _git
+    from .public_security_context import _git
     with tempfile.TemporaryDirectory(prefix='factory-source-',dir=scratch) as directory:
         paths=_git(root,['ls-files','factory/src/getzilla_factory'],Path(directory)).splitlines()
     if not 1 <= len(paths) <= 10000:
@@ -171,7 +171,7 @@ def _environment(value):
 def _command(command,stage):
     from .python_test_runner import execute
     from .security_tools import _environment as command_environment
-    from .security_cli import _preparation_step
+    from .public_security_context import _preparation_step
     with _preparation_step('factory-target' if command[-1]=='--describe-target' else 'factory-output'):
         result=execute(command,stage,command_environment(stage),timeout=120)
         if result.returncode or result.terminal_state!='completed' or result.cleanup_error or len(result.stdout)>65536:
@@ -207,7 +207,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
     from .security_license_acquisition import acquire_pypi,_write
     from .manifest import _open_root
     from .security_licenses import load_policy
-    from .security_cli import _preparation_step
+    from .public_security_context import _preparation_step
     declared=validate_declaration(binding['factory_inputs'])
     # The caller has independently rederived the declaration and exact source binding.
     main_bytes=_catalog_bytes(artifacts,now=now)

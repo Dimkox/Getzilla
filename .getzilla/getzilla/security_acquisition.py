@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Callable
 
 from .security_data import SOURCE_URLS, SecurityDataError, osv_coverage, publish_snapshot
-from .updater import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
+from .security_intelligence import validate_epss, validate_kev
+from .release_transport import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
 
 TRIVY_VERSION = '0.74.0'
 TRIVY_ARCHIVE_SHA256 = '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a'

@@ -7,20 +7,17 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib
-import importlib.machinery
-import importlib.util
 import json
 import os
 import re
 import sys
-import zipimport
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .util import git_head, run, tree_fingerprint
+from .verification_policy_source import implementation_source_binding, _module_source  # noqa: F401 compatibility
 
 MAX_OBLIGATIONS = 4096
 MAX_PLAN_BYTES = 2 * 1024 * 1024
@@ -72,32 +69,6 @@ def _obligation(value: Any) -> dict:
     return copy.deepcopy(value)
 
 
-def _module_source(module) -> bytes:
-    """Read corresponding engine source through its actual closed loader; never execute it."""
-    loader = getattr(module, '__loader__', None)
-    if type(loader) not in {importlib.machinery.SourceFileLoader,
-                            importlib.machinery.SourcelessFileLoader, zipimport.zipimporter}:
-        raise ValueError('verification policy source loader is unavailable')
-    try:
-        filename = loader.get_filename(module.__name__)
-        if filename != module.__file__:
-            raise ValueError('verification policy source identity differs')
-        source = filename
-        if source.endswith('.pyc'):
-            try:
-                source = importlib.util.source_from_cache(source)
-            except ValueError:
-                source = source[:-1]
-        if not source.endswith('.py'):
-            raise ValueError('verification policy has no corresponding Python source')
-        content = loader.get_data(source)
-        if not isinstance(content, bytes) or not 0 < len(content) <= 4 * 1024 * 1024:
-            raise ValueError('verification policy source is unavailable or excessive')
-        return content
-    except (AttributeError, ImportError, OSError, TypeError) as exc:
-        raise ValueError('verification policy source cannot be bound') from exc
-
-
 def policy_binding(root: Path) -> dict:
     from .verification_tool_workspace import checked_path
     values = {}
@@ -109,34 +80,7 @@ def policy_binding(root: Path) -> dict:
         if not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
             raise ValueError('verification policy path is not a bounded regular file: ' + name)
         values[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    implementation = {}
-    for name in ('verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
-                 'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
-                 'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
-                 'verification_scope.py', 'verification_tool_workspace.py',
-                 'expanded_security.py', 'security_cli.py', 'security_inventory.py', 'security_licenses.py', 'security_tools.py',
-                 'public_security_context.py', 'security_oci.py',
-                 'security_build_inputs.py', 'security_image_registry.py', 'security_image_backend.py',
-                 'security_image_producer.py', 'security_image_provision.py', 'security_image_job.py',
-                 'security_acquisition.py', 'startup_cpu.py', '_cpu_capacity.py',
-                 'security_intelligence.py', 'security_data.py', 'security_data_windows.py', 'security_osv_snapshot.py',
-                 'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
-                 'cost_guard.py',
-                 'baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py',
-                 'current_workflows.py', 'latest_releases.py', 'managed_runtime.py', 'managed_source_build.py',
-                 'managed_environment.py', 'managed_pyyaml.py', 'managed_npm.py', 'managed_software.py', 'opengrep_releases.py',
-                 'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
-                 'architecture_diagrams.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
-                 'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
-                 'verification_journal.py', 'queue_refusal.py', 'harnesses.py'):
-        module = importlib.import_module('.' + name[:-3], __package__)
-        implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
-    from . import STACK_DIR
-    for name, label in (('stacks.json', 'stack'), ('toolchain.json', 'toolchain')):
-        registry = STACK_DIR / 'config' / name
-        if not registry.is_file() or registry.is_symlink() or registry.stat().st_size > 4 * 1024 * 1024:
-            raise ValueError('engine ' + label + ' registry source is unavailable')
-        implementation[name] = hashlib.sha256(registry.read_bytes()).hexdigest()
+    implementation = implementation_source_binding()
     content = {'inputs': values, 'implementation': implementation}
     return {'schema_version': 1, **content, 'digest': digest(content)}
 
@@ -416,7 +360,7 @@ def requested_profiles_from_report(report):
 def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *, files=None, profiles=None,
                         bases=None, documents=_UNREAD_DOCUMENTS) -> list[dict]:
     from .quality_gates import MANDATORY_PR_CHECKS, MANDATORY_PYTHON_PR_CHECKS
-    from .verification import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
+    from .verification_scope import (_existing_quality_paths, _semgrep_config, _trivy_config_present,
                                composer_check_selection, node_check_selection, python_check_selection)
     from .verification_tools import load_checks
     names = {'required-plan', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'source-stability', 'task-context'}
@@ -585,7 +529,7 @@ def _native_obligations(root: Path, mode: str, route: dict, docs_scope: dict, *,
 def current_required_plan(root: Path, *, mode: str, profiles=None, docs_scope=None) -> dict:
     """Read the current native source and policy; never trust the old plan to select obligations."""
     from .state import get_active_route
-    from .verification import GitRangeSelection, _git_range_selection
+    from .git_ranges import GitRangeSelection, _git_range_selection
     route = get_active_route(root) or {}
     range_mode = 'pr' if mode == 'fast' and route.get('delivery_lane') == 'light' else mode
     ranges = _git_range_selection(root, route or None, range_mode)
@@ -602,10 +546,10 @@ def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route
     therefore be checked without re-entering its own witness reader.
     """
     from .continuity import context_binding, legacy_evidence_allowed
-    from .verification import _changed_file_inventory
+    from .verification_scope import _changed_file_inventory
     from .review_plan import assess
     from .verification_scope import select_docs_state_scope, FOCUSED_TEST_TARGETS
-    from .verification import _docs_state_status_inventory
+    from .verification_scope import _docs_state_status_inventory
     from .expanded_security import security_obligations
     documents = _plan_documents(root, route)
     context = context_binding(root, route) if route and not legacy_evidence_allowed(route) else {
@@ -634,7 +578,7 @@ def _compile_required_plan(root: Path, *, mode: str, profiles, docs_scope, route
         route = {**route, 'delivery_lane': 'light' if light['admitted'] else 'full', 'light_diff': light}
     if docs_scope is None and mode == FOCUSED_MODE:
         from .state import get_active_change
-        from .verification import select_static_seo_landing_scope
+        from .verification_scope import select_static_seo_landing_scope
         active = get_active_change(root) or {}
         findings = list(ranges.findings)
         if not route:

@@ -62,7 +62,7 @@ def _refuse():
 
 
 def _live(root,inventory,binding):
-    from . import security_image_producer as producer,security_image_backend as native
+    from . import security_image_authority as producer, security_image_authority as native
     state=producer._LIVE
     if state is None or state.get('license_entry') is not producer._LICENSE_ENTRY:
         return None
@@ -77,7 +77,7 @@ def _live(root,inventory,binding):
 
 def activate(root,profile,*,_entry=None):
     """Called only by the fixed native pipeline after its actual declaration."""
-    from . import security_image_producer as producer,security_image_backend as native
+    from . import security_image_authority as producer, security_image_authority as native
     from .security_python_target import binding,source_pins
     state=producer._LIVE
     if (_entry is not producer._LICENSE_ENTRY or state is None
@@ -332,7 +332,7 @@ class Scope:
 
 
 def validate_result(value,*,profile=None,inventory_sha256=None,now=None,diagnostics=None,raw_coverage=None):
-    from . import security_image_producer as producer
+    from . import security_image_authority as producer
     try:
         state=producer._LIVE
         record=state.get('license_results',{}).get(digest(value)) if state is not None else None
@@ -360,7 +360,8 @@ def validate_result(value,*,profile=None,inventory_sha256=None,now=None,diagnost
 
 def declaration_expectation(root,checker,inputs,source,run,*,now,scratch,checker_revision=None):
     """Reobserve source applicability outside the native job; never restore its seals."""
-    from .security_cli import _profile_declaration,validate_selection_authority,_policy_digest
+    from .public_security_context import _profile_declaration,validate_selection_authority
+    from .expanded_security import _policy_digest
     from .security_inventory import declared_inventory
     from .security_python_target import validate_target,source_pins,closure_graphs
     from .security_licenses import load_policy

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import release_transport
 from getzilla import updater
 from getzilla import verification
 
@@ -60,8 +61,8 @@ class OpenGrepLatestTests(unittest.TestCase):
         binary = self.root / 'opengrep.exe'
         binary.write_bytes(b'forged')
         (self.root / 'opengrep-current.json').write_text(json.dumps({'sha256': hashlib.sha256(b'forged').hexdigest()}))
-        with patch.object(updater, '_platform_key', return_value=('windows', 'amd64')), \
-                patch.object(updater, '_release_fetch', side_effect=self.fetch):
+        with patch.object(release_transport, '_platform_key', return_value=('windows', 'amd64')), \
+                patch.object(release_transport, '_release_fetch', side_effect=self.fetch):
             self.assertIsNotNone(verification._unpinned_opengrep(binary))
             binary.write_bytes(b'owned inert EXE')
             (self.root / 'support.dll').write_bytes(b'owned inert DLL')

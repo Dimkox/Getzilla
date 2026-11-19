@@ -10,6 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend
 from getzilla.architecture_diff import _run_capped
 
@@ -37,7 +38,7 @@ class DaemonHandoffControl(unittest.TestCase):
                     def client(_command, **_kwargs):
                         return _run_capped([sys.executable, '-I', '-S', '-B', '-c', 'pass'], cwd=root,
                             env={'PATH': os.defpath}, stdin_data=None, stdout_limit=128, stderr_limit=128, timeout=2)
-                    with mock.patch.object(backend, '_GUARD', guard), mock.patch(
+                    with mock.patch.object(image_authority, '_GUARD', guard), mock.patch(
                             'getzilla.architecture_diff._run_capped', side_effect=client):
                         marker = builder.build(dict(dockerfile='Dockerfile', context='.', platform='linux/amd64',
                                                     arguments={}), root, root / 'not-an-image')
@@ -74,12 +75,12 @@ class DaemonHandoffControl(unittest.TestCase):
                     result[name] = {'path': str(path), 'sha256': 'model-only'}
                 return result
             try:
-                with mock.patch.object(backend, '_GUARD', (volume, object(), [])), \
+                with mock.patch.object(image_authority, '_GUARD', (volume, object(), [])), \
                         mock.patch.object(backend, '_fixed'), \
                         mock.patch('getzilla.security_image_provision.archive_bytes', return_value=b'owned model'), \
                         mock.patch('getzilla.security_image_provision.extract_tools', side_effect=extract), \
                         mock.patch.object(backend, '_Root', return_value=mock.Mock(fd=held)), \
-                        mock.patch.object(backend, '_filesystem', return_value=0x01021994):
+                        mock.patch.object(image_authority, '_filesystem', return_value=0x01021994):
                     builder = backend.BuildKit(volume, archive='model-only', deadline=time.monotonic() + 1)
                     self.assertLess(len(os.fsencode(builder.address.removeprefix('unix://'))), 104)
                     self.assertEqual(builder.socket.parent, Path('/tmp'))
@@ -95,7 +96,7 @@ class DaemonHandoffControl(unittest.TestCase):
             b = os.open(root / 'foreign', os.O_RDONLY | os.O_DIRECTORY)
             try:
                 with mock.patch.object(backend, '_Root', side_effect=[mock.Mock(fd=a), mock.Mock(fd=b)]), \
-                        mock.patch.object(backend, '_filesystem', return_value=0x01021994):
+                        mock.patch.object(image_authority, '_filesystem', return_value=0x01021994):
                     with self.assertRaises(backend.BackendUnavailable):
                         backend._socket_alias(root)
             finally:

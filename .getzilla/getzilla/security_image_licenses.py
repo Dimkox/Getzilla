@@ -430,7 +430,7 @@ _FAMILY_KIND = "held-oci-components/v1"
 
 
 def _family_live(inventory=None, source=None, run=None):
-    from . import security_image_producer as producer, security_image_backend as native
+    from . import security_image_authority as producer, security_image_authority as native
     from .security_artifacts import ArtifactError
 
     state = producer._LIVE
@@ -555,7 +555,7 @@ def prepare_families(root, inventory, source, run, *, now=None):
     from pathlib import Path
     from .security_artifacts import artifact_context, family_identity, ArtifactError, MAX_INDEX_BYTES
     from .security_license_acquisition import _write
-    from .security_cli import _clock
+    from .public_security_context import _clock
 
     state = _family_live(inventory, source, run)
     root = Path(root)
