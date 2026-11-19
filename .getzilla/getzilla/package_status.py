@@ -71,7 +71,8 @@ def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
     return fsx.directory_identity(info, _identity(info))
 
 
-def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *, sync: bool = False) -> bytes:
+def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *, sync: bool = False,
+                      single_link: bool = False) -> bytes:
     """Open every component without following links; never block on a FIFO."""
     parts = _relative(relative)
     if not fsx.WINDOWS and (
@@ -97,6 +98,8 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise InspectionError('file_unsafe', 'selected input is not a regular file')
+        if single_link and before.st_nlink != 1:
+            raise InspectionError('file_unsafe', 'selected input has multiple links')
         if before.st_size > limit:
             raise InspectionError('file_too_large', 'selected input exceeds its byte limit')
         chunks: list[bytes] = []
@@ -111,6 +114,7 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
                 raise InspectionError('file_too_large', 'selected input exceeds its byte limit')
         if (
             _identity(before) != _identity(os.fstat(descriptor))
+            or (single_link and os.fstat(descriptor).st_nlink != 1)
             or _identity(before) != _identity(fsx.lstat_at(directory, parts[-1]))
             or total != before.st_size
             or any(
