@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser(
     description='Print the active route, change package, agents, human gates and evidence gaps as JSON.',
 )
 parser.add_argument('--model-continuation', action='store_true', help='Print only passive model continuation status.')
+parser.add_argument('--onboarding', action='store_true', help='Read opt-in free/local profile declarations; never qualify or launch a model.')
 parser.add_argument('--harness', choices=('grok', 'qwen', 'claude', 'codex', 'gemini', 'copilot'),
                     help='Identify the native harness; this does not qualify an adapter.')
 args = parser.parse_args()
@@ -30,6 +31,10 @@ from getzilla.util import find_root
 from getzilla.model_continuation import startup_status
 
 root = find_root()
+if args.onboarding:
+    from getzilla.free_onboarding import onboarding_status
+    print(json.dumps(onboarding_status(root), ensure_ascii=True, indent=2))
+    raise SystemExit(0)
 continuation = startup_status(root, args.harness or 'unknown')
 if args.model_continuation:
     print(json.dumps(continuation, ensure_ascii=True, indent=2))
