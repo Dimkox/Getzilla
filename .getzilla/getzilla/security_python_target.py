@@ -278,7 +278,7 @@ def source_pins(root, inventory, target):
     """Private per-use observations, not a rewrite of the source inventory."""
     from .security_inventory import _PIN, _logical_requirements
     from .security_osv_snapshot import REQUIREMENTS_RE
-    from .security_licenses import _marker_required
+    from .security_license_contracts import _marker_required
     manifests={row['path']:row['sha256'] for row in inventory['manifests']}
     result,cache={},{}
     for dep in inventory['dependencies']:

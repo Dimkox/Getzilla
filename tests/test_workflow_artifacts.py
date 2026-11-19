@@ -1088,6 +1088,8 @@ for prior in ('absent', 'none', 'loaded'):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'workflow_artifacts.py'
         path.write_bytes(original.read_bytes())
+        path.with_name('workflow_inputs.py').write_bytes(original.with_name('workflow_inputs.py').read_bytes())
+        path.with_name('workflow_storage.py').write_bytes(original.with_name('workflow_storage.py').read_bytes())
         path.with_name('fsx.py').write_text(
             "import sys\nassert sys.modules.get(__name__).__dict__ is globals()\n"
             "raise RuntimeError('public sibling import failure')\n",

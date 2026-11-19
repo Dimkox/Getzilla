@@ -17,7 +17,7 @@ from .verification_actions import retain_stop, stop_details, updated_stop
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
 from .security_artifacts import ArtifactError
 from .security_inventory import canonical_digest
-from .security_licenses import _repository_identity
+from .security_license_contracts import _repository_identity
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
 from .security_tools import _environment
 

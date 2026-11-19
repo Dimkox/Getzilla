@@ -12,7 +12,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from .spec import _validate_document, load_schema, validate_schema
-from .workflow_artifacts import canonical_json, _strict_json, MAX_SOURCE_BYTES
+from .workflow_storage import canonical_json, _strict_json, MAX_SOURCE_BYTES
 
 
 class IntakeError(ValueError):

@@ -6,6 +6,7 @@ a closed namespace for demand-based source analysis.
 from __future__ import annotations
 
 import hashlib
+import json
 import importlib
 import importlib.machinery
 import importlib.util
@@ -40,7 +41,7 @@ def _module_source(module) -> bytes:
 
 def implementation_source_binding() -> dict:
     implementation = {}
-    for name in ('verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
+    for name in ('agent_eval_authoring.py', 'security_license_contracts.py', 'live_evidence.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
@@ -68,3 +69,21 @@ def implementation_source_binding() -> dict:
             raise ValueError('engine ' + label + ' registry source is unavailable')
         implementation[name] = hashlib.sha256(registry.read_bytes()).hexdigest()
     return implementation
+
+
+def _producer_digest(root, cell):
+    from .live_evidence import _held_bytes
+    names = ('live_acceptance', 'disposable_resources', 'factory_tests', 'python_test_runner',
+             'live_lifecycle', 'live_contracts', 'live_evidence', 'verification_policy_source')
+    hashes = {}
+    for name in names:
+        module = importlib.import_module('getzilla.' + name)
+        hashes[module.__name__] = hashlib.sha256(module.__loader__.get_data(module.__file__)).hexdigest()
+    files = {'factory': ('factory/tests/run_live_suite.py', 'factory/tests/run_disposable_exit.py',
+                         'factory/tests/postgres_restart_probe.py', 'factory/tests/test_postgres_integration.py',
+                         'factory/tests/test_execution_persistence_postgres.py'),
+             'trust-ci': ('trust-ci/tests/run_postgres_suite.py', 'trust-ci/tests/postgres_restart_probe.py'),
+             'lifecycle': ('scripts/getzilla_live_lifecycle.py',)}[cell]
+    for name in files:
+        hashes[name] = hashlib.sha256(_held_bytes(root/name)).hexdigest()
+    return hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()

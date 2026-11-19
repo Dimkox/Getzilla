@@ -13,7 +13,7 @@ from . import state
 from .requirements_intake import (IntakeError, digest, normalized, project_requirements, validate_intake,
                                  reduce_intake, NativeIntakeContext)
 from .intake_readiness import assess_readiness
-from .workflow_artifacts import canonical_json, _strict_json, _read_regular, WorkflowArtifactError
+from .workflow_inputs import canonical_json, _strict_json, _read_regular, WorkflowArtifactError
 from .workflow_storage import cas_package_write, change_directory
 from .util import now_utc
 
@@ -518,7 +518,7 @@ def trace_requirement(root, criterion_id, delivery=None):
     tasks, graph_status = [],'not_run'
     graph = _json(root,package,'workflow/task-graph.json',missing=True)
     if graph is not None:
-        from .workflow_artifacts import validate_task_graph,load_source_manifest,compile_task_graph
+        from .workflow_inputs import validate_task_graph,load_source_manifest,compile_task_graph
         validate_task_graph(graph)
         bundle = load_source_manifest(root,package/'workflow/manifest.json')
         if graph != compile_task_graph(root,route['change_id'],bundle,route):

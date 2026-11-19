@@ -49,7 +49,7 @@ def declaration(root,inventory,policy,*,scratch):
     """Reobserve policy-pinned selectors; do not alter the source-use inventory."""
     if 'factory_offline_profile' not in policy:
         return None
-    from .security_licenses import factory_offline_intent
+    from .security_license_contracts import factory_offline_intent
     intent=factory_offline_intent(root,policy)
     if not intent or intent.get('code')!='license-factory-archive-delivery-unverified':
         _refuse()
@@ -94,7 +94,7 @@ def validate_declaration(value):
             or any(type(value[k]) is not str or not re.fullmatch('[a-f0-9]{64}',value[k])
                 for k in ('inventory_sha256','app_members_sha256'))):
         _refuse()
-    from .security_licenses import _policy
+    from .security_license_contracts import _policy
     _policy(dict(schema_version=1,project_repository='github.com/Dimkox/Getzilla',
         auto_allow=['MIT'],usage_distribution={},factory_offline_profile=value['policy_profile']))
     seen=set()
@@ -206,7 +206,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
     """Run only the trusted builder on exact clean source data and exact wheel bytes."""
     from .security_license_acquisition import acquire_pypi,_write
     from .manifest import _open_root
-    from .security_licenses import load_policy
+    from .security_license_contracts import load_policy
     from .public_security_context import _preparation_step
     declared=validate_declaration(binding['factory_inputs'])
     # The caller has independently rederived the declaration and exact source binding.
@@ -284,7 +284,7 @@ def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
 
 def verify(artifacts,binding,policy,*,now=None,checker=None):
     """Recompute complete target, original-use, source-app and final composition joins."""
-    from .security_licenses import artifact_catalog_source
+    from .security_license_contracts import artifact_catalog_source
     from .security_tools import TRUSTED_ROOT
     checker=TRUSTED_ROOT if checker is None else checker
     declared=validate_declaration(binding['factory_inputs'])

@@ -19,6 +19,99 @@ from getzilla.python_source_proof import namespace_is_closed
 
 
 class ArchitectureDependencyBoundaryTests(unittest.TestCase):
+    def test_eval_read_consumer_excludes_baseline_and_critic_authoring(self):
+        from getzilla import agent_evals, agent_eval_authoring
+        for name in ('review_quality', 'accept_baseline'):
+            self.assertIs(getattr(agent_evals, name), getattr(agent_eval_authoring, name))
+        import subprocess
+        for first in ('agent_evals', 'agent_eval_authoring'):
+            code = ("import sys;sys.path.insert(0,sys.argv[1]);"
+                    "__import__('getzilla.'+sys.argv[2]);"
+                    "from getzilla import agent_evals as core,agent_eval_authoring as author;"
+                    "assert core.accept_baseline is author.accept_baseline;"
+                    "assert core.review_quality is author.review_quality")
+            observed = subprocess.run([sys.executable, '-B', '-c', code, str(ROOT / '.getzilla'), first],
+                                      capture_output=True, text=True, timeout=10)
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes())
+        projection = _queue_export_slice(tree, frozenset({'required_suites'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'agent_eval_authoring'
+                             for node in ast.walk(projection)))
+
+    def test_license_catalog_contract_does_not_import_artifact_evaluation(self):
+        from getzilla import security_licenses, security_license_contracts
+        for name in ('load_policy', 'artifact_catalog_source', '_license_evidence'):
+            self.assertIs(getattr(security_licenses, name), getattr(security_license_contracts, name))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_license_contracts.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_licenses'
+                             for node in ast.walk(tree)))
+        with self.assertRaises(security_license_contracts.ArtifactError):
+            security_license_contracts._policy({})
+
+    def test_live_evidence_consumer_excludes_producer_orchestration(self):
+        from getzilla import live_acceptance, live_evidence
+        for name in ('valid_binding', 'read_document', 'validate_components', '_held_bytes'):
+            self.assertIs(getattr(live_acceptance, name), getattr(live_evidence, name))
+        self.assertIs(live_acceptance._ParserObservation, live_evidence._ParserObservation)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/verification.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'live_acceptance'
+                             for node in ast.walk(tree)))
+        self.assertFalse(live_evidence.valid_binding({}))
+        import json
+        modules = ('live_acceptance', 'disposable_resources', 'factory_tests', 'python_test_runner',
+                   'live_lifecycle', 'live_contracts', 'live_evidence', 'verification_policy_source')
+        hashes = {}
+        for name in modules:
+            module = __import__('getzilla.' + name, fromlist=[name])
+            hashes[module.__name__] = hashlib.sha256(module.__loader__.get_data(module.__file__)).hexdigest()
+        for name in ('trust-ci/tests/run_postgres_suite.py', 'trust-ci/tests/postgres_restart_probe.py'):
+            hashes[name] = hashlib.sha256(live_evidence._held_bytes(ROOT / name)).hexdigest()
+        expected = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+        self.assertEqual(live_evidence._producer_digest(ROOT, 'trust-ci'), expected)
+        with mock.patch.object(live_evidence.__loader__, 'get_data', return_value=b'changed consumer'):
+            self.assertNotEqual(live_evidence._producer_digest(ROOT, 'trust-ci'), expected)
+
+    def test_spec_json_pairs_demand_excludes_intake_publication(self):
+        tree = ast.parse((ROOT / '.getzilla/getzilla/spec.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'_pairs_object', '_reject_constant'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'intake_publication'
+                             for node in ast.walk(projection)))
+        from getzilla import spec
+        self.assertEqual(spec._pairs_object([('x', 1)]), {'x': 1})
+        with self.assertRaises(spec.SpecError):
+            spec._pairs_object([('x', 1), ('x', 2)])
+
+
+    def test_intake_input_demand_does_not_reenter_workflow_compiler(self):
+        from getzilla import workflow_artifacts, workflow_inputs
+        self.assertIs(workflow_artifacts.WorkflowArtifactError, workflow_inputs.WorkflowArtifactError)
+        for name in ('canonical_json', '_strict_json', '_read_regular'):
+            self.assertIs(getattr(workflow_artifacts, name), getattr(workflow_inputs, name))
+        for name in ('requirements_intake', 'intake_publication'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'workflow_artifacts'
+                                 for node in ast.walk(tree)))
+        with self.assertRaises(workflow_inputs.WorkflowArtifactError):
+            workflow_inputs._strict_json(b'{"x":1,"x":2}', limit=100)
+        self.assertEqual(workflow_inputs.canonical_json({'x': 1}), b'{"x":1}\n')
+
+    def test_replay_evaluator_demand_excludes_review_quality_orchestration(self):
+        tree = ast.parse((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'required_suites'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'review_source'
+                             for node in ast.walk(projection)))
+        from getzilla import agent_evals
+        expected = hashlib.sha256((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes()).hexdigest()
+        self.assertEqual(agent_evals._runner_digest(), expected)
+        with mock.patch.dict(agent_evals.__dict__, clear=False):
+            del agent_evals.__loader__
+            with self.assertRaisesRegex(agent_evals.EvalError, 'runner_source_unavailable'):
+                agent_evals._runner_digest()
+
     def test_plan_ordinary_export_keeps_closed_namespace_and_precise_demand(self):
         tree = ast.parse((ROOT / '.getzilla/getzilla/verification_plan.py').read_bytes())
         self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
@@ -202,7 +295,7 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
         from getzilla.verification_plan import policy_binding
         with tempfile.TemporaryDirectory() as directory:
             implementation = policy_binding(Path(directory))['implementation']
-        for name in ('verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
+        for name in ('agent_eval_authoring.py', 'security_license_contracts.py', 'live_evidence.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
             with self.subTest(name=name):
                 self.assertIn(name, implementation)
                 self.assertEqual(implementation[name], hashlib.sha256(
