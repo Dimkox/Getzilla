@@ -8,25 +8,10 @@ from __future__ import annotations
 
 # Complete original bytes and immutable source identities are retained in
 # tests/fixtures/security-license-internal-family-conditions.json.
-TEXTS = {'26be8a79415737dfe8edf1be62e71afeb8c770ed5a5605a06270d5701830f47c': ('BSD-3-Clause',),
- '28ca54ff46a27183631aa262673d13e3c829d909059f5c861da835fe1783fbec': ('MPL-2.0',),
- '2ba4d89aab98b9f2fb760a8fe7d05ed1c7d06be44c79f1ceb02cf9ce6e61c9a8': ('MPL-2.0',),
- '3325702108f9d65db464595854e509f2a1be9ffdc1ae82a7e99fa63c92c404c9': ('MIT',),
- '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04': ('MPL-2.0',),
- '60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d': ('MPL-2.0',),
- '6c7088eb877b5d7e6e0e9d27e822ea25fcda2e83f9eba59bb5f1418a656796e0': ('MPL-2.0',),
- '6d462371baa8649492b06f51f154dba9b25d2ac9548369b8b4fdbbbb85f2f75d': ('BSD-3-Clause',),
- '83e36e42b3dacc3d447eca3049848b3e2ff66b6e1768a6a3cf3f27a57079bda4': ('BSD-3-Clause', 'MPL-2.0'),
- '87b250b11ffadc5f872cb676caa219e2871e454ddd562d9e532d52d5c9b7520d': ('MPL-2.0',),
- '8b7975e73de4ffd999102c9d599070b02e8b3146f14184ab66588fb27c660bd8': ('X11',),
- '91b6643919df970f0968799615888a2620300dc32bb515d7bd3764ad72c282ca': ('MPL-2.0',),
- 'a830016911a348a54e89bd54f2f8b0d8fffdeac20aecfba8e36ebbf38a03f5ff': ('MPL-2.0',),
- 'b31266a0a4ade23e6c0cb5a6ae1c7933b390f30b80550a715579989639b4f55e': ('MPL-2.0',),
- 'bef1747eda88b9ed46e94830b0d978c3499dad5dfe38d364971760881901dadd': ('MPL-2.0',),
- 'd6b1a865f1c8c697d343bd4e0ce61025f91898486a1f00d727f32e8644af77d3': ('MPL-2.0',)}
+from .security_license_texts import _CONDITIONAL_TEXTS as TEXTS
 
-from .security_license_source_conditions import TEXTS as _SOURCE_TEXTS, action_allowed_for
-TEXTS.update(_SOURCE_TEXTS)
+from .security_license_source_conditions import action_allowed_for
+from .security_license_texts import _SOURCE_CONDITIONAL_TEXTS as _SOURCE_TEXTS  # noqa: F401 compatibility identity
 
 PROFILES = [{'artifact_sha256': '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a',
   'component_id': 'go-module:github.com/cyphar/filepath-securejoin@v0.6.1',
@@ -140,5 +125,6 @@ def allowed_for(record, component, allowed, *, selected_internal, source_modules
             continue
         for sha in expected.values():
             for identifier in TEXTS[sha]:
-                if identifier not in result:result.append(identifier)
+                if identifier not in result:
+                    result.append(identifier)
     return result

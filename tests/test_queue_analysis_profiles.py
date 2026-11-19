@@ -175,3 +175,34 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         self.assertEqual((head.module_limit, head.byte_limit), (128, 4194304))
         self.assertEqual((base.module_limit, base.byte_limit), (128, 4194304))
         self.assertNotEqual(base.binding, head.binding)
+
+    def test_text_recognition_owns_exact_tables_without_policy_dependency(self):
+        from getzilla import security_license_texts as texts, security_license_family_conditions as family
+        from getzilla import security_license_source_conditions as source, security_license_go_term_variants as variants
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_license_texts.py').read_bytes())
+        forbidden = {'security_license_family_conditions', 'security_license_source_conditions',
+                     'security_license_go_term_variants'}
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module in forbidden
+                             for node in ast.walk(tree)), 'recognition must not import policy evaluators')
+        self.assertIs(family.TEXTS, texts._CONDITIONAL_TEXTS)
+        self.assertIs(source.TEXTS, texts._SOURCE_CONDITIONAL_TEXTS)
+        self.assertIs(variants.FILES, texts._GO_FILES)
+        self.assertIs(variants.BUNDLES, texts._GO_BUNDLES)
+        self.assertIs(variants.EXPRESSIONS, texts._GO_EXPRESSIONS)
+
+    def test_actual_recognition_and_condition_owners_all_change_policy_on_body_mutation(self):
+        import importlib
+        from getzilla.verification_plan import policy_binding
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = policy_binding(root)
+            for name in ('security_license_texts', 'security_license_family_conditions',
+                         'security_license_source_conditions', 'security_license_go_term_variants'):
+                with self.subTest(owner=name):
+                    module = importlib.import_module('getzilla.' + name)
+                    raw = (ROOT / '.getzilla/getzilla' / (name + '.py')).read_bytes()
+                    changed = raw + b'\n# actual source body mutation control\n'
+                    with patch.object(module.__loader__, 'get_data', return_value=changed):
+                        after = policy_binding(root)
+                    self.assertEqual(after['implementation'][name + '.py'], hashlib.sha256(changed).hexdigest())
+                    self.assertNotEqual(before['digest'], after['digest'])
