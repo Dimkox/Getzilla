@@ -1,8 +1,10 @@
 """Inert source-window controls, never a real tokenizer or data seal."""
 import hashlib
 import importlib
+import ast
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +57,49 @@ class StudyWindowTests(unittest.TestCase):
         windows = self.builder()('small', 'x.py', raw, [function(raw)], Counter())
         self.assertEqual(windows[0].text.encode(), raw)
         self.assertTrue(windows[0].encoder_truncated)
+
+    def test_published_counter_and_windows_parity_at_token_boundaries(self):
+        # Execute only these two original pure definitions on tiny fake bytes.
+        # No benchmark import, model, tokenizer package or retained corpus read.
+        tree = ast.parse((ROOT / 'engineering/benchmarks/issue162/benchmark.py').read_text())
+        encoder = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                       and node.name == 'Encoder')
+        count = next(node for node in encoder.body if isinstance(node, ast.FunctionDef)
+                     and node.name == 'count')
+        chunks = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == 'chunks_for')
+        for length in (252, 253, 254, 255, 256, 257, 300):
+            with self.subTest(source_tokens=length):
+                raw = b'x' * length
+                record = function(raw)
+                class TinyPath:
+                    def __truediv__(self, unused):
+                        return self
+
+                    def read_text(self):
+                        return '[]'
+
+                    def read_bytes(self):
+                        return raw
+
+                namespace = {'sha': lambda data: hashlib.sha256(data).hexdigest(),
+                             'R': TinyPath(), 'json': SimpleNamespace(loads=lambda text: [record]),
+                             'pathlib': SimpleNamespace(Path=lambda path: TinyPath())}
+                exec(compile(ast.Module(body=[count, chunks], type_ignores=[]),
+                             '<published-pure-study-definitions>', 'exec'), namespace)
+                # Fake specials are explicit: source count +2. The historical
+                # count method includes encode().ids, rather than subtracting2.
+                counter = SimpleNamespace(identity='a' * 64, tokenizer=SimpleNamespace(
+                    encode=lambda text: SimpleNamespace(ids=list(range(len(text) + 2)))))
+                counter.count = lambda text: namespace['count'](counter, text)
+                old = namespace['chunks_for']('small', counter)
+                actual = self.builder()('small', 'x.py', raw, [record], counter)
+                self.assertEqual([(row.id, row.text, row.encoder_tokens, row.encoder_truncated)
+                                  for row in actual],
+                                 [(row['id'], row['text'], row['encoder_tokens'],
+                                   row['encoder_truncated']) for row in old])
+                self.assertEqual(actual[0].encoder_tokens, length + 2)
+                self.assertEqual(actual[0].encoder_truncated, length + 2 > 256)
 
     def test_changed_source_or_manifest_span_refuses_before_emitting_windows(self):
         raw = b'def choose():\n    return 1\n'

@@ -13,15 +13,32 @@ class StudyMetricsTests(unittest.TestCase):
     def test_unknown_positions_are_not_dropped_or_refilled(self):
         result = self.owner().ranking_metrics(
             ['outside', 'a', 'a', 'outside2', 'b', 'c'], {'a': 2, 'b': 2, 'c': 1})
-        self.assertEqual(result['recall_at_5'], 0)
-        self.assertEqual(result['mrr_at_10'], 1 / 6)
-        self.assertEqual(result['unjudged_positions_at_10'], [1, 4])
+        self.assertEqual(result['recall_at_5'], 1)
+        self.assertEqual(result['mrr_at_10'], 1 / 5)
+        self.assertEqual(result['unjudged_positions_at_10'], [1, 3])
+        self.assertEqual(result['original_positions'], [1, 2, 4, 5, 6])
         self.assertEqual(result['judgment_status'], 'partial')
 
     def test_duplicate_relevant_windows_credit_one_function(self):
         result = self.owner().ranking_metrics(['a', 'a', 'b'], {'a': 1, 'b': 1, 'c': 1})
         self.assertEqual(result['recall_at_5'], 2 / 3)
         self.assertEqual(result['mrr_at_10'], 1)
+
+    def test_historical_function_projection_precedes_metric_cutoffs(self):
+        # Published benchmark.evaluate calls dedup(..., 'function_id') first.
+        ranked = ['a', 'a', 'b', 'c', 'd', 'e', 'f']
+        judgments = dict.fromkeys(ranked, 2)
+        judgments['e'] = 1
+        actual = self.owner().ranking_metrics(ranked, judgments)
+        historical = list(dict.fromkeys(ranked))
+        self.assertEqual(actual['recall_at_5'], len(set(historical[:5]) & {'e'}))
+        self.assertEqual(actual['mrr_at_10'], 1 / (historical.index('e') + 1))
+
+    def test_repeated_outside_universe_positions_remain_reserved(self):
+        actual = self.owner().ranking_metrics(['outside'] * 5 + ['a'], {'a': 1})
+        self.assertEqual(actual['recall_at_5'], 0)
+        self.assertEqual(actual['mrr_at_10'], 1 / 6)
+        self.assertEqual(actual['original_positions'], [1, 2, 3, 4, 5, 6])
 
     def test_unjudged_is_never_a_negative_and_no_answer_is_separate(self):
         result = self.owner().ranking_metrics(['a'], {'a': 0, 'b': 2})
