@@ -62,3 +62,6 @@ def queue_refusal_text(error: Exception) -> str:
     except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
         return original
     return text
+
+# Stable public refusal vocabulary, shared by the source-budget owner.
+QUEUE_MODULE_LIMIT_CATEGORY = 'modules'

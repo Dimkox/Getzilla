@@ -40,6 +40,7 @@ from .architecture_diff import (
     read_diff_file,
     read_diff_files,
 )
+from .queue_refusal import QUEUE_MODULE_LIMIT_CATEGORY
 from .queue_provenance import (QueueAnalysisLimit, analyze_queue_tree, literal_patch_members,
                                QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)
 from .python_source_proof import binding_events, binding_owner, literal_import_reads, namespace_is_closed
@@ -507,7 +508,7 @@ class _QueueBudget:
         # Every inspected source counts, including the importer, declarations
         # and transitive cache hits. Cache warmth cannot change admission.
         if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
-            raise self.refusal('queue adapter module limit exceeded', 'modules', MAX_QUEUE_ADAPTER_MODULES,
+            raise self.refusal('queue adapter module limit exceeded', QUEUE_MODULE_LIMIT_CATEGORY, MAX_QUEUE_ADAPTER_MODULES,
                                len({source.path for source in self.sources.values()} | {item.path}))
         byte_total = self.source_bytes + (0 if previous else item.size)
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
@@ -574,14 +575,14 @@ class _QueueAdapterResolution(NamedTuple):
     signals: tuple[str, ...] = ()
     declared_exports: tuple[str, ...] = ()
     sources: tuple[tuple[str, bytes, str], ...] = ()
-    modules: frozenset[str] = frozenset()
+    source_modules: frozenset[str] = frozenset()
     height: int = 1
     footprint: _QueueFootprint | None = None
     witness: tuple[str, ...] = ()
 
 
 class _QueueResolutionCache(NamedTuple):
-    modules: tuple[str, ...]
+    source_modules: tuple[str, ...]
     paths: tuple[str, ...]
     values: dict[str, _QueueAdapterResolution]
     demands: dict[tuple[str, frozenset[str] | None, bool], _QueueAdapterResolution]
@@ -590,7 +591,7 @@ class _QueueResolutionCache(NamedTuple):
 class _QueueAdapterNamesResult(NamedTuple):
     names: frozenset[str]
     unsupported: bool
-    modules: frozenset[str] = frozenset()
+    source_modules: frozenset[str] = frozenset()
     height: int = 0
     unproved_queue_callback: bool = False
     witness: tuple[str, ...] = ()
@@ -2920,79 +2921,8 @@ def _queue_scalar_projection(tree: ast.Module) -> ast.Module:
 
 
 def _queue_export_slice_prepared(tree: ast.Module, requested: frozenset[str]) -> ast.Module:
-    """Read an owned scalar tree; copy selected declarations before rewriting."""
-    import copy
-
-    @lru_cache(maxsize=None)
-    def names(node: ast.AST) -> set[str]:
-        return {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
-
-    @lru_cache(maxsize=None)
-    def writes(node: ast.AST) -> set[str]:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            return {node.name}
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            return {alias.asname or alias.name.split('.')[0] for alias in node.names}
-        targets = [item for item in ast.walk(node)
-                   if isinstance(item, (ast.Name, ast.Attribute, ast.Subscript))
-                   and isinstance(item.ctx, (ast.Store, ast.Del))]
-        return set().union(*(names(item) for item in targets)) if targets else set()
-
-    memo: dict[tuple[int, frozenset[str], bool, int], list[ast.stmt]] = {}
-
-    def closure(body: list[ast.stmt], seeds: set[str], *, returns: bool = False, depth: int = 0) -> list[ast.stmt]:
-        if depth > 64:
-            raise ArchitectureError('queue export syntax depth limit exceeded', code='limit')
-        key = (id(body), frozenset(seeds), returns, depth)
-        if key in memo:
-            return memo[key]
-        selected: dict[int, ast.stmt] = {}
-        wanted = set(seeds)
-        for _ in range(MAX_QUEUE_DEPENDENCY_WORK):
-            previous = (len(wanted), len(selected))
-            for index, node in enumerate(body):
-                wildcard = isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names)
-                mutation = isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and bool(names(node) & wanted)
-                returning = returns and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and any(isinstance(item, (ast.Return, ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
-                if not (writes(node) & wanted or wildcard or mutation or returning):
-                    continue
-                chosen = node
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    chosen = copy.copy(node)
-                    chosen.body = closure(node.body, set(), returns=True, depth=depth + 1) or [ast.Pass()]
-                    chosen.returns = None
-                    chosen.args = copy.deepcopy(node.args)
-                    for argument in (*chosen.args.posonlyargs, *chosen.args.args, *chosen.args.kwonlyargs,
-                                     *([chosen.args.vararg] if chosen.args.vararg else []),
-                                     *([chosen.args.kwarg] if chosen.args.kwarg else [])):
-                        argument.annotation = None
-                elif isinstance(node, (ast.If, ast.While, ast.For, ast.AsyncFor, ast.Try, ast.With, ast.AsyncWith)):
-                    chosen = copy.copy(node)
-                    for field in ('body', 'orelse', 'finalbody'):
-                        if hasattr(node, field):
-                            setattr(chosen, field, closure(getattr(node, field), wanted, returns=returns, depth=depth + 1))
-                    if hasattr(chosen, 'test') and not (names(chosen.test) & wanted):
-                        # The value interpreter joins both branches. Keep an
-                        # unknown predicate so the projection cannot imply reachability.
-                        chosen.test = ast.Name(id='__getzilla_unknown_predicate__', ctx=ast.Load())
-                    if isinstance(chosen, (ast.For, ast.AsyncFor)) and not (names(chosen.target) & wanted):
-                        chosen.iter = ast.Tuple(elts=[ast.Constant(value=None)], ctx=ast.Load())
-                    if isinstance(chosen, ast.Try):
-                        chosen.handlers = []
-                        for handler in node.handlers:
-                            selected_handler = copy.copy(handler)
-                            selected_handler.type = None
-                            selected_handler.body = closure(handler.body, wanted, returns=returns, depth=depth + 1)
-                            chosen.handlers.append(selected_handler)
-                selected[index] = chosen
-                wanted.update(names(chosen))
-            if previous == (len(wanted), len(selected)):
-                result = [selected[index] for index in sorted(selected)]
-                memo[key] = result
-                return result
-        raise ArchitectureError('queue export dependency limit exceeded', code='limit')
-
-    return ast.Module(body=closure(tree.body, set(requested)), type_ignores=[])
+    from .python_source_proof import _queue_export_slice_prepared as prepare
+    return prepare(tree, requested, work_limit=MAX_QUEUE_DEPENDENCY_WORK)
 
 
 @lru_cache(maxsize=128)
@@ -3139,38 +3069,21 @@ def _imported_module(package: str, name: str) -> str:
 
 def _module_package(path: str, source_roots: tuple[str, ...] = (), paths: tuple[str, ...] = ()) -> str:
     directories = PurePosixPath(path).parent.parts
-    src = [index + 1 for index, part in enumerate(directories) if part == 'src' and index + 1 < len(directories)]
-    if len(src) == 1:
-        return '.'.join(directories[src[0]:])
+    matching_roots = [root for root in source_roots if root and _matches(path, (root,))]
+    # Only the source roots derived from declared ownership establish src layout;
+    # an ordinary directory named src does not change a module's package.
+    src_roots = [root for root in matching_roots if PurePosixPath(root).name == 'src']
+    if src_roots:
+        relative = path[len(max(src_roots, key=len)) + 1:]
+        return '.'.join(PurePosixPath(relative).parent.parts)
     for index in range(len(directories)):
         if '/'.join((*directories[:index + 1], '__init__.py')) in paths:
             return '.'.join(directories[index:])
-    relative = path
-    matching_roots = [
-        root for root in source_roots if root and _matches(path, (root,))
-    ]
-    directories = PurePosixPath(path).parent.parts
-    # Ownership roots can name a package itself. Preserve the actual package
-    # ancestry from this snapshot rather than stripping its ownership prefix.
-    src = [index + 1 for index, part in enumerate(directories) if part == 'src']
-    if len(src) > 1:
-        raise ArchitectureError('ambiguous relative source root', code='fitness')
-    if src:
-        relative = '/'.join((*directories[src[0]:], PurePosixPath(path).name))
-    elif package_paths:
-        start = len(directories)
-        while start and '/'.join((*directories[:start], '__init__.py')) in package_paths:
-            start -= 1
-        if start < len(directories):
-            relative = '/'.join((*directories[start:], PurePosixPath(path).name))
-        elif matching_roots:
-            relative = path[len(max(matching_roots, key=len)) + 1:]
-    elif matching_roots:
-        relative = path[len(max(matching_roots, key=len)) + 1:]
-    module = relative.rsplit(".", 1)[0].replace("/", ".")
-    if module.endswith(".__init__"):
-        return module.removesuffix(".__init__")
-    return module.rsplit(".", 1)[0] if "." in module else ""
+    relative = path[len(max(matching_roots, key=len)) + 1:] if matching_roots else path
+    module = relative.rsplit('.', 1)[0].replace('/', '.')
+    if module.endswith('.__init__'):
+        return module.removesuffix('.__init__')
+    return module.rsplit('.', 1)[0] if '.' in module else ''
 
 
 def _queue_adjacent_module(module: str) -> bool:
@@ -3218,7 +3131,7 @@ def _prime_local_module_sources(
     remaining: int,
     budget: _QueueBudget | None = None,
 ) -> None:
-    pending = sorted(module for module in modules if module in cache.modules and module not in cache.values)
+    pending = sorted(module for module in modules if module in cache.source_modules and module not in cache.values)
     if len(pending) > remaining:
         raise ArchitectureError("queue adapter module limit exceeded", code="limit")
     paths_by_module = {
@@ -3247,7 +3160,7 @@ def _prime_local_module_sources(
 
 def _is_local_package(cache: _QueueResolutionCache, module: str) -> bool:
     package_path = f"{module.replace('.', '/')}/__init__.py"
-    return any(path.endswith(package_path) for path in cache.paths) or module not in cache.modules and any(name.startswith(module + ".") for name in cache.modules)
+    return any(path.endswith(package_path) for path in cache.paths) or module not in cache.source_modules and any(name.startswith(module + ".") for name in cache.source_modules)
 
 
 def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None = None) -> frozenset[str] | None:
@@ -3875,7 +3788,7 @@ def _local_queue_resolution(
                 source_roots, requested, callable_only, budget)
             budget.merge(result.footprint)
             canonical = result
-            if (callable_only and resolving and module not in resolving and not result.modules
+            if (callable_only and resolving and module not in resolving and not result.source_modules
                     and result.reason == 'local_module_not_queue' and result.declared_exports):
                 # A dependent declaration read still traverses a reexport edge.
                 # Keep its topology/depth charge even though its stable function
@@ -3885,7 +3798,7 @@ def _local_queue_resolution(
                     raise ArchitectureError('queue adapter module limit exceeded', code='limit')
                 _queue_check_depth(budget, len(resolving) + 1, site='declaration', module=module, side=side, active=resolving)
                 visited.add(module)
-                result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
+                result = result._replace(source_modules=frozenset({module}), height=1, witness=(module,))
         except BaseException as error:
             if (isinstance(error, ArchitectureError) and error.code == 'limit'
                     and type(getattr(error, '_queue_refusal_capture', None)) is not _QueueRefusalCapture):
@@ -3921,12 +3834,12 @@ def _local_queue_resolution_impl(
         or any(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) is None for part in module.split("."))
     ):
         return _QueueAdapterResolution("not_queue", "invalid_local_module")
-    if module not in cache.modules:
+    if module not in cache.source_modules:
         return _QueueAdapterResolution("not_queue", "local_module_missing")
     prefetched = cache.values.get(module)
     demand_key = (module, requested, callable_only)
     cached_declaration = cache.demands.get(demand_key)
-    if callable_only and cached_declaration is not None and not cached_declaration.modules:
+    if callable_only and cached_declaration is not None and not cached_declaration.source_modules:
         return cached_declaration
     if callable_only and prefetched is not None and prefetched.sources:
         # Declaration inspection does not expand a dependency. It is bounded by
@@ -3952,12 +3865,12 @@ def _local_queue_resolution_impl(
         return _QueueAdapterResolution("unsupported", "cyclic_local_queue_adapter")
     _queue_check_depth(budget, len(resolving) + 1, site='active', module=module, side=side, active=resolving)
     cached = cache.demands.get(demand_key)
-    if cached is not None and not (cached.modules & resolving):
-        if len(visited | cached.modules) > MAX_QUEUE_ADAPTER_MODULES:
+    if cached is not None and not (cached.source_modules & resolving):
+        if len(visited | cached.source_modules) > MAX_QUEUE_ADAPTER_MODULES:
             raise ArchitectureError('queue adapter module limit exceeded', code='limit')
         _queue_check_depth(budget, len(resolving) + cached.height, site='cached', module=module, side=side, active=resolving,
-                           cached=cached.witness, cached_height=cached.height, cached_modules=cached.modules)
-        visited.update(cached.modules)
+                           cached=cached.witness, cached_height=cached.height, cached_modules=cached.source_modules)
+        visited.update(cached.source_modules)
         return cached
     resolving.add(module)
     try:
@@ -3985,7 +3898,7 @@ def _local_queue_resolution_impl(
             )
         try:
             with _source_span(source_path, side, 'values'):
-                analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
+                analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.source_modules)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
         if imported.unproved_queue_callback:
@@ -4012,7 +3925,7 @@ def _local_queue_resolution_impl(
                     body.append(ast.Assign(targets=[ast.Name(id=node.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
             try:
                 analysis = analyze_queue_tree(ast.Module(body=body, type_ignores=[]), imported.names | aliases,
-                                              allow_local_ipc='queue' not in cache.modules)
+                                              allow_local_ipc='queue' not in cache.source_modules)
             except QueueAnalysisLimit as exc:
                 raise ArchitectureError(str(exc), code='limit') from exc
         exports = set(analysis.export_paths) - {'__getzilla_factory_' + name for name in factories}
@@ -4026,7 +3939,7 @@ def _local_queue_resolution_impl(
         reason = "local_queue_provenance_resolved" if has_queue_provenance else "local_module_not_queue"
         result = _QueueAdapterResolution(
             state, reason, exports, analysis.signals, declared,
-            modules=imported.modules | {module}, height=imported.height + 1,
+            source_modules=imported.source_modules | {module}, height=imported.height + 1,
             witness=(module, *imported.witness),
         )
         # Side/source bytes belong to this snapshot cache; a completed summary
@@ -4151,9 +4064,9 @@ def _queue_adapter_names(
             tuple(sorted({name for item in results for name in item.exports})),
             tuple(sorted({signal for item in results for signal in item.signals})),
             tuple(sorted({name for item in results for name in item.declared_exports})),
-            modules=frozenset(name for item in results for name in item.modules),
+            source_modules=frozenset(name for item in results for name in item.source_modules),
             height=max(item.height for item in results),
-            witness=max(results, key=lambda item: (item.height, bool(item.modules))).witness)
+            witness=max(results, key=lambda item: (item.height, bool(item.source_modules))).witness)
 
     for _target, _member, replacement, factory in patches.values():
         names = frozenset(node.id for node in ast.walk(replacement) if isinstance(node, ast.Name)) if replacement is not None else frozenset()
@@ -4213,18 +4126,18 @@ def _queue_adapter_names(
                 (frozenset({target_name}) if target_name and not wildcard else
                  frozenset(reachable) if wildcard else demanded_members(access_name)),
                 split=whole_module and not wildcard)
-            modules.update(resolution.modules)
-            if resolution.modules and resolution.height > height:
+            modules.update(resolution.source_modules)
+            if resolution.source_modules and resolution.height > height:
                 witness = resolution.witness
-            height = max(height, resolution.height if resolution.modules else 0)
+            height = max(height, resolution.height if resolution.source_modules else 0)
             if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
                 _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
                 resolution = resolve_import(target_module, demanded_members(access_name), split=True)
-                modules.update(resolution.modules)
-                if resolution.modules and resolution.height > height:
+                modules.update(resolution.source_modules)
+                if resolution.source_modules and resolution.height > height:
                     witness = resolution.witness
-                height = max(height, resolution.height if resolution.modules else 0)
+                height = max(height, resolution.height if resolution.source_modules else 0)
                 queue_adjacent = _queue_adjacent_module(target_module)
             export_resolved = (
                 (target_name and any(value == target_name or value.startswith(target_name + '.') for value in resolution.exports))
@@ -4250,7 +4163,7 @@ def _queue_adapter_names(
             if (frontier_reachable or whole_module or wildcard) and (
                 level > 0
                 or resolution.reason != "local_module_missing"
-                or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.modules)
+                or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.source_modules)
             ):
                 declared = resolution.reason == "local_module_not_queue" and (
                     whole_module or wildcard or target_name in resolution.declared_exports)
@@ -4287,7 +4200,7 @@ def _queue_adapter_names(
                 and queue_adjacent
                 and (
                     level > 0
-                    or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.modules)
+                    or any(name == target_module.split(".", 1)[0] or name.startswith(target_module.split(".", 1)[0] + ".") for name in cache.source_modules)
                 )
                 and resolution.reason == "local_module_missing"
             ):
@@ -4343,7 +4256,7 @@ def _queue_signals(
         budget=budget,
     )
     try:
-        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules,
+        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.source_modules,
                                       complete_module=complete_module)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc

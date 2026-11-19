@@ -88,7 +88,7 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
         roots, cache, package, result = self.observe()
         self.assertEqual(result.state, 'not_queue', result)
         self.assertIn('owned/src', roots)
-        self.assertIn('pkg.helper', cache.modules)
+        self.assertIn('pkg.helper', cache.source_modules)
         self.assertEqual(package, 'pkg')
         self.assertEqual(result.state, 'not_queue', result)
         self.assertEqual(result.signals, ())
@@ -97,14 +97,14 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
         roots, cache, package, result = self.observe(folder='product/lib/src/acme/nested',
             ownership=['product/lib/src/acme/nested'])
         self.assertIn('product/lib/src', roots)
-        self.assertIn('acme.nested.helper', cache.modules)
+        self.assertIn('acme.nested.helper', cache.source_modules)
         self.assertEqual(package, 'acme.nested')
         self.assertEqual(result.state, 'not_queue', result)
 
     def test_namespace_src_files_have_canonical_module_names(self):
         roots, cache, package, result = self.observe(initializer=False)
         self.assertIn('owned/src', roots)
-        self.assertIn('pkg.helper', cache.modules)
+        self.assertIn('pkg.helper', cache.source_modules)
         self.assertEqual(package, 'pkg')
         self.assertEqual(result.state, 'not_queue', result)
 
@@ -4803,7 +4803,7 @@ class ArchitectureFitnessTests(unittest.TestCase):
                 warm = FIT._queue_module_inventory(repo.root, diff, 'head', roots)
                 run(warm)
                 summary = warm.demands[('runtime', frozenset({'ordinary'}), True)]
-                self.assertEqual(len(summary.modules), 2 if reexport else 0)
+                self.assertEqual(len(summary.source_modules), 2 if reexport else 0)
                 self.assertTrue(summary.footprint.sources)
                 self.assertTrue(all(item.nodes > 0 for item in summary.footprint.sources))
                 inventory = FIT._queue_module_inventory

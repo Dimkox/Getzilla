@@ -19,6 +19,48 @@ from getzilla.python_source_proof import namespace_is_closed
 
 
 class ArchitectureDependencyBoundaryTests(unittest.TestCase):
+    def test_bare_module_package_fallback_uses_supplied_paths(self):
+        from getzilla import architecture_fitness as fitness
+        self.assertEqual(fitness._module_package('tools/standalone.py'), 'tools')
+        self.assertEqual(fitness._module_package('owned/standalone.py', ('owned',), ()), '')
+
+    def test_fitness_metadata_exports_exclude_reflective_ast_rewriting(self):
+        from getzilla import architecture_fitness as fitness
+        tree = ast.parse((ROOT / '.getzilla/getzilla/architecture_fitness.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'_module_package'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'python_source_proof'
+                             for node in ast.walk(projection)))
+        with mock.patch.object(fitness, 'MAX_QUEUE_ADAPTER_MODULES', 0):
+            with self.assertRaises(fitness.ArchitectureError) as captured:
+                fitness._QueueBudget('head').source('owned.py', b'x = 1\n')
+        self.assertEqual(captured.exception.queue_refusal['category'], 'modules')
+        self.assertEqual(captured.exception.queue_refusal['limit'], 0)
+
+    def test_each_split_implementation_owner_mutation_changes_policy_binding(self):
+        import importlib
+        from getzilla.verification_plan import policy_binding
+        owners = ('verification_actions.py', 'git_ranges.py', 'governance_records.py',
+                  'security_image_authority.py', 'release_transport.py', 'verification_policy_source.py',
+                  'workflow_inputs.py', 'workflow_cas.py', 'workflow_storage.py', 'live_evidence.py',
+                  'agent_eval_authoring.py', 'security_license_contracts.py', 'grant_authoring.py',
+                  'intake_authoring.py', 'security_publication.py', 'security_windows_publication.py',
+                  'verification_scope.py', 'public_security_context.py', 'metrics_journal.py',
+                  'architecture_fitness.py', 'python_source_proof.py', 'queue_refusal.py')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = policy_binding(root)['implementation']
+            for name in owners:
+                with self.subTest(owner=name):
+                    module = importlib.import_module('getzilla.' + name[:-3])
+                    raw = (ROOT / '.getzilla/getzilla' / name).read_bytes()
+                    changed = raw + b'\n# source policy mutation control\n'
+                    with mock.patch.object(module.__loader__, 'get_data', return_value=changed):
+                        observed = policy_binding(root)['implementation']
+                    self.assertEqual(observed[name], hashlib.sha256(changed).hexdigest())
+                    self.assertNotEqual(observed[name], original[name])
+
     def test_stored_workflow_consumer_excludes_cas_publication(self):
         from getzilla import workflow_artifacts, workflow_cas
         context = workflow_artifacts._cas_context()
