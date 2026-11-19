@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .budget import Budget, RetrievalError
 from .engine import pack_context, search
+from .observation import stage
 
 
 def prepare_packet(source, generation, query, *, mandatory='', token_budget=8192,
@@ -23,13 +24,17 @@ def prepare_packet(source, generation, query, *, mandatory='', token_budget=8192
     # about a selected model's tokenization or its actual provider usage.
     counter = token_counter or (lambda text: len(text.encode('utf-8')))
     result = search(generation, query, budget=budget)
-    hits, seen = [], set()
-    for hit in (*graph_hits, *result.rankings['rrf']):
-        budget.check()
-        if hit.chunk.id not in seen:
-            hits.append(hit)
-            seen.add(hit.chunk.id)
-    packed = pack_context(source, hits, counter, token_budget, mandatory=mandatory, budget=budget)
+    with stage('fusion') as measured:
+        hits, seen = [], set()
+        for hit in (*graph_hits, *result.rankings['rrf']):
+            budget.check()
+            if hit.chunk.id not in seen:
+                hits.append(hit)
+                seen.add(hit.chunk.id)
+        measured.result('succeeded' if hits else 'empty', candidate_count=len(hits))
+    with stage('context_assembly') as measured:
+        packed = pack_context(source, hits, counter, token_budget, mandatory=mandatory, budget=budget)
+        measured.result('succeeded' if packed.citations else 'empty', context_bytes=len(packed.text.encode()))
     components = {name: {hit.chunk.id: (hit.rank, hit.score) for hit in rows}
                   for name, rows in result.rankings.items()}
     cited = {(row['path'], row['start'], row['end'], row['chunk_sha256']) for row in packed.citations}

@@ -8,6 +8,7 @@ from __future__ import annotations
 from ..code_graph.context import query_graph
 from ..code_graph.models import EXTRACTOR
 from .budget import Budget, RetrievalError
+from .observation import stage
 from .contracts import Chunk, sha
 from .lines import physical_lines
 from .packet import prepare_packet
@@ -21,8 +22,11 @@ def current_graph(graph_input, store):
     Reuse an identical generation without parsing or relinking. Changed source
     uses the existing incremental path and its transactional publication.
     """
-    previous = store.read_active()
-    if previous is not None and previous.input_identity == graph_input.identity:
+    with stage('cache_lookup') as measured:
+        previous = store.read_active()
+        reused = previous is not None and previous.input_identity == graph_input.identity
+        measured.result('cache_hit' if reused else 'cache_miss')
+    if reused:
         return previous, {'generation_reused': True, 'parsed_files': 0, 'link_resolution_runs': 0}
     from ..code_graph.incremental import update_index
     from ..code_graph.store import build_full_index
@@ -44,7 +48,10 @@ def prepare_graph_packet(source, generation, graph, query, *, depth=1, max_nodes
             or source.head_sha is not None and graph_source.get('commit_oid') != source.head_sha
             or source.head_sha is None and graph_source.get('source_kind') != 'folder'):
         raise RetrievalError('current_graph_unavailable')
-    selection = query_graph(graph, query, depth=depth, max_nodes=max_nodes, budget=budget)
+    with stage('structural') as measured:
+        selection = query_graph(graph, query, depth=depth, max_nodes=max_nodes, budget=budget)
+        measured.result('succeeded' if selection['node_ids'] else 'empty',
+                        candidate_count=len(selection['node_ids']))
     selected = set(selection['node_ids'])
     paths = {node['path'] for node in selection['nodes'] if node['id'].startswith('file:')}
     chunks = [chunk for chunk in generation.chunks if 'sym:' + chunk.path + '::' + chunk.symbol in selected
