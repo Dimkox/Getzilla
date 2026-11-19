@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -127,47 +128,74 @@ class ResultAdmission:
 
 
 def _validate_capability_session(cursor, capability_role: str, label: str) -> None:
-    cursor.execute(
+    checks = _capability_session_checks(cursor.connection.info.server_version, capability_role, label)
+    rows = None
+    while True:
+        try:
+            query, parameters = checks.send(rows)
+        except StopIteration:
+            return
+        cursor.execute(query, parameters)
+        rows = cursor.fetchall()
+
+
+async def _validate_capability_session_async(cursor, capability_role: str, label: str) -> None:
+    checks = _capability_session_checks(cursor.connection.info.server_version, capability_role, label)
+    rows = None
+    while True:
+        try:
+            query, parameters = checks.send(rows)
+        except StopIteration:
+            return
+        await cursor.execute(query, parameters)
+        rows = await cursor.fetchall()
+
+
+def _capability_session_checks(server_version, capability_role: str, label: str):
+    rows = yield (
         """SELECT rolcanlogin,rolinherit,rolsuper,rolcreaterole,rolcreatedb,
         rolreplication,rolbypassrls,COALESCE(rolconfig,ARRAY[]::text[])
-        FROM pg_roles WHERE rolname=session_user"""
+        FROM pg_roles WHERE rolname=session_user""",
+        None,
     )
-    identity = cursor.fetchone()
+    identity = (rows[0] if rows else None)
     if identity is None or identity[:7] != (True, False, False, False, False, False, False) \
             or tuple(identity[7]) != ():
         raise StoreError(f"{label} login is not least privilege")
-    if cursor.connection.info.server_version >= 160000:
-        cursor.execute(
+    if server_version >= 160000:
+        rows = yield (
             """SELECT r.rolname,m.admin_option,m.inherit_option,m.set_option
             FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid
-            JOIN pg_roles u ON u.oid=m.member WHERE u.rolname=session_user"""
+            JOIN pg_roles u ON u.oid=m.member WHERE u.rolname=session_user""",
+            None,
         )
-        membership = cursor.fetchall()
+        membership = rows
         expected_membership = [(capability_role, False, False, True)]
     else:
-        cursor.execute(
+        rows = yield (
             """SELECT r.rolname,m.admin_option FROM pg_auth_members m
             JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles u ON u.oid=m.member
-            WHERE u.rolname=session_user"""
+            WHERE u.rolname=session_user""",
+            None,
         )
-        membership = cursor.fetchall()
+        membership = rows
         expected_membership = [(capability_role, False)]
     if membership != expected_membership:
         raise StoreError(f"{label} login has excess role membership")
-    cursor.execute(
+    rows = yield (
         """SELECT rolcanlogin,rolinherit,rolsuper,rolcreaterole,rolcreatedb,
         rolreplication,rolbypassrls,COALESCE(rolconfig,ARRAY[]::text[])
         FROM pg_roles WHERE rolname=%s""",
         (capability_role,),
     )
-    capability = cursor.fetchone()
+    capability = (rows[0] if rows else None)
     expected_config = (
         ("search_path=factory, pg_catalog",) if capability_role == "factory_runtime" else ()
     )
     if capability is None or capability[:7] != (False, False, False, False, False, False, False) \
             or tuple(capability[7]) != expected_config:
         raise StoreError(f"{label} capability role is not isolated")
-    cursor.execute(
+    rows = yield (
         """SELECT
         EXISTS(SELECT 1 FROM pg_auth_members membership
           JOIN pg_roles member ON member.oid=membership.member
@@ -179,10 +207,10 @@ def _validate_capability_session(cursor, capability_role: str, label: str) -> No
         session_user""",
         (capability_role, capability_role),
     )
-    outbound_membership, inbound_members, session_user = cursor.fetchone()
+    outbound_membership, inbound_members, session_user = (rows[0] if rows else None)
     if outbound_membership or tuple(inbound_members) != (session_user,):
         raise StoreError(f"{label} capability role is not isolated")
-    cursor.execute(
+    rows = yield (
         """WITH login AS (SELECT oid FROM pg_roles WHERE rolname=session_user)
         SELECT
           (SELECT datdba=(SELECT oid FROM login) FROM pg_database WHERE datname=current_database())
@@ -214,9 +242,10 @@ def _validate_capability_session(cursor, capability_role: str, label: str) -> No
             WHERE t.typacl IS NOT NULL AND a.grantee=(SELECT oid FROM login))
           OR EXISTS(SELECT 1 FROM pg_default_acl d
             CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-            WHERE d.defaclrole=(SELECT oid FROM login) OR a.grantee=(SELECT oid FROM login))"""
+            WHERE d.defaclrole=(SELECT oid FROM login) OR a.grantee=(SELECT oid FROM login))""",
+        None,
     )
-    if cursor.fetchone()[0]:
+    if (rows[0] if rows else None)[0]:
         raise StoreError(f"{label} login has direct database authority")
 
 
@@ -2721,10 +2750,83 @@ class PostgresFactoryStore:
     def _is_killed(self, cursor, repositories: tuple[str, ...]) -> bool:
         scopes = ("global",) + tuple(f"repository:{item}" for item in repositories)
         cursor.execute(
-            "SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled FROM factory.kill_switches WHERE scope_key=ANY(%s) ORDER BY scope_key,created_at DESC,switch_id DESC) current",
+            "SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled FROM factory.kill_switches WHERE scope_key=ANY(%s) ORDER BY scope_key,revision DESC) current",
             (list(scopes),),
         )
         return bool(cursor.fetchone()[0])
+
+    async def landing_stop_snapshot(self, source, actor):
+        """Bound connect, role checks and the canonical snapshot by one deadline."""
+        import psycopg
+        connection = None
+        async def observe():
+            nonlocal connection
+            connection = await psycopg.AsyncConnection.connect(
+                self.database_url, connect_timeout=1, autocommit=True,
+                options='-c lock_timeout=200ms -c statement_timeout=200ms',
+            )
+            if connection.info.server_version < 170000:
+                raise StoreError('Factory stop observation requires PostgreSQL 17')
+            async with connection.cursor() as cursor:
+                await cursor.execute('SET search_path=pg_catalog')
+                await _validate_capability_session_async(cursor, self._CAPABILITY_ROLE, self._CAPABILITY_LABEL)
+                if self._CAPABILITY_ROLE != 'factory_runtime':
+                    raise StoreError('unknown database capability')
+                await cursor.execute('SET ROLE factory_runtime')
+                await cursor.execute('SET search_path=pg_catalog,factory')
+                await cursor.execute("SELECT current_user,current_setting('search_path')")
+                if await cursor.fetchone() != (self._CAPABILITY_ROLE, 'pg_catalog, factory'):
+                    raise StoreError('Factory stop capability unavailable')
+                return await self._landing_stop_snapshot_query(cursor, source, actor)
+        task = asyncio.create_task(observe())
+        try:
+            done, _ = await asyncio.wait((task,), timeout=.75)
+            if task not in done:
+                raise StoreUnavailable('database unavailable')
+            return task.result()
+        finally:
+            # Close before cancellation: psycopg otherwise tries a separate
+            # server cancellation request, which itself can wait on an outage.
+            if connection is not None:
+                await connection.close()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _landing_stop_snapshot_query(self, cursor, source, actor):
+        """One statement reads the actual task/creator and both canonical heads."""
+        from .factory_stop import FactoryStopError, FactoryStopSnapshot, landing_source_id
+        repository_scope = f"repository:{source.repository_id}"
+        await cursor.execute(
+                """WITH heads AS (
+                  SELECT DISTINCT ON (scope_key) scope_key,enabled,revision
+                  FROM factory.kill_switches WHERE scope_key=ANY(%s)
+                  ORDER BY scope_key,revision DESC
+                )
+                SELECT t.task_id::text,t.packet_digest,t.repository_id,t.intake_actor_id,t.intake_actor_kind,
+                  COALESCE((SELECT revision FROM heads WHERE scope_key='global'),0),
+                  COALESCE((SELECT revision FROM heads WHERE scope_key=%s),0),
+                  COALESCE((SELECT enabled FROM heads WHERE scope_key='global'),false)
+                    OR COALESCE((SELECT enabled FROM heads WHERE scope_key=%s),false)
+                FROM factory.tasks t JOIN factory.accepted_intents i ON i.intent_id=t.intent_id
+                WHERE t.repository_id=%s AND i.repository_id=t.repository_id
+                  AND t.source_type='api' AND i.source_type=t.source_type AND i.source_id=t.source_id
+                  AND t.source_id=%s AND i.source_digest=%s AND i.exact_base_sha=%s
+                  AND t.intake_actor_id=%s AND t.intake_actor_kind=%s
+                  AND t.deadline_at>clock_timestamp()
+                  AND t.state IN ('queued','retry','leased','analyzing','implementing','verifying','reviewing')
+                ORDER BY t.generation DESC LIMIT 2""",
+                (['global', repository_scope], repository_scope, repository_scope, source.repository_id,
+                 landing_source_id(source.job_id), source.content_sha256, source.exact_base_sha,
+                 actor.actor_id, actor.kind),
+            )
+        rows = await cursor.fetchall()
+        if len(rows) != 1:
+            raise FactoryStopError('factory_stop_binding_required')
+        task, packet, repository, owner, kind, global_revision, repository_revision, stopped = rows[0]
+        return FactoryStopSnapshot(task, packet, repository, owner, kind, source.job_id, source.input_digest,
+                                   source.content_sha256, source.exact_base_sha, source.exact_base_tree,
+                                   global_revision, repository_revision, stopped)
 
     def claim(self, request, actor: Actor, now: datetime, *, idempotency_key: str | None = None, correlation_id: str | None = None) -> LeaseGrant | None:
         if actor.kind != "worker" or request.owner != actor.actor_id:

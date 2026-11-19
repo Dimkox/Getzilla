@@ -81,10 +81,36 @@ RECORD_SCHEMA = _object({
     'dispatch_claim': {'enum': ['pending', 'consumed']},
     'cancel_claim': {**_CANCEL, 'type': ['object', 'null']},
 })
+RECORD_V2_SCHEMA = _object({
+    **RECORD_SCHEMA['properties'], 'schema_version': {'type': 'integer', 'const': 2},
+    'admission_binding': _object({
+        'store_generation': _string(32, pattern=r'^[0-9a-f]{32}$'),
+        'control_revision': {'type': 'integer', 'minimum': 0},
+    }),
+    'launch': {**_object({
+        'phase': {'enum': ['starting', 'registered', 'released', 'finished']},
+        'owner_instance': _string(32, pattern=r'^[0-9a-f]{32}$'),
+        'launcher_digest': _DIGEST, 'executable_digest': _DIGEST,
+        'process_id': {'type': ['integer', 'null'], 'minimum': 1},
+        'start_identity': _string(128, nullable=True),
+        'handle_kind': {'enum': ['linux-pidfd-unreaped-group', None]},
+    }), 'type': ['object', 'null']},
+})
 REGISTRY_SCHEMA = _object({'schema_version': {'type': 'integer', 'const': 1},
                            'revision': {'type': 'integer', 'minimum': 0},
                            'records': {'type': 'object', 'maxProperties': MAX_RECORDS},
                            'intents': {'type': 'object', 'maxProperties': MAX_RECORDS}})
+CONTROL_SCHEMA = _object({
+    'version': {'type': 'integer', 'const': 1}, 'logical_task_id': _ID,
+    'revision': {'type': 'integer', 'minimum': 0}, 'stopped': {'type': 'boolean'},
+    'reason': _string(80, nullable=True, pattern=r'^[A-Za-z0-9._-]+$'),
+    'session_id': _ID, 'authority_epoch': {'type': 'integer', 'minimum': 0},
+})
+REGISTRY_V2_SCHEMA = _object({
+    **REGISTRY_SCHEMA['properties'], 'schema_version': {'type': 'integer', 'const': 2},
+    'generation': _string(32, pattern=r'^[0-9a-f]{32}$'),
+    'controls': {'type': 'object', 'maxProperties': MAX_RECORDS},
+})
 
 
 def empty_registry() -> dict:
@@ -102,12 +128,20 @@ def _validate(value: Any) -> None:
     try:
         if not isinstance(value, dict) or len(value.get('records', {})) > MAX_RECORDS:
             raise RegistryError('registry_full')
-        validate_schema(value, REGISTRY_SCHEMA)
+        validate_schema(value, REGISTRY_V2_SCHEMA if value.get('schema_version') == 2 else REGISTRY_SCHEMA)
+        if value['schema_version'] == 2:
+            for route_id, control in value['controls'].items():
+                if not re.fullmatch(r'[A-Za-z0-9:._-]{1,128}', route_id):
+                    raise ValueError('control identity')
+                validate_schema(control, CONTROL_SCHEMA)
         expected = {}
         for key, record in value['records'].items():
             safe = {**record, 'output': normalize_output(record.get('output'))}
             _bounded_walk(safe)
-            validate_schema(safe, RECORD_SCHEMA)
+            validate_schema(safe, RECORD_V2_SCHEMA if record.get('schema_version') == 2 else RECORD_SCHEMA)
+            if record['schema_version'] == 2 and (value['schema_version'] != 2
+                    or record['admission_binding']['store_generation'] != value['generation']):
+                raise ValueError('admission store binding')
             if key != record['execution_id'] or type(record['revision']) is not int:
                 raise ValueError('record identity')
             intent = record['input']['intent_digest']
@@ -207,12 +241,38 @@ def _publish(root, previous, value):
             record['output'] = normalize_output(record['output'])
     _validate(value)
     if previous:
+        if previous['schema_version'] == 2:
+            if (value['schema_version'] != 2 or value['generation'] != previous['generation']
+                    or not previous['controls'].keys() <= value['controls'].keys()):
+                raise RegistryError('registry_conflict')
+            for key, control in previous['controls'].items():
+                after = value['controls'][key]
+                if (after['logical_task_id'] != control['logical_task_id']
+                        or after != control and after['revision'] != control['revision'] + 1):
+                    raise RegistryError('registry_conflict')
+        elif value['schema_version'] == 2:
+            if (value['records'] != previous['records'] or value['intents'] != previous['intents']
+                    or any(item['execution_status'] not in TERMINAL for item in previous['records'].values())):
+                raise RegistryError('registry_conflict')
         if not previous['records'].keys() <= value['records'].keys():
             raise RegistryError('registry_conflict')
         for key, before in previous['records'].items():
             after = value['records'][key]
             if any(before[field] != after[field] for field in IMMUTABLE):
                 raise RegistryError('registry_conflict')
+            if before.get('admission_binding') != after.get('admission_binding'):
+                raise RegistryError('registry_conflict')
+            old_launch, new_launch = before.get('launch'), after.get('launch')
+            if old_launch is not None:
+                phases = {'starting': {'starting', 'registered', 'finished'},
+                          'registered': {'registered', 'released', 'finished'},
+                          'released': {'released', 'finished'}, 'finished': {'finished'}}
+                if (new_launch is None or new_launch['phase'] not in phases[old_launch['phase']]
+                        or any(old_launch[key] != new_launch[key] for key in
+                               ('owner_instance', 'launcher_digest', 'executable_digest'))
+                        or old_launch['process_id'] is not None and any(old_launch[key] != new_launch[key]
+                            for key in ('process_id', 'start_identity', 'handle_kind'))):
+                    raise RegistryError('registry_conflict')
             if after != before and after['revision'] != before['revision'] + 1:
                 raise RegistryError('registry_conflict')
             if before['dispatch_claim'] == 'consumed' and after['dispatch_claim'] != 'consumed':

@@ -4,7 +4,7 @@ from .landing_observation import LandingProviderObservation
 
 import base64
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import os
@@ -47,6 +47,9 @@ EXECUTOR_CODE_CATEGORIES = {
     "executor_transport": "transport",
     "executor_usage": "accounting",
     "http_usage": "accounting",
+    "factory_stop_binding_required": "policy",
+    "factory_stop_authority_unavailable": "policy",
+    "factory_stop_changed": "policy",
 }
 FAILURE_CATEGORIES = frozenset({
     "accounting", "authentication", "deadline", "permission", "policy", "protocol", "rate_limit",
@@ -61,10 +64,11 @@ class LandingProviderError(RuntimeError):
 class HttpProviderFailure(LandingProviderError):
     """Allowlisted local classification; never carries an upstream error body."""
 
-    def __init__(self, code: str, category: str, http_status: int | None = None):
+    def __init__(self, code: str, category: str, http_status: int | None = None, *, dispatched: bool = True):
         super().__init__(code)
         self.category = category
         self.http_status = http_status
+        self.dispatched = dispatched
 
 
 def _provider_error(error: LandingContractError) -> LandingProviderError:
@@ -239,6 +243,7 @@ def unavailable_landing_profile() -> LandingProviderProfile:
 class LandingNormalizationRequest:
     source: LandingInputV1
     profile_digest: str
+    stop_capability: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, LandingInputV1) or not HEX64.fullmatch(

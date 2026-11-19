@@ -262,6 +262,7 @@ class LandingApplicationService:
         profile_digest: str,
         artifact_builder: LandingArtifactBuilder | None = None,
         clock: Callable[[], datetime] | None = None,
+        factory_service=None,
     ) -> None:
         if not isinstance(store, LandingJobStore):
             raise LandingServiceError("store", 500, "landing store unavailable")
@@ -275,6 +276,7 @@ class LandingApplicationService:
         self._profile_digest = profile_digest
         self._artifact_builder = artifact_builder
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._factory_service = factory_service
         self._lock = threading.RLock()
 
     def submit(
@@ -323,17 +325,28 @@ class LandingApplicationService:
                 self._purge(source, "rejected")
                 raise
             if not created:
-                self._purge(source, "normalized")
+                if accepted.state in _TERMINAL_STATES or accepted.state == 'cancelled':
+                    self._purge(source, "normalized")
                 return LandingSubmitResult(accepted, False)
-            try:
-                final = self._process(accepted)
-            except Exception:
+        # The durable create/replay cut is above. No service/task lock spans
+        # provider IO; cancellation and observation must make progress.
+        try:
+            final = self._process(accepted, actor=actor)
+        except Exception:
+            with self._lock:
                 current = self._store.get(
                     source.tenant_id, source.repository_id, source.job_id
                 )
-                final = replace(
+                final = current if current.state == 'cancelled' else replace(
                     current, state="needs_human", reason_code="internal_failure"
                 )
+        with self._lock:
+            current = self._store.get(source.tenant_id, source.repository_id, source.job_id)
+            if current.state == 'cancelled':
+                # Keep actual usage/unknown outcome, but never turn a cancelled
+                # local job into a late success or publish a late artifact.
+                final = replace(current, observation=final.observation,
+                                provider_evidence_digest=final.provider_evidence_digest)
             final = self._store.put(final)
             self._purge(source, "normalized")
             return LandingSubmitResult(final, True)
@@ -392,12 +405,25 @@ class LandingApplicationService:
             raise LandingServiceError("not_terminal", 409, "landing result is not terminal")
         return current
 
-    def _process(self, accepted: LandingJobRecord) -> LandingJobRecord:
+    def _process(self, accepted: LandingJobRecord, *, actor: Actor) -> LandingJobRecord:
         source = accepted.source
         processing = self._store.put(replace(accepted, state="normalizing"))
+        capability = None
+        if self._factory_service is not None:
+            from .factory_stop import FactoryStopError
+            try:
+                # Re-read the actual durable source/creator. Request Actor labels
+                # cannot replace an existing record's immutable tenant/source.
+                current = self._store.get(source.tenant_id, source.repository_id, source.job_id)
+                if current.source != source or current.source.tenant_id != actor.actor_id:
+                    raise FactoryStopError('factory_stop_binding_required')
+                capability = self._factory_service.landing_stop_capability(current.source, actor=actor,
+                                                                           landing_store=self._store)
+            except FactoryStopError as error:
+                return replace(processing, state='needs_human', reason_code=error.code)
         try:
             outcome = self._provider.normalize(
-                LandingNormalizationRequest(source, self._profile_digest),
+                LandingNormalizationRequest(source, self._profile_digest, stop_capability=capability),
                 lambda: self._blobs.read(
                     source,
                     tenant_id=source.tenant_id,

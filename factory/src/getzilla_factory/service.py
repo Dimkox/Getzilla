@@ -151,6 +151,29 @@ class FactoryService:
         if repository is not None and "*" not in actor.repositories and repository not in actor.repositories:
             raise AuthorizationError("repository is outside actor authorization")
 
+    def _check_landing_stop_actor(self, source, actor):
+        from .factory_stop import FactoryStopError
+        from .landing_contracts import LandingInputV1
+        from .landing_renderer import TARGET_BASE_SHA, TARGET_BASE_TREE, TARGET_REPOSITORY_ID
+        if (type(actor) is not Actor or type(source) is not LandingInputV1
+                or source.tenant_id != actor.actor_id
+                or (source.repository_id, source.exact_base_sha, source.exact_base_tree)
+                != (TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE)):
+            raise FactoryStopError('factory_stop_binding_required')
+        try:
+            self._require(actor, 'landing:submit', source.repository_id)
+            self._require(actor, 'task:read', source.repository_id)
+        except AuthorizationError:
+            raise FactoryStopError('factory_stop_binding_required') from None
+    async def _landing_stop_snapshot(self, source, actor):
+        self._check_landing_stop_actor(source, actor)
+        return await self.store.landing_stop_snapshot(source, actor)
+
+    def landing_stop_capability(self, source, *, actor: Actor, landing_store=None):
+        """Bind stop observation to actual server task/source/creator, never JSON claims."""
+        from .factory_stop import _issue_factory_capability
+        return _issue_factory_capability(self, source, actor, landing_store)
+
     def intake(
         self,
         payload,
