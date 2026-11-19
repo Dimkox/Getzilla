@@ -67,8 +67,14 @@ Core algorithms and final release checks. Its deterministic controls include
 different principals, projects and tenants, group removal, source deletion and
 actual PostgreSQL/UDS delivery. These controls do not qualify a model backend.
 
-Full issue162 still requires durable derived-data retirement across the existing
-result journal and actual recipients, broader native/provider profiles, real
+The separately selected ephemeral Factory profile now also retires its owned
+broker/service/receiver derivatives and the existing durable result payload while
+retaining explicit digest-only audit projections. Current operator actions and
+bounded lifecycle reconciliation have different authority and clocks. Receiver
+restart, unavailable storage and unknown transport outcomes retain explicit
+refusals/unknown states; this is not deletion of arbitrary recipient knowledge.
+
+Full issue162 still requires broader native/provider retention profiles, real
 optional dense integration and the independently sealed RU/EN/BGE-M3 experiment.
 BGE-M3 is not selected or loaded by this library. No benchmark quality, native ACL,
 provider, retention or complete-delivery claim follows from this checkpoint.

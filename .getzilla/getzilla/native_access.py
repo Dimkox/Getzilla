@@ -172,6 +172,9 @@ class NativeAccessHost(ABC):
     def discard_native_request(self, binding):
         """Release owned ephemeral references; never grants or recalls disclosure."""
 
+    def attach_native_broker(self, broker):
+        """Optional trusted lifecycle edge, never a request-data registration."""
+
 
 class _Opaque:
     __slots__ = ()
@@ -223,6 +226,7 @@ class _Request:
     prepared: PreparedReadResponse | None = None
     response: PreparedResponseRef | None = None
     consumed: bool = False
+    retiring: bool = False
 
 
 class NativeAccessBroker:
@@ -237,6 +241,7 @@ class NativeAccessBroker:
         _require(isinstance(host, NativeAccessHost))
         broker = cls()
         broker._host = host
+        host.attach_native_broker(broker)
         return broker
 
     def _call(self, method, *args):
@@ -289,6 +294,39 @@ class NativeAccessBroker:
             self._call('discard_native_request', request.binding)
         finally:
             request.captured = request.cut = request.prepared = request.binding = None
+            request.query = request.preparation = request.response = None
+
+    def _retire_dependencies(self, dependency_digests, *, cancel_all=False):
+        """Fixed host lifecycle only: invalidate existing holders, not permissions."""
+        _require(type(cancel_all) is bool and type(dependency_digests) is tuple
+                 and (0 if cancel_all else 1) <= len(dependency_digests) <= 128
+                 and all(_sha(item) for item in dependency_digests))
+        bindings, idle, pending = [], [], False
+        with self._lock:
+            for handle, request in tuple(self._requests.items()):
+                hashes = (() if request.captured is None else tuple(hashlib.sha256(_canonical(
+                    [list(doc.dependency.key), doc.dependency.version, doc.dependency.content_sha256])).hexdigest()
+                    for doc in request.captured.documents))
+                if (not cancel_all and not set(hashes).intersection(dependency_digests)
+                        and not (request.busy and not hashes)):
+                    continue
+                request.retiring = request.failed = request.consumed = True
+                bindings.append(request.binding)
+                if request.cut is not None:
+                    object.__setattr__(request.cut, '_documents', ())
+                request.captured = request.cut = request.prepared = None
+                request.query = request.preparation = request.response = None
+                if request.busy:
+                    pending = True
+                else:
+                    del self._requests[handle]
+                    idle.append(request)
+        for request in idle:
+            try:
+                self._call('discard_native_request', request.binding)
+            finally:
+                request.binding = None
+        return tuple(bindings), not pending
 
     @contextmanager
     def _operation(self, handle, absolute_deadline=None):
@@ -318,6 +356,15 @@ class NativeAccessBroker:
         finally:
             with self._lock:
                 request.busy = False
+                retiring = request.retiring
+                if retiring and self._requests.get(handle) is request:
+                    del self._requests[handle]
+            if retiring:
+                try:
+                    self._call('discard_native_request', request.binding)
+                finally:
+                    request.captured = request.cut = request.prepared = request.binding = None
+                    request.query = request.preparation = request.response = None
 
     def check_current(self, handle):
         """Recheck an existing live cut; never renew its original deadline."""
@@ -325,8 +372,9 @@ class NativeAccessBroker:
             self._unchanged(request)
 
     def _unchanged(self, request):
+        _require(not request.retiring, 'native_access_stale')
         stamp = self._stamp(request.binding, request.deadline)
-        _require(stamp == request.stamp, 'native_access_stale')
+        _require(not request.retiring and stamp == request.stamp, 'native_access_stale')
 
     @staticmethod
     def _documents(captured):
@@ -358,7 +406,9 @@ class NativeAccessBroker:
             self._unchanged(request)
             cut = object.__new__(OwnedSourceCut)
             object.__setattr__(cut, '_documents', documents)
-            request.query, request.captured, request.cut = query.identity, captured, cut
+            with self._lock:
+                _require(not request.retiring, 'native_access_stale')
+                request.query, request.captured, request.cut = query.identity, captured, cut
             return cut
 
     def prepare_owned_response(self, handle, computation, cut, response, *, absolute_deadline):
@@ -377,7 +427,9 @@ class NativeAccessBroker:
                      and _sha(prepared.payload_sha256))
             self._unchanged(request)
             reference = object.__new__(PreparedResponseRef)
-            request.preparation, request.prepared, request.response = key, prepared, reference
+            with self._lock:
+                _require(not request.retiring, 'native_access_stale')
+                request.preparation, request.prepared, request.response = key, prepared, reference
             return reference
 
     def admit_response(self, handle, reference):

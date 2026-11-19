@@ -7,6 +7,7 @@ trusted host/OS transport,151 transform or162/200 consumer by construction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import weakref
 
 from getzilla.native_access import (
     AuthorityStamp, CapturedRead, ExistingOperationDisposition, NativeAccessError,
@@ -57,8 +58,30 @@ class FactoryNativeAccessHost(NativeAccessHost):
         self._authority, self._source_adapter = service._authority, service._sources
         self._sources = dict(service._sources._sources)
         self._destinations = dict(service._destinations)
+        self._broker_ref = None
+        if service._retrieval_enabled:
+            service._attach_retrieval_host(self)
         self._scopes = {factory_source_scope(dict(zip(
             ('tenant', 'project', 'provider', 'site', 'resource'), key))): key for key in self._sources}
+
+    def attach_native_broker(self, broker):
+        from getzilla.native_access import NativeAccessBroker
+        if not self._service._retrieval_enabled:
+            return
+        if (type(broker) is not NativeAccessBroker or broker._host is not self
+                or self._broker_ref is not None and self._broker_ref() is not None):
+            raise NativeAccessError()
+        self._broker_ref = weakref.ref(broker)
+
+    def _retire_dependencies(self, digests, *, cancel_all=False):
+        broker = None if self._broker_ref is None else self._broker_ref()
+        if broker is None:
+            return True
+        bindings, complete = broker._retire_dependencies(digests, cancel_all=cancel_all)
+        for binding in bindings:
+            if binding is not None:
+                self.discard_native_request(binding)
+        return complete
 
     def _binding(self, binding):
         if (type(binding) is not _Binding or binding.issuer is not self._issuer

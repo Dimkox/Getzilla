@@ -45,15 +45,22 @@ class AgentLifecycleTests(unittest.TestCase):
                                      ('Read', {'file_path': str(root / 'VERSION')})]:
                     results = []
                     warning = io.StringIO()
-                    with patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
+                    request = json.dumps({**payload, 'tool_name': tool, 'tool_input': values}).encode('utf-8')
+                    # Feed the real bounded decoder. The former read_payload
+                    # global is no longer consumed by this native hook.
+                    with io.TextIOWrapper(io.BytesIO(request), encoding='utf-8') as stream, \
+                         patch.object(sys, 'stdin', stream), \
+                         patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
                          patch.object(sys, 'stderr', warning), \
-                         patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
+                         patch.dict(hook['main'].__globals__, {'emit': results.append}):
                         hook['main']()
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
                     self.assertEqual(warning.getvalue(), 'Getzilla: lifecycle observation unavailable; authorization continues.\n')
-                    with patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
+                    with io.TextIOWrapper(io.BytesIO(request), encoding='utf-8') as stream, \
+                         patch.object(sys, 'stdin', stream), \
+                         patch.object(agent_lifecycle, 'observe_tool', side_effect=failure), \
                          patch.object(sys.stderr, 'write', side_effect=OSError('private-marker')), \
-                         patch.dict(hook['main'].__globals__, {'read_payload': lambda: {**payload, 'tool_name': tool, 'tool_input': values}, 'emit': results.append}):
+                         patch.dict(hook['main'].__globals__, {'emit': results.append}):
                         hook['main']()
                     self.assertEqual(results[-1]['decision'], 'allow' if tool == 'Read' else 'deny')
 
