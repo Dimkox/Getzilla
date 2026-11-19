@@ -12,6 +12,7 @@ from pathlib import Path
 import secrets
 import threading
 import time
+import weakref
 
 from .access_authority import AccessAuthority, AccessError, _identity, _private, source_key
 from .brokers import _allowed_path
@@ -125,6 +126,7 @@ class _CapturedSources:
     profile: tuple
     classifications: tuple = ()
     retrieval_query: object | None = None
+    capture_clock: tuple | None = None
 
 
 @dataclass(repr=False)
@@ -216,6 +218,9 @@ class AccessReleaseService:
         if payload_profile is not None and retrieval_profile is not None:
             raise AccessError('access_profile_unavailable')
         self._retrieval_enabled = retrieval_profile is not None
+        self._automatic_retention = retrieval_profile == 'factory.ephemeral-retrieval162/v1'
+        self._retention_receiver_ref = self._retention_destination = None
+        self._retention_last_scan = 0.0
         if retrieval_profile is not None:
             try:
                 from .retrieval_access import RetrievalProfile
@@ -229,12 +234,70 @@ class AccessReleaseService:
             except (ImportError, ValueError, TypeError):
                 raise AccessError('access_profile_unavailable') from None
         self._payload_profile = payload_profile
+        self._retrieval_hosts = weakref.WeakSet() if self._retrieval_enabled else None
         self._store, self._authority, self._sources = store, authority, sources
         self._destinations = {_identity(key): client for key, client in destinations.items()}
         self._queue, self._prepared, self._lock = _NativeQueue(), {}, threading.Lock()
         self._stop = threading.Event()
         self._thread = None
         self.last_error = None
+
+    def _attach_retrieval_host(self, host):
+        from .native_access import FactoryNativeAccessHost
+        if (not self._retrieval_enabled or type(host) is not FactoryNativeAccessHost
+                or host._service is not self or len(self._retrieval_hosts) >= 8):
+            raise AccessError('access_profile_unavailable')
+        self._retrieval_hosts.add(host)
+
+    def _retire_dependencies(self, digests, *, cancel_all=False):
+        complete = True
+        for host in tuple(self._retrieval_hosts or ()):
+            complete = host._retire_dependencies(digests, cancel_all=cancel_all) and complete
+        with self._lock:
+            identifiers = tuple(key for key, value in self._prepared.items() if type(value) is _Prepared
+                and (cancel_all or any(canonical_digest([list(source), version, digest]) in digests
+                    for source, version, digest in value.lineage)))
+        for identifier in identifiers:
+            self._retire_retrieval(identifier)
+        return complete
+
+    def _attach_retention_receiver(self, receiver, destination):
+        from .retrieval_receiver import OwnedRetrievalReceiver
+        if (not self._automatic_retention or type(receiver) is not OwnedRetrievalReceiver
+                or receiver._retention_profile != 'factory.ephemeral-retrieval162/v1'
+                or destination not in self._destinations):
+            raise AccessError('access_profile_unavailable')
+        client = self._destinations[destination]
+        client._revalidate_socket()
+        if (receiver.path != client._socket_path or receiver._identity != client._socket_identity
+                or not secrets.compare_digest(receiver._credential, client._token)):
+            raise AccessError('access_profile_unavailable')
+        self._retention_receiver_ref, self._retention_destination = weakref.ref(receiver), destination
+
+    def _retention_receiver(self, destination):
+        receiver = None if self._retention_receiver_ref is None else self._retention_receiver_ref()
+        if (receiver is None or receiver._server is None or receiver._thread is None
+                or not receiver._thread.is_alive() or destination != self._retention_destination
+                or receiver._service_ref is None or receiver._service_ref() is not self):
+            raise AccessError('access_profile_unavailable')
+        client = self._destinations[destination]
+        client._revalidate_socket()
+        if client._socket_identity != receiver._identity:
+            raise AccessError('access_profile_unavailable')
+        return receiver
+
+    def _expire_owned_memory(self):
+        if not self._automatic_retention:
+            return False
+        return self._retire_dependencies((), cancel_all=True)
+
+    def retire_retrieval(self, session, envelope_digest, *, reason):
+        from .retrieval_retention import retire
+        return retire(self, session, envelope_digest, reason=reason)
+
+    def observe_retrieval_retirement(self, session, envelope_digest):
+        from .retrieval_retention import observe
+        return observe(self, session, envelope_digest)
 
     def _context(self, cursor, grant, packet):
         context = self._store._proposal_context(cursor, grant, packet)
@@ -255,9 +318,13 @@ class AccessReleaseService:
         original = ('factory.source-text/v1', 'identity/v1', 'access-local-text/v1')
         if self._payload_profile is None:
             return original
-        return (*original, self._payload_profile.name, self._payload_profile.policy.identity,
+        identity = (*original, self._payload_profile.name, self._payload_profile.policy.identity,
             canonical_digest([[list(key), item.version, item.digest, item.classification]
                               for key, item in sorted(self._sources._sources.items())]))
+        if self._automatic_retention:
+            receiver = self._retention_receiver(self._retention_destination)
+            return (*identity, receiver._epoch)
+        return identity
 
     def _capture_retrieval_sources(self, session, grant, packet, query, deadline):
         """Candidate filters come from this task and current destination authority."""
@@ -267,7 +334,11 @@ class AccessReleaseService:
             raise AccessError('access_denied')
         _remaining_bounds(deadline)
         with self._store._transaction(**_remaining_bounds(deadline)) as cursor:
-            context, _attempt = self._context(cursor, grant, packet)
+            context, attempt = self._context(cursor, grant, packet)
+        capture_clock = None
+        if self._automatic_retention:
+            receiver = self._retention_receiver(query.destination)
+            deadline, capture_clock = receiver._reserve(self, context, attempt, deadline)
         self._authority._live()
         self._authority._credential_live(session)
         with self._authority._source:
@@ -300,9 +371,10 @@ class AccessReleaseService:
                 raise AccessError('source_unavailable')
         if not keys:
             raise AccessError('source_unavailable')
-        return self._capture_native_sources(session, grant, packet, keys, deadline, retrieval_query=query)
+        return self._capture_native_sources(session, grant, packet, keys, deadline,
+            retrieval_query=query, capture_clock=capture_clock)
 
-    def _capture_native_sources(self, session, grant, packet, sources, deadline, *, retrieval_query=None):
+    def _capture_native_sources(self, session, grant, packet, sources, deadline, *, retrieval_query=None, capture_clock=None):
         """The same actual producer, retained for the optional trusted-parent bridge."""
         _remaining_bounds(deadline)
         if self._retrieval_enabled != (retrieval_query is not None):
@@ -336,7 +408,7 @@ class AccessReleaseService:
         _remaining_bounds(deadline)
         return _CapturedSources(session, grant, packet, context, attempt,
                                 tuple(chunks), tuple(lineage), deadline, self._native_profile(), classifications,
-                                retrieval_query)
+                                retrieval_query, capture_clock)
 
     def _revalidate_native_sources(self, captured, context, attempt, deadline):
         if (type(captured) is not _CapturedSources or context != captured.context
@@ -405,6 +477,8 @@ class AccessReleaseService:
             native_payload=native_payload,
             native_destination=self._destinations[destination] if native_payload is not None else None)
         self._verify_native_payload(prepared)
+        if self._automatic_retention:
+            self._retention_receiver(destination)._pin_prepared(self, prepared)
         with self._lock:
             now = time.monotonic()
             # Native entries retain this service's original bounded stage intent,
@@ -547,8 +621,21 @@ class AccessReleaseService:
                 cursor.execute('SELECT factory.stage_access_release_v1(%s,%s,%s,%s)',
                     (record.record_digest, prepared.grant.owner, prepared.binding_wire, prepared.binding_digest))
                 request = cursor.fetchone()[0].strip()
+                if prepared.native_capture is not None and prepared.native_capture.retrieval_query is not None:
+                    client = prepared.native_destination
+                    client._revalidate_socket()
+                    cursor.execute('SELECT factory.bind_access_destination_v1(%s,%s,%s,%s,%s,%s)',
+                        (request, prepared.binding_digest, canonical_json({'kind': 'uds',
+                            'device': client._socket_identity[0], 'inode': client._socket_identity[1]}).decode(),
+                         self._payload_profile.name if self._automatic_retention else None,
+                         prepared.native_capture.capture_clock[0] if self._automatic_retention else None,
+                         prepared.native_capture.capture_clock[1] if self._automatic_retention else None))
                 entry = self._authority._queue_cut(prepared, self._queue)
             # The context manager has verified COMMIT and released every database lock.
+            if self._automatic_retention:
+                # Exact DB profile/clock/retirement proof before publishing this
+                # already-owned pending entry to the existing dispatcher.
+                self._retention_receiver(prepared.destination).arm(self, identifier)
             self._queue._finish_commit(entry, request)
         except BaseException:
             if entry is not None:
@@ -598,6 +685,10 @@ class AccessReleaseService:
             finally:
                 self._queue._abort(entry)
                 self._retire_retrieval(prepared.identifier)
+        if self._automatic_retention and time.monotonic() - self._retention_last_scan >= .1:
+            self._retention_last_scan = time.monotonic()
+            from .retrieval_retention import expire_due
+            expire_due(self)
         return count
 
     def start(self):

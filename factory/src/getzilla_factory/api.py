@@ -349,6 +349,30 @@ def create_app(
             raise HTTPException(status, code) from None
         return {'revision': revision}
 
+    @app.post('/v1/access/result-retirement', tags=['control'])
+    async def access_result_retirement(request: Request, authorization: str | None = Header(None)):
+        session = authenticator.access_session(authorization, 'factory:access-admin')
+        if access_service is None:
+            raise HTTPException(503, 'source_authority_unavailable')
+        from .access_authority import _pairs
+        try:
+            raw = await request.body()
+            if len(raw) > 2048:
+                raise ValueError('invalid_access_request')
+            body = _closed(json.loads(raw, object_pairs_hook=_pairs), {'envelope_digest', 'reason'})
+        except (ValueError, UnicodeError, RecursionError):
+            raise HTTPException(422, 'invalid_access_request') from None
+        return await run_in_threadpool(access_service.retire_retrieval, session,
+            _digest(body['envelope_digest'], 'envelope_digest'), reason=body['reason'])
+
+    @app.get('/v1/access/result-retirement/{envelope_digest}', tags=['control'])
+    async def access_result_retirement_observation(envelope_digest: str, authorization: str | None = Header(None)):
+        session = authenticator.access_session(authorization, 'factory:access-admin')
+        if access_service is None:
+            raise HTTPException(503, 'source_authority_unavailable')
+        return await run_in_threadpool(access_service.observe_retrieval_retirement, session,
+            _digest(envelope_digest, 'envelope_digest'))
+
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, error: StarletteHTTPException):
         category, code, detail = _http_error(error.status_code, error.detail)

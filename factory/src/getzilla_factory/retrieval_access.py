@@ -19,6 +19,7 @@ from .access_authority import AccessError
 from .payload_access import PreparedPayload, _EMAIL, _PHONE
 
 PROFILE = 'factory.local-retrieval162/v1'
+EPHEMERAL = 'factory.ephemeral-retrieval162/v1'
 READER = 'factory.retrieval162/v1'
 
 
@@ -41,7 +42,7 @@ class RetrievalProfile:
     policy: TransformPolicy
 
     def __init__(self, name):
-        if name != PROFILE:
+        if name not in (PROFILE, EPHEMERAL):
             raise AccessError('access_profile_unavailable')
         object.__setattr__(self, 'name', name)
         object.__setattr__(self, 'policy', TransformPolicy(name, Purpose.TOOL_RESPONSE,
@@ -93,15 +94,20 @@ class RetrievalProfile:
             result = search(generation, request.text, budget=budget)
             packed = pack_context(snapshot, result.rankings['rrf'], lambda text: len(text.encode('utf-8')),
                 request.token_budget, budget=budget)
-            payload = engine.encode_json({'contract': PROFILE, 'context': packed.text,
+            value = {'contract': self.name, 'context': packed.text,
                 'citations': [{**item, 'source_key': list(item['source_key'])} for item in packed.citations],
                 'source_snapshot': snapshot.source_identity,
                 'generation_id': generation.identity, 'query_sha256': hashlib.sha256(request.text.encode()).hexdigest(),
                 'components': result.component_status, 'coverage_gaps': list(generation.gaps),
                 'status': result.status, 'answerability': result.answerability,
                 'measurement': {'kind': 'utf8_bytes_upper_bound_estimate', 'units': packed.proxy_tokens,
-                    'budget': request.token_budget, 'actual_units': None}, 'untrusted_data': True},
-                max_bytes=min(262144, max_bytes))
+                    'budget': request.token_budget, 'actual_units': None}, 'untrusted_data': True}
+            if self.name == EPHEMERAL:
+                if type(captured.capture_clock) is not tuple or len(captured.capture_clock) != 2:
+                    raise AccessError('source_unavailable')
+                value['retention'] = {'profile': self.name, 'captured_at': captured.capture_clock[0],
+                    'due_at': captured.capture_clock[1]}
+            payload = engine.encode_json(value, max_bytes=min(262144, max_bytes))
             budget.check()
             return PreparedPayload(payload, tuple(facts), self.policy.identity, self.name)
         except AccessError:

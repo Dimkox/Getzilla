@@ -3542,6 +3542,8 @@
         "factory/src/getzilla_factory/access_authority.py",
         "factory/src/getzilla_factory/access_release.py",
         "factory/src/getzilla_factory/retrieval_access.py",
+        "factory/src/getzilla_factory/retrieval_receiver.py",
+        "factory/src/getzilla_factory/retrieval_retention.py",
         "factory/src/getzilla_factory/factory_stop.py",
         "factory/src/getzilla_factory/local_writer.py",
         "factory/src/getzilla_factory/native_access.py",
