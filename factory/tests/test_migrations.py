@@ -41,6 +41,22 @@ PRE_RECOVERY_MIGRATIONS = (
     (16, "016_contract_execution_canonical_persistence.sql", "3b6d6104a0074b5357915583385aa433f71ccf9755f101cf9a7d6322fcc75b54"),
 )
 
+BASELINE_001_025 = PRE_RECOVERY_MIGRATIONS + (
+    (17, "017_execution_recovery_topology.sql", "4114b0a1d3b5e8ab86227b0bd2dd459d62d023d033d1ff2b9b5bdc66aaa07da1"),
+    (18, "018_semantic_validation_bridge.sql", "33053563dce7c34edfa9301130272adb34651d44dd1f2bc305ba3eec01382c70"),
+    (19, "019_usage_token_components.sql", "e0cf573b2bd183f5bf6291f02d330e98edf7d4e00d34944daba5719eee91c790"),
+    (20, "020_execution_v2_priced_usage.sql", "524c94bf95f38f8a339c3f5b1165d7f7b7fffc81eb7fd8a2faff4362f33d2ae3"),
+    (21, "021_semantic_repair_child_rejection_reasons.sql", "868bc21f47351f92b79acb8bd8e9390c62b43803c0b5761400e32c7143d56d5e"),
+    (22, "022_semantic_repair_plan_rejection_reasons.sql", "3bd08d907c538ab3964727fdca91eb35565821889d1999da8fcba1278613267d"),
+    (23, "023_factory_v15_decisions.sql", "89e3d35e3cb96076c74ceba4ff3eab769ddeb91458c3ea45f36d5db2aeb25d53"),
+    (24, "024_factory_v15_result_outbox.sql", "72efd7e17b4d25f89925ff274f35306cba9d335cc9dc5355549283e3bf743bce"),
+    (25, "025_factory_v15_result_dispatch.sql", "5782e7d8ea86848583b227754b8f2fddedba8ef3a9d7d59bd9934799d8887fd4"),
+)
+ACCESS_026_027 = (
+    (26, "026_factory_stop_fence.sql", "8bccf401d84d24665c71903e6bf516a5bf989cc81487d468d97c94f8b41c14b2"),
+    (27, "027_factory_access_release.sql", "6347ca2b6b016cff0ac50b8c0e0b0d88be40e2d6b0236b62ecc68968b16801e0"),
+)
+
 
 class MigrationTests(unittest.TestCase):
     def setUp(self):
@@ -426,11 +442,29 @@ class MigrationTests(unittest.TestCase):
 
     def test_packaged_migrations_are_contiguous_and_factory_only(self):
         migrations = discover_migrations()
-        self.assertEqual([item.version for item in migrations], list(range(1, 27)))
-        self.assertEqual(len({item.sha256 for item in migrations}), 26)
+        self.assertEqual([item.version for item in migrations], list(range(1, 28)))
+        self.assertEqual(len({item.sha256 for item in migrations}), 27)
+        self.assertEqual(tuple((item.version, item.name, item.sha256) for item in migrations),
+                         BASELINE_001_025 + ACCESS_026_027)
         for item in migrations:
             self.assertIn("factory.", item.sql)
             self.assertNotIn("trust_ci", item.sql.lower())
+
+    def test_access_source_grade_is_immutable_and_cannot_become_ordinary_outbox_work(self):
+        migration = next(item for item in discover_migrations() if item.version == 27)
+        self.assertEqual(migration.name, '027_factory_access_release.sql')
+        lowered = migration.sql.lower()
+        self.assertIn('add column access_grade text not null', lowered)
+        self.assertIn('unique (envelope_digest,access_grade)', lowered)
+        self.assertIn('access_release_source_grade_fk foreign key (envelope_digest,source_grade)', lowered)
+        self.assertIn("source_grade='protected' and dispatch_phase='blocked'", lowered)
+        self.assertIn("raise exception 'immutable result source'", lowered)
+        self.assertIn("raise exception 'immutable result provenance'", lowered)
+        for function in ('stamp_result_access_grade_v1', 'stamp_outbox_access_grade_v1'):
+            self.assertIn(f'revoke all on function factory.{function}() from public,factory_runtime', lowered)
+            self.assertNotIn(f'grant execute on function factory.{function}', lowered)
+        self.assertNotIn('create table', lowered)
+        self.assertNotIn('grant update', lowered)
 
     def test_matching_applied_migrations_are_idempotent(self):
         migrations = discover_migrations()
