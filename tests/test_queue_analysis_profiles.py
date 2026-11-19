@@ -402,3 +402,17 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         self.assertEqual(artifacts.package_key('PyPI', 'Owned_Package', '1.0.0'),
                          artifacts.package_key('PyPI', 'owned-package', '1'))
         self.assertLess(artifacts._semver_key('1.0.0-alpha.1'), artifacts._semver_key('1.0.0'))
+
+    def test_artifact_packagist_identity_does_not_import_archive_or_registry_reader(self):
+        from getzilla import security_artifacts as artifacts, security_packagist as packagist
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_artifacts.py').read_bytes())
+        selected = fit._queue_export_slice(tree, frozenset({'package_key'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_packagist'
+                             for node in ast.walk(selected)))
+        self.assertIs(packagist.key, artifacts._packagist_key)
+        self.assertIs(packagist.version, artifacts._packagist_version)
+        self.assertIs(packagist.error, artifacts._packagist_error)
+        self.assertEqual(artifacts.package_key('Packagist', 'owned/package', 'v1.0'),
+                         packagist.key('owned/package', '1.0.0.0'))
+        with self.assertRaises(artifacts.ArtifactError):
+            artifacts.package_key('Packagist', 'Owned/Package', '1.0')

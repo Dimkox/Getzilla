@@ -101,6 +101,29 @@ def _pypi_key(version: str) -> tuple[Any, ...]:
 
 
 
+_PACKAGIST_NAME = re.compile(r'[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?\Z')
+
+
+_PACKAGIST_VERSION = re.compile(r'v?([0-9]+(?:\.[0-9]+){0,3})\Z')
+
+
+def _packagist_error(code, message):
+    return ArtifactError(code, message)
+
+
+def _packagist_version(value):
+    if type(value) is not str or len(value) > 128 or (not _PACKAGIST_VERSION.fullmatch(value)):
+        raise _packagist_error('artifact-identity', 'Packagist requires an exact stable numeric version')
+    parts = tuple((int(p) for p in _PACKAGIST_VERSION.fullmatch(value)[1].split('.')))
+    return parts + (0,) * (4 - len(parts))
+
+
+def _packagist_key(name, value):
+    if type(name) is not str or len(name) > 200 or (not _PACKAGIST_NAME.fullmatch(name)):
+        raise _packagist_error('artifact-identity', 'Packagist requires a canonical vendor/package name')
+    return ('Packagist', name, _packagist_version(value))
+
+
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 MAX_INDEX_BYTES = 16 * 1024 * 1024
 MAX_METADATA_BYTES = 2 * 1024 * 1024
@@ -178,8 +201,7 @@ def package_key(ecosystem: str, name: str, version: str) -> tuple:
         if ecosystem == 'npm':
             return ecosystem, name.lower(), _semver_key(version)
         if ecosystem == 'Packagist':
-            from .security_packagist import key
-            return key(name, version)
+            return _packagist_key(name, version)
     except VulnerabilityError as exc:
         raise ArtifactError('artifact-identity', str(exc)) from exc
     raise ArtifactError('license-ecosystem-coverage', f'artifact license metadata is unsupported for {ecosystem}')
