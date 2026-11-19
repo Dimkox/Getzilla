@@ -24,6 +24,9 @@ authenticate a publisher or supply missing copyright attribution.
 Complete Go module/toolchain variants and multi-grant source containers are
 retained in tests/fixtures/security-license-go-complete-files.json. Nested/test
 source terms identify text only; they do not establish runtime membership.
+Four complete decoded Protocol Buffers BSD3 blocks and exact source-container
+bindings are retained in tests/fixtures/security-license-protobuf-bsd-files.json.
+The source reader owns decoding; this helper matches only complete UTF8 bytes.
 """
 from __future__ import annotations
 
@@ -220,6 +223,10 @@ _REVIEWED_FILES = {
     'f6918bd93ffe07f4b2c61b8287c32cb3122e08aed0be50f1c7d0eddc87877a8f': 'Apache-2.0',
     '986175a94c6ab7f33be5d3b5018797147a6cc740c357597fdb1ca679b72206a8': 'BSD-2-Clause',
     '881467e52efeb1807406134b0ec04b1c6f52dc9dc49382713ef9ac4e0cae42f8': 'Apache-2.0',
+    'bd773be0928aebf73959b15de6edd7abf4e78014bc9e8be3b96142ca251a018f': 'BSD-3-Clause',
+    '32ae9a06ce10bb95444eaef5a0a6fe171c2b088a0ace3a03daaf5ff5dd60a8f7': 'BSD-3-Clause',
+    '182a1bc8985a586e8e0ca3b5a3af1ff3c28bd3475833a07f50b42b53dd7ac889': 'BSD-3-Clause',
+    '1033ec013241782ef9264400da6635b26b7a14674d9601c6c767be84ad778af4': 'BSD-3-Clause',
 }
 _ANCILLARY_FILES = {
     '3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb': (
