@@ -202,4 +202,3 @@ def copy_snapshot(source_database: Path, destination_database: Path, source_id: 
         reader.confirm_snapshots(source_database, [evidence], now=now)
     return publish_snapshot(destination_database, source_id, payload, acquisition=evidence['acquisition'],
                             coverage=evidence['coverage'], now=now)
-
