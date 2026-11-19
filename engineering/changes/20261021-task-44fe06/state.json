@@ -37,35 +37,35 @@
       {
         "id": "verification",
         "kind": "receipt",
-        "reason": "Frozen75b6f334 failed factory-postgres-exit. Derived inventory repair passed20 tests plus architecture/spec/governance and was committed clean asdc3d66bc. Required named smoke is BLOCKED before execution by the authoritative same-objective circuit breaker. No retry or dependent review is allowed without scoped recovery. No qualifying PASS is claimed.",
+        "reason": "Frozen d7f91344 failed its final local gate and public Linux tests. Test repair and remote55e7cb05 are preserved through merge2a7738c3 on actual basef9. Fresh affected controls passed170 tests and175 subtests with1 skip; static/spec/architecture checks passed. Optional pinned installation stays BLOCKED/NOT_RUN. Named smoke, fresh reviews and final gates remain pending. No coverage gate PASS is claimed.",
         "receipt_kind": "verification",
         "status": "not_run"
       },
       {
         "id": "code_review",
         "kind": "receipt",
-        "reason": "All complete prior reports remain historical and unchanged, including the wave4 PASS report frozen in75b6f334. Fresh independent review and receipt remain pending after the derived-inventory repair.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "code_review",
         "status": "not_run"
       },
       {
         "id": "test_review",
         "kind": "receipt",
-        "reason": "All complete prior reports remain historical and unchanged, including the wave4 PASS report frozen in75b6f334. Fresh independent review and receipt remain pending after the derived-inventory repair.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "test_review",
         "status": "not_run"
       },
       {
         "id": "security_review",
         "kind": "receipt",
-        "reason": "All complete prior reports remain historical and unchanged, including the wave4 PASS report frozen in75b6f334. Fresh independent review and receipt remain pending after the derived-inventory repair.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "security_review",
         "status": "not_run"
       },
       {
         "id": "release_review",
         "kind": "receipt",
-        "reason": "All complete prior reports remain historical and unchanged, including the wave4 PASS report frozen in75b6f334. Fresh independent review and receipt remain pending after the derived-inventory repair.",
+        "reason": "All complete prior reports remain historical and unchanged, including the wave3 PASS report frozen in d7f91344. Fresh independent review and receipt remain pending after the final-gate repair.",
         "receipt_kind": "release_review",
         "status": "not_run"
       }
@@ -220,37 +220,6 @@
       ],
       "reason": "Fresh bounded repair and installed CLI integration controls passed on actual base f9f02dd5. Commit source and run named no-record smoke before four fresh independent reviews. Final qualification remains unverified.",
       "to": "reviewing"
-    },
-    {
-      "at": "2026-10-21T17:21:43+00:00",
-      "from": "reviewing",
-      "open_human_gates": [
-        "migration_or_external_write_approval: pending",
-        "production_action_approval: pending"
-      ],
-      "reason": "Final gate failed Factory derived wheel inventory. Existing regression reproduces WHEEL_INVENTORY_DRIFT. Refresh only inventory from unchanged security-pinned lock and retain historical wave4 reports.",
-      "to": "implementing"
-    },
-    {
-      "at": "2026-10-21T17:30:47+00:00",
-      "from": "implementing",
-      "open_human_gates": [
-        "scope_and_design_approval: stale",
-        "migration_or_external_write_approval: pending",
-        "production_action_approval: pending"
-      ],
-      "reason": "Existing wheel inventory regression failed before refresh. Derived JSON now matches unchanged lock and20 builder/process controls pass on system Python3.12. Architecture spec governance and diff controls pass.",
-      "to": "verifying"
-    },
-    {
-      "at": "2026-10-21T17:31:10+00:00",
-      "from": "verifying",
-      "open_human_gates": [
-        "migration_or_external_write_approval: pending",
-        "production_action_approval: pending"
-      ],
-      "reason": "Bounded derived-inventory repair and all relevant controls passed. Preserve wave4 reports as historical. Commit source and run named no-record smoke before four fresh reviews and final gates.",
-      "to": "reviewing"
     }
   ],
   "human_gates": [
@@ -263,5 +232,5 @@
   "schema_version": 1,
   "status": "reviewing",
   "title": "Complete EU AI Act phase 2 evidence and transparency adapters",
-  "updated_at": "2026-10-21T17:31:10+00:00"
+  "updated_at": "2026-10-21T16:39:38+00:00"
 }

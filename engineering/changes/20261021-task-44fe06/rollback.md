@@ -1,7 +1,5 @@
 # Rollback
 
-For the derived Factory inventory repair, regenerate from the current approved lock and rerun the existing exact-inventory test. Keep the certifi security pin; do not restore the stale inventory or downgrade the lock to make its hash match. Select the supported system Python3.12 environment for process checks; change no production adapter or deployed state.
-
 The final-gate repair changes only test fixtures, a timing assertion harness and a pinned test dependency. Revert that batch through a reviewed PR if needed. It changes no deployed hook, runner, coverage setting or production state. Keep the failing gate evidence and do not reuse historical PASS reviews after a rollback.
 
 Revert this source commit through a reviewed PR if regressions block a consumer. Re-run focused tests and the normal PR gate. No migration or data recovery is needed.

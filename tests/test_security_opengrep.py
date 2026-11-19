@@ -22,6 +22,7 @@ class SourceCensusTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('getzilla.security_opengrep'),
                              'the actual source census/adapter must exist')
+        self.addCleanup(os.umask, os.umask(0o022))
         self.scanner = importlib.import_module('getzilla.security_opengrep')
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -117,6 +118,7 @@ class SourceCensusTests(unittest.TestCase):
 
 class SyntaxProfileTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
         self.scanner = importlib.import_module('getzilla.security_opengrep')
         self.assertTrue(callable(getattr(self.scanner, 'syntax_frontend', None)),
                         'compatible grammar needs actual protected frontend admission')
@@ -186,6 +188,7 @@ class SealedPublicToolTests(unittest.TestCase):
 
 class RuleHeaderProfileTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
         self.scanner = importlib.import_module('getzilla.security_opengrep')
         self.assertTrue(callable(getattr(self.scanner, 'rule_catalog', None)),
                         'original anchored rule bytes need a closed metadata binding')
@@ -221,6 +224,7 @@ class RuleHeaderProfileTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform.startswith('linux'), 'sealed Linux adapter profile unavailable')
 class AdapterRefusalTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
         self.scanner = importlib.import_module('getzilla.security_opengrep')
         self.assertTrue(callable(getattr(self.scanner, 'scan_source', None)),
                         'the real source-bound adapter must consume the contract')
@@ -325,6 +329,7 @@ def _offline_fixture_child():
                      'actual offline pinned scanner profile unavailable')
 class ActualPinnedAdapterTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))
         self.scanner = importlib.import_module('getzilla.security_opengrep')
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

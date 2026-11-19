@@ -171,7 +171,7 @@ class PackageStatusTests(unittest.TestCase):
             self.assertEqual(self.inventory(root), before)
 
     def test_status_rejects_legacy_and_forged_review_source_receipts(self):
-        with project_copy(git=True, omit_tool_manifests=True) as root:
+        with project_copy(git=True) as root:
             self.install_cli(root)
             route, _, _, _ = self.prepare(root, complete=True)
             review = prepare_review_source(root)

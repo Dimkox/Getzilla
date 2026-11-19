@@ -74,57 +74,10 @@
           "receipt": "security_review"
         }
       ]
-    },
-    {
-      "id": "AC-006",
-      "statement": "Queue dependency analysis retains eager inspection and every existing bound; measured limits of 64 modules and depth 16 reject over-budget closures.",
-      "evidence": [
-        {
-          "test": "tests/test_architecture_fitness.py"
-        },
-        {
-          "receipt": "verification"
-        },
-        {
-          "receipt": "security_review"
-        }
-      ]
-    },
-    {
-      "id": "AC-007",
-      "statement": "Hooks resolve their own installation before a competing foreign installation; degraded local policy or filesystem support denies protected actions and preserves ordinary reads.",
-      "evidence": [
-        {
-          "test": "tests/test_hook_degraded.py"
-        },
-        {
-          "receipt": "verification"
-        },
-        {
-          "receipt": "security_review"
-        }
-      ]
-    },
-    {
-      "id": "AC-008",
-      "statement": "The offline runtime inventory is exactly derived from already-pinned dependencies; unrelated existing PDF-profile API incompatibility remains disclosed outside this audit repair.",
-      "evidence": [
-        {
-          "test": "factory/tests/test_offline_release_builder.py"
-        },
-        {
-          "receipt": "verification"
-        },
-        {
-          "receipt": "security_review"
-        }
-      ]
     }
   ],
   "approvals": {
-    "required_scopes": [
-      "scope_and_design_approval"
-    ]
+    "required_scopes": []
   },
   "change_id": "20261021-task-d83415",
   "contracts": {

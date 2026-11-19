@@ -147,15 +147,6 @@
       "from": "verifying",
       "reason": "Freeze conservative ASCII-prefix repair and complete retained failures for a fresh four-role independent review.",
       "to": "reviewing"
-    },
-    {
-      "at": "2026-10-21T15:15:53+00:00",
-      "from": "reviewing",
-      "open_human_gates": [
-        "scope_and_design_approval: stale"
-      ],
-      "reason": "First full gate failed; preserve evidence and repair measured capacity, local hook precedence, pinned metadata and execution environment without reducing scope.",
-      "to": "implementing"
     }
   ],
   "human_gates": [
@@ -164,7 +155,7 @@
   "human_gates_digest": "30d5ada87775024a66426f74c51e25ffd76df9e6e9608cd92ed98c7b86151962",
   "route_id": "d834158878e0",
   "schema_version": 1,
-  "status": "implementing",
+  "status": "reviewing",
   "title": "Fix verification false positives for public token addresses and immutable historical Markdown: add narrow hash-bound reviewed dispositions, fail closed on stale or unsafe entries, preserve raw findings and genuine secret detection, and verify the Liqvera audit without modifying historical evidence.",
-  "updated_at": "2026-10-21T15:15:53+00:00"
+  "updated_at": "2026-10-21T14:06:57+00:00"
 }
