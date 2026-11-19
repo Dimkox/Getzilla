@@ -661,6 +661,66 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         )
         return {row[0]: row[1:] for row in cursor.fetchall()}
 
+    def test_workflow_native_claim_concurrent_replay_and_stale_owner(self):
+        """Real native compile and SQL admission; fixture profiles remain test-only."""
+        from copy import deepcopy
+        from factory.tests.test_workflow_claim import NativeBoundaryTests
+        from getzilla_factory.workflow import NativeWorkflowBoundary, WorkflowRejected
+        fixture = NativeBoundaryTests()
+        fixture.setUp()
+        fixture.route['session_id'] = WORKER.actor_id
+        (fixture.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(fixture.route))
+        self.addCleanup(fixture.doCleanups)
+        rows = []
+        for index, row in enumerate(fixture.rows):
+            body = deepcopy(row[3])
+            body.pop('intent_digest'); body.pop('idempotency_key')
+            body['request_id'] = f'workflow-native-{index}'
+            body['m0_authority'] = valid_intake()['m0_authority']
+            body['m0_authority']['observed_at'] = NOW.isoformat()
+            task = self.service.intake(body, actor=OPERATOR, now=NOW).task
+            rows.append(task)
+        self.assertIsNone(self.service.claim(owner=WORKER.actor_id, role=RunRole.WRITER,
+            repositories=('owner/repository',), lease_seconds=60, actor=WORKER, now=NOW))
+        boundary = NativeWorkflowBoundary(fixture.root, 'owner/repository',
+            verify_authority=self.store._verify_m0_authority)
+        self.store.workflow_boundary = boundary
+        # Database locks and actual SKIP LOCKED claim run here, rather than a
+        # second in-memory queue or a fixture-written accepted result.
+        with boundary.locked(), self.store._transaction() as cursor:
+            candidate = boundary.candidate(cursor, 'a')
+        selection = self.selection(capabilities=['notes', 'structured_output'])
+        service = FactoryService(self.store, execution_registry=trusted_registry(selection))
+        def claim(key):
+            return service.claim_execution(owner=WORKER.actor_id, role=RunRole.WRITER,
+                repositories=('owner/repository',), lease_seconds=60, selection=selection,
+                actor=WORKER, now=NOW, idempotency_key=key, workflow_candidate=candidate)
+        # The route principal is part of the fixture and of every real claim.
+        self.assertEqual(WORKER.actor_id, fixture.route['session_id'])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            values = list(pool.map(claim, ('workflow-command-a', 'workflow-command-b')))
+        winners = [value for value in values if value is not None]
+        self.assertEqual(len(winners), 1)
+        winner_key = 'workflow-command-a' if values[0] is not None else 'workflow-command-b'
+        self.assertEqual(claim(winner_key), winners[0])
+        import psycopg
+        with psycopg.connect(DATABASE_URL) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT count(*) FROM factory.runs WHERE task_id=%s', (candidate.factory_task_id,))
+                self.assertEqual(cursor.fetchone()[0], 1)
+        self.assertEqual(self.service.release(winners[0].lease, outcome=FailureClass.WORKER_LOST,
+            actor=WORKER, now=NOW).value, 'retry')
+        retried = claim('workflow-defined-retry')
+        self.assertEqual(retried.lease.task_id, winners[0].lease.task_id)
+        self.assertNotEqual(retried.lease.run_id, winners[0].lease.run_id)
+        self.assertGreater(retried.lease.fence, winners[0].lease.fence)
+        with self.assertRaises(FenceError):
+            claim(winner_key)
+        fixture.route['session_id'] = 'handed-off-owner'
+        (fixture.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(fixture.route))
+        with self.assertRaisesRegex(WorkflowRejected, 'owner'):
+            claim(winner_key)
+
     def submit(self, source: str):
         payload = valid_intake()
         payload["request_id"] = (
@@ -6153,10 +6213,10 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
         import psycopg
 
         migrations = discover_migrations()
-        if (len(migrations) != 25 or
-                [item.version for item in migrations] != list(range(1, 26)) or
+        if (len(migrations) != 28 or
+                [item.version for item in migrations] != list(range(1, 29)) or
                 migrations[14].name != "015_execution_canonical_persistence.sql"):
-            raise AssertionError("fresh-cluster test requires the complete current migration history 001..025")
+            raise AssertionError("fresh-cluster test requires the complete current migration history 001..028")
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT to_regnamespace('factory'),to_regrole('factory_artifact_attestor')")

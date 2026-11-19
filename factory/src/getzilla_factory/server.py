@@ -129,6 +129,8 @@ def build_app(
     artifact_broker=None,
     snapshot_broker=None,
     landing_service=None,
+    workflow_root=None,
+    workflow_repository=None,
 ):
     settings.validate_landing()
     if settings.execution_enabled and (
@@ -142,7 +144,10 @@ def build_app(
         raise ServerError("trusted execution dependencies are unavailable")
 
     try:
-        store = PostgresFactoryStore(settings.database_url)
+        store = PostgresFactoryStore(settings.database_url, **(
+            {"workflow_root": workflow_root, "workflow_repository": workflow_repository}
+            if workflow_root is not None else {}
+        ))
         runtime_readiness = _runtime_readiness(store)
     except Exception as exc:
         raise ServerError("database capabilities are not ready") from exc

@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .brokers import BrokerError, secret_free_identity
 from .contracts import ContractError, canonical_digest
+from .workflow import WorkflowCandidate, WorkflowRejected
 from .execution_contracts import ExecutionContractError
 from .landing_contracts import MAX_INPUT_BYTES, MEDIA_TYPES
 from .landing_service import LandingApplicationService, LandingServiceError
@@ -306,6 +307,10 @@ def create_app(
         return _error_response(
             "invalid", error.code, "contract validation failed", 422
         )
+
+    @app.exception_handler(WorkflowRejected)
+    async def workflow_rejected(_request: Request, error: WorkflowRejected):
+        return JSONResponse({"error": "workflow-blocked", "code": str(error)}, status_code=409)
 
     @app.exception_handler(ExecutionContractError)
     async def execution_contract_error(_request: Request, error: ExecutionContractError):
@@ -837,6 +842,19 @@ def create_app(
         )
         return JSONResponse(_json({"grant": grant}), headers={"X-Correlation-ID": correlation})
 
+    @app.post("/v2/workflow/ready", tags=["execution"])
+    def workflow_ready(payload: dict, authorization: str | None = Header(None)):
+        actor = authenticator.authenticate(authorization, "task:execute")
+        payload = _closed(payload, set(), optional={"node_key"})
+        node_key = _text(payload["node_key"], "node_key", maximum=64) if "node_key" in payload else None
+        return _json(service.workflow_ready(node_key=node_key, actor=actor))
+
+    @app.post("/v2/workflow/context", tags=["execution"])
+    def workflow_context(payload: dict, authorization: str | None = Header(None)):
+        actor = authenticator.authenticate(authorization, "task:execute")
+        payload = _closed(payload, {"grant"})
+        return _json(service.workflow_context(_grant(payload["grant"]), actor=actor))
+
     @app.post("/v2/execution/claims", tags=["execution"])
     @app.post("/v1/execution/claims", tags=["execution"])
     def claim_execution(
@@ -861,7 +879,13 @@ def create_app(
             "tool_policy_digest",
             "output_schema_digest",
         }
-        payload = _closed(payload, fields)
+        payload = _closed(payload, fields, optional={"workflow_candidate"})
+        candidate = None
+        if "workflow_candidate" in payload:
+            value = _closed(payload["workflow_candidate"], {"node_key", "factory_task_id", "snapshot_digest"})
+            candidate = WorkflowCandidate(_text(value["node_key"], "node_key", maximum=64),
+                _uuid(value["factory_task_id"], "factory_task_id"),
+                _digest(value["snapshot_digest"], "snapshot_digest"))
         try:
             role = RunRole(payload["role"])
         except (ValueError, TypeError) as exc:
@@ -877,6 +901,7 @@ def create_app(
             now=datetime.now(timezone.utc),
             idempotency_key=key,
             correlation_id=correlation,
+            **({"workflow_candidate": candidate} if candidate is not None else {}),
         )
         return JSONResponse(_json({"grant": grant}), headers={"X-Correlation-ID": correlation})
 

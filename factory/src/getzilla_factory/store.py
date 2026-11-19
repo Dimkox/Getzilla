@@ -1208,10 +1208,18 @@ class PostgresFactoryStore:
             raise StoreError("locked task state changed during transition")
         return current
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, workflow_boundary=None, workflow_root=None, workflow_repository=None) -> None:
         if not database_url:
             raise StoreError("database URL is required")
         self.database_url = database_url
+        if workflow_root is not None:
+            from .workflow import NativeWorkflowBoundary
+            if workflow_boundary is not None or not workflow_repository:
+                raise StoreError("workflow native configuration is ambiguous")
+            workflow_boundary = NativeWorkflowBoundary(
+                workflow_root, workflow_repository, verify_authority=self._verify_m0_authority
+            )
+        self.workflow_boundary = workflow_boundary
 
     def _connect(
         self,
@@ -2726,25 +2734,43 @@ class PostgresFactoryStore:
         )
         return bool(cursor.fetchone()[0])
 
-    def claim(self, request, actor: Actor, now: datetime, *, idempotency_key: str | None = None, correlation_id: str | None = None) -> LeaseGrant | None:
+    def claim(self, request, actor: Actor, now: datetime, *, idempotency_key: str | None = None, correlation_id: str | None = None, workflow_candidate=None) -> LeaseGrant | None:
         if actor.kind != "worker" or request.owner != actor.actor_id:
             raise StoreError("claim owner must match worker actor")
-        with self._transaction() as cursor:
+        from .workflow import WorkflowCandidate, WorkflowRejected
+        if workflow_candidate is not None and not isinstance(workflow_candidate, WorkflowCandidate):
+            raise WorkflowRejected("candidate-invalid")
+        if workflow_candidate is not None and self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                # The trusted boundary locks current authority and prerequisites here.
+                # This is before replay, so a handoff also invalidates cached grants.
+                self.workflow_boundary.validate(
+                    cursor, workflow_candidate, request.owner, workflow_candidate.factory_task_id
+                )
             command = {
                 "owner": request.owner,
                 "role": request.role.value,
                 "repositories": list(request.repositories),
                 "lease_seconds": request.lease_seconds,
+                **({"workflow_candidate": workflow_candidate.to_dict()} if workflow_candidate is not None else {}),
             }
             replay, prior, request_digest = self._command_replay(cursor, idempotency_key, actor, "claim", command)
             if replay:
                 value = prior["grant"]
                 if value is None:
                     return None
-                return LeaseGrant(
+                grant = LeaseGrant(
                     value["task_id"], value["run_id"], value["owner"], RunRole(value["role"]), value["fence"],
                     datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00")), value["packet_digest"]
                 )
+                if workflow_candidate is not None:
+                    self._lock_grant(cursor, grant)
+                return grant
             def no_grant() -> None:
                 self._record_command(
                     cursor, idempotency_key, actor, "claim", request_digest, correlation_id, {"grant": None}
@@ -2762,6 +2788,9 @@ class PostgresFactoryStore:
             cursor.execute(
                 """SELECT t.task_id,t.repository_id,t.packet_digest,t.deadline_at,t.infrastructure_retries,t.state
                 FROM factory.tasks t WHERE t.state IN ('queued','retry') AND t.repository_id=ANY(%s)
+                AND (%s::uuid IS NULL OR t.task_id=%s::uuid)
+                AND (%s OR NOT EXISTS (SELECT 1 FROM factory.accepted_intents wi
+                    WHERE wi.intent_id=t.intent_id AND wi.source_id LIKE 'workflow:v1:%%'))
                 AND t.deadline_at>clock_timestamp() AND NOT t.accounting_blocked
                 AND t.cost_reserved_micros=0 AND t.tokens_reserved=0 AND t.wall_reserved_seconds=0
                 AND NOT EXISTS (SELECT 1 FROM factory.budget_reservations b
@@ -2771,12 +2800,18 @@ class PostgresFactoryStore:
                   %s,%s
                 )
                 ORDER BY t.created_at,t.task_id FOR UPDATE SKIP LOCKED LIMIT 1""",
-                (list(eligible_repositories), request.owner, request.role.value),
+                (list(eligible_repositories),
+                 workflow_candidate.factory_task_id if workflow_candidate else None,
+                 workflow_candidate.factory_task_id if workflow_candidate else None,
+                 workflow_candidate is not None,
+                 request.owner, request.role.value),
             )
             row = cursor.fetchone()
             if not row:
                 return no_grant()
             task_id, repository_id, packet_digest, deadline, infrastructure_retries, task_state = row
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, request.owner, str(task_id))
             current = TaskStatus(task_state)
             cursor.execute("SELECT COALESCE(max(attempt_no),0)+1 FROM factory.attempts WHERE task_id=%s", (task_id,))
             attempt_no = cursor.fetchone()[0]
@@ -2905,8 +2940,36 @@ class PostgresFactoryStore:
             )
             return grant
 
-    def execution_material(self, grant: LeaseGrant) -> dict[str, object]:
-        with self._transaction() as cursor:
+    def workflow_ready(self, *, owner: str, node_key: str | None = None):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked(), self._transaction() as cursor:
+            state, _ = self.workflow_boundary._snapshot(cursor)
+            if state['owner'] != owner:
+                raise WorkflowRejected("owner")
+            if node_key is None:
+                return self.workflow_boundary.ready(cursor)
+            return self.workflow_boundary.candidate(cursor, node_key)
+
+    def workflow_context(self, grant):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked(), self._transaction() as cursor:
+            state, _ = self.workflow_boundary._snapshot(cursor)
+            self._lock_grant(cursor, grant)
+            if state['owner'] != grant.owner or grant.task_id not in state['bindings'].values():
+                raise WorkflowRejected("owner")
+            return state['context']
+
+    def execution_material(self, grant: LeaseGrant, *, workflow_candidate=None) -> dict[str, object]:
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, grant.owner, grant.task_id)
             self._lock_grant(cursor, grant)
             cursor.execute(
                 """SELECT t.repository_id,t.packet_digest,t.deadline_at,i.body
@@ -2948,8 +3011,14 @@ class PostgresFactoryStore:
         *,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        workflow_candidate=None,
     ) -> ExecutionGrant:
-        with self._transaction() as cursor:
+        from contextlib import nullcontext
+        authority_lock = (self.workflow_boundary.locked() if workflow_candidate is not None
+                          and hasattr(self.workflow_boundary, 'locked') else nullcontext())
+        with authority_lock, self._transaction() as cursor:
+            if workflow_candidate is not None:
+                self.workflow_boundary.validate(cursor, workflow_candidate, grant.owner, grant.task_id)
             cursor.execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'")
             self._lock_grant(cursor, grant)
             command = {

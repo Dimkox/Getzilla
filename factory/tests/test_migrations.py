@@ -48,7 +48,7 @@ class MigrationTests(unittest.TestCase):
                                       return_value=run_disposable_exit.POSTGRES['image_id']))
 
     def test_result_admission_is_definer_only_immutable_and_dormant_until_qualification(self):
-        migration = discover_migrations()[-2]
+        migration = discover_migrations()[23]
         self.assertEqual((migration.version, migration.name), (24, "024_factory_v15_result_outbox.sql"))
         lowered = migration.sql.lower()
         self.assertIn("security definer", lowered)
@@ -82,7 +82,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(record.to_dict()["evidence_refs"], [])
         self.assertEqual(len(record.record_digest), 64)
     def test_result_dispatch_migration_is_fenced_dormant_and_least_privilege(self):
-        migration = discover_migrations()[-1]
+        migration = discover_migrations()[24]
         self.assertEqual(
             (migration.version, migration.name),
             (25, "025_factory_v15_result_dispatch.sql"),
@@ -426,8 +426,8 @@ class MigrationTests(unittest.TestCase):
 
     def test_packaged_migrations_are_contiguous_and_factory_only(self):
         migrations = discover_migrations()
-        self.assertEqual([item.version for item in migrations], list(range(1, 26)))
-        self.assertEqual(len({item.sha256 for item in migrations}), 25)
+        self.assertEqual([item.version for item in migrations], list(range(1, 29)))
+        self.assertEqual(len({item.sha256 for item in migrations}), 28)
         for item in migrations:
             self.assertIn("factory.", item.sql)
             self.assertNotIn("trust_ci", item.sql.lower())
