@@ -781,3 +781,7 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
             or read_package_file(root, relative, MAX_FILE_BYTES) != raw):
         raise ValueError('package or route changed before accounting publication')
     durable_json(root, root / relative, changed)
+    require_route_owner(root, route)
+    if (get_active_route(root) != route or get_active_change(root) != active
+            or read_package_file(root, relative, MAX_FILE_BYTES) != encoded):
+        raise ValueError('package or route changed during accounting publication')
