@@ -675,7 +675,8 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         descriptors = {node['source_id']: node for node in fixture.boundary.describe()['nodes']}
         for index, row in enumerate(fixture.rows):
             body = deepcopy(row[3])
-            body.pop('intent_digest'); body.pop('idempotency_key')
+            body.pop('intent_digest')
+            body.pop('idempotency_key')
             body['request_id'] = f'workflow-native-{index}'
             body['source_digest'] = descriptors[body['source_id']]['source_digest']
             body['m0_authority'] = valid_intake()['m0_authority']
@@ -6224,10 +6225,10 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
             )
 
         migrations = discover_migrations()
-        if (len(migrations) != 29 or
-                [item.version for item in migrations] != list(range(1, 30)) or
+        if (len(migrations) != 30 or
+                [item.version for item in migrations] != list(range(1, 31)) or
                 migrations[14].name != "015_execution_canonical_persistence.sql"):
-            raise AssertionError("fresh-cluster test requires the complete current migration history 001..029")
+            raise AssertionError("fresh-cluster test requires the complete current migration history 001..030")
         with psycopg.connect(FRESH_CLUSTER_DATABASE_URL) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT to_regnamespace('factory'),to_regrole('factory_artifact_attestor')")

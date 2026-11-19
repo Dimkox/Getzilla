@@ -6,6 +6,7 @@ import copy
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from getzilla_factory.access_authority import AccessAuthority, AccessError, _pri
 from getzilla_factory.access_release import AccessReleaseService, LocalSourceAdapter
 
 
+@unittest.skipUnless(os.name == 'posix' and hasattr(os, 'geteuid'), 'requires POSIX native source custody')
 class CurrentAuthorityRetrievalTests(unittest.TestCase):
     transaction = base.FactoryNativeAccessTests.transaction
     read_empty = base.FactoryNativeAccessTests.read_empty

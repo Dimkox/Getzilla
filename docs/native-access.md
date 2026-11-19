@@ -70,7 +70,7 @@ scopes/parameters/computations/responses refuse. Fixed optional payload151
 profiles and the separate retrieval162 reader now compose with this same owner.
 They are disabled by default; installing the bridge does not select a profile.
 See [Factory retrieval](factory-retrieval.md) for its exact supported channel,
-current-authority checks and remaining durable-retention limitation.
+current-authority checks, explicit retention profiles and unqualified recipients.
 
 The bridge reuses the same source producer. Cached cuts and prepared responses
 recheck the actual registered reader, byte/hash/version and current custody, not
