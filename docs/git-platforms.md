@@ -204,11 +204,54 @@ checks never produce a passing preflight. Provider success still reports
 `trusted_ci_verified:false` and `merge_supported:false`. Upstream `app_name` and eval
 scores do not establish a trusted independent CI producer.
 
-**Automated merge returns `unsupported` and performs no write**, including for a GitHub
-mirror. A dedicated trusted-CI adapter must bind forge, repository, Trail, base/head,
-producer identity and policy before that capability can be enabled. Local grants and
-review receipts cannot manufacture that external authority. The unbound upstream
-`trail merge` command is not used as a fallback.
+**Merge is off by default.** The ordinary command-line launcher returns `unsupported`
+without an operator-configured protected CI profile. It never loads a producer key or
+profile from the candidate, CLI flags, check names or eval scores. The unbound upstream
+`trail merge` command is not a fallback.
+
+The optional Python API now has a closed integration path:
+
+- `EntireCheckAuthority` pins the producer's Ed25519 public key, policy digest, selected
+  check-plan digest and required check IDs. The host supplies these values out of band.
+- `EntireCheckPublisher` consumes that producer's signed verification for the exact
+  transport/mode, processing repository and API host, context, Trail/change, source
+  branch/head/tree, base branch/head and authoritative branch mapping. It requires the
+  full selected check plan, independent exact-head review and no unresolved threads.
+  The protected service supplies its registered installation's SDK `Checks.Upsert`
+  adapter and signer. An unsigned candidate report cannot reach that publisher.
+- The bridge accepts only matching SDK v0.3.0 suite/run identities and successful
+  `created`, `updated` or `unchanged` outcomes. Stale and unknown outcomes never create
+  an accepted-check proof. The original producer timestamps and attempt ID remain
+  unchanged. The proof expires within ten minutes. No signing key or token is read by
+  this adapter. Candidate execution must remain outside the protected signer process.
+- A configured host can call `EntireAdapter(..., authority=authority).merge(...)`, or
+  inject the same authority into `cli.main(argv, authority=authority)`. Merge arguments
+  are the Trail ID, `--head`, `--branch`, `--base`, `--base-head`, `--proof` and
+  `--request-id`. The proof file contains signed public evidence, not an authority pin.
+  CLI arguments alone cannot enable this path.
+
+Merge still requires an exact production grant for action `pull-request-merge` and resource
+`entire://CLUSTER/FORGE/PROJECT/REPO#trails/TRAIL_ULID`. It rereads the processing
+placement, branch heads, ordinary merge action and provider-required gates before the
+write. The pinned v0.12.2 API receives `expectedHeadSha` and `bypass:false`; native
+requests also send `deleteBranch:false`. The provider revalidates its own merge gates.
+No force, admin, bypass, implicit push or session upload is used. Success requires a
+matching base-ref readback. A changed or unavailable result remains unknown in the
+existing request journal and cannot trigger a blind retry.
+
+Native mode binds the Entire repository and branch. Mirror mode additionally requires
+an independently configured GitHub reader. That reader must confirm the exact
+`https://github.com/OWNER/REPO`, source/base branches and heads before the write, then
+confirm the merged upstream base afterward. A matching Entire ref or a forge-local
+branch is insufficient. Entire credentials never enter that reader. No such reader is
+selected automatically from the repository.
+
+This is a source-level integration bridge with synthetic signature, SDK-receipt,
+merge and negative tests. This checkout has no registered/deployed SDK publisher or
+qualified authenticated Entire profile. Live native/mirror acceptance is **NOT
+TESTED**. Successful test fixtures do not grant a hosted verification badge. Windows
+remote operations and session publication remain unsupported. Other catalog forges
+retain their existing status.
 
 ## Failure, cancellation and retry
 
@@ -231,6 +274,7 @@ by a digest in the journal; raw CLI stdout/stderr is not logged there.
 
 Offline tests: [registry](../tests/test_git_platforms.py), [protocol/auth](../tests/test_entire_adapter.py),
 [grants/writes/retries/checks](../tests/test_entire_authority.py),
+[signed publisher and merge contracts](../tests/test_entire_merge_authority.py),
 [bounded child processes](../tests/test_entire_process.py), [optional packaging](../tests/test_entire_install.py).
 The existing GitHub CI, grant lifecycle and launcher suites remain the regression baseline.
 
@@ -252,3 +296,5 @@ Primary references: [Entire CLI v0.12.2](https://github.com/entireio/cli/tree/v0
 [Bitbucket Data Center exception](https://www.atlassian.com/licensing/data-center-end-of-life),
 [CodeCommit history](https://docs.aws.amazon.com/codecommit/latest/userguide/history.html),
 [GitCode/AtomGit](https://docs.gitcode.com/en/docs/help/home/aboutus/).
+
+The protected publisher contract follows [Entire SDK plugin v0.3.0](https://pkg.go.dev/go.entire.com/entire-sdk-go@v0.3.0/plugin), checked 2026-11-19. This does not upgrade the pinned remote CLI contract or certify a deployed plugin.
