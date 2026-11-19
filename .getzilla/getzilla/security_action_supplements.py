@@ -1,4 +1,4 @@
-"""Exact original publisher source terms for three immutable published npm objects.
+"""Exact original publisher source terms for immutable published npm objects.
 
 The research packet is not runtime authority. Cold preparation fetches these
 fixed official objects; every use rechecks their bytes, source identity and all
@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 
 from .security_artifacts import ArtifactError, read_file
+from .security_action_supplier_terms import PROFILES as SUPPLIER_PROFILES
 
 PROFILES = {
     '19347cbcba429e9f240427ce4e5998efe30a47cb9131b5673fc2f0441f7f4f57': {
@@ -46,6 +47,8 @@ PROFILES = {
     },
 }
 
+PROFILES.update(SUPPLIER_PROFILES)
+
 
 def profile_for(source):
     return PROFILES.get(source.get('sha256')) if isinstance(source, dict) else None
@@ -57,13 +60,17 @@ def admitted_urls(expected):
     for profile in PROFILES.values():
         rows = expected.get(profile['npm_url'], [])
         if rows and all((row['name'], row['version']) == (profile['name'], profile['version']) for row in rows):
-            result.update((profile['registry_url'], profile['source_url']))
+            result.update(profile_urls(profile))
     return result
+
+
+def profile_urls(profile):
+    return [profile['registry_url'], profile['source_url']] + ([profile['copyright_url']] if 'copyright_url' in profile else [])
 
 
 def response_descriptors(source):
     supplement = source.get('term_supplement')
-    return [supplement['registry'], supplement['archive']] if isinstance(supplement, dict) else []
+    return ([supplement['registry'], supplement['archive']] + ([supplement['copyright']] if 'copyright' in supplement else [])) if isinstance(supplement, dict) else []
 
 
 def _fail(code, message):
@@ -75,11 +82,11 @@ def verify(root, source, payload, npm_files, *, now=None):
     from .security_license_texts import recognized_license
     profile = profile_for(source)
     value = source.get('term_supplement')
-    if (profile is None or not isinstance(value, dict) or set(value) != {'profile', 'registry', 'archive'}
+    if (profile is None or not isinstance(value, dict) or set(value) != ({'profile', 'registry', 'archive', 'copyright'} if profile and 'copyright_url' in profile else {'profile', 'registry', 'archive'})
             or value['profile'] != profile['id'] or source['url'] != profile['npm_url']):
         _fail('license-obligation-missing', 'no closed exact publisher source term profile')
     raw, proofs = {}, []
-    for kind, url in (('registry', profile['registry_url']), ('archive', profile['source_url'])):
+    for kind, url in [('registry', profile['registry_url']), ('archive', profile['source_url'])] + ([('copyright', profile['copyright_url'])] if 'copyright_url' in profile else []):
         descriptor = value[kind]
         if (not isinstance(descriptor, dict) or set(descriptor) != {'url', 'path', 'sha256', 'bytes', 'acquired_at'}
                 or descriptor['url'] != url or type(descriptor['bytes']) is not int or not 0 < descriptor['bytes'] <= MAX_NPM_BYTES):
@@ -119,21 +126,28 @@ def verify(root, source, payload, npm_files, *, now=None):
         if upstream.get(source_path) != body:
             _fail('license-transitive-coverage', 'published npm member differs from exact supplemental source')
         matches[name] = {'source_path': source_path, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body)}
-    term_path = prefix + '/' + profile['term_path']
-    term = upstream.get(term_path)
-    if (term is None or len(term) != profile['term_bytes'] or hashlib.sha256(term).hexdigest() != profile['term_sha256']
-            or recognized_license(term.decode('utf-8')) != 'MIT'):
-        _fail('license-text-review', 'complete original publisher MIT term is missing or modified')
-    derived = 'derived/npm/' + source['sha256'] + '/publisher/LICENSE'
+    if 'copyright_url' in profile:
+        from .security_action_supplier_terms import project_dep5
+        term = project_dep5(raw['copyright'], profile)
+        term_path = 'debian/copyright#upstream-Files-star-and-complete-MIT-paragraph'
+    else:
+        term_path = prefix + '/' + profile['term_path']
+        term = upstream.get(term_path)
+        if (term is None or len(term) != profile['term_bytes'] or hashlib.sha256(term).hexdigest() != profile['term_sha256']
+                or recognized_license(term.decode('utf-8')) != 'MIT'):
+            _fail('license-text-review', 'complete original publisher MIT term is missing or modified')
+    derived = 'derived/npm/' + source['sha256'] + ('/supplier/LICENSE' if 'copyright_url' in profile else '/publisher/LICENSE')
     proofs.append({'path': term_path, 'sha256': profile['term_sha256'], 'bytes': len(term),
-        'container_kind': 'supplemental-source-archive-member', 'artifact_path': value['archive']['path'],
-        'artifact_sha256': value['archive']['sha256'], 'derived_path': derived,
+        'container_kind': 'supplier-dep5-upstream-grant' if 'copyright_url' in profile else 'supplemental-source-archive-member', 'artifact_path': value.get('copyright', value['archive'])['path'],
+        'artifact_sha256': value.get('copyright', value['archive'])['sha256'], 'derived_path': derived,
         'published_member_matches': matches, 'source_assurance': 'exact-published-member-source-match',
         'source_identity_basis': profile.get('source_identity_basis', 'registry-gitHead-and-all-published-members'),
         'registry_gitHead': profile['git_head'], 'source_commit': profile.get('source_commit', profile['git_head']),
-        'physical_bytes': 0})
+        'physical_bytes': 0,
+        **({'supplier_version': profile['supplier_version'], 'source_archive': dict(value['archive']),
+            'grant_scope': 'upstream-Files:*; Debian packaging excluded'} if 'copyright_url' in profile else {})})
     return {'terms': [(derived, term)], 'proofs': proofs,
-            'bound_bytes': len(raw['registry']) + len(raw['archive'])}
+            'bound_bytes': sum(len(body) for body in raw.values())}
 
 
 def source_receipts(source):
