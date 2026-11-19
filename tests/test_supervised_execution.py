@@ -180,9 +180,36 @@ class SupervisedExecutionTests(unittest.TestCase):
         self.assertEqual(self.finish(identity)["execution_status"], "succeeded")
 
     def test_supervisor_death_cannot_relaunch_unknown_attempt(self):
-        self.configure("import time;time.sleep(20)")
+        from getzilla import supervised_execution as backend
+
+        self.configure(
+            "import os,time;pid=os.fork();\nif pid==0: os.setsid();time.sleep(20)\nelse: print('owned-alive',flush=True);time.sleep(20)"
+        )
         view = self.start(timeout=3)
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end:
+            current = self.observe(view["execution_id"])
+            if "owned-alive" in current["output"]["preview"]:
+                break
+            time.sleep(0.03)
+        self.assertIn("owned-alive", current["output"]["preview"])
+        # Observe only the actual owned launch tree's public PID metadata.
+        pending, identities = [current["launch"]["process_id"]], []
+        while pending and len(identities) < 16:
+            pid = pending.pop()
+            try:
+                identities.append(
+                    {"profile": backend.PROFILE, "host_pid": pid, "start_ticks": backend._host_identity(pid)}
+                )
+                pending.extend(int(value) for value in Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
+            except (OSError, ValueError):
+                pass
+        self.assertGreaterEqual(len(identities), 3)
         os.kill(view["supervisor"]["host_pid"], signal.SIGKILL)
+        end = time.monotonic() + 2
+        while time.monotonic() < end and any(backend.is_live(item) for item in identities):
+            time.sleep(0.02)
+        self.assertFalse(any(backend.is_live(item) for item in identities))
         time.sleep(0.15)
         execution._LIVE.clear()
         observed = self.observe(view["execution_id"])
