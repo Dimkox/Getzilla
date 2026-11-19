@@ -21,6 +21,14 @@ from .package_status import MAX_PUBLIC_SOURCE_BYTES, InspectionError, _git_read,
 from .spec import _bounded_walk
 from .util import tree_fingerprint
 
+# Source-owned public bytes, pinned independently of mutable source manifests.
+# Provenance: certifi-2026.10.19-snapshot.json, certifi/cacert.pem (MPL-2.0).
+# This is a source observation exception, not an extra TLS trust store.
+_PUBLIC_CA_PATH = ('.getzilla/config/license-exception-inputs/factory-source-delivery-v1/'
+                   'vendor/certifi-2026.10.19/certifi/cacert.pem')
+_PUBLIC_CA_SIZE = 238856
+_PUBLIC_CA_SHA256 = '50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785'
+
 _ISSUER = object()
 _CONSTRUCTION_TOKEN = object()
 _UNCERTAIN: set[tuple[str, str]] = set()
@@ -285,7 +293,9 @@ def _source(root, route):
                 path = Path(entry.path)
                 relative = path.relative_to(root).as_posix()
                 if (entry.name == '.env' or entry.name.startswith('.env.') or entry.name in {'.ssh', 'id_rsa'}
-                        or path.suffix.lower() in {'.pem', '.key'}):
+                        or (path.suffix.lower() in {'.pem', '.key'} and relative != _PUBLIC_CA_PATH)):
+                    raise ExecutionError('source_inventory_unavailable')
+                if relative == _PUBLIC_CA_PATH and not entry.is_file(follow_symlinks=False):
                     raise ExecutionError('source_inventory_unavailable')
                 if entry.is_symlink():
                     raise ExecutionError('source_inventory_unavailable')
@@ -293,9 +303,16 @@ def _source(root, route):
                     pending.append(path)
                 elif entry.is_file(follow_symlinks=False):
                     try:
-                        raw = read_package_file(root, relative, limit=MAX_PUBLIC_SOURCE_BYTES - total, public_source=True)
+                        raw = read_package_file(root, relative,
+                            limit=min(MAX_PUBLIC_SOURCE_BYTES - total, _PUBLIC_CA_SIZE)
+                                  if relative == _PUBLIC_CA_PATH else MAX_PUBLIC_SOURCE_BYTES - total,
+                            public_source=True)
                     except (InspectionError, OSError):
                         raise ExecutionError('source_inventory_unavailable') from None
+                    if relative == _PUBLIC_CA_PATH and (
+                            len(raw) != _PUBLIC_CA_SIZE
+                            or hashlib.sha256(raw).hexdigest() != _PUBLIC_CA_SHA256):
+                        raise ExecutionError('source_inventory_unavailable')
                     total += len(raw)
                     if total > MAX_PUBLIC_SOURCE_BYTES:
                         raise ExecutionError('source_inventory_unavailable')

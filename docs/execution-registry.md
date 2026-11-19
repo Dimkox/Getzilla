@@ -2,9 +2,10 @@
 
 This composition retains the shared Core preview assertion and bounded historical
 counter checks. Local contract tests do not qualify a production backend.
-The complete installed payload can remain unavailable for source observation:
-the public vendored certifi `cacert.pem` also matches the current conservative
-sensitive-path refusal. The real installed recovery assertion remains required.
+The exact shipped certifi public CA bundle has a source-owned path, byte-size
+and SHA-256 exception to the sensitive PEM refusal. Descriptor-based public
+source custody still rejects changed, linked, private-mode or replaced files.
+Other PEM and key paths remain unavailable. This exception grants no TLS trust.
 
 The optional `getzilla.execution` Python API records one attempt per scoped intent.
 It uses `.getzilla/runtime/executions/registry.json`, with version 1 retained for
