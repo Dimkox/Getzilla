@@ -51,6 +51,8 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_execution.py",
+    "docs/supervised-execution.md",
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
     "docs/isolated-ci-acceptance.md",

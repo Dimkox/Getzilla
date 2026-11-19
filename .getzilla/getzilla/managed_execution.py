@@ -176,7 +176,7 @@ def _policy(root, tool):
         _json(read_public_source(root.resolve(), '.getzilla/config/policy.json', 262144))
         permitted, _ = policy.evaluate_pre_tool(root, {
             'tool_name': 'Bash', 'tool_input': {'command': shlex.join([tool.executable, *tool.arguments])}},
-            execution_cwd=str(root.resolve()))
+            execution_cwd=root.resolve())
         if not permitted:
             raise execution.ExecutionError('managed_policy_denied')
     except execution.ExecutionError:
@@ -237,13 +237,30 @@ class Backend:
         admission.consume(root)
         return True  # Durable request accepted; only the owning runner confirms cleanup.
 
+    def launcher_digest(self):
+        return hashlib.sha256((_LAUNCHER + self.bootstrap.digest).encode()).hexdigest()
+
+    def started(self, root, admission, instance):
+        pass
+
+    def progress(self, root, admission, instance, tail, observed):
+        pass
+
+    def cleanup(self, process):
+        return _cleanup(process)
+
+    def spawn(self, root):
+        return _spawn(root, self.binary, self.bootstrap, self.tool)
+
     def dispatch(self, root, admission, request):
         admission.consume(root, request)
         instance = secrets.token_hex(16)
-        digest = hashlib.sha256((_LAUNCHER + self.bootstrap.digest).encode()).hexdigest()
+        digest = self.launcher_digest()
         execution._begin_managed(root, admission, instance, digest, self.binary.digest)
+        self.started(root, admission, instance)
         process, pidfd = None, None
         tail, observed = b'', 0
+        last_progress = execution.SYSTEM_CLOCK.monotonic()
         status, reason, confirmed = 'failed', 'managed_authority_unavailable', True
         selector = selectors.DefaultSelector()
         def drain(timeout=0):
@@ -277,7 +294,7 @@ class Backend:
                 raise execution.ExecutionError('execution_deadline_elapsed' if watcher == 'deadline'
                                                else 'execution_stopped')
             recheck()
-            process = _spawn(root, self.binary, self.bootstrap, self.tool)
+            process = self.spawn(root)
             pidfd = os.pidfd_open(process.pid)
             start = _start_identity(process, pidfd)
             for stream in (process.stdout, process.stderr):
@@ -302,6 +319,10 @@ class Backend:
                     status, reason = 'succeeded', 'managed_exit'
                     break
                 drain(.05)
+                current = execution.SYSTEM_CLOCK.monotonic()
+                if observed and current - last_progress >= .25:
+                    self.progress(root, admission, instance, tail, observed)
+                    last_progress = current
         except execution.ExecutionError as error:
             if error.code == 'execution_stopped':
                 status, reason = 'cancelled', 'managed_stop_before_release'
@@ -313,7 +334,7 @@ class Backend:
             status, reason = 'failed', 'managed_authority_unavailable'
         finally:
             if process is not None:
-                confirmed = _cleanup(process)
+                confirmed = self.cleanup(process)
                 if status == 'succeeded' and process.returncode != 0:
                     status, reason = 'failed', 'managed_exit_nonzero'
                 drain()
