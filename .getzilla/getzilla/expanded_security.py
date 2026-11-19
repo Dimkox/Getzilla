@@ -205,7 +205,8 @@ def validate_data_source(binding: dict[str, Any], *, root: Path, now: datetime |
             raise SecurityDataError('image database differs from the frozen required source')
         return True
     if binding['source_id'] == 'artifact-license-catalog':
-        from .security_license_contracts import artifact_catalog_source, load_policy
+        from .security_artifacts import artifact_catalog_source
+        from .security_license_contracts import load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         inventory = selected_inventory(root, environ=env, now=now)
@@ -245,7 +246,8 @@ def security_obligations(root: Path, inventory: dict[str, Any] | None = None, *,
             descriptors['trivy-db'] = {'database': str(tools_path / 'cache/db/trivy.db'),
                                        'source_id': 'trivy-db', 'unavailable': True}
     if dependencies or images or tools or unknown:
-        from .security_license_contracts import artifact_catalog_source, load_policy
+        from .security_artifacts import artifact_catalog_source
+        from .security_license_contracts import load_policy
         env = os.environ if environ is None else environ
         artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
         try:
@@ -424,7 +426,8 @@ def run_checks(root: Path, *, environ: dict[str, str] | None = None, now: dateti
                                        inventory, policy, sources=source_evidence, findings=hits))
             elif name == 'security-licenses':
                 from .security_licenses import evaluate_artifacts
-                from .security_license_contracts import artifact_catalog_source, load_policy
+                from .security_artifacts import artifact_catalog_source
+                from .security_license_contracts import load_policy
                 artifacts = Path(env.get('GETZILLA_SECURITY_ARTIFACTS') or root / '.getzilla/runtime/security-artifacts')
                 license_policy = load_policy(policy_root or root)
                 target_options=_license_target(env)

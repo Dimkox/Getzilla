@@ -15,11 +15,11 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .security_osv_snapshot import _pypi_key, _semver_key, normalize_name
-from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES, artifact_identity, read_file, verify_origin, safe_parts)
-from .security_artifacts import family_evidence
-from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
+from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES as MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES as MAX_INDEX_BYTES, artifact_identity as artifact_identity, read_file, verify_origin as verify_origin, safe_parts)
+from .security_artifacts import family_evidence as family_evidence
+from .security_data import MAX_AGE_SECONDS, SecurityDataError as SecurityDataError, _clock as _clock, _json, _timestamp
 from .security_license_texts import recognized_license, recognized_license_bundle, reviewed_ancillary
-from .security_deliveries import verify_deliveries
+from .security_deliveries import verify_deliveries as verify_deliveries
 
 POLICY_PATH = '.getzilla/config/license-policy.json'
 
@@ -495,135 +495,4 @@ def _family_age(record: dict, current: datetime, catalog_time: str) -> None:
         raise ArtifactError('artifact-stale', 'family acquisition is stale/future or catalog timestamp renews older evidence')
 
 
-def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, now: datetime | None = None,
-                            target_binding: dict | None = None) -> dict:
-    """Freeze actual catalog bytes for final-receipt revalidation, without policy PASS.
-
-    Recompute at receipt consumption and compare the whole source projection.
-    Coverage.complete describes only the structural completeness of this
-    manifest's referenced records. It never claims complete dependency, tool,
-    image, license or distribution coverage. evaluate_artifacts supplies those
-    decisions independently. Hashes and unsigned timestamps supply integrity
-    bindings only; external runner qualification supplies independent authority.
-
-    The returned projection stays stable while bytes, inventory, policy and the
-    original acquisition time stay unchanged. Clock validation runs on every
-    call; copying a catalog cannot renew its 72-hour lifetime. Missing or
-    inconsistent references raise ArtifactError; an invalid clock may raise
-    SecurityDataError. Callers must map either exception to unavailable.
-    """
-    try:
-        digest = inventory.get('digest') if isinstance(inventory, dict) else None
-        if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
-            raise ArtifactError('artifact-inventory-binding', 'catalog needs the exact source inventory digest')
-        selected_policy = _policy(policy)
-        if target_binding is not None:
-            from .security_python_target import _binding
-            _binding(target_binding)
-            if target_binding['inventory_sha256'] != digest:
-                raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
-        current = _clock(now)
-        raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
-        bundle = _json(raw)
-        if type(bundle.get('schema_version')) is not int or bundle['schema_version'] != 1 or bundle.get('inventory_digest') != digest:
-            raise ArtifactError('artifact-inventory-binding', 'catalog schema or source inventory binding differs')
-        acquired = bundle.get('last_verified_sync_utc')
-        age = (current - _timestamp(acquired)).total_seconds()
-        if age < 0 or age > MAX_AGE_SECONDS:
-            raise ArtifactError('artifact-stale', 'catalog acquisition is future-dated or older than 72 hours')
-        records = bundle.get('records')
-        if not isinstance(records, list) or not records or len(records) > 10000 or not all(isinstance(record, dict) for record in records):
-            raise ArtifactError('artifact-manifest', 'catalog has no bounded complete records')
-        bindings, seen, total = [], set(), len(raw)
-        for record in records:
-            key = artifact_identity(record)
-            if key in seen:
-                raise ArtifactError('artifact-manifest', 'catalog repeats a package artifact identity')
-            seen.add(key)
-            if 'kind' in record:
-                subjects = inventory.get('images' if record['kind'] == 'image' else 'tools', [])
-                if record['subject'] not in subjects:
-                    raise ArtifactError('artifact-inventory-binding', 'family does not belong to the current source inventory')
-                _family_age(record, current, acquired)
-                evidence = family_evidence(artifacts, record)
-                total += evidence['bound_bytes']
-                if total > 512 * 1024 * 1024:
-                    raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
-                bindings.append(evidence['binding'])
-                continue
-            origin = record.get('origin')
-            if not isinstance(origin, dict):
-                raise ArtifactError('artifact-origin', 'catalog record lacks its saved registry index')
-            if 'acquired_at' in record:
-                _family_age(record, current, acquired)
-            payload = read_file(artifacts, record.get('path'), MAX_ARTIFACT_BYTES)
-            index = read_file(artifacts, origin.get('index_path'), MAX_INDEX_BYTES)
-            verified = verify_origin(artifacts, record, payload, index_bytes=index)
-            observed = None
-            if record['ecosystem'] == 'PyPI' and (target_binding is not None or 'python_target' in record):
-                from .security_python_target import verify_record
-                observed = verify_record(record,payload,target_binding)
-            bound = {'ecosystem': record['ecosystem'], 'name': record['name'], 'version': record['version'],
-                     'path': record['path'], 'filename': record['filename'], 'artifact_size': len(payload),
-                     'artifact_id': key, 'context': record.get('context', {}),
-                     'index_path': origin['index_path'], 'index_size': len(index), **verified}
-            if observed is not None:
-                bound['python_target'] = observed
-            total += len(payload) + len(index)
-            if record.get('redistributed_path') is not None:
-                delivered = read_file(artifacts, record['redistributed_path'], MAX_ARTIFACT_BYTES)
-                delivery_digest = hashlib.sha256(delivered).hexdigest()
-                if delivery_digest != verified['artifact_sha256']:
-                    raise ArtifactError('artifact-hash', 'catalog delivered artifact bytes no longer match')
-                bound['delivery'] = {'path': record['redistributed_path'], 'sha256': delivery_digest, 'size': len(delivered)}
-                total += len(delivered)
-            if total > 512 * 1024 * 1024:
-                raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
-            bindings.append(bound)
-        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
-        total += sum(delivery['output_bytes'] for delivery in deliveries.values())
-        if total > 512 * 1024 * 1024:
-            raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')
-        # Also bind the supplied input contents: a caller changing an input
-        # while retaining its old digest must not obtain the same projection.
-        inventory_body = json.dumps(inventory, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
-        if len(inventory_body) > MAX_INDEX_BYTES:
-            raise ArtifactError('artifact-size', 'source inventory exceeds its byte budget')
-        binding = {'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'inventory_digest': digest,
-                   'inventory_content_sha256': hashlib.sha256(inventory_body).hexdigest(),
-                   'policy_digest': selected_policy['digest'],
-                   'records': sorted(bindings, key=lambda item: item['artifact_id']),
-                   'deliveries': deliveries}
-        if target_binding is not None and 'factory_inputs' in target_binding:
-            from .security_factory_inputs import verify
-            auxiliary=verify(artifacts,target_binding,selected_policy,now=now)
-            binding['factory_output']=auxiliary['projection']
-            total+=auxiliary['projection']['payload_size']
-            if total>512*1024*1024:
-                raise ArtifactError('artifact-size','catalog and Factory output exceed the shared aggregate byte budget')
-        if target_binding is not None and 'ci_uses' in target_binding and 'ci_consumer' not in target_binding:
-            from .security_ci_inputs import verify as verify_ci
-            binding['ci_installations']=[]
-            for index,consumer in enumerate(target_binding['ci_uses']['consumers']):
-                if consumer.get('image_target_observed') is not True:
-                    continue
-                auxiliary=verify_ci(artifacts,target_binding,index,selected_policy,now=now)
-                binding['ci_installations'].append(auxiliary['projection'])
-                total+=auxiliary['projection']['payload_size']
-                if total>512*1024*1024:
-                    raise ArtifactError('artifact-size','CI installations exceed the shared package byte budget')
-        if target_binding is not None and 'ci_uses' in target_binding:
-            from .security_python_target import digest as python_digest
-            binding['ci_use_observation_sha256']=python_digest(target_binding['ci_uses'])
-        content = json.dumps(binding, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
-        return {'database': str(Path(artifacts).absolute()), 'source_id': 'artifact-license-catalog',
-                'source_url': 'urn:getzilla:artifact-license-catalog:1',
-                'content_sha256': hashlib.sha256(content).hexdigest(), 'payload_size': total,
-                'acquisition': {'last_verified_sync_utc': acquired, 'retrieval_kind': 'catalog-binding',
-                                'producer': 'getzilla-artifact-catalog-v1'},
-                'coverage': {'schema': 'artifact-license-catalog-1', 'scopes': ['catalog'],
-                             'record_count': len(bindings), 'complete': True}}
-    except (ArtifactError, SecurityDataError):
-        raise
-    except (ValueError, TypeError, KeyError) as exc:
-        raise ArtifactError('artifact-catalog-unavailable', str(exc)) from exc
+from .security_artifacts import artifact_catalog_source as artifact_catalog_source
