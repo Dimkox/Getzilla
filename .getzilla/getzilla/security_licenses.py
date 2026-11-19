@@ -30,7 +30,7 @@ _CANONICAL = {name.lower(): name for name in ALLOWED}
 _NONALLOW = ('GPL-2.0-only', 'GPL-2.0-or-later', 'GPL-3.0-only', 'GPL-3.0-or-later',
              'LGPL-2.1-only', 'LGPL-2.1-or-later', 'LGPL-3.0-only', 'LGPL-3.0-or-later',
              'AGPL-3.0-only', 'AGPL-3.0-or-later', 'MPL-2.0', 'EPL-2.0', 'BSD-4-Clause',
-             'CC0-1.0', 'Unlicense')
+             'CC0-1.0', 'Unlicense', 'X11')
 _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 
@@ -617,7 +617,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
                 selected, licenses, notices = [], [], []
                 for component in evidence['components']:
-                    chosen, identifiers = _select_expression(component['expression'], policy['auto_allow'])
+                    from .security_license_family_conditions import allowed_for
+                    component_allowed = allowed_for(record, component, policy['auto_allow'],
+                        selected_internal=distribution == 'internal' and (selected_required or
+                            record['origin'].get('kind') == 'go-checker-release/v1' and
+                            'go_module_sources' in evidence['binding']),
+                        source_modules=evidence['binding'].get('go_module_sources', []))
+                    chosen, identifiers = _select_expression(component['expression'], component_allowed)
                     owned = {item['path'] for item in component['files']}
                     shared = set(component['license_paths'] + component['notice_paths']) if evidence.get('held_image') else set()
                     files = {name: body for name, body in evidence['files'].items() if name in owned | shared}

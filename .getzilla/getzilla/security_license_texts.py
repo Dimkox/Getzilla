@@ -260,6 +260,12 @@ _REVIEWED_BUNDLES = {
 }
 
 
+# Recognition grants no policy permission. These exact complete files retain
+# their original bytes; only finite selected component profiles permit use.
+from .security_license_family_conditions import TEXTS as _CONDITIONAL_TEXTS
+_REVIEWED_BUNDLES.update(_CONDITIONAL_TEXTS)
+
+
 def recognized_license_bundle(text: str) -> tuple[str, ...] | None:
     """Identify an exact reviewed multi-grant file, never infer an SPDX branch.
 
