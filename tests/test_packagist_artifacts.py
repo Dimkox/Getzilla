@@ -1,6 +1,7 @@
 """New owned Packagist controls; fetch is inert data, all effects are denied."""
 import ctypes
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -97,6 +98,9 @@ def encoded(value):
 
 class PackagistArtifactTests(unittest.TestCase):
     def setUp(self):
+        # Trusted implementation imports precede the test's owned-I/O fence.
+        for name in ('security_family_inputs', 'security_release_tool_inputs', 'security_license_exceptions'):
+            importlib.import_module('getzilla.' + name)
         runtime = Path(__file__).resolve().parents[1] / '.getzilla/runtime/scratch'
         runtime.mkdir(parents=True, exist_ok=True)
         self.tmp = tempfile.TemporaryDirectory(prefix='owned-composer-', dir=runtime)
