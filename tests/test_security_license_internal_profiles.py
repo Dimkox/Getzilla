@@ -15,6 +15,27 @@ from getzilla import security_image_backend as native
 from getzilla import security_ci_inputs as ci
 
 
+_DENY_EFFECTS = False
+
+
+def _audit(event, args):
+    if _DENY_EFFECTS and (event == "open" or event.startswith(("os.", "socket.", "subprocess.", "ctypes."))):
+        raise AssertionError("owned pure control attempted external effect: " + event)
+
+
+sys.addaudithook(_audit)
+
+
+def _pure(callback):
+    global _DENY_EFFECTS
+    previous = _DENY_EFFECTS
+    _DENY_EFFECTS = True
+    try:
+        return callback()
+    finally:
+        _DENY_EFFECTS = previous
+
+
 class InternalProfiles(unittest.TestCase):
     def values(self, name="setuptools"):
         f = json.loads((ROOT / "tests/fixtures/security-license-internal-profiles.json").read_text())[name]
@@ -78,16 +99,24 @@ class InternalProfiles(unittest.TestCase):
         return binding
 
     def verify(self, v, proof=None, distribution="internal"):
-        return ex.verify_exception({"dependency_exceptions": [v[0]]}, *v[1:5], distribution, v[5], supplements=proof)
+        return _pure(
+            lambda: ex.verify_exception(
+                {"dependency_exceptions": [v[0]]}, *v[1:5], distribution, v[5], supplements=proof
+            )
+        )
+
+    def prove(self, binding, dep, record, scope, profile):
+        from getzilla import security_license_supplements as sup
+
+        return _pure(lambda: sup.prove_ci(binding, dep, record, scope, profile))
 
     def test_actual_three_profiles_and_separate_supplements(self):
-        from getzilla import security_license_supplements as sup
 
         for name in ("setuptools", "certifi", "psycopg"):
             with self.subTest(name=name):
                 v = self.values(name)
                 b = self.environment(v)
-                proof = sup.prove_ci(b, v[1], v[2], v[5], v[0]["condition_profile"])
+                proof = self.prove(b, v[1], v[2], v[5], v[0]["condition_profile"])
                 result = self.verify(v, proof)
                 self.assertTrue(result["required_supplements"])
                 self.assertFalse(set(result["required_retention"]) & set(self.bodies))
@@ -98,11 +127,10 @@ class InternalProfiles(unittest.TestCase):
         self.values()
 
     def test_every_original_term_or_nested_metadata_change_refuses(self):
-        from getzilla import security_license_supplements as sup
 
         v = self.values()
         b = self.environment(v)
-        proof = sup.prove_ci(b, v[1], v[2], v[5], v[0]["condition_profile"])
+        proof = self.prove(b, v[1], v[2], v[5], v[0]["condition_profile"])
         for path in v[3]:
             changed = copy.deepcopy(v)
             changed[3][path] += b" changed"
@@ -110,14 +138,13 @@ class InternalProfiles(unittest.TestCase):
                 self.verify(changed, proof)
 
     def test_missing_forged_replayed_and_changed_live_text_refuse(self):
-        from getzilla import security_license_supplements as sup
 
         v = self.values()
         b = self.environment(v)
         for proof in (None, {}, object()):
             with self.subTest(proof=type(proof).__name__), self.assertRaises(ValueError):
                 self.verify(v, proof)
-        proof = sup.prove_ci(b, v[1], v[2], v[5], v[0]["condition_profile"])
+        proof = self.prove(b, v[1], v[2], v[5], v[0]["condition_profile"])
         original = self.bodies["usr/share/common-licenses/GPL-3"]
         self.bodies["usr/share/common-licenses/GPL-3"] = b"GPL-3.0"
         with self.assertRaises(ValueError):
@@ -132,7 +159,7 @@ class InternalProfiles(unittest.TestCase):
 
         v = self.values()
         b = self.environment(v)
-        proof = sup.prove_ci(b, v[1], v[2], v[5], v[0]["condition_profile"])
+        proof = self.prove(b, v[1], v[2], v[5], v[0]["condition_profile"])
         forged = sup._Proof(proof.binding, proof.subject, proof.requirements, proof.fingerprint)
         with self.assertRaises(ValueError):
             self.verify(v, forged)
@@ -141,11 +168,10 @@ class InternalProfiles(unittest.TestCase):
             self.verify(v, proof)
 
     def test_supplement_details_replay_structurally_but_do_not_mint_authority(self):
-        from getzilla import security_license_supplements as sup
 
         v = self.values()
         b = self.environment(v)
-        proof = sup.prove_ci(b, v[1], v[2], v[5], v[0]["condition_profile"])
+        proof = self.prove(b, v[1], v[2], v[5], v[0]["condition_profile"])
         result = self.verify(v, proof)
         finding = dict(
             ecosystem="PyPI",
