@@ -1,4 +1,4 @@
-"""Join the two finite source-data providers into the shared artifact budget."""
+"""Join the finite source-data providers into the shared artifact budget."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from .security_artifacts import ArtifactError, MAX_INDEX_BYTES, _saved_proof
 
 RELEASE = "opengrep-release-v1"
 ACTION = "github-action-source-v1"
+GO = "go-checker-tools-v1"
 
 
 def _fail(message):
@@ -34,7 +35,7 @@ def publish(root, descriptor, value, *, inventory_digest, now=None, byte_budget=
         providers = value["providers"]
     else:
         _fail("family preparation has an unsupported schema")
-    if not isinstance(providers, list) or len(providers) > 2:
+    if not isinstance(providers, list) or len(providers) > 3:
         _fail("finite family provider list is malformed")
     frontiers = []
     seen = set()
@@ -47,14 +48,14 @@ def publish(root, descriptor, value, *, inventory_digest, now=None, byte_budget=
             if not isinstance(provider["frontiers"], list):
                 _fail("raw release frontier list is malformed")
             frontiers.extend({"kind": RELEASE, "descriptor": item} for item in provider["frontiers"])
-        elif kind == ACTION and set(provider) == {"kind", "report"}:
+        elif kind in {ACTION, GO} and set(provider) == {"kind", "report"}:
             body = json.dumps(provider["report"], sort_keys=True, separators=(",", ":")).encode()
             if len(body) > MAX_INDEX_BYTES:
-                raise ArtifactError("artifact-size", "Action source report exceeds the metadata bound")
+                raise ArtifactError("artifact-size", "Family source report exceeds the metadata bound")
             digest = hashlib.sha256(body).hexdigest()
             path = "proofs/" + digest
             _write(descriptor, path, body, immutable=True)
-            frontiers.append({"kind": ACTION, "descriptor": {"path": path, "sha256": digest}})
+            frontiers.append({"kind": kind, "descriptor": {"path": path, "sha256": digest}})
         else:
             _fail("family provider is not one of the qualified finite source-data readers")
     return validate_frontiers(
@@ -74,6 +75,7 @@ def validate_frontiers(root, frontiers, *, inventory_digest=None, now=None, byte
         _fail("persisted family frontiers are malformed or unbounded")
     release = []
     actions = []
+    go = []
     normalized = []
     for frontier in frontiers:
         # The first raw producer's shape remains readable without widening the
@@ -89,11 +91,15 @@ def validate_frontiers(root, frontiers, *, inventory_digest=None, now=None, byte
             release.append(frontier["descriptor"])
         elif kind == ACTION:
             actions.append(frontier["descriptor"])
+        elif kind == GO:
+            go.append(frontier["descriptor"])
         else:
             _fail("unknown family source provider")
         normalized.append(frontier)
     if len(actions) > 1:
         _fail("one exact Action source report is required per inventory")
+    if len(go) > 1:
+        _fail("one exact joined checker-tool report is required per inventory")
     result = validate_preparation(Path(root), release, now=now, byte_budget=budget)
     output = {
         "records": [],
@@ -127,4 +133,16 @@ def validate_frontiers(root, frontiers, *, inventory_digest=None, now=None, byte
         output["records"].extend(checked["records"])
         output["gaps"].extend(checked["gaps"])
         output["frontiers"].append({"kind": ACTION, "descriptor": descriptor})
+    for descriptor in go:
+        if not isinstance(descriptor, dict) or set(descriptor) != {"path", "sha256"}:
+            _fail("Go source report descriptor is malformed")
+        body, report = _saved_proof(Path(root), descriptor["path"], descriptor["sha256"])
+        from .security_go_tool_producer import validate_preparation as validate_go
+
+        checked = validate_go(Path(root), report, inventory_digest=inventory_digest, now=now)
+        output["bound_bytes"] += len(body) + checked["bound_bytes"]
+        if output["bound_bytes"] > budget:
+            raise ArtifactError("artifact-size", "joined source providers exceed the shared catalog byte budget")
+        output["gaps"].extend(checked["gaps"])
+        output["frontiers"].append({"kind": GO, "descriptor": descriptor})
     return output
