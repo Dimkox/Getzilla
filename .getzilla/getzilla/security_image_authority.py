@@ -154,12 +154,14 @@ def ci_use_observations(root,inventory,source,run,graphs):
         context = ci_install_context(root, recipe)
         if context is None:
             continue
+        if context['recipe_sha256'] != row['recipe_sha256']:
+            raise BackendUnavailable('current CI recipe differs from its owned completed build')
         requirements = context['requirements']
         installed = context['install_requirements']
         proof=graphs.get('evidence',{})
         expected=graphs.get('graphs',{}).get('trust-ci/pyproject.toml#runtime',[])
         if (context['graph'] not in expected or recipe not in proof
-                or any(proof.get(path) != sha for path, sha in installed.items())):
+                or any(proof.get(path) != sha for path, sha in {**context['source_inputs'], **installed}.items())):
             continue
         if hashlib.sha256(read_file(root,recipe,4*1024*1024)).hexdigest()!=proof[recipe]:
             raise BackendUnavailable('current CI consumer source changed')
@@ -178,7 +180,7 @@ def ci_use_observations(root,inventory,source,run,graphs):
                 dependencies=[dict(dep) for dep in inventory['dependencies'] if dep.get('ecosystem')=='PyPI'
                     and (dep.get('manifest') in installed or dep.get('manifest')=='trust-ci/pyproject.toml'
                          and (dep.get('usage') in {'runtime','build'} or dep.get('usage')=='optional'
-                              and requirements=='trust-ci/requirements-test.txt'))])
+                              and requirements in {'trust-ci/requirements-test.txt','trust-ci/requirements-runner.txt'}))])
         consumers.append(consumer)
     subjects={}
     for dep in inventory['dependencies']:
@@ -190,7 +192,7 @@ def ci_use_observations(root,inventory,source,run,graphs):
             direct=manifest in consumer['install_requirements']
             project=manifest=='trust-ci/pyproject.toml' and (
                 dep['usage'] in {'runtime','build'} or dep['usage']=='optional'
-                and consumer['requirements']=='trust-ci/requirements-test.txt')
+                and consumer['requirements'] in {'trust-ci/requirements-test.txt','trust-ci/requirements-runner.txt'})
             if direct or project:
                 indexes.append(index)
         if indexes:
