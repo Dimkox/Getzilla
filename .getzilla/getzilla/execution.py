@@ -167,6 +167,24 @@ def _agent(root, agent_id):
         raise ExecutionError('actor_unavailable') from error
 
 
+def _read_transition(function):
+    from functools import wraps
+    @wraps(function)
+    def observe(root, *arguments, **keywords):
+        # Reap only native children we created, before taking their former
+        # lock. A killed but unreaped supervisor must not look like a holder.
+        import sys
+        supervisor = sys.modules.get('getzilla.supervised_execution')
+        if supervisor is not None:
+            supervisor.reap()
+        if not os.path.lexists(root / '.getzilla/runtime'):
+            return function(root, *arguments, **keywords)
+        with state.task_transition(root):
+            return function(root, *arguments, **keywords)
+    return observe
+
+
+@_read_transition
 def trusted_caller(root: Path, *, agent_id: str | None = None, execution_id: str | None = None) -> CallerContext:
     """Calling adapters bind the native session first; principal text is never an input."""
     root = root.resolve(strict=True)
@@ -179,13 +197,13 @@ def trusted_caller(root: Path, *, agent_id: str | None = None, execution_id: str
         if saved['owner']['workspace'] != str(root) or saved['owner']['session_id'] != session:
             raise ExecutionError('execution_forbidden')
         _owner_current(root, saved)
-        route = state.canonical_route(root, saved['owner']['route_id'])
+        route = _canonical_route(root, saved['owner']['route_id'])
     else:
         try:
             route = state.require_route_owner(root)
         except ValueError as error:
             raise ExecutionError('actor_unavailable') from error
-        route = state.canonical_route(root, route['route_id'])
+        route = _canonical_route(root, route['route_id'])
     if not session or session != route.get('session_id') or not continuity.has_task_context(route):
         raise ExecutionError('actor_unavailable')
     generation = None
@@ -204,12 +222,23 @@ def trusted_caller(root: Path, *, agent_id: str | None = None, execution_id: str
     return CallerContext(**fields, _construction_token=_CONSTRUCTION_TOKEN)
 
 
+def _canonical_route(root, route_id):
+    # Sibling lock markers can change directory timestamps while a read is
+    # bracketed. Retry only the fail-closed changed observation, never custody.
+    for attempt in range(3):
+        try:
+            return state.canonical_route(root, route_id)
+        except InspectionError as error:
+            if error.code != 'file_changed' or attempt == 2:
+                raise
+
+
 def _caller(root, caller):
     if (type(caller) is not CallerContext or caller._issuer is not _ISSUER
             or caller.workspace != str(root.resolve()) or caller.session_id != state.current_session()):
         raise ExecutionError('execution_forbidden')
     try:
-        route = state.canonical_route(root, caller.route_id)
+        route = _canonical_route(root, caller.route_id)
         if (route['session_id'] != caller.session_id or route['authority_epoch'] != caller.authority_epoch
                 or continuity.task_identity(route) != caller.logical_task_id):
             raise ExecutionError('execution_forbidden')
@@ -244,7 +273,7 @@ def _authorize(root, caller, record):
 def _owner_route(root, record):
     owner = record['owner']
     try:
-        route = state.canonical_route(root, owner['route_id'])
+        route = _canonical_route(root, owner['route_id'])
         if (route['session_id'] != owner['session_id'] or route['authority_epoch'] != owner['authority_epoch']
                 or continuity.task_identity(route) != owner['logical_task_id']):
             raise ExecutionError('event_fenced')
@@ -351,6 +380,9 @@ def _view(root, record):
     result['observation_status'] = 'expired' if record['expired'] else 'ready'
     live = _LIVE.get((str(root.resolve()), record['execution_id']))
     result['live_continuity'] = bool(live and live[2] == record['execution_generation'])
+    if record.get('supervisor') and record['execution_status'] not in store.TERMINAL:
+        from .supervised_execution import is_live
+        result['live_continuity'] = is_live(record['supervisor'])
     if record['execution_status'] not in store.TERMINAL and not result['live_continuity']:
         result['observation_status'] = 'recovery_unknown'
     result['deadline_elapsed'] = bool(live and live[0].monotonic() >= live[1])
@@ -375,6 +407,7 @@ def _find(registry, execution_id):
         raise ExecutionError('execution_not_found') from error
 
 
+@_read_transition
 def get(root: Path, caller: CallerContext, execution_id: str):
     _caller(root, caller)
     record = _find(store.load_registry(root), execution_id)
@@ -589,7 +622,7 @@ def _dispatch_ready(root, record, registry=None):
             or record['execution_status'] != 'running' or record['dispatch_claim'] != 'pending'):
         raise ExecutionError('admission_fenced')
     _owner_current(root, record)
-    route = state.canonical_route(root, record['owner']['route_id'])
+    route = _canonical_route(root, record['owner']['route_id'])
     registry, control = _required_registry(root, route, registry)
     if control['stopped']:
         raise ExecutionError('execution_stopped')
@@ -630,7 +663,7 @@ def _managed_record(root, registry, admission, instance=None):
 
 
 def _managed_admitted(root, registry, record):
-    route = state.canonical_route(root, record['owner']['route_id'])
+    route = _canonical_route(root, record['owner']['route_id'])
     registry, control = _required_registry(root, route, registry)
     live = _LIVE.get((str(root.resolve()), record['execution_id']))
     if not live or live[2] != record['execution_generation'] or live[0].monotonic() >= live[1]:
@@ -716,7 +749,7 @@ def _release_managed(root, admission, instance, recheck, release):
 def _managed_watch(root, admission, instance):
     registry = store.load_registry(root)
     record = _managed_record(root, registry, admission, instance)
-    route = state.canonical_route(root, record['owner']['route_id'])
+    route = _canonical_route(root, record['owner']['route_id'])
     _, control = _required_registry(root, route, registry)
     if (control['stopped'] or record['execution_status'] == 'cancel_requested'
             or record['admission_binding']['control_revision'] != control['revision']):
@@ -775,6 +808,11 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
                 if record['input']['request_digest'] != request_digest:
                     raise ExecutionError('intent_conflict')
                 return existing, False
+            if getattr(backend, 'supervised', False) and sum(
+                    item['backend']['kind'] == 'managed-local' and (item['execution_status'] not in store.TERMINAL
+                    or item['cleanup_status'] in {'pending', 'unconfirmed', 'failed'})
+                    for item in registry['records'].values()) >= 2:
+                raise ExecutionError('backend_saturated')
             if len(registry['records']) >= store.MAX_RECORDS:
                 raise store.RegistryError('registry_full')
             execution_id = secrets.token_hex(16)
@@ -904,7 +942,7 @@ def record_event(root, backend_token, execution_id, expected_revision, execution
                 record['terminal_reason'] = 'backend_' + record['execution_status']
             record['retention_until'] = (live[0].utcnow() + timedelta(days=1)).isoformat()
             try:
-                route = state.canonical_route(root, record['owner']['route_id'])
+                route = _canonical_route(root, record['owner']['route_id'])
                 record['source_final'] = _source(root.resolve(), route)
                 record['source_changed'] = record['source_final'] != record['source']
             except (ValueError, OSError):
@@ -964,6 +1002,11 @@ def restore(root, *, clock: Clock = SYSTEM_CLOCK):
                     if not output_changed:
                         counts['unchanged'] += 1
                 continue
+            if record.get('supervisor'):
+                from .supervised_execution import is_live
+                if is_live(record['supervisor']):
+                    counts['unchanged'] += 1
+                    continue
             live = _LIVE.get((str(root.resolve()), execution_id))
             if (live and live[0] is clock and live[0].monotonic() < live[1]
                     and (str(root.resolve()), execution_id) not in _UNCERTAIN):
