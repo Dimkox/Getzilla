@@ -1,0 +1,2345 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "synthetic-fixture-benchmark",
+  "created_at": "2026-10-15T09:04:04.940628+00:00",
+  "source": {
+    "head": "2abea74537edd4980be6c0239b4fb2fe57de3181",
+    "dirty": true,
+    "measured_source_digest": "6494984d205ac0990375c2f476c5798c57e1e0e35c02881bb0e1fc6b41461995"
+  },
+  "host": {
+    "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "cpu_allocation": {
+      "host_logical": 28,
+      "reserve": 2,
+      "requested": 6,
+      "available": 22,
+      "quota": null,
+      "effective": 6,
+      "reasons": [
+        "host-reserve-two"
+      ]
+    }
+  },
+  "sample_count": 5,
+  "cases": [
+    {
+      "name": "javascript-small-untyped",
+      "requested_scope": "changed",
+      "base": "1ac47b11446e29e30396b0bda9326917d67d352b",
+      "fixture_digest": "3d5a919feaaeaab10c6dbc6d0586c49368e46ec9b654eb7200be2eab928c1b8e",
+      "dirty_files": [
+        "src/file0000.js"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": false,
+      "fixture_setup_ms": 29.073,
+      "cold_samples_ms": [
+        74.501,
+        62.232,
+        69.751,
+        75.85,
+        72.935
+      ],
+      "warm_samples_ms": [
+        56.114,
+        58.122,
+        57.826,
+        61.987,
+        63.004
+      ],
+      "cold_p50_ms": 72.935,
+      "cold_p95_ms": 75.85,
+      "warm_p50_ms": 58.122,
+      "warm_p95_ms": 63.004,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.025,
+            "setup": 19.937,
+            "execution": 5.382,
+            "validation": 3.72
+          },
+          {
+            "queue": 0.014,
+            "setup": 15.079,
+            "execution": 5.559,
+            "validation": 3.809
+          },
+          {
+            "queue": 0.021,
+            "setup": 17.024,
+            "execution": 6.218,
+            "validation": 4.133
+          },
+          {
+            "queue": 0.016,
+            "setup": 17.001,
+            "execution": 6.537,
+            "validation": 4.414
+          },
+          {
+            "queue": 0.023,
+            "setup": 18.293,
+            "execution": 6.643,
+            "validation": 4.461
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.018,
+            "setup": 15.281,
+            "execution": 0.0,
+            "validation": 3.455
+          },
+          {
+            "queue": 0.013,
+            "setup": 14.091,
+            "execution": 0.0,
+            "validation": 3.872
+          },
+          {
+            "queue": 0.017,
+            "setup": 14.393,
+            "execution": 0.0,
+            "validation": 4.126
+          },
+          {
+            "queue": 0.017,
+            "setup": 15.453,
+            "execution": 0.0,
+            "validation": 4.093
+          },
+          {
+            "queue": 0.017,
+            "setup": 15.262,
+            "execution": 0.0,
+            "validation": 4.179
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        54.948,
+        37.059,
+        45.623,
+        38.73,
+        49.125,
+        40.591,
+        56.688,
+        42.534,
+        54.307,
+        42.179
+      ],
+      "traced_peak_bytes": 1156150,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "javascript-small-untyped",
+      "requested_scope": "full",
+      "base": "34f87e1574f94393b14327a520ac568233bad532",
+      "fixture_digest": "ba8dcf1987a9f63008a36f9e491d4b70c3fbf7a820c49fc20148f36f83c922d2",
+      "dirty_files": [
+        "src/file0000.js"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": false,
+      "fixture_setup_ms": 4055.043,
+      "cold_samples_ms": [
+        85.274,
+        75.869,
+        74.983,
+        75.676,
+        75.018
+      ],
+      "warm_samples_ms": [
+        60.5,
+        62.607,
+        64.985,
+        64.035,
+        72.435
+      ],
+      "cold_p50_ms": 75.676,
+      "cold_p95_ms": 85.274,
+      "warm_p50_ms": 64.035,
+      "warm_p95_ms": 72.435,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.025,
+            "setup": 19.521,
+            "execution": 7.291,
+            "validation": 5.429
+          },
+          {
+            "queue": 0.015,
+            "setup": 18.832,
+            "execution": 6.905,
+            "validation": 4.585
+          },
+          {
+            "queue": 0.019,
+            "setup": 18.875,
+            "execution": 6.959,
+            "validation": 4.545
+          },
+          {
+            "queue": 0.022,
+            "setup": 19.466,
+            "execution": 7.006,
+            "validation": 4.505
+          },
+          {
+            "queue": 0.035,
+            "setup": 18.437,
+            "execution": 6.957,
+            "validation": 4.55
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.015,
+            "setup": 14.536,
+            "execution": 0.0,
+            "validation": 4.042
+          },
+          {
+            "queue": 0.027,
+            "setup": 16.516,
+            "execution": 0.0,
+            "validation": 4.13
+          },
+          {
+            "queue": 0.021,
+            "setup": 16.862,
+            "execution": 0.0,
+            "validation": 4.046
+          },
+          {
+            "queue": 0.019,
+            "setup": 16.72,
+            "execution": 0.0,
+            "validation": 3.984
+          },
+          {
+            "queue": 0.019,
+            "setup": 20.05,
+            "execution": 0.0,
+            "validation": 4.317
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        62.298,
+        39.707,
+        57.124,
+        44.478,
+        55.248,
+        45.131,
+        56.2,
+        45.208,
+        57.783,
+        50.01
+      ],
+      "traced_peak_bytes": 1086757,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "javascript-small-typed",
+      "requested_scope": "changed",
+      "base": "b6be7a903bb5d282622ef7a34bdabb30978dedf9",
+      "fixture_digest": "c0b058a7ff9d4d8c83843b58ec60429d5c55d42ad4c5a97504ec76d359ca4ab5",
+      "dirty_files": [
+        "src/file0000.ts"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": true,
+      "fixture_setup_ms": 30.985,
+      "cold_samples_ms": [
+        97.86,
+        66.524,
+        70.918,
+        74.302,
+        73.387
+      ],
+      "warm_samples_ms": [
+        61.452,
+        61.258,
+        61.56,
+        64.081,
+        63.84
+      ],
+      "cold_p50_ms": 73.387,
+      "cold_p95_ms": 97.86,
+      "warm_p50_ms": 61.56,
+      "warm_p95_ms": 64.081,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.024,
+            "setup": 29.099,
+            "execution": 11.53,
+            "validation": 7.457
+          },
+          {
+            "queue": 0.017,
+            "setup": 17.281,
+            "execution": 6.393,
+            "validation": 4.375
+          },
+          {
+            "queue": 0.018,
+            "setup": 17.791,
+            "execution": 6.373,
+            "validation": 4.319
+          },
+          {
+            "queue": 0.026,
+            "setup": 18.959,
+            "execution": 6.357,
+            "validation": 4.239
+          },
+          {
+            "queue": 0.022,
+            "setup": 19.485,
+            "execution": 6.426,
+            "validation": 4.38
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.017,
+            "setup": 15.121,
+            "execution": 0.0,
+            "validation": 4.098
+          },
+          {
+            "queue": 0.018,
+            "setup": 15.945,
+            "execution": 0.0,
+            "validation": 4.142
+          },
+          {
+            "queue": 0.023,
+            "setup": 14.1,
+            "execution": 0.0,
+            "validation": 3.899
+          },
+          {
+            "queue": 0.02,
+            "setup": 16.726,
+            "execution": 0.0,
+            "validation": 3.956
+          },
+          {
+            "queue": 0.02,
+            "setup": 16.049,
+            "execution": 0.0,
+            "validation": 3.909
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        82.163,
+        45.338,
+        50.881,
+        44.807,
+        52.261,
+        42.064,
+        54.357,
+        45.515,
+        54.567,
+        44.273
+      ],
+      "traced_peak_bytes": 1084807,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "javascript-small-typed",
+      "requested_scope": "full",
+      "base": "7dec206ee50d6036578aeba2e722320aaa07b261",
+      "fixture_digest": "9d431350d908262b04c4543d34dc35b1ffd1e2449bf2e389f8955f70a64526c9",
+      "dirty_files": [
+        "src/file0000.ts"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": true,
+      "fixture_setup_ms": 26.806,
+      "cold_samples_ms": [
+        78.46,
+        68.999,
+        72.274,
+        67.925,
+        78.211
+      ],
+      "warm_samples_ms": [
+        59.255,
+        60.468,
+        57.582,
+        59.646,
+        62.294
+      ],
+      "cold_p50_ms": 72.274,
+      "cold_p95_ms": 78.46,
+      "warm_p50_ms": 59.646,
+      "warm_p95_ms": 62.294,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.034,
+            "setup": 17.776,
+            "execution": 7.255,
+            "validation": 4.557
+          },
+          {
+            "queue": 0.013,
+            "setup": 16.36,
+            "execution": 6.831,
+            "validation": 4.421
+          },
+          {
+            "queue": 0.014,
+            "setup": 17.739,
+            "execution": 7.035,
+            "validation": 4.61
+          },
+          {
+            "queue": 0.014,
+            "setup": 17.204,
+            "execution": 7.047,
+            "validation": 4.592
+          },
+          {
+            "queue": 0.019,
+            "setup": 19.823,
+            "execution": 7.164,
+            "validation": 4.672
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.018,
+            "setup": 15.839,
+            "execution": 0.0,
+            "validation": 3.819
+          },
+          {
+            "queue": 0.019,
+            "setup": 15.469,
+            "execution": 0.0,
+            "validation": 3.936
+          },
+          {
+            "queue": 0.018,
+            "setup": 16.108,
+            "execution": 0.0,
+            "validation": 4.083
+          },
+          {
+            "queue": 0.018,
+            "setup": 15.204,
+            "execution": 0.0,
+            "validation": 4.179
+          },
+          {
+            "queue": 0.014,
+            "setup": 15.331,
+            "execution": 0.0,
+            "validation": 3.977
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        58.901,
+        41.237,
+        51.095,
+        41.253,
+        53.137,
+        43.312,
+        52.324,
+        41.302,
+        56.883,
+        42.647
+      ],
+      "traced_peak_bytes": 1085264,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "javascript-medium",
+      "requested_scope": "changed",
+      "base": "8d5e0b2d347bd54450b7683f3804afa22912e482",
+      "fixture_digest": "7d5c3a8a12724c118f2487c7eee5af99317790204c634094a191231c59205543",
+      "dirty_files": [
+        "src/file0000.js"
+      ],
+      "files_per_package": 150,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": false,
+      "fixture_setup_ms": 77.583,
+      "cold_samples_ms": [
+        369.98,
+        321.441,
+        319.357,
+        310.5,
+        340.552
+      ],
+      "warm_samples_ms": [
+        193.198,
+        188.342,
+        194.83,
+        187.571,
+        186.219
+      ],
+      "cold_p50_ms": 321.441,
+      "cold_p95_ms": 369.98,
+      "warm_p50_ms": 188.342,
+      "warm_p95_ms": 194.83,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.022,
+            "setup": 104.961,
+            "execution": 96.754,
+            "validation": 48.26
+          },
+          {
+            "queue": 0.023,
+            "setup": 91.984,
+            "execution": 82.791,
+            "validation": 41.425
+          },
+          {
+            "queue": 0.034,
+            "setup": 90.396,
+            "execution": 81.82,
+            "validation": 39.719
+          },
+          {
+            "queue": 0.018,
+            "setup": 89.099,
+            "execution": 78.306,
+            "validation": 38.699
+          },
+          {
+            "queue": 0.016,
+            "setup": 100.426,
+            "execution": 93.659,
+            "validation": 44.629
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.023,
+            "setup": 50.081,
+            "execution": 0.0,
+            "validation": 40.198
+          },
+          {
+            "queue": 0.017,
+            "setup": 50.494,
+            "execution": 0.0,
+            "validation": 37.823
+          },
+          {
+            "queue": 0.018,
+            "setup": 50.858,
+            "execution": 0.0,
+            "validation": 40.52
+          },
+          {
+            "queue": 0.019,
+            "setup": 49.775,
+            "execution": 0.0,
+            "validation": 38.21
+          },
+          {
+            "queue": 0.029,
+            "setup": 49.129,
+            "execution": 0.0,
+            "validation": 38.117
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        348.843,
+        174.878,
+        299.351,
+        170.89,
+        295.625,
+        174.141,
+        285.214,
+        165.221,
+        321.407,
+        164.799
+      ],
+      "traced_peak_bytes": 1112740,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "javascript-medium",
+      "requested_scope": "full",
+      "base": "945364b7016eb47d9a2f0f6d832679f7d5804b5b",
+      "fixture_digest": "ffbb0de416a19440b309062021b3c2fe31803a73d0ae1229636cc8650cf6e263",
+      "dirty_files": [
+        "src/file0000.js"
+      ],
+      "files_per_package": 150,
+      "packages": 1,
+      "stack": "javascript",
+      "typed": false,
+      "fixture_setup_ms": 61.729,
+      "cold_samples_ms": [
+        315.831,
+        327.742,
+        323.103,
+        366.152,
+        367.228
+      ],
+      "warm_samples_ms": [
+        192.735,
+        190.558,
+        189.777,
+        227.814,
+        192.774
+      ],
+      "cold_p50_ms": 327.742,
+      "cold_p95_ms": 367.228,
+      "warm_p50_ms": 192.735,
+      "warm_p95_ms": 227.814,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0.019,
+            "setup": 88.461,
+            "execution": 84.287,
+            "validation": 43.539
+          },
+          {
+            "queue": 0.019,
+            "setup": 89.953,
+            "execution": 88.889,
+            "validation": 44.33
+          },
+          {
+            "queue": 0.02,
+            "setup": 92.82,
+            "execution": 86.773,
+            "validation": 41.244
+          },
+          {
+            "queue": 0.018,
+            "setup": 106.68,
+            "execution": 106.062,
+            "validation": 52.348
+          },
+          {
+            "queue": 0.027,
+            "setup": 105.387,
+            "execution": 102.585,
+            "validation": 43.901
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0.021,
+            "setup": 52.568,
+            "execution": 0.0,
+            "validation": 39.609
+          },
+          {
+            "queue": 0.019,
+            "setup": 54.086,
+            "execution": 0.0,
+            "validation": 39.758
+          },
+          {
+            "queue": 0.017,
+            "setup": 51.026,
+            "execution": 0.0,
+            "validation": 39.271
+          },
+          {
+            "queue": 0.017,
+            "setup": 61.628,
+            "execution": 0.0,
+            "validation": 47.079
+          },
+          {
+            "queue": 0.022,
+            "setup": 53.276,
+            "execution": 0.0,
+            "validation": 39.454
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        294.37,
+        171.009,
+        304.681,
+        171.724,
+        304.368,
+        167.587,
+        346.312,
+        204.513,
+        344.898,
+        171.474
+      ],
+      "traced_peak_bytes": 1138150,
+      "fresh_executions": 5,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "typescript-monorepo",
+      "requested_scope": "changed",
+      "base": "490629cabfae682efb55f653ce689fb5cb894d15",
+      "fixture_digest": "3ff1e4273264874237a5ffd4fc7a0e3b79445d469b4569c831f88c65c7451dd2",
+      "dirty_files": [
+        "pkg00/javascript/src/file0000.ts",
+        "pkg01/javascript/src/file0000.ts",
+        "pkg02/javascript/src/file0000.ts",
+        "pkg03/javascript/src/file0000.ts"
+      ],
+      "files_per_package": 50,
+      "packages": 4,
+      "stack": "javascript",
+      "typed": true,
+      "fixture_setup_ms": 55.436,
+      "cold_samples_ms": [
+        1182.046,
+        1210.261,
+        1212.287,
+        1207.844,
+        1203.873
+      ],
+      "warm_samples_ms": [
+        472.66,
+        472.808,
+        473.886,
+        462.737,
+        473.153
+      ],
+      "cold_p50_ms": 1207.844,
+      "cold_p95_ms": 1212.287,
+      "warm_p50_ms": 472.808,
+      "warm_p95_ms": 473.886,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 791.931,
+            "setup": 313.798,
+            "execution": 496.211,
+            "validation": 226.934
+          },
+          {
+            "queue": 809.331,
+            "setup": 319.56,
+            "execution": 504.277,
+            "validation": 231.094
+          },
+          {
+            "queue": 818.929,
+            "setup": 323.056,
+            "execution": 510.633,
+            "validation": 230.38
+          },
+          {
+            "queue": 814.355,
+            "setup": 323.973,
+            "execution": 506.258,
+            "validation": 229.602
+          },
+          {
+            "queue": 811.961,
+            "setup": 318.911,
+            "execution": 508.992,
+            "validation": 230.034
+          }
+        ],
+        "warm": [
+          {
+            "queue": 262.266,
+            "setup": 98.163,
+            "execution": 0.0,
+            "validation": 229.853
+          },
+          {
+            "queue": 260.151,
+            "setup": 97.322,
+            "execution": 0.0,
+            "validation": 229.016
+          },
+          {
+            "queue": 260.098,
+            "setup": 96.549,
+            "execution": 0.0,
+            "validation": 227.862
+          },
+          {
+            "queue": 255.396,
+            "setup": 95.75,
+            "execution": 0.0,
+            "validation": 223.971
+          },
+          {
+            "queue": 260.94,
+            "setup": 97.434,
+            "execution": 0.0,
+            "validation": 229.42
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        1162.269,
+        448.176,
+        1182.7,
+        448.728,
+        1189.521,
+        446.702,
+        1185.395,
+        440.167,
+        1182.507,
+        449.97
+      ],
+      "traced_peak_bytes": 1167052,
+      "fresh_executions": 20,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "typescript-monorepo",
+      "requested_scope": "full",
+      "base": "1cb4e575f1593f93a5dba51118c673176f0e6f2f",
+      "fixture_digest": "34efeb81d2c8d7ea76fd3526968b8b20b2076ba3ac08dff61739a55bdfc39876",
+      "dirty_files": [
+        "pkg00/javascript/src/file0000.ts",
+        "pkg01/javascript/src/file0000.ts",
+        "pkg02/javascript/src/file0000.ts",
+        "pkg03/javascript/src/file0000.ts"
+      ],
+      "files_per_package": 50,
+      "packages": 4,
+      "stack": "javascript",
+      "typed": true,
+      "fixture_setup_ms": 67.288,
+      "cold_samples_ms": [
+        1181.171,
+        1189.723,
+        1197.046,
+        1209.353,
+        1215.58
+      ],
+      "warm_samples_ms": [
+        451.04,
+        460.013,
+        514.761,
+        455.064,
+        498.733
+      ],
+      "cold_p50_ms": 1197.046,
+      "cold_p95_ms": 1215.58,
+      "warm_p50_ms": 460.013,
+      "warm_p95_ms": 514.761,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 794.613,
+            "setup": 312.79,
+            "execution": 493.293,
+            "validation": 226.743
+          },
+          {
+            "queue": 802.109,
+            "setup": 314.935,
+            "execution": 500.982,
+            "validation": 228.479
+          },
+          {
+            "queue": 809.386,
+            "setup": 316.359,
+            "execution": 503.974,
+            "validation": 232.524
+          },
+          {
+            "queue": 820.857,
+            "setup": 320.2,
+            "execution": 507.449,
+            "validation": 232.135
+          },
+          {
+            "queue": 811.806,
+            "setup": 321.953,
+            "execution": 510.516,
+            "validation": 233.035
+          }
+        ],
+        "warm": [
+          {
+            "queue": 248.735,
+            "setup": 93.537,
+            "execution": 0.0,
+            "validation": 219.21
+          },
+          {
+            "queue": 256.19,
+            "setup": 97.9,
+            "execution": 0.0,
+            "validation": 221.974
+          },
+          {
+            "queue": 308.919,
+            "setup": 128.587,
+            "execution": 0.0,
+            "validation": 250.726
+          },
+          {
+            "queue": 253.09,
+            "setup": 93.896,
+            "execution": 0.0,
+            "validation": 221.037
+          },
+          {
+            "queue": 289.729,
+            "setup": 109.255,
+            "execution": 0.0,
+            "validation": 245.45
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        1157.388,
+        428.917,
+        1163.653,
+        435.177,
+        1170.415,
+        499.011,
+        1184.18,
+        432.374,
+        1191.178,
+        475.864
+      ],
+      "traced_peak_bytes": 1181130,
+      "fresh_executions": 20,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "kotlin",
+      "requested_scope": "changed",
+      "base": "50c87d67db21a37b4dd98ae118ae21cb1c123a75",
+      "fixture_digest": "fb597fb0a280ccf0619ed7e9219234a32721603f26ad0c4490c9969cf328ef9a",
+      "dirty_files": [
+        "src/file0000.kt"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "kotlin",
+      "typed": false,
+      "fixture_setup_ms": 28.974,
+      "cold_samples_ms": [
+        92.718,
+        87.858,
+        91.234,
+        88.101,
+        89.274
+      ],
+      "warm_samples_ms": [
+        65.086,
+        72.539,
+        67.879,
+        70.286,
+        68.506
+      ],
+      "cold_p50_ms": 89.274,
+      "cold_p95_ms": 92.718,
+      "warm_p50_ms": 68.506,
+      "warm_p95_ms": 72.539,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 28.542,
+            "setup": 29.105,
+            "execution": 10.556,
+            "validation": 7.533
+          },
+          {
+            "queue": 26.592,
+            "setup": 27.459,
+            "execution": 10.853,
+            "validation": 7.658
+          },
+          {
+            "queue": 27.536,
+            "setup": 28.242,
+            "execution": 11.111,
+            "validation": 7.806
+          },
+          {
+            "queue": 27.701,
+            "setup": 28.734,
+            "execution": 10.77,
+            "validation": 7.536
+          },
+          {
+            "queue": 28.061,
+            "setup": 28.601,
+            "execution": 10.956,
+            "validation": 7.646
+          }
+        ],
+        "warm": [
+          {
+            "queue": 17.647,
+            "setup": 22.258,
+            "execution": 0.0,
+            "validation": 7.398
+          },
+          {
+            "queue": 19.076,
+            "setup": 23.63,
+            "execution": 0.0,
+            "validation": 7.322
+          },
+          {
+            "queue": 17.185,
+            "setup": 22.228,
+            "execution": 0.0,
+            "validation": 7.359
+          },
+          {
+            "queue": 17.916,
+            "setup": 22.623,
+            "execution": 0.0,
+            "validation": 7.648
+          },
+          {
+            "queue": 17.88,
+            "setup": 22.882,
+            "execution": 0.0,
+            "validation": 7.604
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        72.182,
+        48.366,
+        68.085,
+        50.756,
+        69.226,
+        49.512,
+        68.416,
+        50.81,
+        69.216,
+        50.911
+      ],
+      "traced_peak_bytes": 1120233,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "kotlin",
+      "requested_scope": "full",
+      "base": "5421f7e4776a87f282f4cee4b1946555ae946259",
+      "fixture_digest": "968921e5303caf8609389913fcaf65ca99bd40722fd4c30942ad21824390cb65",
+      "dirty_files": [
+        "src/file0000.kt"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "kotlin",
+      "typed": false,
+      "fixture_setup_ms": 29.017,
+      "cold_samples_ms": [
+        86.966,
+        86.058,
+        87.922,
+        87.544,
+        86.53
+      ],
+      "warm_samples_ms": [
+        69.771,
+        71.49,
+        70.059,
+        69.018,
+        71.979
+      ],
+      "cold_p50_ms": 86.966,
+      "cold_p95_ms": 87.922,
+      "warm_p50_ms": 70.059,
+      "warm_p95_ms": 71.979,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 26.577,
+            "setup": 27.037,
+            "execution": 10.24,
+            "validation": 7.366
+          },
+          {
+            "queue": 26.831,
+            "setup": 27.77,
+            "execution": 10.635,
+            "validation": 7.454
+          },
+          {
+            "queue": 26.963,
+            "setup": 27.283,
+            "execution": 10.932,
+            "validation": 7.565
+          },
+          {
+            "queue": 27.057,
+            "setup": 27.411,
+            "execution": 10.969,
+            "validation": 7.692
+          },
+          {
+            "queue": 26.593,
+            "setup": 27.326,
+            "execution": 10.532,
+            "validation": 7.422
+          }
+        ],
+        "warm": [
+          {
+            "queue": 17.825,
+            "setup": 22.529,
+            "execution": 0.0,
+            "validation": 7.382
+          },
+          {
+            "queue": 18.697,
+            "setup": 23.378,
+            "execution": 0.0,
+            "validation": 7.14
+          },
+          {
+            "queue": 18.863,
+            "setup": 23.64,
+            "execution": 0.0,
+            "validation": 7.403
+          },
+          {
+            "queue": 18.072,
+            "setup": 22.89,
+            "execution": 0.0,
+            "validation": 7.373
+          },
+          {
+            "queue": 19.36,
+            "setup": 24.152,
+            "execution": 0.0,
+            "validation": 7.322
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        69.575,
+        49.896,
+        67.09,
+        50.205,
+        68.03,
+        50.684,
+        67.786,
+        50.161,
+        67.004,
+        51.421
+      ],
+      "traced_peak_bytes": 1091468,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "dart",
+      "requested_scope": "changed",
+      "base": "44fba17c3bfb38a6eae9fce87f77b00ee153ce2a",
+      "fixture_digest": "a0656d8546e66d6675b823ba60993c27b448699b488bf8e9b81f76754b40f119",
+      "dirty_files": [
+        "src/file0000.dart"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "dart",
+      "typed": false,
+      "fixture_setup_ms": 26.968,
+      "cold_samples_ms": [
+        90.183,
+        90.351,
+        86.277,
+        83.896,
+        87.398
+      ],
+      "warm_samples_ms": [
+        72.795,
+        68.617,
+        72.68,
+        72.087,
+        69.044
+      ],
+      "cold_p50_ms": 87.398,
+      "cold_p95_ms": 90.351,
+      "warm_p50_ms": 72.087,
+      "warm_p95_ms": 72.795,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 29.967,
+            "setup": 30.253,
+            "execution": 9.858,
+            "validation": 7.473
+          },
+          {
+            "queue": 28.0,
+            "setup": 28.28,
+            "execution": 10.234,
+            "validation": 7.372
+          },
+          {
+            "queue": 26.936,
+            "setup": 27.366,
+            "execution": 10.167,
+            "validation": 7.579
+          },
+          {
+            "queue": 27.718,
+            "setup": 27.938,
+            "execution": 10.377,
+            "validation": 7.45
+          },
+          {
+            "queue": 26.539,
+            "setup": 26.642,
+            "execution": 10.214,
+            "validation": 7.514
+          }
+        ],
+        "warm": [
+          {
+            "queue": 20.18,
+            "setup": 24.489,
+            "execution": 0.0,
+            "validation": 6.723
+          },
+          {
+            "queue": 18.272,
+            "setup": 22.871,
+            "execution": 0.0,
+            "validation": 6.946
+          },
+          {
+            "queue": 18.647,
+            "setup": 23.156,
+            "execution": 0.0,
+            "validation": 6.897
+          },
+          {
+            "queue": 19.228,
+            "setup": 23.876,
+            "execution": 0.0,
+            "validation": 6.97
+          },
+          {
+            "queue": 17.625,
+            "setup": 22.19,
+            "execution": 0.0,
+            "validation": 6.902
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        72.046,
+        50.547,
+        68.117,
+        49.157,
+        67.058,
+        50.966,
+        66.768,
+        50.285,
+        67.243,
+        49.218
+      ],
+      "traced_peak_bytes": 1128578,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "dart",
+      "requested_scope": "full",
+      "base": "bb049bbf6c894e130180b39bc0fd6cf0f4451ea9",
+      "fixture_digest": "75eb09c8bb3760905a5777ef5901945603717bcaaec679fd15fce4e8aac26301",
+      "dirty_files": [
+        "src/file0000.dart"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "dart",
+      "typed": false,
+      "fixture_setup_ms": 29.636,
+      "cold_samples_ms": [
+        125.02,
+        94.994,
+        97.119,
+        95.88,
+        96.573
+      ],
+      "warm_samples_ms": [
+        69.254,
+        78.924,
+        66.439,
+        78.432,
+        74.101
+      ],
+      "cold_p50_ms": 96.573,
+      "cold_p95_ms": 125.02,
+      "warm_p50_ms": 74.101,
+      "warm_p95_ms": 78.924,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 44.461,
+            "setup": 44.563,
+            "execution": 19.81,
+            "validation": 14.884
+          },
+          {
+            "queue": 32.77,
+            "setup": 33.132,
+            "execution": 12.047,
+            "validation": 9.038
+          },
+          {
+            "queue": 32.743,
+            "setup": 33.318,
+            "execution": 12.391,
+            "validation": 9.163
+          },
+          {
+            "queue": 30.812,
+            "setup": 31.354,
+            "execution": 12.201,
+            "validation": 8.941
+          },
+          {
+            "queue": 30.734,
+            "setup": 31.2,
+            "execution": 12.337,
+            "validation": 9.13
+          }
+        ],
+        "warm": [
+          {
+            "queue": 20.133,
+            "setup": 25.707,
+            "execution": 0.0,
+            "validation": 7.912
+          },
+          {
+            "queue": 21.448,
+            "setup": 27.207,
+            "execution": 0.0,
+            "validation": 8.645
+          },
+          {
+            "queue": 20.133,
+            "setup": 25.83,
+            "execution": 0.0,
+            "validation": 8.18
+          },
+          {
+            "queue": 20.208,
+            "setup": 25.941,
+            "execution": 0.0,
+            "validation": 8.213
+          },
+          {
+            "queue": 19.715,
+            "setup": 25.587,
+            "execution": 0.0,
+            "validation": 8.156
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        106.234,
+        54.332,
+        77.944,
+        58.21,
+        81.378,
+        55.702,
+        77.919,
+        56.865,
+        78.341,
+        56.334
+      ],
+      "traced_peak_bytes": 1092877,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "flutter",
+      "requested_scope": "changed",
+      "base": "09f23e07a137f7f854623acd65dc07920582d377",
+      "fixture_digest": "c22c9bddea0a10f135c7c14bad1484e6abe2246269ee07fdbecad872c3a8d61a",
+      "dirty_files": [
+        "src/file0000.dart"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "flutter",
+      "typed": false,
+      "fixture_setup_ms": 27.379,
+      "cold_samples_ms": [
+        98.25,
+        98.028,
+        97.021,
+        97.37,
+        98.961
+      ],
+      "warm_samples_ms": [
+        74.411,
+        77.475,
+        76.392,
+        75.398,
+        73.964
+      ],
+      "cold_p50_ms": 98.028,
+      "cold_p95_ms": 98.961,
+      "warm_p50_ms": 75.398,
+      "warm_p95_ms": 77.475,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 31.244,
+            "setup": 31.623,
+            "execution": 11.696,
+            "validation": 8.599
+          },
+          {
+            "queue": 30.008,
+            "setup": 30.819,
+            "execution": 12.976,
+            "validation": 9.41
+          },
+          {
+            "queue": 30.421,
+            "setup": 30.504,
+            "execution": 12.123,
+            "validation": 8.901
+          },
+          {
+            "queue": 30.137,
+            "setup": 30.424,
+            "execution": 12.104,
+            "validation": 8.804
+          },
+          {
+            "queue": 31.081,
+            "setup": 31.27,
+            "execution": 12.136,
+            "validation": 8.739
+          }
+        ],
+        "warm": [
+          {
+            "queue": 19.619,
+            "setup": 25.219,
+            "execution": 0.0,
+            "validation": 7.958
+          },
+          {
+            "queue": 20.695,
+            "setup": 26.152,
+            "execution": 0.0,
+            "validation": 8.073
+          },
+          {
+            "queue": 19.618,
+            "setup": 25.21,
+            "execution": 0.0,
+            "validation": 8.111
+          },
+          {
+            "queue": 20.048,
+            "setup": 25.582,
+            "execution": 0.0,
+            "validation": 8.078
+          },
+          {
+            "queue": 18.891,
+            "setup": 24.393,
+            "execution": 0.0,
+            "validation": 8.188
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        78.689,
+        54.85,
+        77.857,
+        57.48,
+        76.326,
+        56.096,
+        76.28,
+        55.899,
+        77.493,
+        55.223
+      ],
+      "traced_peak_bytes": 1092963,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "flutter",
+      "requested_scope": "full",
+      "base": "6a849a178ec4292f519d9bd3ec2463d6598fe150",
+      "fixture_digest": "7f54e42d9261a9012124a527d7e2f6553d9b7874e09a6e978ec9ee4cdca8cd0d",
+      "dirty_files": [
+        "src/file0000.dart"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "flutter",
+      "typed": false,
+      "fixture_setup_ms": 27.757,
+      "cold_samples_ms": [
+        97.371,
+        94.626,
+        101.896,
+        95.006,
+        96.965
+      ],
+      "warm_samples_ms": [
+        77.355,
+        76.992,
+        76.794,
+        79.868,
+        78.695
+      ],
+      "cold_p50_ms": 96.965,
+      "cold_p95_ms": 101.896,
+      "warm_p50_ms": 77.355,
+      "warm_p95_ms": 79.868,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 30.752,
+            "setup": 31.268,
+            "execution": 11.45,
+            "validation": 8.791
+          },
+          {
+            "queue": 29.444,
+            "setup": 29.977,
+            "execution": 12.031,
+            "validation": 8.933
+          },
+          {
+            "queue": 30.003,
+            "setup": 30.17,
+            "execution": 12.12,
+            "validation": 9.167
+          },
+          {
+            "queue": 29.46,
+            "setup": 29.896,
+            "execution": 12.028,
+            "validation": 9.379
+          },
+          {
+            "queue": 30.447,
+            "setup": 31.233,
+            "execution": 12.174,
+            "validation": 9.184
+          }
+        ],
+        "warm": [
+          {
+            "queue": 19.522,
+            "setup": 25.184,
+            "execution": 0.0,
+            "validation": 7.949
+          },
+          {
+            "queue": 19.965,
+            "setup": 25.497,
+            "execution": 0.0,
+            "validation": 8.302
+          },
+          {
+            "queue": 19.7,
+            "setup": 25.349,
+            "execution": 0.0,
+            "validation": 8.055
+          },
+          {
+            "queue": 20.909,
+            "setup": 26.63,
+            "execution": 0.0,
+            "validation": 8.082
+          },
+          {
+            "queue": 21.13,
+            "setup": 26.649,
+            "execution": 0.0,
+            "validation": 8.165
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        77.678,
+        57.097,
+        75.204,
+        56.293,
+        83.665,
+        56.041,
+        76.733,
+        58.744,
+        78.21,
+        59.713
+      ],
+      "traced_peak_bytes": 1094159,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "swift",
+      "requested_scope": "changed",
+      "base": "27cdc072970f8ae928d89fb7a4f1928917e434d1",
+      "fixture_digest": "b79b07110e343d5e6b7ac78308871429e2b60445db261d17d20e77f51f807dd3",
+      "dirty_files": [
+        "src/file0000.swift"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "swift",
+      "typed": false,
+      "fixture_setup_ms": 26.35,
+      "cold_samples_ms": [
+        98.231,
+        97.759,
+        98.255,
+        97.305,
+        101.882
+      ],
+      "warm_samples_ms": [
+        73.602,
+        74.419,
+        75.523,
+        79.35,
+        74.007
+      ],
+      "cold_p50_ms": 98.231,
+      "cold_p95_ms": 101.882,
+      "warm_p50_ms": 74.419,
+      "warm_p95_ms": 79.35,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 31.747,
+            "setup": 31.965,
+            "execution": 12.413,
+            "validation": 9.042
+          },
+          {
+            "queue": 30.334,
+            "setup": 30.567,
+            "execution": 12.798,
+            "validation": 9.06
+          },
+          {
+            "queue": 30.52,
+            "setup": 31.12,
+            "execution": 13.019,
+            "validation": 9.21
+          },
+          {
+            "queue": 30.653,
+            "setup": 31.172,
+            "execution": 13.111,
+            "validation": 9.131
+          },
+          {
+            "queue": 32.477,
+            "setup": 32.683,
+            "execution": 13.099,
+            "validation": 9.304
+          }
+        ],
+        "warm": [
+          {
+            "queue": 20.378,
+            "setup": 25.603,
+            "execution": 0.0,
+            "validation": 8.508
+          },
+          {
+            "queue": 19.241,
+            "setup": 24.659,
+            "execution": 0.0,
+            "validation": 8.613
+          },
+          {
+            "queue": 19.93,
+            "setup": 25.23,
+            "execution": 0.0,
+            "validation": 8.699
+          },
+          {
+            "queue": 21.148,
+            "setup": 26.296,
+            "execution": 0.0,
+            "validation": 8.875
+          },
+          {
+            "queue": 19.698,
+            "setup": 25.038,
+            "execution": 0.0,
+            "validation": 8.7
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        79.727,
+        55.982,
+        77.212,
+        56.296,
+        78.656,
+        57.805,
+        79.237,
+        58.802,
+        80.566,
+        56.908
+      ],
+      "traced_peak_bytes": 1115154,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "swift",
+      "requested_scope": "full",
+      "base": "1bc9386c696090f10b0a937bb2c33575822b8bd7",
+      "fixture_digest": "8b9c8b939834bb499976e68ea6b3b26e179dc6e070e34cdcfcddf872bf60cbc5",
+      "dirty_files": [
+        "src/file0000.swift"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "swift",
+      "typed": false,
+      "fixture_setup_ms": 28.704,
+      "cold_samples_ms": [
+        97.533,
+        100.023,
+        99.497,
+        99.543,
+        89.576
+      ],
+      "warm_samples_ms": [
+        77.589,
+        78.171,
+        83.921,
+        77.245,
+        74.316
+      ],
+      "cold_p50_ms": 99.497,
+      "cold_p95_ms": 100.023,
+      "warm_p50_ms": 77.589,
+      "warm_p95_ms": 83.921,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 30.558,
+            "setup": 30.526,
+            "execution": 12.278,
+            "validation": 8.81
+          },
+          {
+            "queue": 31.431,
+            "setup": 31.226,
+            "execution": 12.71,
+            "validation": 9.019
+          },
+          {
+            "queue": 31.027,
+            "setup": 32.531,
+            "execution": 12.8,
+            "validation": 9.002
+          },
+          {
+            "queue": 33.521,
+            "setup": 31.871,
+            "execution": 14.237,
+            "validation": 9.836
+          },
+          {
+            "queue": 30.76,
+            "setup": 30.9,
+            "execution": 13.143,
+            "validation": 9.251
+          }
+        ],
+        "warm": [
+          {
+            "queue": 20.337,
+            "setup": 25.182,
+            "execution": 0.0,
+            "validation": 8.65
+          },
+          {
+            "queue": 20.294,
+            "setup": 25.277,
+            "execution": 0.0,
+            "validation": 8.543
+          },
+          {
+            "queue": 21.195,
+            "setup": 25.607,
+            "execution": 0.0,
+            "validation": 10.21
+          },
+          {
+            "queue": 19.842,
+            "setup": 25.257,
+            "execution": 0.0,
+            "validation": 8.805
+          },
+          {
+            "queue": 21.371,
+            "setup": 26.427,
+            "execution": 0.0,
+            "validation": 8.65
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        79.111,
+        57.26,
+        78.648,
+        56.125,
+        81.656,
+        62.178,
+        81.442,
+        59.402,
+        77.914,
+        62.095
+      ],
+      "traced_peak_bytes": 1095646,
+      "fresh_executions": 10,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "mixed",
+      "requested_scope": "changed",
+      "base": "91ae636a8aa1774cc7d81f12a3798c79d4a196f0",
+      "fixture_digest": "d4708e9320682975bafab6cf8eed98034539ef732096e193b85f1c02125231c9",
+      "dirty_files": [
+        "pkg00/javascript/src/file0000.ts",
+        "pkg00/kotlin/src/file0000.kt",
+        "pkg00/dart/src/file0000.dart",
+        "pkg00/swift/src/file0000.swift",
+        "pkg01/javascript/src/file0000.ts",
+        "pkg01/kotlin/src/file0000.kt",
+        "pkg01/dart/src/file0000.dart",
+        "pkg01/swift/src/file0000.swift"
+      ],
+      "files_per_package": 8,
+      "packages": 2,
+      "stack": "mixed",
+      "typed": true,
+      "fixture_setup_ms": 52.721,
+      "cold_samples_ms": [
+        1624.539,
+        1581.508,
+        1589.565,
+        1605.939,
+        1629.996
+      ],
+      "warm_samples_ms": [
+        865.093,
+        636.888,
+        577.86,
+        585.966,
+        601.618
+      ],
+      "cold_p50_ms": 1605.939,
+      "cold_p95_ms": 1629.996,
+      "warm_p50_ms": 601.618,
+      "warm_p95_ms": 865.093,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 1436.245,
+            "setup": 490.461,
+            "execution": 678.924,
+            "validation": 347.462
+          },
+          {
+            "queue": 1402.765,
+            "setup": 476.835,
+            "execution": 669.954,
+            "validation": 341.049
+          },
+          {
+            "queue": 1409.659,
+            "setup": 478.259,
+            "execution": 672.015,
+            "validation": 342.089
+          },
+          {
+            "queue": 1416.799,
+            "setup": 478.477,
+            "execution": 676.931,
+            "validation": 345.542
+          },
+          {
+            "queue": 1443.744,
+            "setup": 488.231,
+            "execution": 691.359,
+            "validation": 351.876
+          }
+        ],
+        "warm": [
+          {
+            "queue": 733.969,
+            "setup": 288.698,
+            "execution": 0.0,
+            "validation": 478.137
+          },
+          {
+            "queue": 515.553,
+            "setup": 189.848,
+            "execution": 0.0,
+            "validation": 355.112
+          },
+          {
+            "queue": 469.401,
+            "setup": 158.104,
+            "execution": 0.0,
+            "validation": 341.218
+          },
+          {
+            "queue": 475.876,
+            "setup": 160.655,
+            "execution": 0.0,
+            "validation": 346.253
+          },
+          {
+            "queue": 488.296,
+            "setup": 163.708,
+            "execution": 0.0,
+            "validation": 355.643
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        1594.25,
+        589.897,
+        1561.115,
+        582.911,
+        1567.432,
+        557.319,
+        1578.355,
+        564.303,
+        1608.796,
+        577.926
+      ],
+      "traced_peak_bytes": 1231253,
+      "fresh_executions": 70,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "mixed",
+      "requested_scope": "full",
+      "base": "33ab4353c9b0607c2a3b39c6046e0fd874f3aa34",
+      "fixture_digest": "0d711413a402da07983652daf84330879ccda260000fa55e5fcf00867c0b31db",
+      "dirty_files": [
+        "pkg00/javascript/src/file0000.ts",
+        "pkg00/kotlin/src/file0000.kt",
+        "pkg00/dart/src/file0000.dart",
+        "pkg00/swift/src/file0000.swift",
+        "pkg01/javascript/src/file0000.ts",
+        "pkg01/kotlin/src/file0000.kt",
+        "pkg01/dart/src/file0000.dart",
+        "pkg01/swift/src/file0000.swift"
+      ],
+      "files_per_package": 8,
+      "packages": 2,
+      "stack": "mixed",
+      "typed": true,
+      "fixture_setup_ms": 46.175,
+      "cold_samples_ms": [
+        1509.299,
+        1532.13,
+        1545.99,
+        1516.581,
+        1530.288
+      ],
+      "warm_samples_ms": [
+        556.059,
+        564.749,
+        562.185,
+        550.678,
+        559.159
+      ],
+      "cold_p50_ms": 1530.288,
+      "cold_p95_ms": 1545.99,
+      "warm_p50_ms": 559.159,
+      "warm_p95_ms": 564.749,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 1338.16,
+            "setup": 454.902,
+            "execution": 634.269,
+            "validation": 324.489
+          },
+          {
+            "queue": 1354.393,
+            "setup": 459.555,
+            "execution": 644.223,
+            "validation": 331.049
+          },
+          {
+            "queue": 1366.748,
+            "setup": 462.806,
+            "execution": 648.061,
+            "validation": 335.439
+          },
+          {
+            "queue": 1344.397,
+            "setup": 452.247,
+            "execution": 638.97,
+            "validation": 328.324
+          },
+          {
+            "queue": 1349.69,
+            "setup": 457.368,
+            "execution": 641.415,
+            "validation": 330.743
+          }
+        ],
+        "warm": [
+          {
+            "queue": 449.468,
+            "setup": 152.573,
+            "execution": 0.0,
+            "validation": 326.654
+          },
+          {
+            "queue": 459.023,
+            "setup": 156.053,
+            "execution": 0.0,
+            "validation": 332.011
+          },
+          {
+            "queue": 456.542,
+            "setup": 154.52,
+            "execution": 0.0,
+            "validation": 331.056
+          },
+          {
+            "queue": 445.53,
+            "setup": 150.277,
+            "execution": 0.0,
+            "validation": 324.226
+          },
+          {
+            "queue": 448.919,
+            "setup": 153.355,
+            "execution": 0.0,
+            "validation": 324.97
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        1487.897,
+        531.903,
+        1509.399,
+        543.764,
+        1521.586,
+        540.347,
+        1493.646,
+        527.061,
+        1504.787,
+        534.085
+      ],
+      "traced_peak_bytes": 1222143,
+      "fresh_executions": 70,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "python",
+      "requested_scope": "changed",
+      "base": "ea0d62c0ba0c5e9efa9a007302cac1dc23045967",
+      "fixture_digest": "90bc4c86cb00a54607fcbab65e4c33960a7c2f973177a205c12c7d3bd80f09ba",
+      "dirty_files": [
+        "src/file0000.py"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "python",
+      "typed": false,
+      "fixture_setup_ms": 27.561,
+      "cold_samples_ms": [
+        38.999,
+        37.342,
+        40.029,
+        34.738,
+        37.996
+      ],
+      "warm_samples_ms": [
+        40.018,
+        39.252,
+        38.619,
+        36.727,
+        41.551
+      ],
+      "cold_p50_ms": 37.996,
+      "cold_p95_ms": 40.029,
+      "warm_p50_ms": 39.252,
+      "warm_p95_ms": 41.551,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        20.243,
+        18.301,
+        18.453,
+        17.635,
+        18.993,
+        19.215,
+        17.387,
+        17.31,
+        18.535,
+        19.263
+      ],
+      "traced_peak_bytes": 98570,
+      "fresh_executions": 0,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    },
+    {
+      "name": "python",
+      "requested_scope": "full",
+      "base": "f2d164c1ca494c7db335c00dac799405e6c9f264",
+      "fixture_digest": "f45233065dfdb15e5a364396d0428fa75f0f34cd1b819b15ad7a5be285e01206",
+      "dirty_files": [
+        "src/file0000.py"
+      ],
+      "files_per_package": 8,
+      "packages": 1,
+      "stack": "python",
+      "typed": false,
+      "fixture_setup_ms": 24.913,
+      "cold_samples_ms": [
+        36.341,
+        40.055,
+        38.353,
+        40.644,
+        34.014
+      ],
+      "warm_samples_ms": [
+        39.959,
+        37.871,
+        41.076,
+        42.973,
+        37.739
+      ],
+      "cold_p50_ms": 38.353,
+      "cold_p95_ms": 40.644,
+      "warm_p50_ms": 39.959,
+      "warm_p95_ms": 42.973,
+      "stage_samples_ms": {
+        "cold": [
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          }
+        ],
+        "warm": [
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          },
+          {
+            "queue": 0,
+            "setup": 0,
+            "execution": 0,
+            "validation": 0
+          }
+        ]
+      },
+      "process_cpu_samples_ms": [
+        19.923,
+        17.729,
+        19.154,
+        18.556,
+        18.824,
+        19.338,
+        19.489,
+        20.227,
+        18.604,
+        19.984
+      ],
+      "traced_peak_bytes": 98751,
+      "fresh_executions": 0,
+      "package_install": "not_performed",
+      "sdk_setup": "not_performed"
+    }
+  ],
+  "concurrent_fixture": {
+    "workers": 2,
+    "wall_ms_including_fixture_setup": 131.764,
+    "fresh_executions": 2
+  },
+  "real_sdk_smoke": "NOT_RUN",
+  "external_ci_baseline": "unavailable",
+  "qualifies_latency_targets": false,
+  "llm_calls": 0,
+  "measurement_notes": [
+    "Real Git discovery, scope, input hashing, argv construction, normalization, evidence and cache use a deterministic injected output producer.",
+    "Wall samples include discovery and cache persistence. Queue is the largest wait inside the serial registry; other stage values are sums.",
+    "Cold means empty Getzilla cache, not a cold OS page cache. Warm means unverified diagnostic reuse, not fresh SDK execution.",
+    "Typed fixtures contain TypeScript syntax; no real typed analyzer, SDK setup, container startup, external CI queue or package install is measured.",
+    "Memory is peak Python allocation from tracemalloc, not RSS or container RAM. CPU samples measure this process only.",
+    "Small fixture samples do not establish p50/p95 production latency or the 5 percent and 10 percent rollout targets."
+  ]
+}

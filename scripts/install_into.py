@@ -59,6 +59,7 @@ MANAGED_FILES = (
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
     "scripts/getzilla_duplicates.py",
+    "docs/LANGUAGE_QUALITY_GATES.md",
     "factory/.env.example",
     "factory/.gitignore",
     "factory/actors.example.json",

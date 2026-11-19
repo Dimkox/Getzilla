@@ -727,6 +727,8 @@ def select_engine(workers: int, measured: bool) -> tuple[int, str]:
     pass before execution, never after a failure, and never claim the parallel
     backend it did not use.
     """
+    if workers > 0:
+        workers = cpu_budget(workers).effective
     if workers > 0 and measured and not parallel_engine_ready(measured) and _parallel_process_cleanup_supported():
         return workers, "coverage-unittest-parallel"
     if workers > 0 and (
