@@ -281,6 +281,7 @@ class ArchitectureModelTests(unittest.TestCase):
                 "factory/src/getzilla_factory/adapters/grok.py",
             },
             "NODE-FACTORY-PROPOSAL-BROKER": {
+                "factory/src/getzilla_factory/_payload_engine.py",
                 "factory/src/getzilla_factory/brokers.py",
                 "factory/src/getzilla_factory/result_broker.py",
                 "factory/src/getzilla_factory/result_contracts.py",
@@ -647,7 +648,7 @@ class ArchitectureModelTests(unittest.TestCase):
             ARCH.load_architecture(self._repo(_system(), rules))
 
         for schema_name, expected_objects in (
-            ("architecture-system.schema.json", 10),
+            ("architecture-system.schema.json", 11),
             ("architecture-rules.schema.json", 13),
         ):
             schema = json.loads((ROOT / "schemas" / schema_name).read_text(encoding="utf-8"))
@@ -671,6 +672,8 @@ class ArchitectureModelTests(unittest.TestCase):
                     optional = ({"allowed_dependency_modules"}
                                 if schema_name == "architecture-rules.schema.json"
                                 and object_schema is schema["$defs"]["path_boundary"] else set())
+                    if schema_name == "architecture-system.schema.json" and object_schema is schema:
+                        optional.add("source_fixtures")
                     if schema_name == "architecture-system.schema.json" and object_schema is schema["$defs"]["edge"]:
                         optional.add("secret_classes")
                     self.assertEqual(
