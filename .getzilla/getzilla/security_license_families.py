@@ -41,6 +41,12 @@ def finding_consistent(finding, allowed, select_expression):
             and finding['family_record']['origin'].get('kind') == 'go-checker-release/v1'):
         from .security_go_tool_inputs import finding_consistent as checker_consistent
         return checker_consistent(finding, allowed, select_expression)
+    if (isinstance(finding, dict) and isinstance(finding.get('family_record'), dict)
+            and finding['family_record'].get('kind') == 'action'
+            and isinstance(finding['family_record'].get('origin'), dict)
+            and finding['family_record']['origin'].get('kind') == 'github-action-source/v1'):
+        from .security_action_inputs import finding_consistent as action_consistent
+        return action_consistent(finding, allowed, select_expression)
     fields = {
         "kind",
         "reference",

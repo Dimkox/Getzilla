@@ -230,9 +230,21 @@ def raw_inventory(payload):
 
 def component_frontier(members, terms, source):
     missing = [name for name in members if name not in terms]
+    from .security_license_source_conditions import retained_conditions
+    identifier = "release-source:opengrep@" + COMMIT + ":root"
+    condition = retained_conditions(SHA256, identifier, {"source/LICENSE": source.get("license")})
+    components = []
+    if condition is not None and b'license: "LGPL-2.1-only"' in source.get("opam", b'').splitlines():
+        from .security_licenses import _license_evidence
+        legal, notices = _license_evidence({"source/LICENSE": source["license"]},
+            {"expression": "LGPL-2.1-only", "license_paths": ["source/LICENSE"]},
+            {"LGPL-2.1-only"}, ["LGPL-2.1-only"])
+        components.append(dict(id=identifier, expression="LGPL-2.1-only", source_revision=COMMIT,
+            source_blob=SOURCES["license"][1], license_files=legal, notice_files=notices,
+            source_conditions=condition, scope="verified-root-source-only; compiled/native closure unproved"))
     return {
         "complete": False,
-        "components": [],
+        "components": components,
         "member_inventory": members,
         "retained_term_paths": sorted(terms),
         "source_paths": sorted(source),

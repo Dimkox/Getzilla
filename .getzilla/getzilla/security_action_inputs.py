@@ -235,7 +235,7 @@ def _source(payload, commit_raw, tree_raw, repository, pin, archive_root=None):
     return files, members, prefix, metadata[0], entries, rows
 
 
-def verify_family(root, record, *, now=None):
+def _verify_family(root, record, *, now=None):
     """Verify the source-data proof variant, without root-license inheritance."""
     identity = family_identity(record)
     match = REFERENCE.fullmatch(record['subject'].get('reference', ''))
@@ -378,6 +378,53 @@ def verify_family(root, record, *, now=None):
                         'subject': record['subject'], 'context': record['context'], 'proofs': evidence},
             'bound_bytes': len(payload) + sum(item['bytes'] for item in evidence)}
 
+
+
+
+_VERIFIED_ACTION_FAMILIES = {}
+_SELECTED_INTERNAL_FAMILIES = set()
+
+
+def mark_selected_internal_family(record):
+    """Called only after the evaluator proves a required selected family."""
+    _SELECTED_INTERNAL_FAMILIES.add(family_identity(record))
+
+
+def verify_family(root, record, *, now=None):
+    evidence = _verify_family(root, record, now=now)
+    _VERIFIED_ACTION_FAMILIES[evidence['artifact_id']] = root
+    return evidence
+
+
+def finding_consistent(finding, allowed, select_expression):
+    """Replay possible-source closure from live original bytes, never saved claims."""
+    from .security_artifacts import ArtifactError, family_identity
+    from .security_data import _clock
+    from .security_license_family_conditions import allowed_for
+    from .security_licenses import _license_evidence
+    try:
+        record = finding['family_record']
+        identity = family_identity(record)
+        root = _VERIFIED_ACTION_FAMILIES[identity]
+        evidence = verify_family(root, record, now=_clock(None))
+        selected, terms, notices = [], [], []
+        for component in evidence['components']:
+            permitted = allowed_for(record, component, allowed,
+                selected_internal=identity in _SELECTED_INTERNAL_FAMILIES)
+            chosen, identifiers = select_expression(component['expression'], permitted)
+            owned = {item['path'] for item in component['files']}
+            legal, attribution = _license_evidence({p:b for p,b in evidence['files'].items() if p in owned},
+                component, identifiers, chosen)
+            selected.extend(chosen);terms.extend(legal);notices.extend(attribution)
+        expected = dict(kind='action', reference=record['subject']['reference'], status='pass',
+            selected_expression=' AND '.join(sorted(set(selected))), distribution='internal',
+            **evidence['binding'], family_record=record,
+            component_inventory_json=read_file(Path(root),record['components']['path'],MAX_INDEX_BYTES).decode('utf-8'),
+            license_files=terms, notice_files=notices,
+            obligations='internal use; exact source/component/license evidence retained')
+        return finding == expected
+    except (ArtifactError, ValueError, TypeError, KeyError, OSError):
+        return False
 
 
 def _component_inputs(files):

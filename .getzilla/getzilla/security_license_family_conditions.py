@@ -25,6 +25,9 @@ TEXTS = {'26be8a79415737dfe8edf1be62e71afeb8c770ed5a5605a06270d5701830f47c': ('B
  'bef1747eda88b9ed46e94830b0d978c3499dad5dfe38d364971760881901dadd': ('MPL-2.0',),
  'd6b1a865f1c8c697d343bd4e0ce61025f91898486a1f00d727f32e8644af77d3': ('MPL-2.0',)}
 
+from .security_license_source_conditions import TEXTS as _SOURCE_TEXTS, action_allowed_for
+TEXTS.update(_SOURCE_TEXTS)
+
 PROFILES = [{'artifact_sha256': '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a',
   'component_id': 'go-module:github.com/cyphar/filepath-securejoin@v0.6.1',
   'expression': 'BSD-3-Clause AND MPL-2.0',
@@ -114,7 +117,7 @@ PROFILES = [{'artifact_sha256': '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09
 
 def allowed_for(record, component, allowed, *, selected_internal, source_modules=()):
     """Add only one exact component's reviewed IDs for proved internal use."""
-    result=list(allowed)
+    result=action_allowed_for(record, component, allowed, selected_internal=selected_internal)
     if selected_internal is not True or record.get('kind') != 'tool' or record.get('origin',{}).get('kind') != 'go-checker-release/v1':
         return result
     for profile in PROFILES:

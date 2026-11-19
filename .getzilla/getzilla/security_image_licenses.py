@@ -369,6 +369,22 @@ def observe_components(image):
             ],
         )
         gap("cpython-bundled-terms-unproved", c["id"])
+    # Retain exact reviewed source conditions even when binary composition or
+    # other original licence labels remain unresolved. Never remove those gaps.
+    from .security_license_source_conditions import PROFILES, retained_conditions
+    image_sha = image.manifest_digest.removeprefix("sha256:")
+    for component in components:
+        for profile in PROFILES:
+            if profile["artifact_sha256"] != image_sha or profile["component_id"] != component["id"]:
+                continue
+            original = {}
+            for path in profile["files"]:
+                entry = files.data(path)
+                if entry is not None:
+                    original[path] = entry[0]
+            condition = retained_conditions(image_sha, component["id"], original)
+            if condition is not None:
+                component["source_conditions"] = condition
     if files.data("lib/apk/db/installed"):
         gap("unsupported-apk-components", "apk")
     unknown = []
