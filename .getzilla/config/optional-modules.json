@@ -108,7 +108,7 @@
       "versions": {
         "0.1.0": {
           "manifest": ".getzilla/optional-modules/mcp-jira/0.1.0/module.json",
-          "sha256": "5fd9c61e58e8a4e71347b8037fa60027033bb7930174a26a24606889e4919961"
+          "sha256": "dc86be06df2eb0425376fda1d7dc12c887c883e0e0c3b4d9247808ba85fd345c"
         }
       }
     }

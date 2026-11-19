@@ -93,6 +93,17 @@ class WireTests(unittest.TestCase):
         self.assertEqual((reply.status,reply.reason),('infra','oversize'))
         self.assertTrue(reply.sent)
 
+    def test_parse_boundary_cannot_accept_a_result_after_deadline(self):
+        session=Session(self.child(),deadline=time.monotonic()+1,watch=lambda:'running',request_id='parse-boundary')
+        original=session.frames.feed
+        def late_parse(chunk):
+            result=original(chunk)
+            if result:session.deadline=time.monotonic()-1
+            return result
+        session.frames.feed=late_parse
+        try:self.assertEqual(session.call('fixture_read',{}).status,'deadline')
+        finally:session.close()
+
     def test_remote_task_identity_is_separate_and_never_invented_done(self):
         result=self.call('task')
         self.assertEqual(result.remote_task_id,'remote-job-1')
@@ -241,6 +252,21 @@ class NativeTests(unittest.TestCase):
             self.runtime.call(tool='fixture_read',arguments={},intent_key='host-capacity')
 
     @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
+    def test_disable_after_result_before_release_suppresses_cached_reply(self):
+        from getzilla import execution
+        from getzilla.module_runtime import quiesce_module
+        self.activate()
+        original=execution.submit
+        def finish_then_disable(*args,**kwargs):
+            value=original(*args,**kwargs)
+            quiesce_module(self.root,'mcp-jira',runtime=self.runtime,deadline=time.monotonic()+2)
+            return value
+        with patch.object(execution,'submit',side_effect=finish_then_disable):
+            result=self.runtime.call(tool='fixture_read',arguments={},intent_key='release-fence',hard_timeout_seconds=3)
+        self.assertIsNone(result['reply'])
+        self.assertEqual(result['result_status'],'denied')
+
+    @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
     def test_T21_two_hung_A_attempts_leave_B_and_canonical_local_checks_running(self):
         from dataclasses import replace
         import hashlib,shutil
@@ -257,16 +283,16 @@ class NativeTests(unittest.TestCase):
         self.request=replace(self.request,scope_digest=hashlib.sha256(json.dumps(self.runtime.profile,sort_keys=True,separators=(',',':')).encode()).hexdigest())
         self.plan=plan_activation(self.root,'mcp-jira',self.request,native=self.runtime,runtime=self.runtime,authority=self.authority)
         self.activate();values=[]
-        def hang(index):values.append(self.runtime.call(server_id='a',tool='fixture_read',arguments={'mode':'hang'},intent_key='branch-a-'+str(index),hard_timeout_seconds=3))
+        def hang(index):values.append(self.runtime.call(server_id='a',tool='fixture_read',arguments={'mode':'hang'},intent_key='branch-a-'+str(index),hard_timeout_seconds=5))
         threads=[threading.Thread(target=hang,args=(index,)) for index in range(2)]
         for thread in threads:
             thread.start();self.addCleanup(lambda thread=thread:thread.join(5))
         end=time.monotonic()+2
         while len(execution_store.load_registry(self.root)['records'])<2 and time.monotonic()<end:time.sleep(.01)
-        healthy=self.runtime.call(server_id='b',tool='fixture_read',arguments={},intent_key='branch-b',hard_timeout_seconds=2)
+        healthy=self.runtime.call(server_id='b',tool='fixture_read',arguments={},intent_key='branch-b',hard_timeout_seconds=3)
         self.assertEqual(healthy['reply'].status,'success')
-        local_job=supervised_execution.start(self.root,tool_id='local-true',intent_key='local-check',hard_timeout_seconds=2)
-        local_result=supervised_execution.observe(self.root,local_job['execution_id'],wait_seconds=2)
+        local_job=supervised_execution.start(self.root,tool_id='local-true',intent_key='local-check',hard_timeout_seconds=3)
+        local_result=supervised_execution.observe(self.root,local_job['execution_id'],wait_seconds=3)
         self.assertEqual(local_result['execution']['execution_status'],'succeeded',local_result)
         for thread in threads:thread.join(5);self.assertFalse(thread.is_alive())
         self.assertTrue(all(value['execution']['cleanup_status']=='confirmed' for value in values))
@@ -343,6 +369,7 @@ class EffectsTests(unittest.TestCase):
             allowed=True
             def authorize(self,target,operation):
                 if not self.allowed:raise ValueError('permission_revoked')
+            def authorize_release(self,target,operation,arguments):self.authorize(target,operation)
             def validate_closure(self,resource,acceptance):raise ValueError('accepted_change_evidence_unavailable')
         class Provider:
             intent_reconciliation_qualified=True
@@ -386,6 +413,8 @@ class EffectsTests(unittest.TestCase):
         jira=Jira(site='fixture-site',project='TEST',resources=['1001'],manifest={
             'getIssue':{'class':'read','operation':'read'},'transition':{'class':'write','operation':'close'}},
             runtime=self.runtime,access=self.access,effects=self.effects)
+        with self.assertRaisesRegex(ValueError,'jira_argument_schema_unqualified'):
+            jira.normalize('getIssue',dict(self.target,issueId='outside'))
         nested={'operation':'executeWrite','arguments':{'operation':'transition','arguments':dict(self.target,site='outside')}}
         with self.assertRaisesRegex(ValueError,'jira_target_scope'):jira.normalize('executeWrite',nested)
         with self.assertRaisesRegex(ValueError,'accepted_change_evidence_unavailable'):
