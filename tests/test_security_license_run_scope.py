@@ -67,7 +67,8 @@ class SelectedRunLicenseTests(unittest.TestCase):
         _, _, _, inv, source, run, binding = self.fixture()
         required = {'checker-tool:trivy:' + 'a' * 64: {'kind': 'checker-tool'}}
         context = self.live(inv, source, run, binding, checker_tool_conditions=required)
-        report = {'records': [], 'gaps': [{'code': 'go-source-missing'}]}
+        report = {'records': [{'kind': 'tool', 'reference': 'checker-only-fixture'}],
+                  'gaps': [{'code': 'go-source-missing'}]}
         original = copy.deepcopy(inv)
         with mock.patch('getzilla.security_go_tool_producer.prepare_tools', return_value=report) as prepare:
             records, preparation = cli._prepare_families(
