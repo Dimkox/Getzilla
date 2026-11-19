@@ -1,5 +1,9 @@
 # Native Codex hook repair
 
+## October 13 command-root repair continuation
+
+Continue this existing isolated branch for issue #80, as explicitly requested by the owner. Do not replace or discard the six-part issue plan in the separate all-issues worktree. Repair false command-root denials for literal scanner targets and quoted arguments, and separate unrelated ambiguous-command retry objectives. Preserve actual dynamic-shell denials, sensitive-action policy and external approval boundaries. Source repair is not installation, a completed Trivy scan or continuous L5 acceptance. Session-route isolation remains a separate unimplemented acceptance item of #80.
+
 Issue72 source-readiness work resumes existing pending Codex command normalization defect. Actualexec_command executes cmd, existing policy/root checks inspect command. Restore inspection of executed native text without changing authorization. Existing release2.2.2 and duplicate docs19c worktrees remain preserved and dependent on this repair.
 
 Owner follow-up explicitly requests cleanup, path relocation and actual routing repair. Nested launcher/code-root mismatch reproduced after moving worktrees into canonical runtime; PR79 P2 confirms missing malformed-input denial ledger. Same selected security/API bugfix route retained for related hook producer/consumer repairs and workspace discipline; no route permission invented.
