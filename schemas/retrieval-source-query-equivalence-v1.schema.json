@@ -1,0 +1,306 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "independent_source_query_equivalence_v1"
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_task": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "role": {
+          "const": "data_reviewer"
+        },
+        "native_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "native_generation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ]
+        }
+      },
+      "required": [
+        "agent_task",
+        "role",
+        "native_session_id",
+        "native_generation"
+      ]
+    },
+    "original_annotation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "original_query_sha256": {
+      "const": "f9bfbd0bb662b097193838367c34c06f3ec13e850985cc469a2212e21511172a"
+    },
+    "revised_query_sha256": {
+      "const": "a58592fcf7e78e46145d51680bc34d602f5ff594bbb41cb94cefe3f9917f34e0"
+    },
+    "corpus": {
+      "enum": [
+        "small",
+        "large"
+      ]
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "universe_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "slice_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2193
+    },
+    "slice_end": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2194
+    },
+    "function_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2194,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "touched_variants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "query_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "old_text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "new_text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "base_en_query_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "base_en_text_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "code_identifiers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            }
+          },
+          "inspected_meaning": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "base_en_intent": {
+            "enum": [
+              "preserved",
+              "changed",
+              "unknown"
+            ]
+          },
+          "label_impact": {
+            "enum": [
+              "unchanged",
+              "review_required",
+              "unknown"
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "task_id",
+          "query_id",
+          "old_text_sha256",
+          "new_text_sha256",
+          "base_en_query_id",
+          "base_en_text_sha256",
+          "code_identifiers",
+          "inspected_meaning",
+          "base_en_intent",
+          "label_impact",
+          "rationale"
+        ]
+      }
+    },
+    "observed_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "written_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "parent_head": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$"
+            }
+          ]
+        },
+        "parent_context_digest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          ]
+        },
+        "parent_context_revision": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        }
+      },
+      "required": [
+        "written_at",
+        "parent_head",
+        "parent_context_digest",
+        "parent_context_revision"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "maxLength": 2048
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "reviewer",
+    "original_annotation_sha256",
+    "original_query_sha256",
+    "revised_query_sha256",
+    "corpus",
+    "source_commit",
+    "manifest_sha256",
+    "universe_digest",
+    "slice_start",
+    "slice_end",
+    "function_ids",
+    "touched_variants",
+    "observed_provenance",
+    "limitations"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:research162:source-query-equivalence:v1",
+  "$comment": "Actual independent source-judge observations only; no PhaseA seal, witness, native authentication, model permission or human security approval. Native generation/provenance stays null when unknown. Consumer also verifies exact original annotation identity, scope/order, eight touched corpus variants, unchanged base EN and code identifiers, current source bytes and operator-witness publication.",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "corpus": {
+            "const": "small"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_commit": {
+            "const": "096c8d42545d3b68ea21a4f890fb2b2d8979c0bd"
+          },
+          "manifest_sha256": {
+            "const": "c7728dd6d7d25f9b623def3afa301957ac4a9558dfaf200c2fa70084653206f8"
+          },
+          "universe_digest": {
+            "const": "d64974e092c53c7276e9473c2733280298c36280386af2fbb06c5ea13fa60d79"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "corpus": {
+            "const": "large"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_commit": {
+            "const": "8352756ccddbb7b9f13da2da689ef633d968e30f"
+          },
+          "manifest_sha256": {
+            "const": "360a69ea25e36ef6ac4f47d0fe6f4d4c959b072a1f3b6be4cd9317f08778b447"
+          },
+          "universe_digest": {
+            "const": "134f207a72666e4f834c0220968d29e4640808d80f52a4d1917cdf8e7dd5c91b"
+          }
+        }
+      }
+    }
+  ]
+}

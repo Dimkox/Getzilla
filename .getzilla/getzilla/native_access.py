@@ -366,6 +366,11 @@ class NativeAccessBroker:
                     request.captured = request.cut = request.prepared = request.binding = None
                     request.query = request.preparation = request.response = None
 
+    def check_current(self, handle):
+        """Recheck an existing live cut; never renew its original deadline."""
+        with self._operation(handle) as request:
+            self._unchanged(request)
+
     def _unchanged(self, request):
         _require(not request.retiring, 'native_access_stale')
         stamp = self._stamp(request.binding, request.deadline)

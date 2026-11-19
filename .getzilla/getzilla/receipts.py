@@ -58,6 +58,8 @@ RECEIPT_KINDS = frozenset(
         "release_review",
     }
 )
+# Factual publications share storage but can never satisfy required merge evidence.
+PUBLIC_REVIEW_OBSERVATION_KINDS = frozenset({'retrieval-public-witness-a', 'retrieval-public-witness-b', 'retrieval-public-producer-reference'})
 MAX_RECEIPT_BYTES = 262_144
 MAX_VERIFICATION_REPORT_BYTES = 8_388_608
 VERIFICATION_REPORT_CONTRACT = 'adaptive-grok.verification-report/v1'
@@ -923,6 +925,8 @@ def write_receipt(
     reviewed_context: str | None = None,
     expected_context: dict[str, Any] | None = None,
 ) -> Path:
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and status != 'observed':
+        raise ValueError('public witness publication must remain observed')
     route = get_active_route(root)
     if not route:
         raise RuntimeError('no active route')
@@ -1055,6 +1059,9 @@ def write_receipt(
     finally:
         if publication is not None:
             publication.close()
+    if kind in PUBLIC_REVIEW_OBSERVATION_KINDS:
+        # A data witness is not an ordinary review attempt or failed review.
+        return path
     from .metrics_journal import record_receipt
     from .metrics_journal import digest
     record_receipt(root, route.get('route_id'), kind, status, identity=digest(data))
@@ -1073,7 +1080,7 @@ def _receipt_storage_identity(root: Path, route_id: str) -> tuple | None:
 
 
 def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | None = None, anchor=None) -> dict[str, Any] | None:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", route_id) or kind not in RECEIPT_KINDS | PUBLIC_REVIEW_OBSERVATION_KINDS:
         raise RuntimeError("receipt route or kind is outside the closed set")
     directory_fd: fsx.DirHandle | None = None
     try:
@@ -1084,6 +1091,10 @@ def _read_receipt(root: Path, route_id: str, kind: str, *, _observation: list | 
         else:
             directory_fd = _open_receipt_directory(root, route_id)
             data, _ = _read_bounded_json(directory_fd, f'{kind}.json', MAX_RECEIPT_BYTES, 'receipt', _observation=_observation)
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and data.get('status') != 'observed':
+            raise RuntimeError('public witness publication must remain observed')
+        if kind in PUBLIC_REVIEW_OBSERVATION_KINDS and (data.get('kind') != kind or data.get('route_id') != route_id):
+            raise RuntimeError('public witness publication binding mismatch')
         if kind == 'verification':
             _hydrate_verification_report(directory_fd, route_id, data, anchor=anchor, _observation=_observation)
         return data
