@@ -3,6 +3,7 @@
 This is operator-witnessed-public-only, never authenticated native delivery,
 human security approval, private access or model/execution authority.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
@@ -32,7 +33,9 @@ _PRODUCERS = {
 }
 MAX_GROUPS, MAX_SHARDS = 16, 4
 MAX_WITNESS_BYTES, WITNESS_SECONDS = 128 * 1048576, 30
+_HASH_ONLY_B = ('5971c88d285172e345a07418dd269ae63760c4e147efe01f3a3c7cd13846981c', 6967743)
 _PRODUCER_SEMANTIC = {
+    _HASH_ONLY_B[0]: '2d24769f3f43a0d1a9fa0cb343495b1881cd97989589bb06edd1e297726aa6fc',
     'b1e1245b7d56570388cda4497d769cca0b8225361f8b80f27af9bf43a264e063':
         '5b7d2ee6544aca3fbecdf36395daafcc26c8976c5172b06ca01a63b1f90fa6d3',
     '2eb8d3850f59d816cbeac4bce46c9292254df274640a580540f4973f0b93aac8':
@@ -346,6 +349,19 @@ def _supplement(group, parsed, supplement, budget=None):
         raise RetrievalError('public_witness_lineage_missing')
 
 
+def _capture_original(capture, group):
+    original = group['original']
+    key = original['sha256'], original['bytes']
+    _require(group['supplement'] is not None, 'public_witness_lineage_missing')
+    if key in _PRODUCERS:
+        capture.producer_reference(original, group['delivery_identity'], group['supplement'])
+    else:
+        _require(key == _HASH_ONLY_B, 'public_witness_lineage_missing')
+        # The finite B original is within the physical byte cap. Its complete
+        # hash read remains part of this group's original sixteen-MiB budget.
+        capture.read(original['path'], limit=MAX_JSON_BYTES, expected=original, keep=False)
+
+
 def _groups(capture, groups):
     budget = ScientificBudget(capture.deadline)
     _require(type(groups) is list and 3 <= len(groups) <= MAX_GROUPS)
@@ -360,8 +376,7 @@ def _groups(capture, groups):
         # Original body reads count toward this group's aggregate budget too.
         _require(type(group['original']['bytes']) is int and 0 < group['original']['bytes'] <= 16 * 1048576)
         if len(annotations) != 1 or annotations[0] != group['original']:
-            _require(group['supplement'] is not None, 'public_witness_lineage_missing')
-            capture.producer_reference(group['original'], group['delivery_identity'], group['supplement'])
+            _capture_original(capture, group)
         parsed, total = [], 0
         for reference in annotations:
             total += reference['bytes']
@@ -606,3 +621,62 @@ def _reviewed_dataset(reference, composition):
 def reviewed_public_dataset(reference):
     """Return current fixed public data facts; this grants no encoder or execution access."""
     return _reviewed_dataset(reference, _PRODUCTION)
+
+
+class _WitnessSourceFence:
+    """Fixed current review custody at source boundaries, never a model permit."""
+    __slots__ = ('_issuer', '_reference', '_capture', '_closed')
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError('owned reviewed source composition required')
+
+    def __setattr__(self, name, value):
+        raise AttributeError('review source fence is immutable')
+
+    def __reduce__(self):
+        raise TypeError('review source fence cannot be serialized')
+
+    def check_current(self, deadline):
+        _require(self._issuer is _ISSUER and not self._closed and time.monotonic() < deadline,
+                 'public_witness_stale')
+        receipt = get_receipt(self._capture.root, self._capture.route['route_id'], KIND)
+        _require(receipt is not None and digest(receipt) == self._reference._receipt_digest,
+                 'public_witness_stale')
+        # Full body hashes were consumed before the fresh source lease. Immutable
+        # owner-held identities/ctime are checked here without renewing that lease.
+        self._capture.recheck()
+        _require(time.monotonic() < deadline, 'public_witness_stale')
+
+
+@contextmanager
+def _reviewed_source_cut(reference, *, batch, composition):
+    facts = _consume(reference, composition)
+    capture = _Capture(reference._root)
+    receipt = get_receipt(capture.root, capture.route['route_id'], KIND)
+    _require(receipt is not None and digest(receipt) == reference._receipt_digest, 'public_witness_stale')
+    raw = capture.read(receipt['details']['registration_path'])
+    _require(sha(raw) == facts['registration_sha256'], 'public_witness_changed')
+    registration = _json(raw)
+    capture.dependencies = {snapshot['path']: snapshot for snapshot in receipt['details']['dependencies']}
+    capture.recheck()
+    fence = object.__new__(_WitnessSourceFence)
+    for key, value in (('_issuer', _ISSUER), ('_reference', reference), ('_capture', capture), ('_closed', False)):
+        object.__setattr__(fence, key, value)
+    from .research import _public_source_cut
+    try:
+        with _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
+                batch=batch, review_fence=fence, catalogs=composition.catalogs) as result:
+            yield result
+    finally:
+        object.__setattr__(fence, '_closed', True)
+
+
+@contextmanager
+def reviewed_public_source_cut(reference, *, batch):
+    """Join current public review facts to one fresh fixed two-second source cut.
+
+    Every held cut must remain current before encoder/output stages. This port
+    neither authorizes those stages nor extends the native source deadline.
+    """
+    with _reviewed_source_cut(reference, batch=batch, composition=_PRODUCTION) as result:
+        yield result
