@@ -238,3 +238,22 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         source = ast.parse((ROOT / '.getzilla/getzilla/security_go_tool_producer.py').read_bytes())
         self.assertTrue(any(isinstance(node, ast.Dict) and any(isinstance(key, ast.Name)
                              and key.id == 'MODULES_KEY' for key in node.keys) for node in ast.walk(source)))
+
+    def test_copied_policy_in_real_foreign_git_repository_has_no_self_authority(self):
+        from tests.test_architecture_fitness import GitArchitectureRepo
+        from getzilla.queue_analysis_profile import POLICY_PATH, POLICY_SOURCE
+        foreign = GitArchitectureRepo(self)
+        foreign.write_bytes(POLICY_PATH, POLICY_SOURCE)
+        foreign.commit('foreign copied policy is data only')
+        with self.assertRaisesRegex(fit.ArchitectureError, 'Getzilla source ancestry'):
+            fit._queue_analysis_profile(foreign.root, None, 'head')
+
+    def test_profile_change_during_analysis_cannot_return_cached_classification(self):
+        from types import SimpleNamespace
+        selected = self.self_profile()
+        cache = fit._QueueResolutionCache((), (), {}, {}, selected)
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                fit, '_queue_analysis_profile', side_effect=(selected, fit._CONSUMER_PROFILE)):
+            with self.assertRaisesRegex(fit.ArchitectureError, 'profile changed'):
+                fit._queue_signals(Path(directory), SimpleNamespace(head_kind='worktree'), ast.parse('value=1'), 'head', cache, '', ('',),
+                    source=b'value=1', budget=fit._QueueBudget('head', profile=selected))
