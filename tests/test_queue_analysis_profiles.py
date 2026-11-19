@@ -200,7 +200,7 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             before = policy_binding(root)
-            for name in ('security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
+            for name in ('architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
                          'security_license_source_conditions', 'security_license_go_term_variants'):
                 with self.subTest(owner=name):
                     module = importlib.import_module('getzilla.' + name)
@@ -308,3 +308,13 @@ class QueueAnalysisProfileTests(unittest.TestCase):
                     with self.assertRaises(type(error)) as caught:
                         factory._app_members(root, scratch)
                     self.assertIs(caught.exception, error)
+
+    def test_readonly_metadata_proofs_have_real_owner_and_exact_fit_aliases(self):
+        names = {'_instrumentation_targets_closed', '_byte_only_http_imports',
+                 '_constructor_only_urllib_imports', '_component_metadata_head', '_trust_ci_metadata_paths'}
+        tree = ast.parse((ROOT / '.getzilla/getzilla/architecture_fitness.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.FunctionDef) and node.name in names for node in tree.body),
+                         'readonly metadata proof bodies still enlarge the fitness owner')
+        from getzilla import architecture_metadata as metadata
+        for name in names:
+            self.assertIs(getattr(fit, name), getattr(metadata, name))
