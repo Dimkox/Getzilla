@@ -128,7 +128,7 @@ def validate_selection_authority(source: dict, run: dict, selection=None, *, now
 
 
 def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                  package_target=None, package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None) -> dict:
+                  package_target=None, package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None, network_selection=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     validate_selection_authority(source, run, image_selection, now=now)
     if isinstance(inventory, dict) and inventory.get('builds'):
@@ -141,7 +141,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
     declared=_profile_declaration(source,inventory,roots,run,policy,now=now,image_artifacts=image_artifacts,
         image_selection=image_selection,package_target=package_target,package_pins=package_pins,
         factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses,
-        public_execution=canonical_digest(public) if public is not None else None)
+        public_execution=canonical_digest(public) if public is not None else None, network_selection=network_selection)
     if image_artifacts is not None:
         from .security_oci import validate_selection
         validate_selection(image_artifacts,inventory,declared['image_profile'])
@@ -150,7 +150,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
 
 def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_artifacts=None,image_selection=None,
                          package_target=None,package_pins=None,factory_inputs=None,package_graphs=None,
-                         package_ci_uses=None,public_execution=None,image_limits=None):
+                         package_ci_uses=None,public_execution=None,image_limits=None,network_selection=None):
     """Pure normalized declaration; never grants native/build observation credit."""
     if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not _digest(inventory.get('digest')) or not _digest(policy)):
@@ -224,6 +224,9 @@ def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_arti
         if not _digest(public_execution):
             raise SecurityDataError('public execution declaration digest is malformed')
         body['public_execution_sha256']=public_execution
+    if network_selection is not None:
+        from .security_tools import image_network_selection
+        body['image_network_selection'] = image_network_selection(inventory, network_selection)
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
 
@@ -243,7 +246,7 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     if 'python_source_pins' in profile and package_pins is None:
         raise SecurityDataError('source artifact pins must be reobserved before profile consumption')
     if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts, image_selection=image_selection,
-                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses):
+                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses, network_selection=profile.get('image_network_selection')):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 

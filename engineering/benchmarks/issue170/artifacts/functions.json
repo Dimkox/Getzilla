@@ -1,0 +1,2237 @@
+[
+  {
+    "id": "src/itsdangerous/__init__.py:24:__getattr__",
+    "path": "src/itsdangerous/__init__.py",
+    "qualified_name": "__getattr__",
+    "start": 24,
+    "end": 38,
+    "signature": "name: str",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def __getattr__(name: str) -> t.Any:\n    if name == \"__version__\":\n        import importlib.metadata\n        import warnings\n\n        warnings.warn(\n            \"The '__version__' attribute is deprecated and will be removed in\"\n            \" ItsDangerous 2.3. Use feature detection or\"\n            \" 'importlib.metadata.version(\\\"itsdangerous\\\")' instead.\",\n            DeprecationWarning,\n            stacklevel=2,\n        )\n        return importlib.metadata.version(\"itsdangerous\")\n\n    raise AttributeError(name)",
+    "sha256": "7c1d65dbf8f0a4fffe92fe40c5cd233d10c679c13156da50bc5be0c0e1239384",
+    "calls": [
+      "AttributeError",
+      "importlib.metadata.version",
+      "warnings.warn"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/_json.py:10:_CompactJSON.loads",
+    "path": "src/itsdangerous/_json.py",
+    "qualified_name": "_CompactJSON.loads",
+    "start": 10,
+    "end": 12,
+    "signature": "payload: str | bytes",
+    "returns": "t.Any",
+    "decorators": [
+      "staticmethod"
+    ],
+    "is_overload": false,
+    "source": "    @staticmethod\n    def loads(payload: str | bytes) -> t.Any:\n        return _json.loads(payload)",
+    "sha256": "6d0fc431449debbea5b82df15f922a49677585483922ca040e465531b8249a8f",
+    "calls": [
+      "_json.loads"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/_json.py:14:_CompactJSON.dumps",
+    "path": "src/itsdangerous/_json.py",
+    "qualified_name": "_CompactJSON.dumps",
+    "start": 14,
+    "end": 18,
+    "signature": "obj: t.Any, **kwargs: t.Any",
+    "returns": "str",
+    "decorators": [
+      "staticmethod"
+    ],
+    "is_overload": false,
+    "source": "    @staticmethod\n    def dumps(obj: t.Any, **kwargs: t.Any) -> str:\n        kwargs.setdefault(\"ensure_ascii\", False)\n        kwargs.setdefault(\"separators\", (\",\", \":\"))\n        return _json.dumps(obj, **kwargs)",
+    "sha256": "4fb732463f72710ae51cf2bccaaa9915c4c5bb522f13e91068e4dfffbac29878",
+    "calls": [
+      "_json.dumps",
+      "kwargs.setdefault"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/encoding.py:11:want_bytes",
+    "path": "src/itsdangerous/encoding.py",
+    "qualified_name": "want_bytes",
+    "start": 11,
+    "end": 17,
+    "signature": "s: str | bytes, encoding: str='utf-8', errors: str='strict'",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def want_bytes(\n    s: str | bytes, encoding: str = \"utf-8\", errors: str = \"strict\"\n) -> bytes:\n    if isinstance(s, str):\n        s = s.encode(encoding, errors)\n\n    return s",
+    "sha256": "56f1df7c5e3a16f55477d73229451056e4cea638194b798ad9ba312871543136",
+    "calls": [
+      "isinstance",
+      "s.encode"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/encoding.py:20:base64_encode",
+    "path": "src/itsdangerous/encoding.py",
+    "qualified_name": "base64_encode",
+    "start": 20,
+    "end": 25,
+    "signature": "string: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def base64_encode(string: str | bytes) -> bytes:\n    \"\"\"Base64 encode a string of bytes or text. The resulting bytes are\n    safe to use in URLs.\n    \"\"\"\n    string = want_bytes(string)\n    return base64.urlsafe_b64encode(string).rstrip(b\"=\")",
+    "sha256": "331cdbb77b2c0577f8ae11a0b11ff80a65856b4b6ce2039f3b9485c8f597ceec",
+    "calls": [
+      "base64.urlsafe_b64encode",
+      "base64.urlsafe_b64encode(string).rstrip",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/encoding.py:28:base64_decode",
+    "path": "src/itsdangerous/encoding.py",
+    "qualified_name": "base64_decode",
+    "start": 28,
+    "end": 38,
+    "signature": "string: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def base64_decode(string: str | bytes) -> bytes:\n    \"\"\"Base64 decode a URL-safe string of bytes or text. The result is\n    bytes.\n    \"\"\"\n    string = want_bytes(string, encoding=\"ascii\", errors=\"ignore\")\n    string += b\"=\" * (-len(string) % 4)\n\n    try:\n        return base64.urlsafe_b64decode(string)\n    except (TypeError, ValueError) as e:\n        raise BadData(\"Invalid base64-encoded data\") from e",
+    "sha256": "260068c30859f9affde7aa8bb913fa369f67165db4e485d35bafd65b6b50f024",
+    "calls": [
+      "BadData",
+      "base64.urlsafe_b64decode",
+      "len",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/encoding.py:49:int_to_bytes",
+    "path": "src/itsdangerous/encoding.py",
+    "qualified_name": "int_to_bytes",
+    "start": 49,
+    "end": 50,
+    "signature": "num: int",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def int_to_bytes(num: int) -> bytes:\n    return _int_to_bytes(num).lstrip(b\"\\x00\")",
+    "sha256": "2c4f83244e6f77cf3d03f30434179e1a47ce75ed57f95ef55d17970bf8f5dd0c",
+    "calls": [
+      "_int_to_bytes",
+      "_int_to_bytes(num).lstrip"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/encoding.py:53:bytes_to_int",
+    "path": "src/itsdangerous/encoding.py",
+    "qualified_name": "bytes_to_int",
+    "start": 53,
+    "end": 54,
+    "signature": "bytestr: bytes",
+    "returns": "int",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def bytes_to_int(bytestr: bytes) -> int:\n    return _bytes_to_int(bytestr.rjust(8, b\"\\x00\"))[0]",
+    "sha256": "b61f0ff20227bf71c89925bd7eeb048ef4bb7b598e502b54ec772249d28f15a3",
+    "calls": [
+      "_bytes_to_int",
+      "bytestr.rjust"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:14:BadData.__init__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadData.__init__",
+    "start": 14,
+    "end": 16,
+    "signature": "self, message: str",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(self, message: str):\n        super().__init__(message)\n        self.message = message",
+    "sha256": "96147ba66d124197f024c5c02d43de631f465a16bddc1b390e736a9650438098",
+    "calls": [
+      "super",
+      "super().__init__"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:18:BadData.__str__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadData.__str__",
+    "start": 18,
+    "end": 19,
+    "signature": "self",
+    "returns": "str",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __str__(self) -> str:\n        return self.message",
+    "sha256": "4eaca0f0f0ca5812203077e7ae4d41b77af47a71c575b7e96aa9cfc56fd81b66",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:25:BadSignature.__init__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadSignature.__init__",
+    "start": 25,
+    "end": 33,
+    "signature": "self, message: str, payload: t.Any | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(self, message: str, payload: t.Any | None = None):\n        super().__init__(message)\n\n        #: The payload that failed the signature test. In some\n        #: situations you might still want to inspect this, even if\n        #: you know it was tampered with.\n        #:\n        #: .. versionadded:: 0.14\n        self.payload: t.Any | None = payload",
+    "sha256": "4a6a6161e869ced56a2288ed59c33b7cb4dd2a5afe22275d7f731244ff4729ca",
+    "calls": [
+      "super",
+      "super().__init__"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:41:BadTimeSignature.__init__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadTimeSignature.__init__",
+    "start": 41,
+    "end": 57,
+    "signature": "self, message: str, payload: t.Any | None=None, date_signed: datetime | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(\n        self,\n        message: str,\n        payload: t.Any | None = None,\n        date_signed: datetime | None = None,\n    ):\n        super().__init__(message, payload)\n\n        #: If the signature expired this exposes the date of when the\n        #: signature was created. This can be helpful in order to\n        #: tell the user how long a link has been gone stale.\n        #:\n        #: .. versionchanged:: 2.0\n        #:     The datetime value is timezone-aware rather than naive.\n        #:\n        #: .. versionadded:: 0.14\n        self.date_signed = date_signed",
+    "sha256": "dc8e5443687f1b15a778269cf3f6affaca98baaada2de4154a6b25e37237960f",
+    "calls": [
+      "super",
+      "super().__init__"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:74:BadHeader.__init__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadHeader.__init__",
+    "start": 74,
+    "end": 89,
+    "signature": "self, message: str, payload: t.Any | None=None, header: t.Any | None=None, original_error: Exception | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(\n        self,\n        message: str,\n        payload: t.Any | None = None,\n        header: t.Any | None = None,\n        original_error: Exception | None = None,\n    ):\n        super().__init__(message, payload)\n\n        #: If the header is actually available but just malformed it\n        #: might be stored here.\n        self.header: t.Any | None = header\n\n        #: If available, the error that indicates why the payload was\n        #: not valid. This might be ``None``.\n        self.original_error: Exception | None = original_error",
+    "sha256": "c5f78cbfbf87a07babebfa2748151d212d68d38ca23fda0e5c6d8e34e9907612",
+    "calls": [
+      "super",
+      "super().__init__"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/exc.py:101:BadPayload.__init__",
+    "path": "src/itsdangerous/exc.py",
+    "qualified_name": "BadPayload.__init__",
+    "start": 101,
+    "end": 106,
+    "signature": "self, message: str, original_error: Exception | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(self, message: str, original_error: Exception | None = None):\n        super().__init__(message)\n\n        #: If available, the error that indicates why the payload was\n        #: not valid. This might be ``None``.\n        self.original_error: Exception | None = original_error",
+    "sha256": "61797702a890ac32e20ab9a94f2b8bc7c915de9f07ae88b68380f6343e2a1d5d",
+    "calls": [
+      "super",
+      "super().__init__"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:27:_PDataSerializer.loads",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "_PDataSerializer.loads",
+    "start": 27,
+    "end": 27,
+    "signature": "self, payload: _TSerialized, /",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def loads(self, payload: _TSerialized, /) -> t.Any: ...",
+    "sha256": "1fb177214f294303293523aa821ff197d021912bcdc1c7ce073ba8061b9915da",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:31:_PDataSerializer.dumps",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "_PDataSerializer.dumps",
+    "start": 31,
+    "end": 31,
+    "signature": "self, obj: t.Any, /",
+    "returns": "_TSerialized",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def dumps(self, obj: t.Any, /) -> _TSerialized: ...",
+    "sha256": "7f4ad708c707cbe9817282f7d6fffc72e39deed64dd161241c438744a2cf5897",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:35:is_text_serializer",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "is_text_serializer",
+    "start": 35,
+    "end": 39,
+    "signature": "serializer: _PDataSerializer[t.Any]",
+    "returns": "te.TypeGuard[_PDataSerializer[str]]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def is_text_serializer(\n    serializer: _PDataSerializer[t.Any],\n) -> te.TypeGuard[_PDataSerializer[str]]:\n    \"\"\"Checks whether a serializer generates text or binary.\"\"\"\n    return isinstance(serializer.dumps({}), str)",
+    "sha256": "35d089511225f35754ca8317d036583da6b8910f6a145e413b4c968903f90969",
+    "calls": [
+      "isinstance",
+      "serializer.dumps"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 109,
+    "end": 122,
+    "signature": "self: Serializer[str], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: None | _PDataSerializer[str]=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def __init__(\n        self: Serializer[str],\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None = b\"itsdangerous\",\n        serializer: None | _PDataSerializer[str] = None,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...",
+    "sha256": "b2368243b97a90bb092ccca3eb36c96810bce59539d274d590452cab43833638",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 125,
+    "end": 138,
+    "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def __init__(\n        self: Serializer[bytes],\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None,\n        serializer: _PDataSerializer[bytes],\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...",
+    "sha256": "911a3392e9d6dda24b6eb85647297a294bfbf151ca9d28c631d43f18b3067b70",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 141,
+    "end": 155,
+    "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def __init__(\n        self: Serializer[bytes],\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None = b\"itsdangerous\",\n        *,\n        serializer: _PDataSerializer[bytes],\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...",
+    "sha256": "69c7c74ae39ccab40408c78d31525cea385d36e059ea8b444c2808112bc6387c",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 160,
+    "end": 173,
+    "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def __init__(\n        self,\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None,\n        serializer: t.Any,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...",
+    "sha256": "c49961a9eac23151a64d962833d668c9f7432cd9917c5384e0c0d737df09c55d",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 176,
+    "end": 190,
+    "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def __init__(\n        self,\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None = b\"itsdangerous\",\n        *,\n        serializer: t.Any,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ): ...",
+    "sha256": "a1b76f319330a3a2184305e528851ca9f1e0f114d9d563b101a511a9bf499cae",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:192:Serializer.__init__",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.__init__",
+    "start": 192,
+    "end": 236,
+    "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: t.Any | None=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(\n        self,\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None = b\"itsdangerous\",\n        serializer: t.Any | None = None,\n        serializer_kwargs: dict[str, t.Any] | None = None,\n        signer: type[Signer] | None = None,\n        signer_kwargs: dict[str, t.Any] | None = None,\n        fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ]\n        | None = None,\n    ):\n        #: The list of secret keys to try for verifying signatures, from\n        #: oldest to newest. The newest (last) key is used for signing.\n        #:\n        #: This allows a key rotation system to keep a list of allowed\n        #: keys and remove expired ones.\n        self.secret_keys: list[bytes] = _make_keys_list(secret_key)\n\n        if salt is not None:\n            salt = want_bytes(salt)\n            # if salt is None then the signer's default is used\n\n        self.salt = salt\n\n        if serializer is None:\n            serializer = self.default_serializer\n\n        self.serializer: _PDataSerializer[_TSerialized] = serializer\n        self.is_text_serializer: bool = is_text_serializer(serializer)\n\n        if signer is None:\n            signer = self.default_signer\n\n        self.signer: type[Signer] = signer\n        self.signer_kwargs: dict[str, t.Any] = signer_kwargs or {}\n\n        if fallback_signers is None:\n            fallback_signers = list(self.default_fallback_signers)\n\n        self.fallback_signers: list[\n            dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]\n        ] = fallback_signers\n        self.serializer_kwargs: dict[str, t.Any] = serializer_kwargs or {}",
+    "sha256": "ac4dee81c988f0f6b0ac36754b0ba1c39e1b4a0886f4f91e42878829a3e1aaac",
+    "calls": [
+      "_make_keys_list",
+      "is_text_serializer",
+      "list",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:238:Serializer.secret_key",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.secret_key",
+    "start": 238,
+    "end": 243,
+    "signature": "self",
+    "returns": "bytes",
+    "decorators": [
+      "property"
+    ],
+    "is_overload": false,
+    "source": "    @property\n    def secret_key(self) -> bytes:\n        \"\"\"The newest (last) entry in the :attr:`secret_keys` list. This\n        is for compatibility from before key rotation support was added.\n        \"\"\"\n        return self.secret_keys[-1]",
+    "sha256": "cf099c670b1e3583aac125d99cecbbd344defcc759d41c3992953ce8a139ee58",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:245:Serializer.load_payload",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.load_payload",
+    "start": 245,
+    "end": 271,
+    "signature": "self, payload: bytes, serializer: _PDataSerializer[t.Any] | None=None",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def load_payload(\n        self, payload: bytes, serializer: _PDataSerializer[t.Any] | None = None\n    ) -> t.Any:\n        \"\"\"Loads the encoded object. This function raises\n        :class:`.BadPayload` if the payload is not valid. The\n        ``serializer`` parameter can be used to override the serializer\n        stored on the class. The encoded ``payload`` should always be\n        bytes.\n        \"\"\"\n        if serializer is None:\n            use_serializer = self.serializer\n            is_text = self.is_text_serializer\n        else:\n            use_serializer = serializer\n            is_text = is_text_serializer(serializer)\n\n        try:\n            if is_text:\n                return use_serializer.loads(payload.decode(\"utf-8\"))  # type: ignore[arg-type]\n\n            return use_serializer.loads(payload)  # type: ignore[arg-type]\n        except Exception as e:\n            raise BadPayload(\n                \"Could not load the payload because an exception\"\n                \" occurred on unserializing the data.\",\n                original_error=e,\n            ) from e",
+    "sha256": "4ec3985df19afb1472241979abcb16fe0d5d1bf8be3302489ee853ba5c0faaf4",
+    "calls": [
+      "BadPayload",
+      "is_text_serializer",
+      "payload.decode",
+      "use_serializer.loads"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:273:Serializer.dump_payload",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.dump_payload",
+    "start": 273,
+    "end": 278,
+    "signature": "self, obj: t.Any",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def dump_payload(self, obj: t.Any) -> bytes:\n        \"\"\"Dumps the encoded object. The return value is always bytes.\n        If the internal serializer returns text, the value will be\n        encoded as UTF-8.\n        \"\"\"\n        return want_bytes(self.serializer.dumps(obj, **self.serializer_kwargs))",
+    "sha256": "a06c095d2c9809c9793f92d9b4271d2e22cc558678d75582a69d04e187fa41af",
+    "calls": [
+      "self.serializer.dumps",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:280:Serializer.make_signer",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.make_signer",
+    "start": 280,
+    "end": 287,
+    "signature": "self, salt: str | bytes | None=None",
+    "returns": "Signer",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def make_signer(self, salt: str | bytes | None = None) -> Signer:\n        \"\"\"Creates a new instance of the signer to be used. The default\n        implementation uses the :class:`.Signer` base class.\n        \"\"\"\n        if salt is None:\n            salt = self.salt\n\n        return self.signer(self.secret_keys, salt=salt, **self.signer_kwargs)",
+    "sha256": "280d4fc82d99d53d60d4528fba85d89541eb6e853fb1603c29880a7d49b1565f",
+    "calls": [
+      "self.signer"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:289:Serializer.iter_unsigners",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.iter_unsigners",
+    "start": 289,
+    "end": 309,
+    "signature": "self, salt: str | bytes | None=None",
+    "returns": "cabc.Iterator[Signer]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def iter_unsigners(self, salt: str | bytes | None = None) -> cabc.Iterator[Signer]:\n        \"\"\"Iterates over all signers to be tried for unsigning. Starts\n        with the configured signer, then constructs each signer\n        specified in ``fallback_signers``.\n        \"\"\"\n        if salt is None:\n            salt = self.salt\n\n        yield self.make_signer(salt)\n\n        for fallback in self.fallback_signers:\n            if isinstance(fallback, dict):\n                kwargs = fallback\n                fallback = self.signer\n            elif isinstance(fallback, tuple):\n                fallback, kwargs = fallback\n            else:\n                kwargs = self.signer_kwargs\n\n            for secret_key in self.secret_keys:\n                yield fallback(secret_key, salt=salt, **kwargs)",
+    "sha256": "a4a1b7a7e970807c17f9fa90444d8e10a47ae4e7b368dbc0e67102a9c63c3b2e",
+    "calls": [
+      "fallback",
+      "isinstance",
+      "self.make_signer"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:311:Serializer.dumps",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.dumps",
+    "start": 311,
+    "end": 322,
+    "signature": "self, obj: t.Any, salt: str | bytes | None=None",
+    "returns": "_TSerialized",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def dumps(self, obj: t.Any, salt: str | bytes | None = None) -> _TSerialized:\n        \"\"\"Returns a signed string serialized with the internal\n        serializer. The return value can be either a byte or unicode\n        string depending on the format of the internal serializer.\n        \"\"\"\n        payload = want_bytes(self.dump_payload(obj))\n        rv = self.make_signer(salt).sign(payload)\n\n        if self.is_text_serializer:\n            return rv.decode(\"utf-8\")  # type: ignore[return-value]\n\n        return rv  # type: ignore[return-value]",
+    "sha256": "6b4d66f6c33cbfe17d47da5967aa5cf441837e1ee0a53552bbf454b3938728ce",
+    "calls": [
+      "rv.decode",
+      "self.dump_payload",
+      "self.make_signer",
+      "self.make_signer(salt).sign",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:324:Serializer.dump",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.dump",
+    "start": 324,
+    "end": 328,
+    "signature": "self, obj: t.Any, f: t.IO[t.Any], salt: str | bytes | None=None",
+    "returns": "None",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def dump(self, obj: t.Any, f: t.IO[t.Any], salt: str | bytes | None = None) -> None:\n        \"\"\"Like :meth:`dumps` but dumps into a file. The file handle has\n        to be compatible with what the internal serializer expects.\n        \"\"\"\n        f.write(self.dumps(obj, salt))",
+    "sha256": "a7396464b78999c9a797bf72937816391a4875a6b863a56845bb6f2b6872612a",
+    "calls": [
+      "f.write",
+      "self.dumps"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:330:Serializer.loads",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.loads",
+    "start": 330,
+    "end": 345,
+    "signature": "self, s: str | bytes, salt: str | bytes | None=None, **kwargs: t.Any",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def loads(\n        self, s: str | bytes, salt: str | bytes | None = None, **kwargs: t.Any\n    ) -> t.Any:\n        \"\"\"Reverse of :meth:`dumps`. Raises :exc:`.BadSignature` if the\n        signature validation fails.\n        \"\"\"\n        s = want_bytes(s)\n        last_exception = None\n\n        for signer in self.iter_unsigners(salt):\n            try:\n                return self.load_payload(signer.unsign(s))\n            except BadSignature as err:\n                last_exception = err\n\n        raise t.cast(BadSignature, last_exception)",
+    "sha256": "f642134a487b4078b54f242bfb86a0777a2807ee1106def0426a31cce6164d0b",
+    "calls": [
+      "self.iter_unsigners",
+      "self.load_payload",
+      "signer.unsign",
+      "t.cast",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:347:Serializer.load",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.load",
+    "start": 347,
+    "end": 349,
+    "signature": "self, f: t.IO[t.Any], salt: str | bytes | None=None",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def load(self, f: t.IO[t.Any], salt: str | bytes | None = None) -> t.Any:\n        \"\"\"Like :meth:`loads` but loads from a file.\"\"\"\n        return self.loads(f.read(), salt)",
+    "sha256": "6129d00aaca0e9f2f526966bc30c63187dfe945fea2fe6ee34bbce7262e1d5ba",
+    "calls": [
+      "f.read",
+      "self.loads"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:351:Serializer.loads_unsafe",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.loads_unsafe",
+    "start": 351,
+    "end": 367,
+    "signature": "self, s: str | bytes, salt: str | bytes | None=None",
+    "returns": "tuple[bool, t.Any]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def loads_unsafe(\n        self, s: str | bytes, salt: str | bytes | None = None\n    ) -> tuple[bool, t.Any]:\n        \"\"\"Like :meth:`loads` but without verifying the signature. This\n        is potentially very dangerous to use depending on how your\n        serializer works. The return value is ``(signature_valid,\n        payload)`` instead of just the payload. The first item will be a\n        boolean that indicates if the signature is valid. This function\n        never fails.\n\n        Use it for debugging only and if you know that your serializer\n        module is not exploitable (for example, do not use it with a\n        pickle serializer).\n\n        .. versionadded:: 0.15\n        \"\"\"\n        return self._loads_unsafe_impl(s, salt)",
+    "sha256": "0a2e9ed3a15736793c3d97ab4b2631e23040612739afc63e1c8bf443a192f315",
+    "calls": [
+      "self._loads_unsafe_impl"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:369:Serializer._loads_unsafe_impl",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer._loads_unsafe_impl",
+    "start": 369,
+    "end": 397,
+    "signature": "self, s: str | bytes, salt: str | bytes | None, load_kwargs: dict[str, t.Any] | None=None, load_payload_kwargs: dict[str, t.Any] | None=None",
+    "returns": "tuple[bool, t.Any]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def _loads_unsafe_impl(\n        self,\n        s: str | bytes,\n        salt: str | bytes | None,\n        load_kwargs: dict[str, t.Any] | None = None,\n        load_payload_kwargs: dict[str, t.Any] | None = None,\n    ) -> tuple[bool, t.Any]:\n        \"\"\"Low level helper function to implement :meth:`loads_unsafe`\n        in serializer subclasses.\n        \"\"\"\n        if load_kwargs is None:\n            load_kwargs = {}\n\n        try:\n            return True, self.loads(s, salt=salt, **load_kwargs)\n        except BadSignature as e:\n            if e.payload is None:\n                return False, None\n\n            if load_payload_kwargs is None:\n                load_payload_kwargs = {}\n\n            try:\n                return (\n                    False,\n                    self.load_payload(e.payload, **load_payload_kwargs),\n                )\n            except BadPayload:\n                return False, None",
+    "sha256": "c8a57503eb4839f4251d36a4c326c2aa76bd54b7ae36628a90520a1e7ddfe3c4",
+    "calls": [
+      "self.load_payload",
+      "self.loads"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/serializer.py:399:Serializer.load_unsafe",
+    "path": "src/itsdangerous/serializer.py",
+    "qualified_name": "Serializer.load_unsafe",
+    "start": 399,
+    "end": 406,
+    "signature": "self, f: t.IO[t.Any], salt: str | bytes | None=None",
+    "returns": "tuple[bool, t.Any]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def load_unsafe(\n        self, f: t.IO[t.Any], salt: str | bytes | None = None\n    ) -> tuple[bool, t.Any]:\n        \"\"\"Like :meth:`loads_unsafe` but loads from a file.\n\n        .. versionadded:: 0.15\n        \"\"\"\n        return self.loads_unsafe(f.read(), salt=salt)",
+    "sha256": "a11d7f4fc141dc12d8dab51304fa85a46636894dc01b9d581f500b034ce993fc",
+    "calls": [
+      "f.read",
+      "self.loads_unsafe"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:20:SigningAlgorithm.get_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "SigningAlgorithm.get_signature",
+    "start": 20,
+    "end": 22,
+    "signature": "self, key: bytes, value: bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_signature(self, key: bytes, value: bytes) -> bytes:\n        \"\"\"Returns the signature for the given key and value.\"\"\"\n        raise NotImplementedError()",
+    "sha256": "a9762b41813fcfa20b30936e1f91fabb1256b15ce4879efa7181eb566fdc795a",
+    "calls": [
+      "NotImplementedError"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:24:SigningAlgorithm.verify_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "SigningAlgorithm.verify_signature",
+    "start": 24,
+    "end": 28,
+    "signature": "self, key: bytes, value: bytes, sig: bytes",
+    "returns": "bool",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def verify_signature(self, key: bytes, value: bytes, sig: bytes) -> bool:\n        \"\"\"Verifies the given signature matches the expected\n        signature.\n        \"\"\"\n        return hmac.compare_digest(sig, self.get_signature(key, value))",
+    "sha256": "8d3c475afb4537a0a68b32be6ca3d335ea636127b34bfdacad6c6d03b03894e9",
+    "calls": [
+      "hmac.compare_digest",
+      "self.get_signature"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:36:NoneAlgorithm.get_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "NoneAlgorithm.get_signature",
+    "start": 36,
+    "end": 37,
+    "signature": "self, key: bytes, value: bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_signature(self, key: bytes, value: bytes) -> bytes:\n        return b\"\"",
+    "sha256": "d5e10aa1dab8f463b6ccccd9d3deac9ddf4de2db72a91bbcfcb3330be961dce2",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:40:_lazy_sha1",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "_lazy_sha1",
+    "start": 40,
+    "end": 45,
+    "signature": "string: bytes=b''",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def _lazy_sha1(string: bytes = b\"\") -> t.Any:\n    \"\"\"Don't access ``hashlib.sha1`` until runtime. FIPS builds may not include\n    SHA-1, in which case the import and use as a default would fail before the\n    developer can configure something else.\n    \"\"\"\n    return hashlib.sha1(string)",
+    "sha256": "40c075bdd18744a58f39f7aa9c31d21aed4cf0ae2232d7238230b1aa610be7b9",
+    "calls": [
+      "hashlib.sha1"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:56:HMACAlgorithm.__init__",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "HMACAlgorithm.__init__",
+    "start": 56,
+    "end": 60,
+    "signature": "self, digest_method: t.Any=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(self, digest_method: t.Any = None):\n        if digest_method is None:\n            digest_method = self.default_digest_method\n\n        self.digest_method: t.Any = digest_method",
+    "sha256": "81330dc234e8ba1e260e70ea0692276d13ba37ced1fadd7cf211a7b79ef2fee5",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:62:HMACAlgorithm.get_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "HMACAlgorithm.get_signature",
+    "start": 62,
+    "end": 64,
+    "signature": "self, key: bytes, value: bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_signature(self, key: bytes, value: bytes) -> bytes:\n        mac = hmac.new(key, msg=value, digestmod=self.digest_method)\n        return mac.digest()",
+    "sha256": "66f9fdc0afb22ffe3976f85ffa35706f74ee66e1d609513e34492e9bd7cb84ae",
+    "calls": [
+      "hmac.new",
+      "mac.digest"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:67:_make_keys_list",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "_make_keys_list",
+    "start": 67,
+    "end": 73,
+    "signature": "secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes]",
+    "returns": "list[bytes]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def _make_keys_list(\n    secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n) -> list[bytes]:\n    if isinstance(secret_key, (str, bytes)):\n        return [want_bytes(secret_key)]\n\n    return [want_bytes(s) for s in secret_key]  # pyright: ignore",
+    "sha256": "24147bcf2bbea337554eb1ed1279b0085ad6a2b84a874a4e4ae00397e1915e0f",
+    "calls": [
+      "isinstance",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:129:Signer.__init__",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.__init__",
+    "start": 129,
+    "end": 173,
+    "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous.Signer', sep: str | bytes=b'.', key_derivation: str | None=None, digest_method: t.Any | None=None, algorithm: SigningAlgorithm | None=None",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def __init__(\n        self,\n        secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes],\n        salt: str | bytes | None = b\"itsdangerous.Signer\",\n        sep: str | bytes = b\".\",\n        key_derivation: str | None = None,\n        digest_method: t.Any | None = None,\n        algorithm: SigningAlgorithm | None = None,\n    ):\n        #: The list of secret keys to try for verifying signatures, from\n        #: oldest to newest. The newest (last) key is used for signing.\n        #:\n        #: This allows a key rotation system to keep a list of allowed\n        #: keys and remove expired ones.\n        self.secret_keys: list[bytes] = _make_keys_list(secret_key)\n        self.sep: bytes = want_bytes(sep)\n\n        if self.sep in _base64_alphabet:\n            raise ValueError(\n                \"The given separator cannot be used because it may be\"\n                \" contained in the signature itself. ASCII letters,\"\n                \" digits, and '-_=' must not be used.\"\n            )\n\n        if salt is not None:\n            salt = want_bytes(salt)\n        else:\n            salt = b\"itsdangerous.Signer\"\n\n        self.salt = salt\n\n        if key_derivation is None:\n            key_derivation = self.default_key_derivation\n\n        self.key_derivation: str = key_derivation\n\n        if digest_method is None:\n            digest_method = self.default_digest_method\n\n        self.digest_method: t.Any = digest_method\n\n        if algorithm is None:\n            algorithm = HMACAlgorithm(self.digest_method)\n\n        self.algorithm: SigningAlgorithm = algorithm",
+    "sha256": "58ade5aef09196f0b5fb0907084e8b3baef9c740958d3e2c32896dd62f575a75",
+    "calls": [
+      "HMACAlgorithm",
+      "ValueError",
+      "_make_keys_list",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:175:Signer.secret_key",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.secret_key",
+    "start": 175,
+    "end": 180,
+    "signature": "self",
+    "returns": "bytes",
+    "decorators": [
+      "property"
+    ],
+    "is_overload": false,
+    "source": "    @property\n    def secret_key(self) -> bytes:\n        \"\"\"The newest (last) entry in the :attr:`secret_keys` list. This\n        is for compatibility from before key rotation support was added.\n        \"\"\"\n        return self.secret_keys[-1]",
+    "sha256": "cf099c670b1e3583aac125d99cecbbd344defcc759d41c3992953ce8a139ee58",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:182:Signer.derive_key",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.derive_key",
+    "start": 182,
+    "end": 213,
+    "signature": "self, secret_key: str | bytes | None=None",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def derive_key(self, secret_key: str | bytes | None = None) -> bytes:\n        \"\"\"This method is called to derive the key. The default key\n        derivation choices can be overridden here. Key derivation is not\n        intended to be used as a security method to make a complex key\n        out of a short password. Instead you should use large random\n        secret keys.\n\n        :param secret_key: A specific secret key to derive from.\n            Defaults to the last item in :attr:`secret_keys`.\n\n        .. versionchanged:: 2.0\n            Added the ``secret_key`` parameter.\n        \"\"\"\n        if secret_key is None:\n            secret_key = self.secret_keys[-1]\n        else:\n            secret_key = want_bytes(secret_key)\n\n        if self.key_derivation == \"concat\":\n            return t.cast(bytes, self.digest_method(self.salt + secret_key).digest())\n        elif self.key_derivation == \"django-concat\":\n            return t.cast(\n                bytes, self.digest_method(self.salt + b\"signer\" + secret_key).digest()\n            )\n        elif self.key_derivation == \"hmac\":\n            mac = hmac.new(secret_key, digestmod=self.digest_method)\n            mac.update(self.salt)\n            return mac.digest()\n        elif self.key_derivation == \"none\":\n            return secret_key\n        else:\n            raise TypeError(\"Unknown key derivation method\")",
+    "sha256": "9745d7cf75f5ef146521f10c705678def85940036777dbc536ad5afeb53f8205",
+    "calls": [
+      "TypeError",
+      "hmac.new",
+      "mac.digest",
+      "mac.update",
+      "self.digest_method",
+      "self.digest_method(self.salt + b'signer' + secret_key).digest",
+      "self.digest_method(self.salt + secret_key).digest",
+      "t.cast",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:215:Signer.get_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.get_signature",
+    "start": 215,
+    "end": 220,
+    "signature": "self, value: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_signature(self, value: str | bytes) -> bytes:\n        \"\"\"Returns the signature for the given value.\"\"\"\n        value = want_bytes(value)\n        key = self.derive_key()\n        sig = self.algorithm.get_signature(key, value)\n        return base64_encode(sig)",
+    "sha256": "210f6fffa54faf0f5188542e7ad234b59b4d3e9abd07b46e031576b05fc02ae5",
+    "calls": [
+      "base64_encode",
+      "self.algorithm.get_signature",
+      "self.derive_key",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:222:Signer.sign",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.sign",
+    "start": 222,
+    "end": 225,
+    "signature": "self, value: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def sign(self, value: str | bytes) -> bytes:\n        \"\"\"Signs the given string.\"\"\"\n        value = want_bytes(value)\n        return value + self.sep + self.get_signature(value)",
+    "sha256": "15e47a8b894164cc298fce37dacaada799ae430ffa869547dfa5028d061ef501",
+    "calls": [
+      "self.get_signature",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:227:Signer.verify_signature",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.verify_signature",
+    "start": 227,
+    "end": 242,
+    "signature": "self, value: str | bytes, sig: str | bytes",
+    "returns": "bool",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def verify_signature(self, value: str | bytes, sig: str | bytes) -> bool:\n        \"\"\"Verifies the signature for the given value.\"\"\"\n        try:\n            sig = base64_decode(sig)\n        except Exception:\n            return False\n\n        value = want_bytes(value)\n\n        for secret_key in reversed(self.secret_keys):\n            key = self.derive_key(secret_key)\n\n            if self.algorithm.verify_signature(key, value, sig):\n                return True\n\n        return False",
+    "sha256": "d8ac3f1ef926570ed474c24a09ea469661c30ce2a839742e2db26656b59c6bb7",
+    "calls": [
+      "base64_decode",
+      "reversed",
+      "self.algorithm.verify_signature",
+      "self.derive_key",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:244:Signer.unsign",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.unsign",
+    "start": 244,
+    "end": 256,
+    "signature": "self, signed_value: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def unsign(self, signed_value: str | bytes) -> bytes:\n        \"\"\"Unsigns the given string.\"\"\"\n        signed_value = want_bytes(signed_value)\n\n        if self.sep not in signed_value:\n            raise BadSignature(f\"No {self.sep!r} found in value\")\n\n        value, sig = signed_value.rsplit(self.sep, 1)\n\n        if self.verify_signature(value, sig):\n            return value\n\n        raise BadSignature(f\"Signature {sig!r} does not match\", payload=value)",
+    "sha256": "846548279a0057eef7f3109beb0e5f499c587494710d6a24cf7337dc84059971",
+    "calls": [
+      "BadSignature",
+      "self.verify_signature",
+      "signed_value.rsplit",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/signer.py:258:Signer.validate",
+    "path": "src/itsdangerous/signer.py",
+    "qualified_name": "Signer.validate",
+    "start": 258,
+    "end": 266,
+    "signature": "self, signed_value: str | bytes",
+    "returns": "bool",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def validate(self, signed_value: str | bytes) -> bool:\n        \"\"\"Only validates the given signed value. Returns ``True`` if\n        the signature exists and is valid.\n        \"\"\"\n        try:\n            self.unsign(signed_value)\n            return True\n        except BadSignature:\n            return False",
+    "sha256": "b182c5430f31392a21dcc6696befe610f518f53aa93d6e6be0851e8496790622",
+    "calls": [
+      "self.unsign"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:29:TimestampSigner.get_timestamp",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.get_timestamp",
+    "start": 29,
+    "end": 33,
+    "signature": "self",
+    "returns": "int",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_timestamp(self) -> int:\n        \"\"\"Returns the current timestamp. The function must return an\n        integer.\n        \"\"\"\n        return int(time.time())",
+    "sha256": "0a67fdc20c29bb679de445d516ce6bb3b4e8805a2ebb3685d83049c27aef644b",
+    "calls": [
+      "int",
+      "time.time"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:35:TimestampSigner.timestamp_to_datetime",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.timestamp_to_datetime",
+    "start": 35,
+    "end": 43,
+    "signature": "self, ts: int",
+    "returns": "datetime",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def timestamp_to_datetime(self, ts: int) -> datetime:\n        \"\"\"Convert the timestamp from :meth:`get_timestamp` into an\n        aware :class`datetime.datetime` in UTC.\n\n        .. versionchanged:: 2.0\n            The timestamp is returned as a timezone-aware ``datetime``\n            in UTC rather than a naive ``datetime`` assumed to be UTC.\n        \"\"\"\n        return datetime.fromtimestamp(ts, tz=timezone.utc)",
+    "sha256": "4e1a9fc0d2718ed34aadf348348d393aadefa4b7200e06a124c5910657cdfe92",
+    "calls": [
+      "datetime.fromtimestamp"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:45:TimestampSigner.sign",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.sign",
+    "start": 45,
+    "end": 51,
+    "signature": "self, value: str | bytes",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def sign(self, value: str | bytes) -> bytes:\n        \"\"\"Signs the given string and also attaches time information.\"\"\"\n        value = want_bytes(value)\n        timestamp = base64_encode(int_to_bytes(self.get_timestamp()))\n        sep = want_bytes(self.sep)\n        value = value + sep + timestamp\n        return value + sep + self.get_signature(value)",
+    "sha256": "f7e316b825274785174d840d93ef8b9c257d2c1b5eb8c9aa996f5023e7e550aa",
+    "calls": [
+      "base64_encode",
+      "int_to_bytes",
+      "self.get_signature",
+      "self.get_timestamp",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:56:TimestampSigner.unsign",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.unsign",
+    "start": 56,
+    "end": 62,
+    "signature": "self, signed_value: str | bytes, max_age: int | None=None, return_timestamp: t.Literal[False]=False",
+    "returns": "bytes",
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def unsign(  # type: ignore[overload-overlap]\n        self,\n        signed_value: str | bytes,\n        max_age: int | None = None,\n        return_timestamp: t.Literal[False] = False,\n    ) -> bytes: ...",
+    "sha256": "43dff25a0c347d2faf5514e6e8e88648623478e7205ada047253dbc00ec09ad7",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:64:TimestampSigner.unsign",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.unsign",
+    "start": 64,
+    "end": 70,
+    "signature": "self, signed_value: str | bytes, max_age: int | None=None, return_timestamp: t.Literal[True]=True",
+    "returns": "tuple[bytes, datetime]",
+    "decorators": [
+      "t.overload"
+    ],
+    "is_overload": true,
+    "source": "    @t.overload\n    def unsign(\n        self,\n        signed_value: str | bytes,\n        max_age: int | None = None,\n        return_timestamp: t.Literal[True] = True,\n    ) -> tuple[bytes, datetime]: ...",
+    "sha256": "c7a193de43002524c34eac9c994dc0ea5b9956e8e59c217e99e69f74dcfbc71d",
+    "calls": [],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:72:TimestampSigner.unsign",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.unsign",
+    "start": 72,
+    "end": 158,
+    "signature": "self, signed_value: str | bytes, max_age: int | None=None, return_timestamp: bool=False",
+    "returns": "tuple[bytes, datetime] | bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def unsign(\n        self,\n        signed_value: str | bytes,\n        max_age: int | None = None,\n        return_timestamp: bool = False,\n    ) -> tuple[bytes, datetime] | bytes:\n        \"\"\"Works like the regular :meth:`.Signer.unsign` but can also\n        validate the time. See the base docstring of the class for\n        the general behavior. If ``return_timestamp`` is ``True`` the\n        timestamp of the signature will be returned as an aware\n        :class:`datetime.datetime` object in UTC.\n\n        .. versionchanged:: 2.0\n            The timestamp is returned as a timezone-aware ``datetime``\n            in UTC rather than a naive ``datetime`` assumed to be UTC.\n        \"\"\"\n        try:\n            result = super().unsign(signed_value)\n            sig_error = None\n        except BadSignature as e:\n            sig_error = e\n            result = e.payload or b\"\"\n\n        sep = want_bytes(self.sep)\n\n        # If there is no timestamp in the result there is something\n        # seriously wrong. In case there was a signature error, we raise\n        # that one directly, otherwise we have a weird situation in\n        # which we shouldn't have come except someone uses a time-based\n        # serializer on non-timestamp data, so catch that.\n        if sep not in result:\n            if sig_error:\n                raise sig_error\n\n            raise BadTimeSignature(\"timestamp missing\", payload=result)\n\n        value, ts_bytes = result.rsplit(sep, 1)\n        ts_int: int | None = None\n        ts_dt: datetime | None = None\n\n        try:\n            ts_int = bytes_to_int(base64_decode(ts_bytes))\n        except Exception:\n            pass\n\n        # Signature is *not* okay. Raise a proper error now that we have\n        # split the value and the timestamp.\n        if sig_error is not None:\n            if ts_int is not None:\n                try:\n                    ts_dt = self.timestamp_to_datetime(ts_int)\n                except (ValueError, OSError, OverflowError) as exc:\n                    # Windows raises OSError\n                    # 32-bit raises OverflowError\n                    raise BadTimeSignature(\n                        \"Malformed timestamp\", payload=value\n                    ) from exc\n\n            raise BadTimeSignature(str(sig_error), payload=value, date_signed=ts_dt)\n\n        # Signature was okay but the timestamp is actually not there or\n        # malformed. Should not happen, but we handle it anyway.\n        if ts_int is None:\n            raise BadTimeSignature(\"Malformed timestamp\", payload=value)\n\n        # Check timestamp is not older than max_age\n        if max_age is not None:\n            age = self.get_timestamp() - ts_int\n\n            if age > max_age:\n                raise SignatureExpired(\n                    f\"Signature age {age} > {max_age} seconds\",\n                    payload=value,\n                    date_signed=self.timestamp_to_datetime(ts_int),\n                )\n\n            if age < 0:\n                raise SignatureExpired(\n                    f\"Signature age {age} < 0 seconds\",\n                    payload=value,\n                    date_signed=self.timestamp_to_datetime(ts_int),\n                )\n\n        if return_timestamp:\n            return value, self.timestamp_to_datetime(ts_int)\n\n        return value",
+    "sha256": "8de7a9029070ab2282656d6dfb94809fdf4bec573f2c121215a0ead1df27179d",
+    "calls": [
+      "BadTimeSignature",
+      "SignatureExpired",
+      "base64_decode",
+      "bytes_to_int",
+      "result.rsplit",
+      "self.get_timestamp",
+      "self.timestamp_to_datetime",
+      "str",
+      "super",
+      "super().unsign",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:160:TimestampSigner.validate",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimestampSigner.validate",
+    "start": 160,
+    "end": 167,
+    "signature": "self, signed_value: str | bytes, max_age: int | None=None",
+    "returns": "bool",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def validate(self, signed_value: str | bytes, max_age: int | None = None) -> bool:\n        \"\"\"Only validates the given signed value. Returns ``True`` if\n        the signature exists and is valid.\"\"\"\n        try:\n            self.unsign(signed_value, max_age=max_age)\n            return True\n        except BadSignature:\n            return False",
+    "sha256": "ebf2bc06ca1fa008d29433a4665ae84c32e8a9fbc8b840c895baf7f281657e3d",
+    "calls": [
+      "self.unsign"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:177:TimedSerializer.iter_unsigners",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimedSerializer.iter_unsigners",
+    "start": 177,
+    "end": 180,
+    "signature": "self, salt: str | bytes | None=None",
+    "returns": "cabc.Iterator[TimestampSigner]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def iter_unsigners(\n        self, salt: str | bytes | None = None\n    ) -> cabc.Iterator[TimestampSigner]:\n        return t.cast(\"cabc.Iterator[TimestampSigner]\", super().iter_unsigners(salt))",
+    "sha256": "58c537f841a6bbd2cac3450a3953360988bc3219cae64693616ced91a35b09b0",
+    "calls": [
+      "super",
+      "super().iter_unsigners",
+      "t.cast"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:185:TimedSerializer.loads",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimedSerializer.loads",
+    "start": 185,
+    "end": 220,
+    "signature": "self, s: str | bytes, max_age: int | None=None, return_timestamp: bool=False, salt: str | bytes | None=None",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def loads(  # type: ignore[override]\n        self,\n        s: str | bytes,\n        max_age: int | None = None,\n        return_timestamp: bool = False,\n        salt: str | bytes | None = None,\n    ) -> t.Any:\n        \"\"\"Reverse of :meth:`dumps`, raises :exc:`.BadSignature` if the\n        signature validation fails. If a ``max_age`` is provided it will\n        ensure the signature is not older than that time in seconds. In\n        case the signature is outdated, :exc:`.SignatureExpired` is\n        raised. All arguments are forwarded to the signer's\n        :meth:`~TimestampSigner.unsign` method.\n        \"\"\"\n        s = want_bytes(s)\n        last_exception = None\n\n        for signer in self.iter_unsigners(salt):\n            try:\n                base64d, timestamp = signer.unsign(\n                    s, max_age=max_age, return_timestamp=True\n                )\n                payload = self.load_payload(base64d)\n\n                if return_timestamp:\n                    return payload, timestamp\n\n                return payload\n            except SignatureExpired:\n                # The signature was unsigned successfully but was\n                # expired. Do not try the next signer.\n                raise\n            except BadSignature as err:\n                last_exception = err\n\n        raise t.cast(BadSignature, last_exception)",
+    "sha256": "0fde900dd0dd36b7710fff1fea240ab9a4b7b385409b479d4d649b130df0b8c6",
+    "calls": [
+      "self.iter_unsigners",
+      "self.load_payload",
+      "signer.unsign",
+      "t.cast",
+      "want_bytes"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/timed.py:222:TimedSerializer.loads_unsafe",
+    "path": "src/itsdangerous/timed.py",
+    "qualified_name": "TimedSerializer.loads_unsafe",
+    "start": 222,
+    "end": 228,
+    "signature": "self, s: str | bytes, max_age: int | None=None, salt: str | bytes | None=None",
+    "returns": "tuple[bool, t.Any]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def loads_unsafe(  # type: ignore[override]\n        self,\n        s: str | bytes,\n        max_age: int | None = None,\n        salt: str | bytes | None = None,\n    ) -> tuple[bool, t.Any]:\n        return self._loads_unsafe_impl(s, salt, load_kwargs={\"max_age\": max_age})",
+    "sha256": "22b60c6200401a8f247a5d69cb99e0b555852e9fe6af700fea8733426d8be6f8",
+    "calls": [
+      "self._loads_unsafe_impl"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/url_safe.py:23:URLSafeSerializerMixin.load_payload",
+    "path": "src/itsdangerous/url_safe.py",
+    "qualified_name": "URLSafeSerializerMixin.load_payload",
+    "start": 23,
+    "end": 53,
+    "signature": "self, payload: bytes, *args: t.Any, serializer: t.Any | None=None, **kwargs: t.Any",
+    "returns": "t.Any",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def load_payload(\n        self,\n        payload: bytes,\n        *args: t.Any,\n        serializer: t.Any | None = None,\n        **kwargs: t.Any,\n    ) -> t.Any:\n        decompress = False\n\n        if payload.startswith(b\".\"):\n            payload = payload[1:]\n            decompress = True\n\n        try:\n            json = base64_decode(payload)\n        except Exception as e:\n            raise BadPayload(\n                \"Could not base64 decode the payload because of an exception\",\n                original_error=e,\n            ) from e\n\n        if decompress:\n            try:\n                json = zlib.decompress(json)\n            except Exception as e:\n                raise BadPayload(\n                    \"Could not zlib decompress the payload before decoding the payload\",\n                    original_error=e,\n                ) from e\n\n        return super().load_payload(json, *args, **kwargs)",
+    "sha256": "3c76107415e93f92f13f85a54677ebf791f8e694ee2f221481fc36c019d0e292",
+    "calls": [
+      "BadPayload",
+      "base64_decode",
+      "payload.startswith",
+      "super",
+      "super().load_payload",
+      "zlib.decompress"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "src/itsdangerous/url_safe.py:55:URLSafeSerializerMixin.dump_payload",
+    "path": "src/itsdangerous/url_safe.py",
+    "qualified_name": "URLSafeSerializerMixin.dump_payload",
+    "start": 55,
+    "end": 69,
+    "signature": "self, obj: t.Any",
+    "returns": "bytes",
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def dump_payload(self, obj: t.Any) -> bytes:\n        json = super().dump_payload(obj)\n        is_compressed = False\n        compressed = zlib.compress(json)\n\n        if len(compressed) < (len(json) - 1):\n            json = compressed\n            is_compressed = True\n\n        base64d = base64_encode(json)\n\n        if is_compressed:\n            base64d = b\".\" + base64d\n\n        return base64d",
+    "sha256": "cb26a04ae1e592988e942ca88b36571e307ec65ba0825815789bd69192ace023",
+    "calls": [
+      "base64_encode",
+      "len",
+      "super",
+      "super().dump_payload",
+      "zlib.compress"
+    ],
+    "kind": "production"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_encoding.py:11:test_want_bytes",
+    "path": "tests/test_itsdangerous/test_encoding.py",
+    "qualified_name": "test_want_bytes",
+    "start": 11,
+    "end": 14,
+    "signature": "value",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('value', ('ma\u00f1ana', b'tomorrow'))"
+    ],
+    "is_overload": false,
+    "source": "@pytest.mark.parametrize(\"value\", (\"ma\u00f1ana\", b\"tomorrow\"))\ndef test_want_bytes(value):\n    out = want_bytes(value)\n    assert isinstance(out, bytes)",
+    "sha256": "f6f31d4d8d3222a8cd602a79a1addfb31f3fcad6ec0788f040fb31a1dfd0fd9f",
+    "calls": [
+      "isinstance",
+      "pytest.mark.parametrize",
+      "want_bytes"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_encoding.py:17:test_base64",
+    "path": "tests/test_itsdangerous/test_encoding.py",
+    "qualified_name": "test_base64",
+    "start": 17,
+    "end": 22,
+    "signature": "value",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('value', ('\u7121\u9650', b'infinite'))"
+    ],
+    "is_overload": false,
+    "source": "@pytest.mark.parametrize(\"value\", (\"\u7121\u9650\", b\"infinite\"))\ndef test_base64(value):\n    enc = base64_encode(value)\n    assert isinstance(enc, bytes)\n    dec = base64_decode(enc)\n    assert dec == want_bytes(value)",
+    "sha256": "b778579132bccea0bf7b90b9931c07a02e2c3e01b5735dabb92b761203a9f3f6",
+    "calls": [
+      "base64_decode",
+      "base64_encode",
+      "isinstance",
+      "pytest.mark.parametrize",
+      "want_bytes"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_encoding.py:25:test_base64_bad",
+    "path": "tests/test_itsdangerous/test_encoding.py",
+    "qualified_name": "test_base64_bad",
+    "start": 25,
+    "end": 27,
+    "signature": "",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "def test_base64_bad():\n    with pytest.raises(BadData):\n        base64_decode(\"12345\")",
+    "sha256": "2d3de5b882b2efa44163afc3b810ae014400f34913b952a2ffc87ec40015185a",
+    "calls": [
+      "base64_decode",
+      "pytest.raises"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_encoding.py:30:test_int_bytes",
+    "path": "tests/test_itsdangerous/test_encoding.py",
+    "qualified_name": "test_int_bytes",
+    "start": 30,
+    "end": 37,
+    "signature": "value, expect",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize(('value', 'expect'), ((0, b''), (192, b'\\xc0'), (18446744073709551615, b'\\xff' * 8)))"
+    ],
+    "is_overload": false,
+    "source": "@pytest.mark.parametrize(\n    (\"value\", \"expect\"), ((0, b\"\"), (192, b\"\\xc0\"), (18446744073709551615, b\"\\xff\" * 8))\n)\ndef test_int_bytes(value, expect):\n    enc = int_to_bytes(value)\n    assert enc == expect\n    dec = bytes_to_int(enc)\n    assert dec == value",
+    "sha256": "0dd9fcf9faa8a30aa63db7a30a489a13fac0d0c7c5ffbaa8996f4b2f6d5021fa",
+    "calls": [
+      "bytes_to_int",
+      "int_to_bytes",
+      "pytest.mark.parametrize"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:21:coerce_str",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "coerce_str",
+    "start": 21,
+    "end": 22,
+    "signature": "ref: str, s: str",
+    "returns": "str",
+    "decorators": [
+      "overload"
+    ],
+    "is_overload": true,
+    "source": "@overload\ndef coerce_str(ref: str, s: str) -> str: ...",
+    "sha256": "b07dd5bce40781cec7211a1f9650fc8e2e28267f1a2efdf1c11481e4ee252fa9",
+    "calls": [],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:25:coerce_str",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "coerce_str",
+    "start": 25,
+    "end": 26,
+    "signature": "ref: bytes, s: str",
+    "returns": "bytes",
+    "decorators": [
+      "overload"
+    ],
+    "is_overload": true,
+    "source": "@overload\ndef coerce_str(ref: bytes, s: str) -> bytes: ...",
+    "sha256": "536fad51f8e0b8b4788bf98b3a26da8a46e825c48738f95b9dc5150eb32de5c4",
+    "calls": [],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:29:coerce_str",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "coerce_str",
+    "start": 29,
+    "end": 33,
+    "signature": "ref: Union[str, bytes], s: str",
+    "returns": "Union[str, bytes]",
+    "decorators": [],
+    "is_overload": false,
+    "source": "def coerce_str(ref: Union[str, bytes], s: str) -> Union[str, bytes]:\n    if isinstance(ref, bytes):\n        return s.encode(\"utf8\")\n\n    return s",
+    "sha256": "57a6c3165ce75eb16e6acac3da88c5b3532e526b88f17a11df63d26645918931",
+    "calls": [
+      "isinstance",
+      "s.encode"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:37:TestSerializer.serializer_factory",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.serializer_factory",
+    "start": 37,
+    "end": 39,
+    "signature": "self, request",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture(params=(Serializer, partial(Serializer, serializer=pickle)))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture(params=(Serializer, partial(Serializer, serializer=pickle)))\n    def serializer_factory(self, request):\n        return partial(request.param, secret_key=\"secret_key\")",
+    "sha256": "f62f64762d86d027d52e2b6002bc4db989140d1922fb4b4921957800bd45c2c9",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:41:TestSerializer.serializer",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.serializer",
+    "start": 41,
+    "end": 43,
+    "signature": "self, serializer_factory",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def serializer(self, serializer_factory):\n        return serializer_factory()",
+    "sha256": "d5cd55ace28f85806624e927ec81787a43b6edc8296d56cb063b3fc31af79cdd",
+    "calls": [
+      "pytest.fixture",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:45:TestSerializer.value",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.value",
+    "start": 45,
+    "end": 47,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def value(self):\n        return {\"id\": 42}",
+    "sha256": "0ce0883a80d55d2419d5e1a1726085565ed0a47c25681268e50557ac473303ae",
+    "calls": [
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:49:TestSerializer.test_serializer",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_serializer",
+    "start": 49,
+    "end": 53,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('value', (None, True, 'str', 'text', [1, 2, 3], {'id': 42}))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.mark.parametrize(\n        \"value\", (None, True, \"str\", \"text\", [1, 2, 3], {\"id\": 42})\n    )\n    def test_serializer(self, serializer: Serializer, value: Any):\n        assert serializer.loads(serializer.dumps(value)) == value",
+    "sha256": "666d5c5d95b9feb50b516357c1b73223192da10c603948b7da45117e42a4c7bb",
+    "calls": [
+      "pytest.mark.parametrize",
+      "serializer.dumps",
+      "serializer.loads"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:55:TestSerializer.test_changed_value",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_changed_value",
+    "start": 55,
+    "end": 70,
+    "signature": "self, serializer: Serializer, value: Any, transform",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('transform', (lambda s: s.upper(), lambda s: s + coerce_str(s, 'a'), lambda s: coerce_str(s, 'a') + s[1:], lambda s: s.replace(coerce_str(s, '.'), coerce_str(s, ''))))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.mark.parametrize(\n        \"transform\",\n        (\n            lambda s: s.upper(),\n            lambda s: s + coerce_str(s, \"a\"),\n            lambda s: coerce_str(s, \"a\") + s[1:],\n            lambda s: s.replace(coerce_str(s, \".\"), coerce_str(s, \"\")),\n        ),\n    )\n    def test_changed_value(self, serializer: Serializer, value: Any, transform):\n        signed = serializer.dumps(value)\n        assert serializer.loads(signed) == value\n        changed = transform(signed)\n\n        with pytest.raises(BadSignature):\n            serializer.loads(changed)",
+    "sha256": "fa69ddb39b03d9070676650242be9723c53f935b115d73881575a6d86a4ffbe2",
+    "calls": [
+      "coerce_str",
+      "pytest.mark.parametrize",
+      "pytest.raises",
+      "s.replace",
+      "s.upper",
+      "serializer.dumps",
+      "serializer.loads",
+      "transform"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:72:TestSerializer.test_bad_signature_exception",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_bad_signature_exception",
+    "start": 72,
+    "end": 79,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_bad_signature_exception(self, serializer: Serializer, value: Any):\n        bad_signed = serializer.dumps(value)[:-1]\n\n        with pytest.raises(BadSignature) as exc_info:\n            serializer.loads(bad_signed)\n\n        payload = cast(bytes, exc_info.value.payload)\n        assert serializer.load_payload(payload) == value",
+    "sha256": "e4f27602d0f9e9a27ff92f3f1c64317872153201131d5e744b1cc28aede025e7",
+    "calls": [
+      "cast",
+      "pytest.raises",
+      "serializer.dumps",
+      "serializer.load_payload",
+      "serializer.loads"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:81:TestSerializer.test_bad_payload_exception",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_bad_payload_exception",
+    "start": 81,
+    "end": 89,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_bad_payload_exception(self, serializer: Serializer, value: Any):\n        original = serializer.dumps(value)\n        payload = original.rsplit(coerce_str(original, \".\"), 1)[0]  # type: ignore\n        bad = serializer.make_signer().sign(payload[:-1])\n\n        with pytest.raises(BadPayload) as exc_info:\n            serializer.loads(bad)\n\n        assert exc_info.value.original_error is not None",
+    "sha256": "7c4c5c7c790842fcab316e038c5625684eb0429d9960dbb3a50b5ef9a536d1dc",
+    "calls": [
+      "coerce_str",
+      "original.rsplit",
+      "pytest.raises",
+      "serializer.dumps",
+      "serializer.loads",
+      "serializer.make_signer",
+      "serializer.make_signer().sign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:91:TestSerializer.test_loads_unsafe",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_loads_unsafe",
+    "start": 91,
+    "end": 111,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_loads_unsafe(self, serializer: Serializer, value: Any):\n        signed = serializer.dumps(value)\n        assert serializer.loads_unsafe(signed) == (True, value)\n\n        bad_signed = signed[:-1]\n        assert serializer.loads_unsafe(bad_signed) == (False, value)\n\n        payload = signed.rsplit(coerce_str(signed, \".\"), 1)[0]  # type: ignore\n        bad_payload = serializer.make_signer().sign(payload[:-1])[:-1]\n        assert serializer.loads_unsafe(bad_payload) == (False, None)\n\n        class BadUnsign(serializer.signer):  # type: ignore\n            def unsign(self, signed_value, *args, **kwargs):\n                try:\n                    return super().unsign(signed_value, *args, **kwargs)\n                except BadSignature as e:\n                    e.payload = None\n                    raise\n\n        serializer.signer = BadUnsign\n        assert serializer.loads_unsafe(bad_signed) == (False, None)",
+    "sha256": "e6711b88f3be4502d1cd284a7c05cfe4712166eb518bbfbc159a12a4300bc11f",
+    "calls": [
+      "coerce_str",
+      "serializer.dumps",
+      "serializer.loads_unsafe",
+      "serializer.make_signer",
+      "serializer.make_signer().sign",
+      "signed.rsplit",
+      "super",
+      "super().unsign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:103:TestSerializer.test_loads_unsafe.BadUnsign.unsign",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_loads_unsafe.BadUnsign.unsign",
+    "start": 103,
+    "end": 108,
+    "signature": "self, signed_value, *args, **kwargs",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "            def unsign(self, signed_value, *args, **kwargs):\n                try:\n                    return super().unsign(signed_value, *args, **kwargs)\n                except BadSignature as e:\n                    e.payload = None\n                    raise",
+    "sha256": "fb987693bb0c285780fe60847c62114e81ebeb29b9b9bc8d014a0c29064bf096",
+    "calls": [
+      "super",
+      "super().unsign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:113:TestSerializer.test_file",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_file",
+    "start": 113,
+    "end": 121,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_file(self, serializer: Serializer, value: Any):\n        f = cast(\n            IO, BytesIO() if isinstance(serializer.dumps(value), bytes) else StringIO()\n        )\n        serializer.dump(value, f)\n        f.seek(0)\n        assert serializer.load(f) == value\n        f.seek(0)\n        assert serializer.load_unsafe(f) == (True, value)",
+    "sha256": "57d719076b072c58756f647e6930f33359ba3e8861cf1c8a50d4341acb5195d1",
+    "calls": [
+      "BytesIO",
+      "StringIO",
+      "cast",
+      "f.seek",
+      "isinstance",
+      "serializer.dump",
+      "serializer.dumps",
+      "serializer.load",
+      "serializer.load_unsafe"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:123:TestSerializer.test_alt_salt",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_alt_salt",
+    "start": 123,
+    "end": 129,
+    "signature": "self, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_alt_salt(self, serializer: Serializer, value: Any):\n        signed = serializer.dumps(value, salt=\"other\")\n\n        with pytest.raises(BadSignature):\n            serializer.loads(signed)\n\n        assert serializer.loads(signed, salt=\"other\") == value",
+    "sha256": "a951f62cb129443e3401c0d8c108c3a8a928f39fe27bd3f5f0d187045be42543",
+    "calls": [
+      "pytest.raises",
+      "serializer.dumps",
+      "serializer.loads"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:131:TestSerializer.test_signer_cls",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_signer_cls",
+    "start": 131,
+    "end": 137,
+    "signature": "self, serializer_factory, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_signer_cls(self, serializer_factory, serializer: Serializer, value: Any):\n        class Other(serializer.signer):  # type: ignore\n            default_key_derivation = \"hmac\"\n\n        other = serializer_factory(signer=Other)\n        assert other.loads(other.dumps(value)) == value\n        assert other.dumps(value) != serializer.dumps(value)",
+    "sha256": "636b5bafbf699606793c6bc0061583e873ad44e243b9bac7ac2b548339ae28b0",
+    "calls": [
+      "other.dumps",
+      "other.loads",
+      "serializer.dumps",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:139:TestSerializer.test_signer_kwargs",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_signer_kwargs",
+    "start": 139,
+    "end": 144,
+    "signature": "self, serializer_factory, serializer: Serializer, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_signer_kwargs(\n        self, serializer_factory, serializer: Serializer, value: Any\n    ):\n        other = serializer_factory(signer_kwargs={\"key_derivation\": \"hmac\"})\n        assert other.loads(other.dumps(value)) == value\n        assert other.dumps(\"value\") != serializer.dumps(\"value\")",
+    "sha256": "7b6ff620123e6c534967f179b1f2e13c1d7a9903b11316e7a387630148afba7d",
+    "calls": [
+      "other.dumps",
+      "other.loads",
+      "serializer.dumps",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:146:TestSerializer.test_serializer_kwargs",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_serializer_kwargs",
+    "start": 146,
+    "end": 154,
+    "signature": "self, serializer_factory",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_serializer_kwargs(self, serializer_factory):\n        serializer = serializer_factory(serializer_kwargs={\"skipkeys\": True})\n\n        try:\n            serializer.serializer.dumps(None, skipkeys=True)\n        except TypeError:\n            return\n\n        assert serializer.loads(serializer.dumps({(): 1})) == {}",
+    "sha256": "4279d82ab0efae95ce200cf34256a2415d0a7c6309222f2372b53d90e9611d42",
+    "calls": [
+      "serializer.dumps",
+      "serializer.loads",
+      "serializer.serializer.dumps",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:156:TestSerializer.test_fallback_signers",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_fallback_signers",
+    "start": 156,
+    "end": 165,
+    "signature": "self, serializer_factory, value: Any",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_fallback_signers(self, serializer_factory, value: Any):\n        serializer = serializer_factory(signer_kwargs={\"digest_method\": hashlib.sha256})\n        signed = serializer.dumps(value)\n\n        fallback_serializer = serializer_factory(\n            signer_kwargs={\"digest_method\": hashlib.sha1},\n            fallback_signers=[{\"digest_method\": hashlib.sha256}],\n        )\n\n        assert fallback_serializer.loads(signed) == value",
+    "sha256": "10b4d720e33b84781b6be73d2ad0d45494bfb20c52ced14495f0fa8d62731198",
+    "calls": [
+      "fallback_serializer.loads",
+      "serializer.dumps",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:167:TestSerializer.test_iter_unsigners",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "TestSerializer.test_iter_unsigners",
+    "start": 167,
+    "end": 184,
+    "signature": "self, serializer: Serializer, serializer_factory",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_iter_unsigners(self, serializer: Serializer, serializer_factory):\n        class Signer256(serializer.signer):  # type: ignore\n            default_digest_method = hashlib.sha256\n\n        serializer = serializer_factory(\n            secret_key=\"secret_key\",\n            fallback_signers=[\n                {\"digest_method\": hashlib.sha256},\n                (Signer, {\"digest_method\": hashlib.sha256}),\n                Signer256,\n            ],\n        )\n\n        unsigners = serializer.iter_unsigners()\n        assert next(unsigners).digest_method == _lazy_sha1\n\n        for signer in unsigners:\n            assert signer.digest_method == hashlib.sha256",
+    "sha256": "7e23699045436a088a80db7c3e9bc03ee79ceb072976eee656b24854a1a6810f",
+    "calls": [
+      "next",
+      "serializer.iter_unsigners",
+      "serializer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_serializer.py:187:test_digests",
+    "path": "tests/test_itsdangerous/test_serializer.py",
+    "qualified_name": "test_digests",
+    "start": 187,
+    "end": 197,
+    "signature": "",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "def test_digests():\n    factory = partial(Serializer, secret_key=\"dev key\", salt=\"dev salt\")\n    default_value = factory(signer_kwargs={}).dumps([42])\n    sha1_value = factory(signer_kwargs={\"digest_method\": hashlib.sha1}).dumps([42])\n    sha512_value = factory(signer_kwargs={\"digest_method\": hashlib.sha512}).dumps([42])\n    assert default_value == sha1_value\n    assert sha1_value == \"[42].-9cNi0CxsSB3hZPNCe9a2eEs1ZM\"\n    assert sha512_value == (\n        \"[42].MKCz_0nXQqv7wKpfHZcRtJRmpT2T5uvs9YQsJEhJimqxc\"\n        \"9bCLxG31QzS5uC8OVBI1i6jyOLAFNoKaF5ckO9L5Q\"\n    )",
+    "sha256": "375686437a3b14a97055993b184002dfa31e9e1bf07ad49735813125eae592d5",
+    "calls": [
+      "factory",
+      "factory(signer_kwargs={'digest_method': hashlib.sha1}).dumps",
+      "factory(signer_kwargs={'digest_method': hashlib.sha512}).dumps",
+      "factory(signer_kwargs={}).dumps",
+      "partial"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:14:_ReverseAlgorithm.get_signature",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "_ReverseAlgorithm.get_signature",
+    "start": 14,
+    "end": 15,
+    "signature": "self, key, value",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def get_signature(self, key, value):\n        return (key + value)[::-1]",
+    "sha256": "553c0015855485949b31181a68804c50d9daf8bee6657f99c139dda9b9bdd2b8",
+    "calls": [],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.signer_factory",
+    "start": 19,
+    "end": 21,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def signer_factory(self):\n        return partial(Signer, secret_key=\"secret-key\")",
+    "sha256": "901a70839ee16d0cfd53ab63fa1ba2097a07921163f6c6bc875facae98ebe767",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:23:TestSigner.signer",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.signer",
+    "start": 23,
+    "end": 25,
+    "signature": "self, signer_factory",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def signer(self, signer_factory):\n        return signer_factory()",
+    "sha256": "bfdb9d80d845ffef5ef4349fa0c8e3b0c95426eab6d8f14bfd1998b89bd33e83",
+    "calls": [
+      "pytest.fixture",
+      "signer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:27:TestSigner.test_signer",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_signer",
+    "start": 27,
+    "end": 32,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_signer(self, signer):\n        signed = signer.sign(\"my string\")\n        assert isinstance(signed, bytes)\n        assert signer.validate(signed)\n        out = signer.unsign(signed)\n        assert out == b\"my string\"",
+    "sha256": "03596a48747ce6eb57525cc88256ac4cd2bf8a274e89f3aa87569c8521e2d311",
+    "calls": [
+      "isinstance",
+      "signer.sign",
+      "signer.unsign",
+      "signer.validate"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:34:TestSigner.test_no_separator",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_no_separator",
+    "start": 34,
+    "end": 40,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_no_separator(self, signer):\n        signed = signer.sign(\"my string\")\n        signed = signed.replace(signer.sep, b\"*\", 1)\n        assert not signer.validate(signed)\n\n        with pytest.raises(BadSignature):\n            signer.unsign(signed)",
+    "sha256": "5eb57cb061b82bbddde2d0590f28e6b5e11d498341246e1f1d6c537fd29ccda5",
+    "calls": [
+      "pytest.raises",
+      "signed.replace",
+      "signer.sign",
+      "signer.unsign",
+      "signer.validate"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:42:TestSigner.test_broken_signature",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_broken_signature",
+    "start": 42,
+    "end": 51,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_broken_signature(self, signer):\n        signed = signer.sign(\"b\")\n        bad_signed = signed[:-1]\n        bad_sig = bad_signed.rsplit(b\".\", 1)[1]\n        assert not signer.verify_signature(b\"b\", bad_sig)\n\n        with pytest.raises(BadSignature) as exc_info:\n            signer.unsign(bad_signed)\n\n        assert exc_info.value.payload == b\"b\"",
+    "sha256": "0e8d1e58b30fd758d2e52aa7a9fa3962a8397d8e3040b124cd5cd6d72b1bbd84",
+    "calls": [
+      "bad_signed.rsplit",
+      "pytest.raises",
+      "signer.sign",
+      "signer.unsign",
+      "signer.verify_signature"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:53:TestSigner.test_changed_value",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_changed_value",
+    "start": 53,
+    "end": 59,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_changed_value(self, signer):\n        signed = signer.sign(\"my string\")\n        signed = signed.replace(b\"my\", b\"other\", 1)\n        assert not signer.validate(signed)\n\n        with pytest.raises(BadSignature):\n            signer.unsign(signed)",
+    "sha256": "1dcec51fcc48987c405682a85ef10f16b55e8e95a07241263c35c54671dec4d3",
+    "calls": [
+      "pytest.raises",
+      "signed.replace",
+      "signer.sign",
+      "signer.unsign",
+      "signer.validate"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:61:TestSigner.test_invalid_separator",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_invalid_separator",
+    "start": 61,
+    "end": 65,
+    "signature": "self, signer_factory",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_invalid_separator(self, signer_factory):\n        with pytest.raises(ValueError) as exc_info:\n            signer_factory(sep=\"-\")\n\n        assert \"separator cannot be used\" in str(exc_info.value)",
+    "sha256": "576ff838ca1bc7149136dbe18d66e9ef4f549621380d0baeee9904edf377d768",
+    "calls": [
+      "pytest.raises",
+      "signer_factory",
+      "str"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:67:TestSigner.test_key_derivation",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_key_derivation",
+    "start": 67,
+    "end": 72,
+    "signature": "self, signer_factory, key_derivation",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('key_derivation', ('concat', 'django-concat', 'hmac', 'none'))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.mark.parametrize(\n        \"key_derivation\", (\"concat\", \"django-concat\", \"hmac\", \"none\")\n    )\n    def test_key_derivation(self, signer_factory, key_derivation):\n        signer = signer_factory(key_derivation=key_derivation)\n        assert signer.unsign(signer.sign(\"value\")) == b\"value\"",
+    "sha256": "0287e9846378e364070d9e4137caa196ebedc4a5c3d1714a7750edfbc16d8648",
+    "calls": [
+      "pytest.mark.parametrize",
+      "signer.sign",
+      "signer.unsign",
+      "signer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:74:TestSigner.test_invalid_key_derivation",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_invalid_key_derivation",
+    "start": 74,
+    "end": 78,
+    "signature": "self, signer_factory",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_invalid_key_derivation(self, signer_factory):\n        signer = signer_factory(key_derivation=\"invalid\")\n\n        with pytest.raises(TypeError):\n            signer.derive_key()",
+    "sha256": "d693c2269a7272e519ad6d0ca6c032761c36d9997a11595950ac44a104b8fe47",
+    "calls": [
+      "pytest.raises",
+      "signer.derive_key",
+      "signer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:80:TestSigner.test_digest_method",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_digest_method",
+    "start": 80,
+    "end": 82,
+    "signature": "self, signer_factory",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_digest_method(self, signer_factory):\n        signer = signer_factory(digest_method=hashlib.md5)\n        assert signer.unsign(signer.sign(\"value\")) == b\"value\"",
+    "sha256": "f245549f81ece3e64482c45ded2490f89372daefe352926e3f7b4323a99852aa",
+    "calls": [
+      "signer.sign",
+      "signer.unsign",
+      "signer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:84:TestSigner.test_algorithm",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_algorithm",
+    "start": 84,
+    "end": 92,
+    "signature": "self, signer_factory, algorithm",
+    "returns": null,
+    "decorators": [
+      "pytest.mark.parametrize('algorithm', (None, NoneAlgorithm(), HMACAlgorithm(), _ReverseAlgorithm()))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.mark.parametrize(\n        \"algorithm\", (None, NoneAlgorithm(), HMACAlgorithm(), _ReverseAlgorithm())\n    )\n    def test_algorithm(self, signer_factory, algorithm):\n        signer = signer_factory(algorithm=algorithm)\n        assert signer.unsign(signer.sign(\"value\")) == b\"value\"\n\n        if algorithm is None:\n            assert signer.algorithm.digest_method == signer.digest_method",
+    "sha256": "5f0c861de62d7c2a136e64d8bfaaabefd447b04bbfcb7195c487b49d7ad83ba4",
+    "calls": [
+      "HMACAlgorithm",
+      "NoneAlgorithm",
+      "_ReverseAlgorithm",
+      "pytest.mark.parametrize",
+      "signer.sign",
+      "signer.unsign",
+      "signer_factory"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:94:TestSigner.test_secret_keys",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "TestSigner.test_secret_keys",
+    "start": 94,
+    "end": 102,
+    "signature": "self",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_secret_keys(self):\n        signer = Signer(\"a\")\n        signed = signer.sign(\"my string\")\n        assert isinstance(signed, bytes)\n\n        signer = Signer([\"a\", \"b\"])\n        assert signer.validate(signed)\n        out = signer.unsign(signed)\n        assert out == b\"my string\"",
+    "sha256": "64ffe4f21834d34f3d392d974189d90530a641a68b690d76d13cca86f2e6bbad",
+    "calls": [
+      "Signer",
+      "isinstance",
+      "signer.sign",
+      "signer.unsign",
+      "signer.validate"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_signer.py:105:test_abstract_algorithm",
+    "path": "tests/test_itsdangerous/test_signer.py",
+    "qualified_name": "test_abstract_algorithm",
+    "start": 105,
+    "end": 109,
+    "signature": "",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "def test_abstract_algorithm():\n    alg = SigningAlgorithm()\n\n    with pytest.raises(NotImplementedError):\n        alg.get_signature(b\"a\", b\"b\")",
+    "sha256": "1320453b85fb944d0ab3bba3487e5554ed47eec05d9c2e997e0ffa6bf17af5a5",
+    "calls": [
+      "SigningAlgorithm",
+      "alg.get_signature",
+      "pytest.raises"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:19:FreezeMixin.ts",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "FreezeMixin.ts",
+    "start": 19,
+    "end": 21,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def ts(self):\n        return datetime(2011, 6, 24, 0, 9, 5, tzinfo=timezone.utc)",
+    "sha256": "98fa3cd12c74177e9caf04efcc767833b5f33c5c1d1ec1d833ffb159e7cb324c",
+    "calls": [
+      "datetime",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:23:FreezeMixin.freeze",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "FreezeMixin.freeze",
+    "start": 23,
+    "end": 26,
+    "signature": "self, ts",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture(autouse=True)"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture(autouse=True)\n    def freeze(self, ts):\n        with freeze_time(ts) as ft:\n            yield ft",
+    "sha256": "129abc6ec7440cf9119412a2b1495bf659b1e24a15d2eacf421e40fac72feeea",
+    "calls": [
+      "freeze_time",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:30:TestTimestampSigner.signer_factory",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.signer_factory",
+    "start": 30,
+    "end": 32,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def signer_factory(self):\n        return partial(TimestampSigner, secret_key=\"secret-key\")",
+    "sha256": "1ffab934f907a6faa2c1df91d09134c28c8a778a7e7f0670d7057daf42348fd7",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:34:TestTimestampSigner.test_max_age",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_max_age",
+    "start": 34,
+    "end": 43,
+    "signature": "self, signer, ts, freeze",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_max_age(self, signer, ts, freeze):\n        signed = signer.sign(\"value\")\n        freeze.tick()\n        assert signer.unsign(signed, max_age=10) == b\"value\"\n        freeze.tick(timedelta(seconds=10))\n\n        with pytest.raises(SignatureExpired) as exc_info:\n            signer.unsign(signed, max_age=10)\n\n        assert exc_info.value.date_signed == ts",
+    "sha256": "e88a4a955508fb4e604f9ca485e31beecd5d7ad7e56eb1f205e17e59e920bcf1",
+    "calls": [
+      "freeze.tick",
+      "pytest.raises",
+      "signer.sign",
+      "signer.unsign",
+      "timedelta"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:45:TestTimestampSigner.test_return_timestamp",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_return_timestamp",
+    "start": 45,
+    "end": 47,
+    "signature": "self, signer, ts",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_return_timestamp(self, signer, ts):\n        signed = signer.sign(\"value\")\n        assert signer.unsign(signed, return_timestamp=True) == (b\"value\", ts)",
+    "sha256": "dc6badba9251f5fd8f3d2645dbe3b91bc0ac82b1891f8804cc841378fdfdd026",
+    "calls": [
+      "signer.sign",
+      "signer.unsign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:49:TestTimestampSigner.test_timestamp_missing",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_timestamp_missing",
+    "start": 49,
+    "end": 57,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_timestamp_missing(self, signer):\n        other = Signer(\"secret-key\")\n        signed = other.sign(\"value\")\n\n        with pytest.raises(BadTimeSignature) as exc_info:\n            signer.unsign(signed)\n\n        assert \"missing\" in str(exc_info.value)\n        assert exc_info.value.date_signed is None",
+    "sha256": "4da29b0fd92815392f6fddb758d5fc6374731666654f0892b11e2a5b30ba38b4",
+    "calls": [
+      "Signer",
+      "other.sign",
+      "pytest.raises",
+      "signer.unsign",
+      "str"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_malformed_timestamp",
+    "start": 59,
+    "end": 67,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_malformed_timestamp(self, signer):\n        other = Signer(\"secret-key\")\n        signed = other.sign(b\"value.____________\")\n\n        with pytest.raises(BadTimeSignature) as exc_info:\n            signer.unsign(signed)\n\n        assert \"Malformed\" in str(exc_info.value)\n        assert exc_info.value.date_signed is None",
+    "sha256": "bdad2e7aacb586ddeb74f9a80e01da46b1e01d78e36e9ba9b6119bc96821a0ac",
+    "calls": [
+      "Signer",
+      "other.sign",
+      "pytest.raises",
+      "signer.unsign",
+      "str"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:69:TestTimestampSigner.test_malformed_future_timestamp",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_malformed_future_timestamp",
+    "start": 69,
+    "end": 76,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_malformed_future_timestamp(self, signer):\n        signed = b\"value.TgPVoaGhoQ.AGBfQ6G6cr07byTRt0zAdPljHOY\"\n\n        with pytest.raises(BadTimeSignature) as exc_info:\n            signer.unsign(signed)\n\n        assert \"Malformed\" in str(exc_info.value)\n        assert exc_info.value.date_signed is None",
+    "sha256": "f19f6c69333982f188bf3889883d5e16fe81d5d6b87d1e31ab0d73017d010c69",
+    "calls": [
+      "pytest.raises",
+      "signer.unsign",
+      "str"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:78:TestTimestampSigner.test_future_age",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_future_age",
+    "start": 78,
+    "end": 85,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_future_age(self, signer):\n        signed = signer.sign(\"value\")\n\n        with freeze_time(\"1971-05-31\"):\n            with pytest.raises(SignatureExpired) as exc_info:\n                signer.unsign(signed, max_age=10)\n\n        assert isinstance(exc_info.value.date_signed, datetime)",
+    "sha256": "90660978908f19a8a68319431fd6f7eada8243bc16fb9ef9e24902605d4ea59a",
+    "calls": [
+      "freeze_time",
+      "isinstance",
+      "pytest.raises",
+      "signer.sign",
+      "signer.unsign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:87:TestTimestampSigner.test_sig_error_date_signed",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimestampSigner.test_sig_error_date_signed",
+    "start": 87,
+    "end": 93,
+    "signature": "self, signer",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_sig_error_date_signed(self, signer):\n        signed = signer.sign(\"my string\").replace(b\"my\", b\"other\", 1)\n\n        with pytest.raises(BadTimeSignature) as exc_info:\n            signer.unsign(signed)\n\n        assert isinstance(exc_info.value.date_signed, datetime)",
+    "sha256": "c5382e8bf8bb2bb52c65b75d04617d4e1c1f75411a54fb75022a2b0cc51335ce",
+    "calls": [
+      "isinstance",
+      "pytest.raises",
+      "signer.sign",
+      "signer.sign('my string').replace",
+      "signer.unsign"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:97:TestTimedSerializer.serializer_factory",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimedSerializer.serializer_factory",
+    "start": 97,
+    "end": 99,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def serializer_factory(self):\n        return partial(TimedSerializer, secret_key=\"secret_key\")",
+    "sha256": "35c6b79b8881263b0cbad8e07c213310ef6a439ad8807812bc2aad633a59f1ef",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:101:TestTimedSerializer.test_max_age",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimedSerializer.test_max_age",
+    "start": 101,
+    "end": 111,
+    "signature": "self, serializer, value, ts, freeze",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_max_age(self, serializer, value, ts, freeze):\n        signed = serializer.dumps(value)\n        freeze.tick()\n        assert serializer.loads(signed, max_age=10) == value\n        freeze.tick(timedelta(seconds=10))\n\n        with pytest.raises(SignatureExpired) as exc_info:\n            serializer.loads(signed, max_age=10)\n\n        assert exc_info.value.date_signed == ts\n        assert serializer.load_payload(exc_info.value.payload) == value",
+    "sha256": "729a7b72ec99558c4c9e063cea155b0e19bb9a9c21ca2717f40ee7ca39bc867c",
+    "calls": [
+      "freeze.tick",
+      "pytest.raises",
+      "serializer.dumps",
+      "serializer.load_payload",
+      "serializer.loads",
+      "timedelta"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_timed.py:113:TestTimedSerializer.test_return_payload",
+    "path": "tests/test_itsdangerous/test_timed.py",
+    "qualified_name": "TestTimedSerializer.test_return_payload",
+    "start": 113,
+    "end": 115,
+    "signature": "self, serializer, value, ts",
+    "returns": null,
+    "decorators": [],
+    "is_overload": false,
+    "source": "    def test_return_payload(self, serializer, value, ts):\n        signed = serializer.dumps(value)\n        assert serializer.loads(signed, return_timestamp=True) == (value, ts)",
+    "sha256": "368d3ebe00c559783f96116fadee77771000efea5da967742998564c150849f3",
+    "calls": [
+      "serializer.dumps",
+      "serializer.loads"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_url_safe.py:12:TestURLSafeSerializer.serializer_factory",
+    "path": "tests/test_itsdangerous/test_url_safe.py",
+    "qualified_name": "TestURLSafeSerializer.serializer_factory",
+    "start": 12,
+    "end": 14,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def serializer_factory(self):\n        return partial(URLSafeSerializer, secret_key=\"secret-key\")",
+    "sha256": "0bd3812bb820d1445703c45a496b0d110d0a0618a587ec9c741e48c3776be067",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_url_safe.py:16:TestURLSafeSerializer.value",
+    "path": "tests/test_itsdangerous/test_url_safe.py",
+    "qualified_name": "TestURLSafeSerializer.value",
+    "start": 16,
+    "end": 18,
+    "signature": "self, request",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture(params=({'id': 42}, pytest.param('a' * 1000, id='zlib')))"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture(params=({\"id\": 42}, pytest.param(\"a\" * 1000, id=\"zlib\")))\n    def value(self, request):\n        return request.param",
+    "sha256": "af034939d87766419dadac985005c15166746f7cb927c3e6669a8e5b948dcb78",
+    "calls": [
+      "pytest.fixture",
+      "pytest.param"
+    ],
+    "kind": "test"
+  },
+  {
+    "id": "tests/test_itsdangerous/test_url_safe.py:22:TestURLSafeTimedSerializer.serializer_factory",
+    "path": "tests/test_itsdangerous/test_url_safe.py",
+    "qualified_name": "TestURLSafeTimedSerializer.serializer_factory",
+    "start": 22,
+    "end": 24,
+    "signature": "self",
+    "returns": null,
+    "decorators": [
+      "pytest.fixture()"
+    ],
+    "is_overload": false,
+    "source": "    @pytest.fixture()\n    def serializer_factory(self):\n        return partial(URLSafeTimedSerializer, secret_key=\"secret-key\")",
+    "sha256": "54e349f330ef29eda580972c778b3c62ee1810905744e7f0359faa13f062b169",
+    "calls": [
+      "partial",
+      "pytest.fixture"
+    ],
+    "kind": "test"
+  }
+]

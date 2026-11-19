@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import time
 import stat
 import sys
 import tempfile
@@ -27,6 +28,8 @@ from .verification_actions import retain_stop, stop_details, updated_stop
 from .security_acquisition import MAX_DOWNLOAD, TRIVY_ARCHIVE_SHA256, TRIVY_VERSION, trivy_binary
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
 from .release_transport import OPENGREP_ASSETS
+from .security_oci_layout import OCIError, Budget as OCIBudget, read_directory as read_oci_directory, read_owned_file
+from .security_oci_transport import acquire_images as acquire_oci_images, retained_acquisition, validate_network_selection
 
 TRUSTED_ROOT = Path(__file__).resolve().parents[2]
 TRIVY_DB_URL = 'ghcr.io/aquasecurity/trivy-db:2'
@@ -227,6 +230,13 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
             or not re.fullmatch(r'sha256:[a-f0-9]{64}', str(metadata.get('ImageID', '')))
             or (expected_image_id is not None and metadata['ImageID'] != expected_image_id)):
         raise SecurityDataError('image report is missing or bound to another image')
+    return _image_packages(report, reference)
+
+
+def _image_packages(report: dict, reference: str) -> dict:
+    metadata = report.get('Metadata', {})
+    if not isinstance(metadata, dict) or not isinstance(metadata.get('OS', {}), dict):
+        raise SecurityDataError('invalid image package metadata')
     results = report.get('Results')
     if not isinstance(results, list) or not results:
         raise SecurityDataError('image report has no package coverage')
@@ -252,6 +262,27 @@ def image_report(report: dict, reference: str, *, expected_image_id: str | None 
     return {'package_count': packages, 'findings': findings, 'image_id': metadata['ImageID']}
 
 
+def image_layout_report(report: dict, validated: dict, *, input_name: str) -> dict:
+    """Pinned Trivy0.74 OCI-directory metadata, meaningful only with trusted execution.
+
+    Archives intentionally have no RepoDigests. The caller must bind the actual
+    input object set/argv/tool/DB before and after execution, not this JSON alone.
+    """
+    if not isinstance(report, dict) or not isinstance(report.get('Metadata'), dict) or not isinstance(report.get('Trivy'), dict):
+        raise SecurityDataError('invalid OCI layout report metadata')
+    metadata = report['Metadata']
+    image_config = metadata.get('ImageConfig')
+    if (report.get('SchemaVersion') != 2 or report.get('ArtifactType') != 'container_image'
+            or report.get('ArtifactName') != input_name or report.get('Trivy', {}).get('Version') != TRIVY_VERSION
+            or metadata.get('ImageID') != validated['config_digest']
+            or metadata.get('DiffIDs') != validated['diff_ids']
+            or metadata.get('RepoDigests') not in (None, [])
+            or not isinstance(image_config, dict)
+            or any(key not in image_config or image_config[key] != value for key, value in validated['config'].items())):
+        raise SecurityDataError('OCI archive report differs from validated input/config/platform')
+    return _image_packages(report, validated['manifest_digest'])
+
+
 def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
     """Require finite aggregate bounds before selecting any image transport."""
     keys = {'images', 'max_images', 'max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes',
@@ -273,10 +304,12 @@ def image_acquisition_profile(inventory: dict, profile: dict | None) -> dict:
     return profile
 
 
-def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, image_artifacts=None) -> list[dict]:
+def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, image_artifacts=None, binding=None,
+                   deadline=None, image_opener=None, network_selection=None) -> list[dict]:
     """Explicit acquisition for the isolated runner; never starts an image."""
     if not isinstance(inventory.get('images'), list):
         raise SecurityDataError('image acquisition requires a complete declared image list')
+    results = []
     if inventory.get('images'):
         image_acquisition_profile(inventory, profile)
         if image_artifacts is not None:
@@ -289,16 +322,25 @@ def refresh_images(inventory: dict, tools: Path, *, now=None, profile=None, imag
                          'images': [{'reference': image.reference, 'manifest_sha256': image.manifest_digest,
                                      'config_sha256': image.config_digest, 'platform': image.platform}
                                     for image in images]}]
-        # The daemon writes outside this process's byte budget. Descriptor
-        # estimates do not enforce compressed/unpacked/storage ceilings.
-        raise SecurityDataError('image transport cannot enforce selected storage/byte ceilings; acquisition unavailable')
-    return refresh_image_database(tools, now=now)
+        selected_network = image_network_selection(inventory, network_selection)
+        destination = tools / 'oci'
+        destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            body = acquire_oci_images(inventory['images'], profile, destination, open_url=image_opener,
+                now=now, binding=binding, deadline=deadline, network_selection=selected_network)
+            raw, _ = read_owned_file(destination, 'manifest.json', 16 * 1024 * 1024)
+            results.append({'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
+                'manifest_sha256': hashlib.sha256(raw).hexdigest(), 'root': str(destination.absolute()),
+                'records': body['records'], 'profile': profile, 'binding': binding, 'network_selection': selected_network})
+        except OCIError as exc:
+            raise SecurityDataError('bounded OCI acquisition refused: ' + str(exc)) from exc
+    return results + refresh_image_database(tools, now=now)
 
 
 def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     """Explicit DB-only refresh; separate from local OCI import and image pulls."""
-    trivy = pinned_tool('trivy', tools)
     results = []
+    trivy = pinned_tool('trivy', tools)
     tools.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='refresh-', dir=tools) as directory:
         scratch = Path(directory)
@@ -314,9 +356,118 @@ def refresh_image_database(tools: Path, *, now=None) -> list[dict]:
     return results
 
 
+def image_network_selection(inventory: dict, selection: dict | None) -> dict:
+    required = set()
+    for item in inventory.get('images', []):
+        reference = item.get('reference', '') if isinstance(item, dict) else ''
+        if reference.startswith('docker.io/'):
+            required.update({'registry-1.docker.io', 'auth.docker.io'})
+        elif reference.startswith('ghcr.io/'):
+            required.add('ghcr.io')
+        else:
+            raise SecurityDataError('OCI fixed registry selection is unavailable')
+    try:
+        return validate_network_selection(selection, required=required)
+    except OCIError as exc:
+        raise SecurityDataError('OCI numeric network selection is unqualified') from exc
+
+
+def scan_layouts(inventory: dict, tools: Path, *, binding: dict, now=None, process=None,
+                 profile=None, network_selection=None) -> dict:
+    """Consume retained native layouts through an explicitly isolated runner port.
+
+    No environment flag supplies this boundary. The ordinary process launcher
+    does not enforce a physical quota and is deliberately not a fallback here.
+    Controlled test ports prove contracts, never real scanner execution.
+    """
+    results, gaps, findings = [], [], []
+    source = None
+    try:
+        root = tools / 'oci'
+        retained = retained_acquisition(root, inventory['images'], binding=binding, now=now,
+                                       profile=profile, network_selection=network_selection)
+        if process is None:
+            raise SecurityDataError('isolated OCI scanner execution boundary is unavailable')
+        trivy = pinned_tool('trivy', tools)
+        tool_before = _regular(trivy, limit=MAX_DOWNLOAD, digest_only=True)
+        source = trivy_database_source(tools, now=now)
+        deadline = time.monotonic() + min(retained['profile']['deadline_seconds'], 600)
+        budget = OCIBudget(retained['profile'], deadline=deadline)
+        budget.charge('storage', retained['counters']['storage_high_water_bytes'])
+        with tempfile.TemporaryDirectory(prefix='oci-scan-', dir=tools) as directory:
+            scratch = Path(directory)
+            for index, record in enumerate(retained['records']):
+                reference = record['subject']['reference']
+                before = read_oci_directory(root / record['layout'], reference, record['platform'], budget=budget)
+                if (before['manifest_digest'] != record['manifest_digest'] or before['config_digest'] != record['config_digest']
+                        or before['diff_ids'] != record['diff_ids'] or
+                        {name: {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)} for name, raw in before['objects'].items()} != record['objects']):
+                    raise SecurityDataError('retained OCI object set changed')
+                if {name: list(before['identities'][name]) for name in before['objects']} != record['object_identities']:
+                    raise SecurityDataError('retained original OCI inodes were replaced')
+                # A fresh private read-only input namespace avoids cache/source path reuse.
+                selected = scratch / ('input-' + str(index))
+                selected.mkdir(mode=0o700)
+                for name, raw in before['objects'].items():
+                    target = selected / name
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    budget.charge('storage', len(raw))
+                    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+                    with os.fdopen(descriptor, 'wb') as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                selected_before = read_oci_directory(selected, reference, record['platform'], budget=budget)
+                input_name = str(selected) + '@' + before['manifest_digest']
+                output = scratch / ('report-' + str(index) + '.json')
+                # Reserve the largest accepted report before the isolated port writes it.
+                budget.charge('storage', MAX_REPORT)
+                command = [str(trivy), 'image', '--input', input_name, '--scanners', 'vuln',
+                    '--cache-dir', str(tools / 'cache'), '--config', '', '--ignorefile', '',
+                    '--offline-scan', '--skip-db-update', '--skip-java-db-update', '--skip-check-update',
+                    '--skip-version-check', '--show-suppressed', '--list-all-pkgs', '--parallel', '1',
+                    '--max-image-size', str(min(retained['profile']['max_unpacked_bytes'], 256 * 1024 * 1024)),
+                    '--format', 'json', '--output', str(output)]
+                result = process(command, scratch, scratch, timeout=max(0.001, deadline - time.monotonic()))
+                if result.returncode != 0 or result.terminal_state != 'completed' or result.cleanup_error:
+                    raise _process_error(result, 'OCI scanner process did not complete')
+                parsed = image_layout_report(_process_report(output, result), before, input_name=input_name)
+                after = read_oci_directory(root / record['layout'], reference, record['platform'], budget=budget)
+                selected_after = read_oci_directory(selected, reference, record['platform'], budget=budget)
+                current = retained_acquisition(root, inventory['images'], binding=binding, now=now,
+                                               profile=profile, network_selection=network_selection)
+                if (before['identities'] != after['identities'] or before['objects'] != after['objects']
+                        or selected_before['identities'] != selected_after['identities']
+                        or selected_before['objects'] != selected_after['objects']
+                        or current != retained or _regular(trivy, limit=MAX_DOWNLOAD, digest_only=True) != tool_before
+                        or trivy_database_source(tools, now=now) != source):
+                    raise SecurityDataError('OCI input/tool/DB/source envelope changed during scan')
+                budget.check()
+                results.append({'image': reference, 'input_manifest_digest': before['manifest_digest'],
+                    'input_archive_sha256': record['archive_sha256'], **parsed})
+                findings.extend(parsed['findings'])
+    except (OCIError, OSError, ValueError, RuntimeError) as exc:
+        gaps.append({'code': 'image-scan-unavailable', 'message': str(exc)})
+    if not gaps:
+        gaps.append({'code': 'isolated-execution-unqualified',
+                     'message': 'injected port proves contracts only, not actual scanner execution'})
+    return {'outcome': 'blocked', 'qualification': 'UNVERIFIED', 'execution': 'UNEXECUTED',
+            'summary': f'{len(results)} OCI contract observations; actual isolated scanner execution unqualified',
+            'images': [], 'contract_observations': results, 'findings': [], 'gaps': gaps,
+            'data_sources': []}
+
+
 def scan_images(inventory: dict, *, environ=None, now=None) -> dict:
     env = os.environ if environ is None else environ
     tools = tools_directory(TRUSTED_ROOT, env)
+    if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and ((tools / 'oci/manifest.json').exists() or (tools / 'oci/manifest.json').is_symlink()):
+        try:
+            binding = json.loads(env.get('GETZILLA_SECURITY_OCI_BINDING', 'null'))
+            profile = json.loads(env.get('GETZILLA_SECURITY_OCI_PROFILE', 'null'))
+            network_selection = json.loads(env.get('GETZILLA_SECURITY_OCI_NETWORK_SELECTION', 'null'))
+        except (ValueError, TypeError):
+            binding = profile = network_selection = None
+        return scan_layouts(inventory, tools, binding=binding, now=now, profile=profile, network_selection=network_selection)
     if not env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS') and any(
             row.get('selection_assurance') == 'declaration-only-unverified' for row in inventory['images']):
         return {'outcome':'blocked', 'summary':'declared images require verified offline OCI artifacts',
