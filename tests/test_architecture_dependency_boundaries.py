@@ -19,6 +19,19 @@ from getzilla.python_source_proof import namespace_is_closed
 
 
 class ArchitectureDependencyBoundaryTests(unittest.TestCase):
+    def test_stored_workflow_consumer_excludes_cas_publication(self):
+        from getzilla import workflow_artifacts, workflow_cas
+        context = workflow_artifacts._cas_context()
+        self.assertIs(type(context), workflow_cas._CASContext)
+        self.assertIs(context.bound_cas_recovery_sequence, workflow_artifacts._CAS_RECOVERY_SEQUENCE)
+        self.assertIs(context.bound_workflowartifacterror, workflow_artifacts.WorkflowArtifactError)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/workflow_artifacts.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'validate_stored_workflow'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'workflow_cas'
+                             for node in ast.walk(projection)))
+
     def test_eval_read_consumer_excludes_baseline_and_critic_authoring(self):
         from getzilla import agent_evals, agent_eval_authoring
         for name in ('review_quality', 'accept_baseline'):
@@ -295,7 +308,7 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
         from getzilla.verification_plan import policy_binding
         with tempfile.TemporaryDirectory() as directory:
             implementation = policy_binding(Path(directory))['implementation']
-        for name in ('agent_eval_authoring.py', 'security_license_contracts.py', 'live_evidence.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
+        for name in ('agent_eval_authoring.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
             with self.subTest(name=name):
                 self.assertIn(name, implementation)
                 self.assertEqual(implementation[name], hashlib.sha256(
