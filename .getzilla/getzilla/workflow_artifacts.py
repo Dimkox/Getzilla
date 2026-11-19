@@ -607,7 +607,8 @@ def load_runtime_authority(root: Path, kind: str) -> dict[str, Any]:
             if has_task_context(data):
                 raise WorkflowArtifactError('canonical owned route is unavailable', code='route')
     else:
-        data = _strict_json(_read_regular(root, relative, limit=MAX_MANIFEST_BYTES), limit=MAX_MANIFEST_BYTES)
+        from .native_state_snapshot import decode
+        data = _strict_json(decode(_read_regular(root, relative, limit=4096),limit=4096), limit=MAX_MANIFEST_BYTES)
     if not isinstance(data, dict):
         raise WorkflowArtifactError(f"active {kind} must be an object", code=kind)
     if kind == "route":

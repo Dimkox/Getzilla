@@ -30,6 +30,8 @@ actions.add_argument('--reconcile', action='store_true', help='Derive reviews fr
 parser.add_argument('--add-reviewer', action='append', default=[], help='With --reconcile, retain this explicitly selected reviewer in future plans')
 actions.add_argument('--complete', action='store_true')
 actions.add_argument('--cancel', action='store_true')
+actions.add_argument('--sprint-select', metavar='UTC_START', help='Explicit current-task 14-day sprint selection')
+actions.add_argument('--trace-enroll', action='store_true', help='Enroll closed local observations for the current owned task')
 parser.add_argument('--event-id', help='Trusted stable input event ID (not a session ID)')
 parser.add_argument('--request-id', help='Idempotent cross-session handoff request ID')
 parser.add_argument('--expected-epoch', type=int)
@@ -39,14 +41,25 @@ args = parser.parse_args()
 root = find_root()
 bind_session(args.session)
 if args.task is not None and any((args.show, args.new_task is not None, args.continue_route, args.ack_scope, args.intent,
-                                  args.reconcile, args.complete, args.cancel)):
+                                  args.reconcile, args.complete, args.cancel, args.sprint_select, args.trace_enroll)):
     parser.error('positional task cannot be combined with an explicit route action')
 if args.add_reviewer and not args.reconcile:
     parser.error('--add-reviewer requires --reconcile')
-if any(value is not None for value in (args.request_id, args.expected_epoch, args.expected_revision)) and not args.continue_route:
+if args.request_id is not None and not args.continue_route:
     parser.error('handoff expectations require --continue')
+if any(value is not None for value in (args.expected_epoch, args.expected_revision)) and not (args.continue_route or args.sprint_select or args.trace_enroll):
+    parser.error('revision expectations require --continue or --sprint-select')
+if (args.sprint_select or args.trace_enroll) and (args.expected_epoch is None or args.expected_revision is None):
+    parser.error('sprint selection requires exact owner epoch and state revision')
 try:
-    if args.reconcile:
+    if args.trace_enroll:
+        from getzilla.sprint_lifecycle import enroll_trace
+        data = enroll_trace(root, expected_epoch=args.expected_epoch, expected_revision=args.expected_revision)
+    elif args.sprint_select:
+        from getzilla.sprint_lifecycle import select_sprint
+        data = select_sprint(root, args.sprint_select, expected_epoch=args.expected_epoch,
+                             expected_revision=args.expected_revision)
+    elif args.reconcile:
         require_route_owner(root)
         from getzilla.review_plan import reconcile_route
         data = reconcile_route(root, additional_reviewers=tuple(args.add_reviewer))
@@ -69,4 +82,16 @@ except (ValueError, RuntimeError, OSError) as exc:
     raise SystemExit(f'Route operation refused: {exc}') from exc
 if not data:
     raise SystemExit('No owned active route. Inspect the canonical route and use exact --continue ROUTE_ID --session SESSION.')
-print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else route_context(data, root))
+if not args.show and any((args.task is not None, args.new_task is not None, args.continue_route,
+                          args.ack_scope, args.reconcile, args.complete, args.cancel,
+                          args.sprint_select, args.trace_enroll)) and data.get('observation_publication'):
+    from getzilla.sprint_lifecycle import flush_after_scope
+    current = flush_after_scope(root, data['route_id'])
+    if current is not None:
+        data = current
+    else:
+        # Never disclose cached restricted rows after current access was lost.
+        data = {'action_succeeded': True, 'current_state_revision': None,
+                'observation_delivery': 'unavailable'}
+print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else
+      'Route action succeeded; current observation access is unavailable.' if 'action_succeeded' in data else route_context(data, root))
