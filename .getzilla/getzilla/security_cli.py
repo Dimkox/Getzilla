@@ -41,7 +41,8 @@ _PREPARATION_SEAL = object()
 _PREPARATION_STAGES = frozenset(('setup', 'source-binding', 'profile-declaration', 'profile-validation',
     'tool-provision', 'feeds', 'package-artifacts', 'image-artifacts', 'image-database',
     'obligations', 'licenses', 'final-binding', 'prepare-inputs', 'prepare-result', 'package-target',
-    'factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source'))
+    'factory-target','factory-acquisition','factory-output','license-run-scope','action-source','release-tool-source',
+    'checker-tool-source'))
 _PREPARATION_KINDS = frozenset(('artifact', 'security-data', 'oci', 'inventory', 'os',
     'key', 'type', 'value', 'runtime', 'other'))
 _PREPARATION_CODES = frozenset(('artifact-acquisition', 'artifact-origin', 'artifact-size',
@@ -342,6 +343,16 @@ def _prepare_families(inventory,artifacts,tools,families,*,now=None,run_context=
     from .security_action_inputs import prepare_actions
     providers=[]
     selected=list(families or [])
+    if run_context is not None:
+        from .security_license_scope import Scope
+        if not isinstance(run_context, Scope):
+            raise SecurityDataError('checker source preparation needs actual selected-run scope')
+        run_context.validate(inventory, run_context.binding)
+        if any(row.get('kind') == 'checker-tool' for row in run_context.required.values()):
+            from .security_go_tool_producer import prepare_tools
+            with _preparation_step('checker-tool-source'):
+                checker = prepare_tools(TRUSTED_ROOT, artifacts, inventory_digest=inventory['digest'], now=now)
+                providers.append(dict(kind='go-checker-tools-v1', report=checker))
     if run_context is not None and inventory['images']:
         from .security_license_scope import Scope
         from .security_image_licenses import prepare_families as prepare_images

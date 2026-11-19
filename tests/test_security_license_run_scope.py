@@ -21,6 +21,28 @@ NOW = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
 
 
 class SelectedRunLicenseTests(unittest.TestCase):
+    def test_selected_checker_source_preparation_retains_gaps_outside_raw_inventory(self):
+        _, _, _, inv, source, run, binding = self.fixture()
+        required = {'checker-tool:trivy:' + 'a' * 64: {'kind': 'checker-tool'}}
+        context = self.live(inv, source, run, binding, checker_tool_conditions=required)
+        report = {'records': [], 'gaps': [{'code': 'go-source-missing'}]}
+        original = copy.deepcopy(inv)
+        with mock.patch('getzilla.security_go_tool_producer.prepare_tools', return_value=report) as prepare:
+            records, preparation = cli._prepare_families(
+                inv, self.root, self.root / 'tools', None, now=NOW, run_context=context)
+        prepare.assert_called_once_with(cli.TRUSTED_ROOT, self.root, inventory_digest=inv['digest'], now=NOW)
+        self.assertEqual(records, [])
+        self.assertEqual(preparation['providers'], [{'kind': 'go-checker-tools-v1', 'report': report}])
+        self.assertEqual(inv, original)
+
+    def test_no_selected_checker_use_does_not_fetch_checker_sources(self):
+        _, _, _, inv, source, run, binding = self.fixture()
+        context = self.live(inv, source, run, binding)
+        with mock.patch('getzilla.security_go_tool_producer.prepare_tools') as prepare:
+            for scope in (None, context):
+                cli._prepare_families(inv, self.root, self.root / 'tools', None, now=NOW, run_context=scope)
+        prepare.assert_not_called()
+
     def test_family_provider_join_keeps_full_inventory_records_and_one_budget_owner(self):
         inventory=dict(digest='a'*64,tools=[dict(kind='github-action'),dict(kind='release-tool')])
         old=dict(kind='image')
