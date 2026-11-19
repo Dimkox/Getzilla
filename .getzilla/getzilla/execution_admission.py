@@ -92,7 +92,7 @@ def evaluate_task_execution(
     if not isinstance(tool, str) or not isinstance(inputs, dict):
         return False, "Legacy execution arguments are invalid."
     from ._policy_legacy import evaluate_pre_tool
-    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': inputs})
+    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': inputs}, execution_cwd=root)
     if not allowed:
         return allowed, reason
     if _safe_observation(root, tool, inputs):

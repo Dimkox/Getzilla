@@ -40,7 +40,15 @@ class DispatchTests(unittest.TestCase):
             def __exit__(self, *args):
                 pass
 
+            directories = []
+            files = {}
+            def confirm(self):
+                pass
+            def expect_absent(self, parts):
+                pass
             def read(self, parts, maximum):
+                if parts not in bodies:
+                    raise FileNotFoundError(parts)
                 return bodies[parts]
 
         backend = SimpleNamespace(SnapshotStore=NativeStore)

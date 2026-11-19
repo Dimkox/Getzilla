@@ -764,6 +764,7 @@ def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisit
     pending = (*source_parts, '.publication-pending.json')
     try:
         with _snapshot_store(database, create=True) as store:
+            store.lock_publication()
             # Bind both trees before creating an object or committing a pointer.
             store.directory(source_parts, create=True)
             store.directory(target[:-1], create=True)
@@ -831,6 +832,13 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
     source_parts = folder.relative_to(Path(database)).parts
     try:
         with _snapshot_store(database) as store:
+            pending = (*source_parts, '.publication-pending.json')
+            try:
+                store.read(pending, MAX_MANIFEST_BYTES)
+            except FileNotFoundError:
+                store.expect_absent(pending)
+            else:
+                raise SecurityDataError('snapshot commit_unknown; checked reconciliation is required')
             raw = store.read((*source_parts, 'snapshot.json'), MAX_MANIFEST_BYTES)
             document = _json(raw)
             digest = document.get('content_sha256')
@@ -854,13 +862,16 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
         refresh = (f'declare current profile with {command} --write-input-profile PROFILE --json-out PROFILE_REPORT; '
                    f'refresh with {command} --input-profile PROFILE --prepare-inputs --refresh --json-out REPORT '
                    'on a network-enabled host, then copy the complete snapshot directory; '
-                   'preparation remains UNVERIFIED and may refuse incomplete inputs') if source_id.startswith('osv:') else (
+                   'preparation remains UNVERIFIED and may refuse incomplete inputs; '
+                   f'OSV-only alternative: python3 scripts/getzilla_vulns.py --download-db DIR --ecosystem {source_id.removeprefix("osv:")}') if source_id.startswith('osv:') else (
                        f'refresh {source_id} through its configured updater, then copy manifest and content objects')
+        if source_id == OSV_QUERY_SOURCE:
+            refresh = 'refresh with python3 scripts/getzilla_vulns.py --online --db DIR on the selected ROOT; retain the complete inventory-bound query snapshot'
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc
 
 
 def _custody_digest(store: _SnapshotStore) -> str:
-    directory_ids = {node.descriptor: node.identity for node in store.directories}
+    directory_ids = {getattr(node, 'descriptor', getattr(node, 'handle', None)): node.identity for node in store.directories}
     custody = {'directories': [list(node.identity) for node in store.directories],
                'files': sorted((file.name, list(directory_ids[file.parent]), list(file.identity))
                                for file in store.files.values())}
@@ -886,7 +897,7 @@ def confirm_snapshots(database: Path, evidence: list[dict[str, Any]], *, now: da
                 if source_id not in {OSV_QUERY_SOURCE, *(f'osv:{name}' for name in OSV_ECOSYSTEMS)} or source_id in seen:
                     raise SecurityDataError('final snapshot source is invalid or repeated')
                 seen.add(source_id)
-                store = stack.enter_context(_SnapshotStore(database))
+                store = stack.enter_context(_snapshot_store(database))
                 parts = _source_directory(database, source_id).relative_to(Path(database)).parts
                 try:
                     store.read((*parts, '.publication-pending.json'), MAX_MANIFEST_BYTES)

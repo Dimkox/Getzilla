@@ -499,9 +499,15 @@ class SnapshotTests(unittest.TestCase):
         unknown['affected'][0]['ranges'] = [{'type': 'GIT', 'repo': 'https://example.invalid/public/repository', 'events': [{'introduced': '0'}, {'fixed': 'a' * 40}]}]
         malformed = record()
         malformed['affected'][0]['ranges'] = [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0', 'fixed': '2'}]}]
+        from getzilla import known_vulns
         for item in (unknown, malformed):
-            with self.subTest(kind=item['affected'][0]['ranges'][0]['type']), self.assertRaises(self.data.SecurityDataError):
-                self.data.osv_coverage(archive([item]), 'PyPI')
+            with self.subTest(kind=item['affected'][0]['ranges'][0]['type']):
+                # Publication retains the provider's unknown version semantics;
+                # a matching consumer cannot use an exact version to erase them.
+                self.publish(archive([item]))
+                dependency = known_vulns.Dependency('PyPI', 'public-other-package', '1.0.0', 'requirements.txt')
+                with self.assertRaises(known_vulns.VulnerabilityError):
+                    known_vulns.query_offline([dependency], self.database, now=NOW)
 
     def test_named_npm_with_separate_git_supplement_is_supported(self):
         item = record(ecosystem='npm')
@@ -657,7 +663,7 @@ class SnapshotBoundaryTests(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.database = self.root / 'database'
         self.outside = self.root / 'outside'
-        self.outside.mkdir()
+        self.outside.mkdir(mode=0o700)
         (self.outside / 'marker').write_bytes(b'outside bytes must stay unchanged')
 
     def test_source_ancestor_link_cannot_write_pointer_or_export_outside(self):
