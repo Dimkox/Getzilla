@@ -43,9 +43,11 @@ class Budget:
 
 
 def _roots(config):
-    return {"landing": config.settings.landing_state_path,
-            "publication": config.publication_state,
-            "artifacts": config.settings.landing_output_path}
+    return {
+        "landing": config.settings.landing_state_path,
+        "publication": config.publication_state,
+        "artifacts": config.settings.landing_output_path,
+    }
 
 
 def _sync(path):
@@ -70,16 +72,28 @@ def _new_root(path, repository):
 
 def _file_metadata(path):
     metadata = path.lstat()
-    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-            or metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) != 0o600
-            or not 0 <= metadata.st_size <= MAX_FILE):
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or not 0 <= metadata.st_size <= MAX_FILE
+    ):
         raise BackupError("snapshot_private_file")
     return metadata
 
 
 def _stable(metadata):
-    return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid,
-            metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
 
 def _copy(source, destination, budget):
@@ -124,9 +138,13 @@ def _snapshot(database, destination, identity, budget):
     try:
         source.execute("PRAGMA query_only=ON")
         source.execute("PRAGMA trusted_schema=OFF")
-        actual = (source.execute("PRAGMA application_id").fetchone()[0],
-                  source.execute("PRAGMA user_version").fetchone()[0])
-        if actual != identity and not (identity == (APPLICATION_ID, SCHEMA_VERSION) and actual == (APPLICATION_ID, 1)):
+        actual = (
+            source.execute("PRAGMA application_id").fetchone()[0],
+            source.execute("PRAGMA user_version").fetchone()[0],
+        )
+        if actual != identity and not (
+            identity == (APPLICATION_ID, SCHEMA_VERSION) and actual in {(APPLICATION_ID, 1), (APPLICATION_ID, 2)}
+        ):
             raise BackupError("snapshot_schema")
         target = sqlite3.connect(destination, timeout=5)
         page_size = source.execute("PRAGMA page_size").fetchone()[0]
@@ -183,8 +201,10 @@ def create_snapshot(config, destination):
 
     _snapshot_path(destination)
     roots = _roots(config)
-    if any(destination == root or root in destination.parents or destination in root.parents
-           for root in (*roots.values(), config.control_repository, config.settings.landing_source_path)):
+    if any(
+        destination == root or root in destination.parents or destination in root.parents
+        for root in (*roots.values(), config.control_repository, config.settings.landing_source_path)
+    ):
         raise BackupError("snapshot_destination_overlap")
     for root in roots.values():
         _private_directory(root, repository_root=config.control_repository)
@@ -215,12 +235,21 @@ def create_snapshot(config, destination):
                 budget.consume()
                 if len(entries) >= MAX_FILES or not _ARTIFACT_NAME.fullmatch(item.name):
                     raise BackupError("snapshot_artifact_inventory")
-                entries.append({"category": "artifacts", "name": item.name,
-                                **_copy(Path(item.path), destination / "artifacts" / item.name, budget)})
-        manifest = {"schema_version": 1, "kind": "adaptive-landing-offline-snapshot",
-                    "roots": {key: str(value) for key, value in roots.items()},
-                    "entries": sorted(entries, key=lambda item: (item["category"], item["name"])),
-                    "provider_replay": False, "publication_target_included": False}
+                entries.append(
+                    {
+                        "category": "artifacts",
+                        "name": item.name,
+                        **_copy(Path(item.path), destination / "artifacts" / item.name, budget),
+                    }
+                )
+        manifest = {
+            "schema_version": 1,
+            "kind": "adaptive-landing-offline-snapshot",
+            "roots": {key: str(value) for key, value in roots.items()},
+            "entries": sorted(entries, key=lambda item: (item["category"], item["name"])),
+            "provider_replay": False,
+            "publication_target_included": False,
+        }
         raw = canonical_json(manifest)
         if len(raw) > 2 * 1024 * 1024:
             raise BackupError("snapshot_manifest_size")
@@ -232,8 +261,12 @@ def create_snapshot(config, destination):
             output.flush()
             os.fsync(output.fileno())
         _sync(destination)
-        return {"status": "snapshot_saved", "manifest_sha256": hashlib.sha256(raw).hexdigest(),
-                "files": len(entries), "provider_replay": False}
+        return {
+            "status": "snapshot_saved",
+            "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+            "files": len(entries),
+            "provider_replay": False,
+        }
 
 
 def restore_snapshot(config, snapshot, manifest_sha256):
@@ -244,11 +277,17 @@ def restore_snapshot(config, snapshot, manifest_sha256):
     if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) or hashlib.sha256(raw).hexdigest() != manifest_sha256:
         raise BackupError("restore_manifest_digest")
     manifest = strict_json_object(raw, maximum=2 * 1024 * 1024)
-    if (set(manifest) != {"schema_version", "kind", "roots", "entries", "provider_replay", "publication_target_included"}
-            or manifest["schema_version"] != 1 or manifest["kind"] != "adaptive-landing-offline-snapshot"
-            or manifest["roots"] != {key: str(value) for key, value in roots.items()}
-            or manifest["provider_replay"] is not False or manifest["publication_target_included"] is not False
-            or not isinstance(manifest["entries"], list) or not 1 <= len(manifest["entries"]) <= MAX_FILES):
+    if (
+        set(manifest)
+        != {"schema_version", "kind", "roots", "entries", "provider_replay", "publication_target_included"}
+        or manifest["schema_version"] != 1
+        or manifest["kind"] != "adaptive-landing-offline-snapshot"
+        or manifest["roots"] != {key: str(value) for key, value in roots.items()}
+        or manifest["provider_replay"] is not False
+        or manifest["publication_target_included"] is not False
+        or not isinstance(manifest["entries"], list)
+        or not 1 <= len(manifest["entries"]) <= MAX_FILES
+    ):
         raise BackupError("restore_manifest")
     if config.settings.landing_live_enabled:
         raise BackupError("restore_requires_disabled_provider")
@@ -260,8 +299,11 @@ def restore_snapshot(config, snapshot, manifest_sha256):
         category, name = entry["category"], entry["name"]
         if not isinstance(category, str) or category not in roots or not isinstance(name, str):
             raise BackupError("restore_entry")
-        allowed = (_ARTIFACT_NAME.fullmatch(name) if category == "artifacts"
-                   else name == {"landing": "landing.sqlite3", "publication": "publication.sqlite3"}[category])
+        allowed = (
+            _ARTIFACT_NAME.fullmatch(name)
+            if category == "artifacts"
+            else name == {"landing": "landing.sqlite3", "publication": "publication.sqlite3"}[category]
+        )
         if not allowed or (category, name) in seen or type(entry["size"]) is not int:
             raise BackupError("restore_inventory")
         seen.add((category, name))
@@ -296,8 +338,134 @@ def restore_snapshot(config, snapshot, manifest_sha256):
                 raise BackupError("restore_content_changed")
         for root in roots.values():
             _sync(root)
-    return {"status": "restored_inactive", "provider_replay": False,
-            "publication_reconciliation_required": True}
+    return {"status": "restored_inactive", "provider_replay": False, "publication_reconciliation_required": True}
+
+
+def _incident_root(path):
+    path = Path(path)
+    _snapshot_path(path)
+    resolved = path.resolve(strict=True)
+    if resolved != path:
+        raise BackupError("incident_root_link")
+    for parent in (path, *path.parents):
+        if stat.S_ISLNK(parent.lstat().st_mode):
+            raise BackupError("incident_root_link")
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise BackupError("incident_private_root")
+    return path
+
+
+def _incident_asset(root, relative, budget):
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or relative.startswith("/")
+        or any(char in relative for char in "*?[]{}\\")
+        or any(part in ("", ".", "..") for part in relative.split("/"))
+    ):
+        raise BackupError("incident_asset_scope")
+    path = root / relative
+    if path.suffix.lower() not in {".log", ".json", ".txt", ".png", ".jpg", ".jpeg", ".mp4", ".webm"} or any(
+        part.lower() in {"secrets", "credentials", "private-keys", "auth.json"} or part.lower().startswith(".env")
+        for part in path.relative_to(root).parts
+    ):
+        raise BackupError("incident_asset_scope")
+    for parent in (path.parent, *path.parent.parents):
+        if parent == root.parent:
+            break
+        if stat.S_ISLNK(parent.lstat().st_mode):
+            raise BackupError("incident_asset_link")
+    before = _file_metadata(path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    digest = hashlib.sha256()
+    try:
+        if _stable(os.fstat(descriptor)) != _stable(before):
+            raise BackupError("incident_asset_changed")
+        while True:
+            raw = os.read(descriptor, 1024 * 1024)
+            if not raw:
+                break
+            budget.consume(len(raw))
+            digest.update(raw)
+        if _stable(os.fstat(descriptor)) != _stable(before) or _stable(path.lstat()) != _stable(before):
+            raise BackupError("incident_asset_changed")
+        _incident_root(root)
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest(), before.st_size, stat.S_IMODE(before.st_mode)
+
+
+def plan_incident_cleanup(
+    *, incident_id, source_root, backup_root, quarantine_root, assets, retention_seconds, source_identity, clock
+):
+    """Hash-bind explicit assets to pre-existing backups. Never copy/delete/move.
+
+    This private plan is not mutation authority. A later approved executor must
+    recheck source and backup identity, quarantine without clobber, and preserve
+    this metadata plus redacted attribution before changing any incident bytes.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    if (
+        not isinstance(incident_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", incident_id)
+        or not isinstance(source_identity, str)
+        or not re.fullmatch("[0-9a-f]{64}", source_identity)
+        or type(retention_seconds) is not int
+        or not 3600 <= retention_seconds <= 366 * 86400
+        or not isinstance(assets, list)
+        or not 1 <= len(assets) <= 128
+        or len(set(assets)) != len(assets)
+    ):
+        raise BackupError("incident_plan_contract")
+    now = clock()
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise BackupError("incident_plan_clock")
+    try:
+        source, backup, quarantine = map(_incident_root, (source_root, backup_root, quarantine_root))
+        if any(
+            left == right or left in right.parents or right in left.parents
+            for index, left in enumerate((source, backup, quarantine))
+            for right in (source, backup, quarantine)[index + 1 :]
+        ):
+            raise BackupError("incident_root_overlap")
+        budget = Budget()
+        rows = []
+        for relative in sorted(assets):
+            original, size, mode = _incident_asset(source, relative, budget)
+            saved, saved_size, saved_mode = _incident_asset(backup, relative, budget)
+            if (original, size, mode) != (saved, saved_size, saved_mode):
+                raise BackupError("incident_backup_binding")
+            rows.append(
+                {
+                    "source_ref": relative,
+                    "source_sha256": original,
+                    "byte_length": size,
+                    "mode": mode,
+                    "backup_ref": relative,
+                    "backup_sha256": saved,
+                    "quarantine_destination": incident_id + "/" + relative,
+                    "restore_destination": relative,
+                    "restore_policy": "refuse-clobber",
+                }
+            )
+        plan = {
+            "schema_version": 1,
+            "incident_id": incident_id,
+            "source_identity": source_identity,
+            "action": "plan-only",
+            "mutations_performed": 0,
+            "assets": rows,
+            "retention_seconds": retention_seconds,
+            "created_at": now.astimezone(timezone.utc).isoformat(),
+            "retain_until": (now + timedelta(seconds=retention_seconds)).astimezone(timezone.utc).isoformat(),
+            "redaction": "metadata-only; original bytes stay in private approved backups",
+            "mutation_requires": "exact asset authority and fresh source/backup checks; no executor is implemented",
+        }
+        return {**plan, "plan_digest": hashlib.sha256(canonical_json(plan)).hexdigest()}
+    except (OSError, ValueError, TypeError):
+        raise BackupError("incident_plan_unavailable") from None
 
 
 def main():
@@ -309,8 +477,11 @@ def main():
     args = parser.parse_args()
     try:
         config = load_host_config(args.config)
-        result = (create_snapshot(config, args.snapshot) if args.action == "backup"
-                  else restore_snapshot(config, args.snapshot, args.manifest_sha256 or ""))
+        result = (
+            create_snapshot(config, args.snapshot)
+            if args.action == "backup"
+            else restore_snapshot(config, args.snapshot, args.manifest_sha256 or "")
+        )
     except Exception as exc:
         reason = str(exc) if isinstance(exc, BackupError) else "snapshot_unavailable"
         print(json.dumps({"status": "needs_human", "reason": reason}))

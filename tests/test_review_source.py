@@ -102,7 +102,7 @@ class ReviewSourceTests(unittest.TestCase):
             selected.symlink_to(self.root / 'source.py')
         except OSError:
             self.skipTest('symlinks unavailable')
-        with self.assertRaises((RuntimeError, ValueError)):
+        with self.assertRaisesRegex((RuntimeError, ValueError), 'selected active change'):
             self.record()
 
     def test_ignored_runtime_review_binds_exact_source_and_rechecks_content(self):
@@ -220,9 +220,11 @@ class ReviewSourceTests(unittest.TestCase):
 
     def test_rejects_nonancestor(self):
         self.git('checkout', '--orphan', 'other')
-        (self.root / 'source.py').write_text('other history\n')
-        self.commit()
-        with self.assertRaises((RuntimeError, ValueError, OSError)):
+        self.git('add', '.')
+        self.git('commit', '-qm', 'unrelated identical tree')
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'),
+                         self.git('rev-parse', self.source + '^{tree}'))
+        with self.assertRaisesRegex(RuntimeError, 'not an ancestor'):
             self.record()
 
     def test_rejects_deleted_renamed_executable_or_symlink_evidence(self):

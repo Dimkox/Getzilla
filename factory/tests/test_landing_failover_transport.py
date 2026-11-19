@@ -12,7 +12,7 @@ from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_failover import FailoverCoordinator
 from getzilla_factory.landing_failover_config import FailoverConfig
 from getzilla_factory.landing_failover_journal import CallerJournal
-from getzilla_factory.landing_failover_transport import BackendAmbiguous, BackendUnavailable, UnixLandingBackend
+from getzilla_factory.landing_failover_transport import BackendAmbiguous, BackendUnavailable, BackendRejected, UnixLandingBackend
 from factory.tests.test_landing_failover import configuration, ScriptedBackends
 
 
@@ -91,7 +91,7 @@ class UnixDeadlineTests(unittest.TestCase):
                                                  timeout_seconds=3 if operation == "capability" else 0.3)
                     started = time.monotonic()
                     try:
-                        expected = BackendUnavailable if operation == "capability" else BackendAmbiguous
+                        expected = BackendRejected if operation == "submit" else BackendUnavailable if operation == "capability" else BackendAmbiguous
                         with self.assertRaises(expected):
                             if operation == "submit":
                                 backend.submit("child", b"x" * 1_048_576 if mode == "write" else b"brief", "text/plain")
@@ -100,8 +100,9 @@ class UnixDeadlineTests(unittest.TestCase):
                             else:
                                 backend.capability()
                         self.assertLess(time.monotonic() - started, 2.8 if operation == "capability" else 1.2)
-                        self.assertEqual(1, len(server.requests))
-                        self.assertEqual("POST" if operation == "submit" else "GET", server.requests[0][0])
+                        self.assertEqual(0 if operation == "submit" else 1, len(server.requests))
+                        if operation != "submit":
+                            self.assertEqual("GET", server.requests[0][0])
                     finally:
                         backend.close()
 
@@ -122,46 +123,36 @@ class UnixDeadlineTests(unittest.TestCase):
                     self.assertEqual(["grok-vision"], script.calls)
                     self.assertEqual(["GET"], [item[0] for item in server.requests])
 
-    def test_lost_post_response_resumes_committed_child_without_second_post(self):
+    def test_legacy_paid_post_is_denied_and_restart_cannot_resend(self):
         with tempfile.TemporaryDirectory() as temporary:
             config = self.fixture(Path(temporary))
             script = ScriptedBackends({"qwen-intl": "success"})
             primary = script.factory(config.backends[0], config=config)
-            committed = threading.Event()
-            allow_observation = threading.Event()
             def respond(handler, method, target, headers):
                 if target == "/v4/landing-backend":
                     json_reply(handler, primary.capability())
-                elif method == "POST":
-                    payload = handler.rfile.read(int(headers["content-length"]))
-                    primary.submit(headers["idempotency-key"], payload, headers["content-type"])
-                    committed.set()
-                    # Returning closes the connection after commit without HTTP202.
-                elif not allow_observation.is_set():
-                    json_reply(handler, {}, 404)
                 else:
-                    json_reply(handler, primary.observe(target.split("/")[3]))
-            def factory(backend, **kwargs):
-                return UnixLandingBackend(backend, config=config, timeout_seconds=5)
+                    self.fail("No submission or provider observation is permitted")
             with unix_responder(config.backends[0].socket_path, respond) as server:
                 with CallerJournal(config) as journal:
-                    caller = FailoverCoordinator(config, journal, backend_factory=factory)
-                    uncertain = caller.submit("slow-post", b"brief", "text/plain")
-                    self.assertEqual("needs_human", uncertain["state"])
-                    self.assertEqual("dispatching", uncertain["attempts"][0]["state"])
-                    child_id = uncertain["attempts"][0]["child_id"]
-                    self.assertTrue(committed.is_set(), "the fixture must commit before dropping the response")
-                    self.assertEqual("artifact_ready", script.records[child_id]["state"])
-                    observation_path = f"/v2/landing-jobs/{child_id}/attempt"
-                    self.assertEqual(1, sum(target == observation_path for _, target, _ in server.requests))
-                allow_observation.set()
+                    denied = FailoverCoordinator(config,journal).submit("no-budget",b"brief","text/plain")
+                    self.assertEqual("stopped",denied["state"])
+                    self.assertEqual([],script.calls)
                 with CallerJournal(config) as journal:
-                    result = FailoverCoordinator(config, journal, backend_factory=factory).resume("slow-post")
-                    self.assertEqual("artifact_ready", result["state"])
-                    self.assertEqual(child_id, result["winner"]["child_id"])
-                    self.assertEqual(["qwen-intl"], script.calls)
-                    self.assertEqual(1, sum(method == "POST" for method, *_ in server.requests))
-                    self.assertEqual(2, sum(target == observation_path for _, target, _ in server.requests))
+                    repeated=FailoverCoordinator(config,journal).resume("no-budget")
+                    self.assertEqual("stopped",repeated["state"])
+                self.assertEqual(["GET"],[method for method,*_ in server.requests])
+
+    def test_direct_async_post_is_also_denied(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as temporary:
+            config=self.fixture(Path(temporary))
+            backend=UnixLandingBackend(config.backends[0],config=config,timeout_seconds=1)
+            try:
+                with self.assertRaisesRegex(BackendRejected,"paid_shared_authority_required"):
+                    asyncio.run(backend._exchange_async("POST","/v1/landing-inputs",202,b"brief",{},time.monotonic()+1))
+            finally:
+                backend.close()
 
 
 if __name__ == "__main__":

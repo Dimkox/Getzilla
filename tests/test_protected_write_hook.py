@@ -22,7 +22,7 @@ class ProtectedWriteHookTests(unittest.TestCase):
         self.assertIn('getzilla_protected_write.py', data['reason'])
         self.assertIn('exact protected-path grant', data['reason'])
 
-    def test_validated_batch_writer_invocation_is_not_blocked_by_shell_gate(self) -> None:
+    def test_validated_batch_writer_still_requires_exact_task_scope(self) -> None:
         with project_copy() as root:
             code, data, stderr = run_hook(
                 root,
@@ -36,7 +36,8 @@ class ProtectedWriteHookTests(unittest.TestCase):
                 },
             )
         self.assertEqual(code, 0, stderr)
-        self.assertEqual(data['decision'], 'allow')
+        self.assertEqual(data['decision'], 'deny')
+        self.assertIn('mandatory task route', data['reason'])
 
     def test_batch_writer_cannot_be_chained_with_opaque_control_plane_mutation(self) -> None:
         with project_copy() as root:

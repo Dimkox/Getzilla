@@ -18,7 +18,7 @@ from .settings import SettingsError
 
 
 def build_landing_app(config: LandingHostConfig, *, qwen_env_file: Path | None = None,
-                      provider_env_file: Path | None = None):
+                      provider_env_file: Path | None = None, configure_paid_authority=None):
     credential_file = provider_env_file or qwen_env_file
     if credential_file is not None:
         roots = (config.control_repository, config.publication_state,
@@ -29,7 +29,8 @@ def build_landing_app(config: LandingHostConfig, *, qwen_env_file: Path | None =
             raise SettingsError("Qwen credential file must be outside landing roots")
     _private_directory(config.publication_state, repository_root=config.control_repository)
     owned = compose_server_landing(config.settings, repository_root=config.control_repository,
-                                   qwen_env_file=qwen_env_file, provider_env_file=provider_env_file)
+                                   qwen_env_file=qwen_env_file, provider_env_file=provider_env_file,
+                                   configure_paid_authority=configure_paid_authority)
     if owned is None or owned.store is None:
         raise SettingsError("dedicated landing host requires durable composition")
     try:

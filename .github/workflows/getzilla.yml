@@ -244,9 +244,8 @@ jobs:
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         shell: bash
         run: |
-          if [ -f .getzilla/config/python-test-requirements.txt ]; then
-            python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
-          fi
+          python trust-ci/lock_profiles.py --check
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
           python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
       - name: Set up pinned uv

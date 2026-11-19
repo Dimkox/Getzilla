@@ -3335,6 +3335,75 @@
       "sync_or_async": "synchronous",
       "to": "NODE-SUPPLY-CHAIN-REGISTRY",
       "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-LANDING-LIVE-EXECUTORS",
+      "id": "EDGE-PAID-EXECUTOR-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-PAID-ADMISSION",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
+        "DATA-FACTORY-LANDING-INPUT"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "required",
+        "idempotency": "required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-FACTORY-CONTROL-FAILURE",
+        "terminal_action": "manual_recovery",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-FACTORY-PAID-ADMISSION",
+      "id": "EDGE-PAID-AUTHORITY-JOURNAL",
+      "network_policy": "no_network",
+      "protocol": "sqlite",
+      "sync_or_async": "synchronous",
+      "to": "NODE-FACTORY-LANDING-SQLITE",
+      "type": "data_flow"
+    },
+    {
+      "allowed_data": [
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "local_os",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 5000
+      },
+      "from": "NODE-LOCAL-ROUTE-POLICY",
+      "id": "EDGE-ROUTE-TASK-ADMISSION",
+      "network_policy": "no_network",
+      "protocol": "python_import",
+      "sync_or_async": "synchronous",
+      "to": "NODE-LOCAL-TASK-ADMISSION",
+      "type": "dependency"
     }
   ],
   "nodes": [

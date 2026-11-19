@@ -9,6 +9,8 @@ import json
 import os
 import re
 import stat
+import subprocess
+import threading
 import sys
 sys.dont_write_bytecode = True
 import uuid
@@ -716,7 +718,8 @@ class _SourceTree:
                     f"managed source changed during enumeration: {relative}"
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
-                if name == "__pycache__":
+                if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} or name.endswith(".egg-info"):
+                    # Packaging/cache artifacts are not installation source.
                     continue
                 if relative == "factory/src/getzilla_factory.egg-info":
                     # Editable-install metadata is generated, never managed source.
@@ -1256,8 +1259,8 @@ def _legacy_migration(target: Path) -> list[dict[str, str]]:
             if LEGACY_SCRIPT_PATTERN.fullmatch(name) and not _is_link_path(scripts / name):
                 found.append(f"scripts/{name}")
     return [
-        {"action": "RETIRE", "path": path, "replacement": legacy_to_current_path(path),
-         "reason": "pre-Getzilla stack path; remove after the plan is applied"}
+        {"action": "PRESERVE", "path": path, "replacement": legacy_to_current_path(path),
+         "reason": "legacy candidate; ownership unproved; retain until an exact recoverable migration is approved"}
         for path in found
     ]
 
@@ -1340,6 +1343,12 @@ def _make_plan(
     )
     return {
         "version": 1,
+        "consumer_inventory": inventory,
+        "consumer_git_status": _consumer_git_status(target) if state == "directory" else {"state": "absent", "records": []},
+        "quarantine_plan": {"action": "plan-only", "approval_required": True,
+                            "entries": quarantine_candidates,
+                            "restore": "Verify manifest hashes and modes; restore only to absent original paths; never overwrite conflicts.",
+                            "execution": "No quarantine executor exists. Obtain exact path approval and a recoverable manifest before any move."},
         "target_state": state,
         "kept": keep_reports,
         "entries": [entry.manifest() for entry in deliverable],

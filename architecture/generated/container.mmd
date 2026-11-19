@@ -16,6 +16,7 @@ flowchart LR
   node_6716118911fde778["NODE-FACTORY-LANDING-MODEL-PROVIDER | external_system | injected live landing model providers"]
   node_7c8192807445a8a6["NODE-FACTORY-LANDING-SQLITE | datastore | local factory operators"]
   node_93915052ae8a2e67["NODE-FACTORY-LOCAL-API | service | local factory operators"]
+  node_4ceddb2cec544a16["NODE-FACTORY-PAID-ADMISSION | local_component | explicit owning server authority"]
   node_a77de286f8308fd4["NODE-FACTORY-POSTGRES | datastore | local factory operators"]
   node_21b552fdfa11f1c2["NODE-FACTORY-PROPOSAL-BROKER | local_component | local factory operators"]
   node_fae11f6a95d982dc["NODE-FACTORY-PROVIDER-ADAPTERS | local_component | local factory operators"]
@@ -40,6 +41,7 @@ flowchart LR
   node_770cf3a1783e8525["NODE-LOCAL-ROUTE-POLICY | local_component | repository engineering"]
   node_d3130d35cc27975a["NODE-LOCAL-SECURITY-BUNDLE | local_component | repository engineering; local validation only, no App, DB or mandatory observer"]
   node_99bef979b5a89963["NODE-LOCAL-SUPPLY-CHAIN-UPDATER | local_component | repository engineering"]
+  node_f1c7a7baf723a3c5["NODE-LOCAL-TASK-ADMISSION | local_component | repository owner task delegation"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_e02bf35f8229b0f7["NODE-LOCAL-VULNERABILITY-SCANNER | local_component | repository engineering"]
   node_744d7e0230f6accd["NODE-NPM-REGISTRY | external_system | public npm registry and package source endpoints"]
@@ -151,6 +153,7 @@ flowchart LR
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-JOURNAL | data_flow | sqlite"| node_184d4805d75dbf51
   node_070dda93443dcc1f -->|"EDGE-PUBLIC-WORKER-RUNTIME | dependency | python"| node_d0e570b2fbe52f98
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-CHANGE-EVIDENCE | control | filesystem"| node_8938bd3db1932751
+  node_770cf3a1783e8525 -->|"EDGE-ROUTE-TASK-ADMISSION | dependency | python_import"| node_f1c7a7baf723a3c5
   node_770cf3a1783e8525 -->|"EDGE-ROUTE-WORKFLOW-COMPILER | control | filesystem"| node_05e59b1e4a9cc0f9
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem"| node_0a0fe2f046a648e9
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-WORKSPACE | data_flow | filesystem"| node_2e8a7072de3f3743

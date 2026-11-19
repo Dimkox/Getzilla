@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/ci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md requirements-test.txt requirements-build.txt requirements-runner.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
 
 ARG OPENGREP_VERSION=1.30.1
@@ -18,7 +18,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 ci \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/ci ci \
-    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements-test.txt -r requirements-build.txt -r requirements-runner.txt \
+    && python lock_profiles.py --check \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-runner.txt \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation ".[test]" \
     && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/opengrep')" \
         "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86" \

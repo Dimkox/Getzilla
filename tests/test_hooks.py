@@ -614,6 +614,28 @@ class HookTests(unittest.TestCase):
             source='explicit-user-consent',
         )
 
+    def _task_hook(self, root: Path, hook: str, payload: dict):
+        """Positive policy fixture includes separate exact finite task consent."""
+        import importlib.util
+        from copy import deepcopy
+        from getzilla.execution_admission import task_execution_resource
+        payload = deepcopy(payload)
+        if payload.get('tool_name') == 'Bash':
+            payload['tool_input']['timeout_ms'] = 5000
+        spec = importlib.util.spec_from_file_location('task_fixture_lib', ROOT / '.grok/hooks/_lib.py')
+        lib = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = lib
+        spec.loader.exec_module(lib)
+        if subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=root, capture_output=True).returncode:
+            subprocess.run(['git', 'remote', 'add', 'origin', 'https://github.com/example/fixture.git'], cwd=root, check=True)
+        if not get_active_route(root):
+            set_active_route(root, build_route(root, 'Review exact local operation', 'task-fixture').to_dict())
+        add_approval(root, 'task-execution', 'synthetic owner delegated actual bounded test arguments', 5,
+                     actions=['task-tool-execute'],
+                     resources=[task_execution_resource(lib.tool_name(payload), lib.tool_input(payload))],
+                     source='explicit-user-consent')
+        return run_hook(root, hook, payload)
+
     def test_root_shim_dispatches_pre_tool_use(self) -> None:
         with project_copy() as root:
             shim = (ROOT / '.getzilla/templates/hook_root_shim.py').read_text(encoding='utf-8')
@@ -621,7 +643,7 @@ class HookTests(unittest.TestCase):
             proc = subprocess.run(
                 [sys.executable, 'pre_tool_use.py'],
                 cwd=root,
-                input='{"tool_name":"Read","tool_input":{"path":"AGENTS.md"}}',
+                input=json.dumps({"cwd": str(root), "tool_name": "Read", "tool_input": {"path": "AGENTS.md"}}),
                 text=True,
                 capture_output=True,
                 check=False,
@@ -803,7 +825,7 @@ class HookTests(unittest.TestCase):
                 {'command': 'git push origin feature', 'workdir': 'nested'},
                 {'command': 'git push origin feature', 'workingDirectory': str(subdir)},
             ):
-                _, data, error = run_hook(session_root, 'pre_tool_use.py', {**base, 'tool_input': nested})
+                _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {**base, 'tool_input': nested})
                 self.assertEqual(data['decision'], 'allow', error)
 
             conflicting = {
@@ -965,7 +987,7 @@ class HookTests(unittest.TestCase):
                 'cd -- nested && git push origin feature',
                 'git -C nested -C .. push origin feature',
             ):
-                _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+                _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                     'cwd': str(session_root),
                     'session_id': 'root-test',
                     'tool_name': 'Bash',
@@ -986,7 +1008,7 @@ class HookTests(unittest.TestCase):
 
     def test_non_sensitive_read_with_explicit_cross_root_remains_allowed(self) -> None:
         with project_copy(git=True) as session_root, project_copy(git=True) as command_root:
-            _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+            _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                 'cwd': str(session_root),
                 'tool_name': 'Read',
                 'tool_input': {'path': 'AGENTS.md', 'workdir': str(command_root)},
@@ -1007,7 +1029,7 @@ class HookTests(unittest.TestCase):
                 f'+example text: git -C {other_root} push origin feature\n'
                 '*** End Patch\n'
             )
-            _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+            _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                 'cwd': str(session_root),
                 'session_id': 'root-test',
                 'tool_name': 'apply_patch',
@@ -1047,7 +1069,7 @@ class HookTests(unittest.TestCase):
     def test_benign_shell_expansion_and_read_chain_remain_soft(self) -> None:
         with project_copy(git=True) as root:
             for command in ('echo "$HOME"', 'cat VERSION && git status --short'):
-                _, data, error = run_hook(root, 'pre_tool_use.py', {
+                _, data, error = self._task_hook(root, 'pre_tool_use.py', {
                     'cwd': str(root),
                     'tool_name': 'Bash',
                     'tool_input': {'command': command},
@@ -1117,7 +1139,7 @@ class HookTests(unittest.TestCase):
                 'xargs -a commands.txt git status --short',
             )):
                 with self.subTest(command=command):
-                    _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+                    _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
                         'session_id': f'wrapped-read-{index}',
                         'tool_name': 'Bash',
@@ -1166,7 +1188,7 @@ class HookTests(unittest.TestCase):
 
             for index, command in enumerate(('echo git', 'xargs -a commands.txt echo git')):
                 with self.subTest(command=command):
-                    _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+                    _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
                         'session_id': f'benign-dispatch-argument-{index}',
                         'tool_name': 'Bash',
@@ -1218,7 +1240,7 @@ class HookTests(unittest.TestCase):
                 "bash -lc 'git status --short'",
             )):
                 with self.subTest(command=command):
-                    _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+                    _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
                         'session_id': f'single-shell-read-{index}',
                         'tool_name': 'Bash',
@@ -1275,7 +1297,7 @@ class HookTests(unittest.TestCase):
             )
             for command in benign_reads:
                 with self.subTest(command=command):
-                    _, data, error = run_hook(root, 'pre_tool_use.py', {
+                    _, data, error = self._task_hook(root, 'pre_tool_use.py', {
                         'cwd': str(root),
                         'session_id': 'root-test',
                         'tool_name': 'Bash',
@@ -1339,7 +1361,7 @@ class HookTests(unittest.TestCase):
             )
             for command in inert_or_fixed_commands:
                 with self.subTest(command=command):
-                    _, data, error = run_hook(session_root, 'pre_tool_use.py', {
+                    _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
                         'session_id': 'root-test',
                         'tool_name': 'Bash',

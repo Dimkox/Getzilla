@@ -9,7 +9,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 import hashlib
-import os
 from pathlib import Path
 import re
 import time
@@ -137,7 +136,9 @@ CURRENT_LANDING_HOST_REQUIREMENTS = LandingHostRequirementsV1(
 def api_key_from_environ(name: str, environ: Mapping[str, str] | None = None) -> str:
     if name not in PROVIDER_KEY_NAMES.values():
         raise LandingProviderError("credential_name")
-    source = os.environ if environ is None else environ
+    if environ is None:
+        raise LandingProviderError("credential_scope_required")
+    source = environ
     key = source.get(name, "").strip()
     if not key:
         raise LandingProviderError("credential_unavailable")
@@ -179,7 +180,9 @@ def provider_api_key(provider_id: str, *, env_file: Path | None = None, environ=
 def qwen_api_key(*, env_file: Path | None = None, environ: Mapping[str, str] | None = None) -> str:
     """Read one explicit private assignment as data, without sourcing shell code."""
     if env_file is None:
-        source = os.environ if environ is None else environ
+        if environ is None:
+            raise LandingProviderError("credential_scope_required")
+        source = environ
         if QWEN_API_KEY_ENV in source:
             return api_key_from_environ(QWEN_API_KEY_ENV, source)
         return api_key_from_environ(QWEN_API_KEY_ENV, {QWEN_API_KEY_ENV: source.get("DASHSCOPE_API_KEY", "")})
@@ -224,6 +227,7 @@ class OpenAICompatibleLandingExecutor:
         transport: httpx.AsyncBaseTransport | None = None,
         profile: HttpLandingProfile | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        admission=None,
     ) -> None:
         selected = profile or HttpLandingProfile(
             provider_id, base_url, model_id, available=True
@@ -242,6 +246,10 @@ class OpenAICompatibleLandingExecutor:
             raise LandingProviderError("credential_unavailable")
         if transport is not None and not isinstance(transport, httpx.AsyncBaseTransport):
             raise LandingProviderError("executor_transport_type")
+        from .paid_admission import PaidExecutionAdmission
+        if admission is not None and type(admission) is not PaidExecutionAdmission:
+            raise LandingProviderError("paid_authority_invalid")
+        self._admission = admission
         self._profile = selected
         self._api_key = api_key.strip()
         self._transport = transport
@@ -307,16 +315,35 @@ class OpenAICompatibleLandingExecutor:
             pass
         else:
             raise LandingProviderError("executor_sync_context")
-        raw = asyncio.run(self._exchange(encoded, headers, deadline))
-        self._remaining(deadline)
-        result = (
-            replace(raw, elapsed_ms=int((self._monotonic() - started) * 1_000))
-            if isinstance(raw, HttpLandingExecutionResult) else self._decode_response(raw, started)
-        )
-        self._remaining(deadline)
+        if self._admission is None:
+            raise LandingProviderError("paid_authority_required")
+        input_ceiling = self._admission.input_ceiling(self.provider_id, self.model_id,
+            payload.get("media_kind"), len(encoded))
+        reservation = self._admission.reserve(self.provider_id, self.model_id, "paid-inference",
+            hashlib.sha256(encoded).hexdigest(), input_ceiling, self._profile.max_output_tokens)
+        try:
+            raw = asyncio.run(self._exchange(encoded, headers, deadline, reservation=reservation, input_digest=request.input_digest))
+        except BaseException:
+            self._admission.unknown_if_dispatched(reservation)
+            raise
+        try:
+            self._remaining(deadline)
+            result = (
+                replace(raw, elapsed_ms=int((self._monotonic() - started) * 1_000))
+                if isinstance(raw, HttpLandingExecutionResult) else self._decode_response(raw, started)
+            )
+            self._remaining(deadline)
+        except BaseException:
+            self._admission.unknown_if_dispatched(reservation)
+            raise
+        self._admission.finish(reservation, (result.usage_input_units, result.usage_output_units))
         return result
 
-    async def _exchange(self, encoded: bytes, headers, deadline: float):
+    async def _exchange(self, encoded: bytes, headers, deadline: float, *, reservation=None, input_digest=None):
+        if self._admission is None or reservation is None:
+            raise LandingProviderError("paid_authority_required")
+        if headers != self._request_headers():
+            raise LandingProviderError("paid_scope")
         from .landing_sse import QwenOmniStreamDecoder
 
         decoder = QwenOmniStreamDecoder(self._profile) if self._profile.streaming else None
@@ -329,6 +356,9 @@ class OpenAICompatibleLandingExecutor:
                 follow_redirects=False,
             ) as client:
                 self._remaining(deadline)
+                remaining = self._admission.dispatch(reservation, input_digest,
+                    hashlib.sha256(encoded).hexdigest(), self.provider_id, self.model_id)
+                deadline = min(deadline, self._monotonic() + remaining)
                 async with client.stream(
                     "POST", f"{self.base_url}/{self.endpoint_path}",
                     content=encoded, headers=headers,
@@ -545,6 +575,7 @@ def grok_landing_executor(
     transport: httpx.AsyncBaseTransport | None = None,
     requirements: LandingHostRequirementsV1 = CURRENT_LANDING_HOST_REQUIREMENTS,
     profile: HttpLandingProfile | None = None,
+    admission=None,
 ) -> OpenAICompatibleLandingExecutor:
     return OpenAICompatibleLandingExecutor(
         provider_id="grok",
@@ -553,6 +584,7 @@ def grok_landing_executor(
         api_key=api_key,
         transport=transport,
         profile=profile,
+        admission=admission,
     )
 
 
@@ -562,6 +594,7 @@ def qwen_landing_executor(
     transport: httpx.AsyncBaseTransport | None = None,
     requirements: LandingHostRequirementsV1 = CURRENT_LANDING_HOST_REQUIREMENTS,
     profile: HttpLandingProfile | None = None,
+    admission=None,
 ) -> OpenAICompatibleLandingExecutor:
     return OpenAICompatibleLandingExecutor(
         provider_id="qwen",
@@ -570,6 +603,7 @@ def qwen_landing_executor(
         api_key=api_key,
         transport=transport,
         profile=profile,
+        admission=admission,
     )
 
 
@@ -585,11 +619,12 @@ def compose_landing_live_grok(
     store: LandingJobStore | None = None,
     clock: Callable[[], datetime] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    admission=None,
 ) -> LandingApplicationService:
     return _compose_http_landing(
         binding=binding,
         profile=profile,
-        executor=grok_landing_executor(api_key=api_key, transport=transport, profile=profile),
+        executor=grok_landing_executor(api_key=api_key, transport=transport, profile=profile, admission=admission),
         source_repository=source_repository,
         scratch_root=scratch_root,
         output_directory=output_directory,
@@ -611,11 +646,12 @@ def compose_landing_live_qwen(
     store: LandingJobStore | None = None,
     clock: Callable[[], datetime] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    admission=None,
 ) -> LandingApplicationService:
     return _compose_http_landing(
         binding=binding,
         profile=profile,
-        executor=qwen_landing_executor(api_key=api_key, transport=transport, profile=profile),
+        executor=qwen_landing_executor(api_key=api_key, transport=transport, profile=profile, admission=admission),
         source_repository=source_repository,
         scratch_root=scratch_root,
         output_directory=output_directory,
@@ -625,11 +661,11 @@ def compose_landing_live_qwen(
     )
 
 
-def compose_landing_live_provider(*, api_key, profile, transport=None, **kwargs):
+def compose_landing_live_provider(*, api_key, profile, transport=None, admission=None, **kwargs):
     from .landing_extra_providers import landing_provider_executor
 
     return _compose_http_landing(profile=profile, executor=landing_provider_executor(
-        profile, api_key=api_key, transport=transport,
+        profile, api_key=api_key, transport=transport, admission=admission,
     ), **kwargs)
 
 
@@ -674,13 +710,16 @@ def compose_env_landing(
     store: LandingJobStore | None = None,
     clock: Callable[[], datetime] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    admission=None,
 ) -> LandingApplicationService | None:
     """Compose live Grok/Qwen landing when FACTORY_LANDING_PROVIDER is set.
 
     Unset provider returns None so the caller keeps the unavailable default.
     Does not read files named .env; only the provided mapping or process env.
     """
-    source_env = os.environ if environ is None else environ
+    if environ is None:
+        return None
+    source_env = environ
     provider = source_env.get(LANDING_PROVIDER_ENV, "").strip()
     if not provider:
         return None
@@ -705,7 +744,7 @@ def compose_env_landing(
         blobs=blobs,
         store=store,
         clock=clock,
-        transport=transport,
+        transport=transport, admission=admission,
     )
 
 
@@ -726,13 +765,15 @@ def _probe_failure_fields(exc: LandingProviderError) -> dict[str, object]:
 
 
 def probe_qwen(*, profile_id: str = "qwen-intl", qwen_env_file: Path | None = None,
-               transport: httpx.AsyncBaseTransport | None = None) -> dict[str, object]:
+               transport: httpx.AsyncBaseTransport | None = None, admission=None) -> dict[str, object]:
     """One synthetic normalization request; never reads project or customer inputs."""
+    if admission is None:
+        raise LandingProviderError("paid_authority_required")
     if profile_id not in PROBE_PROFILES:
         raise LandingProviderError("http_profile_identity")
     profile = HttpLandingProfile.for_provider(profile_id, available=True)
     executor = qwen_landing_executor(
-        api_key=qwen_api_key(env_file=qwen_env_file), profile=profile, transport=transport,
+        api_key=qwen_api_key(env_file=qwen_env_file), profile=profile, transport=transport, admission=admission,
     )
     brief = "Create an English landing page for a fictional local gardening club. One hero section. No links, prices, contacts or factual claims."
     input_digest = hashlib.sha256(brief.encode()).hexdigest()

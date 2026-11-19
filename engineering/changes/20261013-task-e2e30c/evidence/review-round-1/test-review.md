@@ -1,0 +1,42 @@
+# Independent test review — FAIL
+
+- **P2 — Exact argument scope lacks a discriminating regression.** `tests/test_task_execution_admission.py:35` consumes the valid grant before it tries changed arguments. Replay denial then hides broken argument binding. Replacing the argument digest with a constant passes all nine task-admission tests. Test changed content and changed destination against separate unused grants. Confirm the matching request still works afterward. This is a critical authorization coverage gap; this probe does not show that the original implementation uses a constant.
+- **P2 — Four paid limits lack independent regression coverage.** `factory/tests/test_paid_admission.py:35` uses equal account/task deadlines. Its budget fixtures exhaust task limits or in-flight limits. Removing account cost, account attempts, rate, or the task-specific deadline each passes all 20 paid-admission and failover-transport tests. Add cross-task account exhaustion with ample task limits, rate-window boundary cases, and a task deadline shorter than its account deadline. Check denial before dispatch and preserve the reservation count. These are critical money-path coverage gaps, not observed live overspend.
+
+Source: `/home/pall/projects/getzilla/.getzilla/runtime/worktrees/all-issues-20261013`; route `e2e30c9f2878`; comparison base `540c12f93e798c2f483455a5086ab0018ac3216e`. Before and after HEAD: `f995a5ab35a26abf967516fffccfbf1b3ba42063`; Git tree: `8ed90be2368af8abc653beba10c38c057bd6d7b3`; candidate fingerprint: `c8edeebeaab9ec8764de395fb176a896ff281c57711460854ce66b61f4dc8dbe`. Staged, unstaged and untracked inventories were empty at both checks.
+
+reviewed-tree-modified: no
+
+Scratch: `/home/pall/projects/getzilla/.getzilla/runtime/reviews/all-issues-f995a5a/test/snapshot`. Its reviewer-owned parent is mode0700 below the private mode0700 `reviews` directory. `git clone --no-hardlinks` reproduced the exact clean candidate; HEAD and fingerprint matched before probes. All mutations were restored in scratch, and its final fingerprint matches source. Capacity record is private `capacity.json`: 28 online CPUs, cpuset0-27, visible ancestor quotas unlimited, successful child affinity6-11. Tests ran serially; one test includes two short race workers. No candidate writes, paid calls, credentials or production operations occurred.
+
+Executed observations (cwd is scratch):
+
+```sh
+taskset -c 6-11 env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.getzilla:factory/src python3 -m unittest tests.test_task_execution_admission tests.test_execution_admission tests.test_harness_hook_payloads tests.test_trust_ci_locks factory.tests.test_paid_admission factory.tests.test_landing_failover_transport
+```
+
+Observed: 78 tests,31.533s,OK. This checks mandatory failures, actual input normalization, source scope, replay, paid admission/failover and rebound lock markers. `baseline.log` retains output.
+
+```sh
+taskset -c 6-11 env PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/pall/projects/getzilla/.getzilla/runtime/reviews/test-f995a-private GETZILLA_TEST_RUNTIME=/home/pall/projects/getzilla/.getzilla/runtime/reviews/test-f995a-private PYTHONPATH=.getzilla:factory/src python3 -m unittest tests.test_installer.OwnershipPlanTests tests.test_review_source tests.test_osv_endpoint_model tests.test_architecture_fitness.ArchitectureFitnessTests.test_relative_whole_module_keeps_real_package_identity tests.test_harnesses.CursorRuleTests.test_parent_relocation_before_temp_creation_fails_closed tests.test_harnesses.CursorRuleTests.test_parent_relocation_after_content_write_blocks_publication tests.test_harnesses.CursorRuleTests.test_parent_relocation_before_publication_preserves_old_file tests.test_policy_bypasses.SecretReadTests factory.tests.test_incident_evidence_plan
+```
+
+Observed:42 tests,19.483s,OK. This covers incident-path preservation, fresh ownership, quarantine-plan race checks, #73 review fixtures, relative module queue controls, descriptor relocation, historical secret-read regressions and incident-evidence plans. `supplemental.log` retains output. These tests do not claim an executed migration or incident cleanup.
+
+Mutation commands and results follow. All use `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=.getzilla:factory/src` and both temporary-root variables from the second command above. The private driver `probes-recheck.py` applies one listed replacement, runs the exact command, and restores original bytes before the next mutant.
+
+- **argument-binding: SURVIVED**. `.getzilla/getzilla/execution_admission.py`: replace `hashlib.sha256(encoded).hexdigest()` with `hashlib.sha256(b"constant").hexdigest()`. Command: `taskset -c 6-11 python3 -m unittest tests.test_task_execution_admission`. Observed: Ran 9 tests in 4.524s; OK.
+- **one-shot: KILLED**. `.getzilla/getzilla/execution_admission.py`: replace `or resource in used:` with `or False:`. Command: `taskset -c 6-11 python3 -m unittest tests.test_task_execution_admission.TaskExecutionAdmissionTests.test_exact_task_action_is_one_shot`. Observed: Ran 1 test in 0.418s; FAILED (failures=1).
+- **account-cost: SURVIVED**. `factory/src/getzilla_factory/paid_admission.py`: replace `sum(r[1] for r in rows) + cost > account.cost_limit_micros` with `False`. Command: `taskset -c 6-11 python3 -m unittest factory.tests.test_paid_admission factory.tests.test_landing_failover_transport`. Observed: Ran 20 tests in 5.286s; OK.
+- **account-attempts: SURVIVED**. `factory/src/getzilla_factory/paid_admission.py`: replace `or len(rows) >= account.max_attempts` with `or False`. Command: `taskset -c 6-11 python3 -m unittest factory.tests.test_paid_admission factory.tests.test_landing_failover_transport`. Observed: Ran 20 tests in 5.292s; OK.
+- **rate-limit: SURVIVED**. `factory/src/getzilla_factory/paid_admission.py`: replace `or sum(r[3] > now - 60 for r in rows) >= account.max_per_minute` with `or False`. Command: `taskset -c 6-11 python3 -m unittest factory.tests.test_paid_admission factory.tests.test_landing_failover_transport`. Observed: Ran 20 tests in 5.337s; OK.
+- **task-deadline: SURVIVED**. `factory/src/getzilla_factory/paid_admission.py`: replace `now < min(account.expires_at, task.deadline_at)` with `now < account.expires_at`. Command: `taskset -c 6-11 python3 -m unittest factory.tests.test_paid_admission factory.tests.test_landing_failover_transport`. Observed: Ran 20 tests in 5.299s; OK.
+- **markers: KILLED**. `trust-ci/lock_profiles.py`: replace `for environment in _marker_environments(lock, rows):` with `for environment in []:`. Command: `taskset -c 6-11 python3 -m unittest tests.test_trust_ci_locks`. Observed: Ran 9 tests in 0.643s; FAILED (failures=4).
+- **shell-secrets: KILLED**. `.getzilla/getzilla/_policy_legacy.py`: replace `def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:` with `def shell_secret_reference(root: Path, command: str, patterns: list[str]) -> str | None:
+    return None`. Command: `taskset -c 6-11 python3 -m unittest tests.test_policy_bypasses.SecretReadTests`. Observed: Ran 9 tests in 0.380s; FAILED (failures=21).
+
+The first paid probe attempt was INCONCLUSIVE: the host-config fixture rejected a mode0775 ancestor in its temporary path. No assertion detected the mutant. The corrected private temporary root made the same four probes run cleanly and survive. Both attempts remain in `probes.json` and `probes-recheck.json`; logs retain exact output. No blanket mutation score is claimed.
+
+Limits: Full PR verification, full coverage, PostgreSQL, external CI, real native-host interception and live paid/provider behavior were not executed in this bounded review. Installed launcher fixtures invoke hooks themselves. They are not proof that a native host loads hooks or emits nested events. The clean-start observation is historical to its recorded source and is not fresh candidate evidence. No fresh deployment-wide aggregate budget, secret revocation, production recovery or actual migration is claimed. #63 prose, #72 delivery status, #37/#38 historical action/resource controls and untouched dependency-scanner paths received static inspection or historical references only; their executable acceptance remains unexecuted here. All source clauses were checked against the supplied combined clause audit and follow-up implementation notes. Static inspection is not a passed probe.
+
+Recommendation: FAIL until the writer adds discriminating tests for both findings and fresh review confirms them. Keep live acceptance and final exact-head gates separate.
