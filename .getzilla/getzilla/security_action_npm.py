@@ -204,6 +204,9 @@ def _qualify_source(result, source, *, supplemental=None):
     for name, body in files.items():
         owner = max((path for path in metadata if name.startswith(path + '/')), key=len)
         owned[owner][name] = body
+    from .security_action_npm_comments import project
+    projection = project(source, files)
+    result = dict(result, proofs=[*result['proofs'], *projection['proofs']])
     normalized, retained = [], {}
     prefix = 'npm/' + source['sha256'] + '/'
     for parent, package in metadata.items():
@@ -236,6 +239,10 @@ def _qualify_source(result, source, *, supplemental=None):
             if terms or notices:
                 _fail('license-obligation-missing', 'cache fallback cannot replace or hide original npm terms/notices')
             for path, body in supplemental:
+                retained[path] = body
+                terms.append(path)
+        for (path, body), proof in zip(projection['terms'], projection['proofs']):
+            if proof['path'] in owned[parent]:
                 retained[path] = body
                 terms.append(path)
         component = {'id': prefix + parent, 'name': package['name'], 'version': package['version'],
