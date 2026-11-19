@@ -322,3 +322,83 @@ class OnnxInspectionTests(unittest.TestCase):
                     continue
                 self.assertFalse(result['runtime_supported'])
                 self.assertEqual(result['runtime_qualification'], 'not_performed')
+
+    def test_surplus_external_file_still_refuses_with_complete_bounded_locations(self):
+        files = self.external()
+        files.update(self.external('unused.bin'))
+        raw = model(graph(initializer=tensor(external=[('location', 'model.onnx_data')])))
+        with self.assertRaisesRegex(self.inspector.OnnxInspectionError, '^external tensor closure mismatch$') as caught:
+            self.inspect(raw, files)
+        self.assertEqual(getattr(caught.exception, 'diagnostics', None), {
+            'status': 'metadata_unavailable', 'runtime_supported': False, 'wire_walk_complete': True,
+            'observed_locations': ('model.onnx_data',),
+            'declared_locations': ('model.onnx_data', 'unused.bin'),
+            'unused_locations': ('unused.bin',),
+        })
+        self.assertLessEqual(len(caught.exception.diagnostics['declared_locations']), 2)
+
+    def test_early_malformed_and_resource_failures_expose_no_complete_walk_diagnostic(self):
+        files = self.external()
+        raw = model(graph(initializer=tensor(external=[('location', 'model.onnx_data')])))
+        for malformed in [raw + b'\x80', raw + field(26, b''),
+                          model(graph(initializer=tensor(external=[('location', 'not-declared')]))),
+                          raw + field(7, graph())]:
+            with self.subTest(malformed=malformed[-4:]), self.assertRaises(self.inspector.OnnxInspectionError) as caught:
+                self.inspect(malformed, files)
+            self.assertIsNone(getattr(caught.exception, 'diagnostics', None))
+        with patch.object(self.inspector, 'MAX_FIELDS', 3), self.assertRaises(self.inspector.OnnxInspectionError) as caught:
+            self.inspect(raw, files)
+        self.assertIsNone(getattr(caught.exception, 'diagnostics', None))
+
+    def test_expired_deadline_at_end_of_walk_does_not_expose_closure_diagnostic(self):
+        original = self.inspector._Wire.message
+        def message(wire, kind, start, end, depth):
+            result = original(wire, kind, start, end, depth)
+            if kind == 'Model':
+                wire.deadline = 0
+            return result
+        files = self.external()
+        with patch.object(self.inspector._Wire, 'message', message), \
+             self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'deadline') as caught:
+            self.inspect(external=files)
+        self.assertIsNone(getattr(caught.exception, 'diagnostics', None))
+
+    def test_midwalk_custody_changes_replace_completed_closure_diagnostic(self):
+        original = self.inspector._Wire.message
+        files = self.external()
+        for change in ['same-bytes-graph-replacement', 'external-mode', 'root-mode']:
+            def message(wire, kind, start, end, depth):
+                result = original(wire, kind, start, end, depth)
+                if kind == 'Model':
+                    if change == 'same-bytes-graph-replacement':
+                        replacement = self.path.with_suffix('.replacement')
+                        replacement.write_bytes(self.path.read_bytes())
+                        os.replace(replacement, self.path)
+                    elif change == 'external-mode':
+                        (self.root / 'onnx/model.onnx_data').chmod(0o666)
+                    else:
+                        self.root.chmod(0o777)
+                return result
+            try:
+                with self.subTest(change=change), patch.object(self.inspector._Wire, 'message', message), \
+                     self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'custody') as caught:
+                    self.inspect(external=files)
+                self.assertIsNone(caught.exception.diagnostics)
+            finally:
+                self.root.chmod(0o700)
+                (self.root / 'onnx/model.onnx_data').chmod(0o600)
+
+    def test_expired_deadline_after_parse_refusal_replaces_diagnostic(self):
+        original = self.inspector._Wire.parse
+        files = self.external()
+        with patch.object(self.inspector.time, 'monotonic', return_value=100) as clock:
+            def parse(wire):
+                try:
+                    return original(wire)
+                except self.inspector.OnnxInspectionError:
+                    clock.return_value = 131
+                    raise
+            with patch.object(self.inspector._Wire, 'parse', parse), \
+                 self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'deadline') as caught:
+                self.inspect(external=files)
+        self.assertIsNone(caught.exception.diagnostics)
