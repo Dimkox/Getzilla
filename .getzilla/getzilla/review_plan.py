@@ -312,10 +312,16 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
         if current != route or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint'] or git_head(root) != updates['risk_assessment']['head']:
             raise ValueError('route or source changed during reconciliation')
         from .state import _route_document, get_active_change, open_change_binding
+        from .workflow_storage import valid_package_path
+        package = get_active_change(root)
+        if (package is not None or route.get('change_id') is not None) and (
+                not isinstance(package, dict) or set(package) != {'change_id', 'path'}
+                or package['change_id'] != route.get('change_id')
+                or not valid_package_path(package['path'], package['change_id'])):
+            raise ValueError('selected accounting package does not match task')
         # Validate the closed state binding without requiring a cancelled draft
         # to have completed its spec or earned review receipts.
         open_change_binding(root)
-        package = get_active_change(root)
         if package and _route_document(root, root / package['path'] / 'state.json').get('status') == 'cancelled':
             raise ValueError('attached package is cancelled; use route --cancel, then --new-task to retry; cancellation is terminal')
         synchronize_accounting(root, route, updates['required_evidence'])
