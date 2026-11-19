@@ -17,7 +17,9 @@ class Parser(argparse.ArgumentParser):
 
 def main(argv=None):
     parser = Parser(description=__doc__)
-    parser.add_argument('action', choices=('status', 'input-audit', 'execute'))
+    parser.add_argument('action', choices=('status', 'input-audit', 'execute', 'witness-public-reviews', 'observe-public-producer'))
+    parser.add_argument('--registration', type=Path, help='Private bounded public review facts; not authority')
+    parser.add_argument('--session', help='Existing current task owner session for explicit witness action')
     parser.add_argument('--candidate', type=Path)
     parser.add_argument('--public-source-root', type=Path)
     args = parser.parse_args(argv)
@@ -25,6 +27,26 @@ def main(argv=None):
     if args.action == 'status':
         print(json.dumps({**status(), 'execution_enabled': False, 'module_selection': 'not_observed'}, sort_keys=True))
         return 0
+    if args.action in ('witness-public-reviews', 'observe-public-producer'):
+        if args.registration is None or args.session is None:
+            print(json.dumps({'status': 'unavailable', 'reason': 'invalid_arguments', 'ranking_permitted': False}))
+            return 2
+        from getzilla.state import bind_session
+        from getzilla.retrieval.public_review_witness import witness_public_reviews, consume_public_reviews, observe_public_producer
+        bind_session(args.session)
+        try:
+            if args.action == 'observe-public-producer':
+                facts = observe_public_producer(ROOT, str(args.registration))
+            else:
+                reference = witness_public_reviews(ROOT, str(args.registration))
+                facts = consume_public_reviews(reference)
+            print(json.dumps({'status': 'observed', **facts}, sort_keys=True))
+            return 0
+        except Exception:
+            print(json.dumps({'status': 'unavailable', 'reason': 'public_review_witness_unavailable', 'ranking_permitted': False}))
+            return 2
+        finally:
+            bind_session(None)
     if args.action == 'execute':
         print(json.dumps(status(), sort_keys=True))
         return 2

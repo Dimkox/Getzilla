@@ -1,6 +1,7 @@
 """Owned public-source custody fixtures; no native independent review or ranker."""
 from contextlib import ExitStack, chdir
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -36,6 +37,7 @@ class PublicResearchTests(unittest.TestCase):
         self.assertEqual(access.REQUEST_SECONDS, 2.0)
         self.assertEqual(access.MAX_CUT_BYTES, 8 * 1048576)
 
+    @unittest.skipUnless(os.name == 'posix' and hasattr(os, 'register_at_fork'), 'POSIX native-root source profile')
     def test_actual_owned_cut_and_current_policy_fence_separate_tiny_fixture(self):
         from tests.test_optional_modules import OptionalModuleTests
         fixture = OptionalModuleTests()
@@ -71,6 +73,7 @@ class PublicResearchTests(unittest.TestCase):
                 cut = broker.load_authorized_cut(handle, host.query, absolute_deadline=time.monotonic() + 2)
                 self.assertEqual([row.content for row in cut.documents], [raw])
                 self.assertTrue(host.held)
+                broker.check_current(handle)
                 with self.assertRaisesRegex(access.NativeAccessError, 'native_access_unavailable'):
                     broker.prepare_owned_response(handle, 'encoder', cut, 'rank', absolute_deadline=time.monotonic() + 2)
                 with self.assertRaisesRegex(access.NativeAccessError, 'native_access_expired'):
@@ -92,7 +95,7 @@ class PublicResearchTests(unittest.TestCase):
                 original.chmod(0o644)
                 policy.write_text(json.dumps({'schema_version': 2, 'secret_read_paths': ['fixture.py']}))
                 with self.assertRaisesRegex(access.NativeAccessError, 'native_access_stale'):
-                    host.check_current(host.binding, time.monotonic() + 2)
+                    broker.check_current(handle)
             finally:
                 broker.discard(handle)
 

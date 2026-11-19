@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "retrieval-public-producer-reference-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "original",
+    "producer_identity",
+    "supplement"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "operator-public-producer-reference/v1"
+    },
+    "original": {
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "bytes"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "sha256": {
+                  "const": "b1e1245b7d56570388cda4497d769cca0b8225361f8b80f27af9bf43a264e063"
+                },
+                "bytes": {
+                  "const": 12774653
+                }
+              }
+            },
+            {
+              "properties": {
+                "sha256": {
+                  "const": "2eb8d3850f59d816cbeac4bce46c9292254df274640a580540f4973f0b93aac8"
+                },
+                "bytes": {
+                  "const": 8591594
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "producer_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_task",
+        "native_session_id",
+        "native_generation"
+      ],
+      "properties": {
+        "agent_task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "native_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "native_generation": {
+          "type": "null"
+        }
+      }
+    },
+    "supplement": {
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "bytes"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            }
+          }
+        },
+        {
+          "properties": {
+            "bytes": {
+              "maximum": 1048576
+            }
+          }
+        }
+      ]
+    }
+  }
+}

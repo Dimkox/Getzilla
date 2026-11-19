@@ -19,7 +19,7 @@ from .evaluation_inputs import checked_relative
 from .evaluation_inputs_io import _json
 
 PUBLIC_LIMITS = (4000, 32 * 1024 * 1024, 1048576)
-BATCH_FILES = 16  # Smaller fresh cuts retain the unchanged broker128-document cap.
+BATCH_FILES = 128  # Existing Core cap; the fixed148-file corpus needs two fresh cuts.
 CATALOGS = (
     ('small', '096c8d42545d3b68ea21a4f890fb2b2d8979c0bd',
      'c7728dd6d7d25f9b623def3afa301957ac4a9558dfaf200c2fa70084653206f8'),
@@ -105,7 +105,8 @@ class _PublicHost(access.NativeAccessHost):
             raise access.NativeAccessError('native_access_denied')
         documents, total = [], 0
         for path, size, expected, commit in self.rows[self.batch * BATCH_FILES:(self.batch + 1) * BATCH_FILES]:
-            self.check_current(binding, deadline)
+            if time.monotonic() >= deadline:
+                raise access.NativeAccessError('native_access_expired')
             observed = self.sources.read(path, limit=PUBLIC_LIMITS[2])
             if observed is None or len(observed.content) != size or sha(observed.content) != expected:
                 raise access.NativeAccessError('native_access_stale')
