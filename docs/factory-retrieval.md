@@ -93,6 +93,13 @@ remain immutable. A retired payload cannot be restored or dispatched. Retrieval
 retirement/audit rows are retained; they cannot be pruned into an orphan source
 record. This audit metadata is not represented as anonymous or erased.
 
+Here `local_retired` means that the normal application row exposes only the
+tagged projection and cannot restore or dispatch its old payload. It is logical
+retirement, not secure erasure of PostgreSQL old tuple versions, WAL, replicas,
+backups, OS buffers or copied recipient memory. Those require the operator's
+separate storage/backup retention policy. The controls inspect the live stored
+rows and owned process references; they do not attest physical media erasure.
+
 The same registered UDS receives a fixed metadata-only retirement command. The
 actual owned receiver clears its one payload and retains a tombstone before
 acknowledgement. That tombstone rejects a delayed original handoff. Unarmed
