@@ -1,5 +1,6 @@
 flowchart LR
   node_8938bd3db1932751["NODE-CHANGE-SPEC-EVIDENCE | repository | repository engineering"]
+  node_4e78270f61d78ed8["NODE-DOCKER-ENGINE | service | Trust CI operators; compose-described TCP/2375 local executor"]
   node_0456afc65ddefc44["NODE-ENTIRE | external_system | Entire"]
   node_2e8a7072de3f3743["NODE-EXACT-SHA-WORKSPACE | repository | Trust CI operators"]
   node_0a0fe2f046a648e9["NODE-EXTERNAL-HOLDOUT | policy_bundle | external Trust CI policy operators"]
@@ -16,6 +17,8 @@ flowchart LR
   node_23677f8757246623["NODE-GOVERNANCE-VALIDATOR | local_component | repository engineering"]
   node_e4e37173e410ad23["NODE-HUMAN-APPROVAL | actor | human security approvers"]
   node_1c3a10ba26a8e80d["NODE-ISOLATED-RUNNER | runner | Trust CI operators"]
+  node_81fcab772d947882["NODE-LIVE-COMPONENT-OBSERVER | local_component | local component test operators"]
+  node_15647433e781e546["NODE-LIVE-DISPOSABLE-POSTGRES | datastore | local component test operators"]
   node_fdafbab352587936["NODE-LOCAL-ENTIRE-ADAPTER | local_component | repository engineering"]
   node_23bed8fcbfc79861["NODE-LOCAL-VERIFIER | local_component | repository engineering"]
   node_fd325b0205e2e68b["NODE-PILOT-CONTROL | local_component | single local pilot operator"]
@@ -40,6 +43,8 @@ flowchart LR
   node_dfd1104494c6ab8f -->|"EDGE-GOVERNANCE-REGISTRIES-VALIDATOR | data_flow | filesystem | DATA-REPOSITORY-SOURCE"| node_23677f8757246623
   node_23677f8757246623 -->|"EDGE-GOVERNANCE-VALIDATOR-LOCAL-VERIFIER | data_flow | filesystem | DATA-GOVERNANCE-EVIDENCE"| node_23bed8fcbfc79861
   node_e4e37173e410ad23 -->|"EDGE-HUMAN-TRUST-CI-API | data_flow | https | DATA-APPROVAL"| node_d0e570b2fbe52f98
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api | DATA-CHECK-STATUS"| node_4e78270f61d78ed8
+  node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql | DATA-CHECK-STATUS"| node_15647433e781e546
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https | DATA-PILOT-STATE"| node_8b8a8cd21b180532
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem | DATA-PILOT-STATE"| node_814a7fe70af9f16d
   node_1c3a10ba26a8e80d -->|"EDGE-RUNNER-EXTERNAL-HOLDOUT | data_flow | filesystem | DATA-HOLDOUT"| node_0a0fe2f046a648e9

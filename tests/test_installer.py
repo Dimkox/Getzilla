@@ -81,6 +81,25 @@ def _broken_local_links(document: Path, root: Path) -> list[str]:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_live_entrypoints_have_install_closure_and_target_owned_architecture(self) -> None:
+        with patch('subprocess.Popen', side_effect=AssertionError('unmocked child forbidden')), \
+                patch('socket.socket.connect', side_effect=AssertionError('unmocked network forbidden')):
+            required = {'scripts/getzilla_live.py', 'scripts/getzilla_live_lifecycle.py',
+                        'docs/isolated-ci-acceptance.md'}
+            self.assertTrue(required <= set(MODULE.MANAGED_FILES))
+            config = json.loads((ROOT/'.getzilla/config/managed.json').read_text())
+            self.assertTrue({'getzilla_live.py','getzilla_live_lifecycle.py'} <= set(config['scripts']))
+            self.assertNotIn('architecture/system.yaml', MODULE.MANAGED_FILES)
+            self.assertNotIn('architecture/rules.yaml', MODULE.MANAGED_FILES)
+            self.assertFalse(any(path.startswith('trust-ci/') for path in MODULE.MANAGED_DIRS))
+            core = MODULE.PayloadSelection(())
+            factory = MODULE.PayloadSelection((), factory=True)
+            for path in required:
+                self.assertTrue(core.includes(path))
+                self.assertTrue(factory.includes(path))
+            self.assertFalse(core.includes('factory/tests/run_live_suite.py'))
+            self.assertTrue(factory.includes('factory/tests/run_live_suite.py'))
+
     def test_factory_support_has_exact_component_ownership(self) -> None:
         support = {
             'engineering/contracts/openapi/factory-result-admission.v2.json',

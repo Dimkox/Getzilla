@@ -6152,6 +6152,18 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
     def setUpClass(cls):
         import psycopg
 
+        if os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL'):
+            from factory.tests.postgres_restart_probe import _owned_endpoint, _assert_cluster_session
+            from psycopg.conninfo import conninfo_to_dict
+            host, port = _owned_endpoint(os.environ['FACTORY_FRESH_POSTGRES_CONTAINER'],
+                os.environ['FACTORY_FRESH_POSTGRES_CONTAINER_ID'], os.environ['FACTORY_TEST_POSTGRES_NONCE'])
+            endpoint = conninfo_to_dict(FRESH_CLUSTER_DATABASE_URL)
+            if (set(endpoint) != {'host', 'port', 'user', 'password', 'dbname'} or endpoint['host'] != host
+                    or endpoint['port'] != str(port) or endpoint['user'] != 'factory_exit'
+                    or endpoint['dbname'] != 'factory_exit' or not endpoint['password']):
+                raise ValueError('Fresh database differs from original owned cluster endpoint')
+            _assert_cluster_session(FRESH_CLUSTER_DATABASE_URL, os.environ['FACTORY_FRESH_POSTGRES_CONTAINER_ID'])
+
         migrations = discover_migrations()
         if (len(migrations) != 25 or
                 [item.version for item in migrations] != list(range(1, 26)) or

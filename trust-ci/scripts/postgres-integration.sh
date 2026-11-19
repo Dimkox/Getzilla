@@ -2,6 +2,10 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+if [[ -n "${GETZILLA_LIVE_BINDING:-}" ]]; then
+  exec python3 "$root/scripts/getzilla_live.py" --root "$root" --cell trust-ci \
+    --output "$GETZILLA_LIVE_ARTIFACTS" --worker
+fi
 compose_file="$root/trust-ci/compose.test.yaml"
 project_name="adaptive-trust-ci-pgtest-${USER:-ci}-$$"
 

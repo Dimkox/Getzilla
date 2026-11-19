@@ -15,6 +15,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class OperationsTests(unittest.TestCase):
+    def test_bound_live_shells_use_structured_producer_before_compose(self) -> None:
+        for name in ('postgres-integration.sh', 'postgres-restart-drill.sh'):
+            source = (ROOT / 'trust-ci/scripts' / name).read_text()
+            self.assertLess(source.index('GETZILLA_LIVE_BINDING'), source.index('compose_file='))
+            self.assertIn('--cell trust-ci', source)
+            self.assertIn('--worker', source)
+
     def test_sandbox_uses_daemon_host_paths_and_mounts_holdout_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / 'workspace'
