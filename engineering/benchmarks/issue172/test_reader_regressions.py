@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 
-READER_PATH = pathlib.Path(__file__).resolve().parents[1] / "issue162/trusted_read.py"
+READER_PATH = pathlib.Path(__file__).resolve().parent / "reference/trusted_read.py"
 SPEC = importlib.util.spec_from_file_location("issue162_research_reader", READER_PATH)
 READER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(READER)

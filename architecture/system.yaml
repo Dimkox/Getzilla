@@ -5161,6 +5161,30 @@
       "secrets": [],
       "trust_domain": "TD-REPOSITORY",
       "type": "repository"
+    },
+    {
+      "data_classification": "DATA-FACTORY-LANDING-INPUT",
+      "id": "NODE-FACTORY-PAID-ADMISSION",
+      "owner": "explicit owning server authority",
+      "public_contracts": [
+        "CONTRACT-PAID-EXECUTION-AUTHORITY-V1"
+      ],
+      "repository_paths": [
+        "factory/src/getzilla_factory/paid_admission.py",
+        "factory/src/getzilla_factory/resources/landing-sqlite-003-paid-admission.sql",
+        "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+        "factory/tests/test_paid_admission.py",
+        "factory/tests/test_control_schema_bindings.py"
+      ],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "python_process",
+        "lifecycle": "on_demand",
+        "network": "none"
+      },
+      "secrets": [],
+      "trust_domain": "TD-FACTORY-CONTROL",
+      "type": "local_component"
     }
   ],
   "schema_version": 1,
