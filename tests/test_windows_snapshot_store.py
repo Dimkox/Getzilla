@@ -51,7 +51,7 @@ class DispatchTests(unittest.TestCase):
                     raise FileNotFoundError(parts)
                 return bodies[parts]
 
-        backend = SimpleNamespace(SnapshotStore=NativeStore)
+        backend = SimpleNamespace(SnapshotStore=NativeStore, SnapshotReader=NativeStore)
         with mock.patch.object(SD, 'os', SimpleNamespace(name='nt')), \
                 mock.patch.object(SD, 'DESCRIPTOR_IO_AVAILABLE', False), \
                 mock.patch.dict(sys.modules, {'getzilla.security_data_windows': backend}):

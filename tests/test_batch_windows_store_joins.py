@@ -9,7 +9,7 @@ from unittest import mock
 
 import getzilla
 from getzilla import security_data as data, security_data_windows as windows, verification_policy_source
-from getzilla import security_osv_diagnostics  # noqa: F401
+from getzilla import security_osv_diagnostics, security_publication, security_windows_publication  # noqa: F401
 from getzilla import security_osv_snapshot as snapshot, verification_plan
 from tests.test_batch_composition_joins import _Registry, pure
 from tests.test_osv_alias_decisions import archive, record
@@ -54,7 +54,9 @@ class WindowsStoreJoinTests(unittest.TestCase):
         with mock.patch.object(data, 'os', SimpleNamespace(name='nt')), \
                 mock.patch.object(data, '_SnapshotStore', side_effect=AssertionError('unexpected POSIX fallback')), \
                 mock.patch.object(windows, 'SnapshotStore', side_effect=lambda path, create=False:
-                    backend(path, create=create, _native=native)), pure():
+                    backend(path, create=create, _native=native)), \
+                mock.patch.object(windows, 'SnapshotReader', side_effect=lambda path:
+                    backend(path, _native=native)), pure():
             publish([unrelated, record(opaque+['CVE-2026-12345'])])
             findings = snapshot.query_offline([dependency], database, now=NOW)
             self.assertEqual(len(findings), 1)
