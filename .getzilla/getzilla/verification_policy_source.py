@@ -57,7 +57,7 @@ def implementation_source_binding() -> dict:
                  'managed_environment.py', 'managed_pyyaml.py', 'managed_npm.py', 'managed_software.py', 'opengrep_releases.py',
                  'process_limits.py', 'architecture.py', 'architecture_diff.py', 'architecture_fitness.py',
                  'architecture_diagrams.py', 'governance.py', 'governance_records.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
-                 'review_plan.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
+                 'review_plan.py', 'historical_data.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
                  'verification_journal.py', 'metrics_journal.py', 'route_metrics.py', 'queue_refusal.py', 'harnesses.py'):
         module = importlib.import_module('.' + name[:-3], __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()

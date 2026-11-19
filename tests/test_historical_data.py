@@ -171,3 +171,129 @@ class HistoricalArchiveFormatTests(unittest.TestCase):
         body[1024] ^= 1
         with self.assertRaises(ValueError):
             history.source_members(self.compressed(body))
+
+
+class HistoricalGitCustodyTests(unittest.TestCase):
+    write = HistoricalReconciliationTests.write
+    commit = HistoricalReconciliationTests.commit
+    route = HistoricalReconciliationTests.route
+    publish = HistoricalReconciliationTests.publish
+
+    def setUp(self):
+        HistoricalReconciliationTests.setUp(self)
+        self.publish()
+
+    # Reuse only fixture methods, not the parent class's reconciliation tests.
+    def _during_validation(self, mutation):
+        from unittest import mock
+        original = history.source_members
+        def changed(raw):
+            rows = original(raw)
+            mutation()
+            return rows
+        with mock.patch.object(history, 'source_members', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'HISTORICAL_GIT_CUSTODY'):
+                history.issue170_source(self.root, 'HEAD')
+
+    def test_git_configuration_replacement_during_decode_refuses(self):
+        import os
+        path = self.root / '.git/config'
+        replacement = path.with_name('config-replacement')
+        def replace():
+            replacement.write_bytes(path.read_bytes())
+            os.replace(replacement, path)
+        self._during_validation(replace)
+
+    def test_head_change_during_decode_refuses(self):
+        self._during_validation(lambda: git(self.root, 'update-ref', 'HEAD', self.base))
+
+    def test_object_content_replacement_after_size_before_body_refuses(self):
+        import os
+        import zlib
+        from unittest import mock
+        raw = (ROOT / history.SOURCE_PATH).read_bytes()
+        oid = history.SOURCE_BLOB
+        path = self.root / '.git/objects' / oid[:2] / oid[2:]
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(zlib.compress(b'blob ' + str(len(raw)).encode() + b'\0' + raw))
+        original = history._git
+        def read(root, arguments, **options):
+            if arguments == ['cat-file', 'blob', oid]:
+                changed = bytearray(raw)
+                changed[-1] ^= 1
+                replacement = path.with_name('replacement')
+                replacement.write_bytes(zlib.compress(b'blob ' + str(len(changed)).encode() + b'\0' + changed))
+                os.replace(replacement, path)
+                # Git may prefer an already packed alternate over a loose
+                # duplicate. Select the fixture's owned local object only;
+                # never modify the shared historical object database.
+                alternate = self.root / '.git/objects/info/alternates'
+                saved = alternate.read_bytes()
+                alternate.unlink()
+                try:
+                    value = original(root, arguments, **options)
+                    self.assertNotEqual(value, raw)
+                    return value
+                finally:
+                    alternate.write_bytes(saved)
+            return original(root, arguments, **options)
+        with mock.patch.object(history, '_git', side_effect=read), self.assertRaises(ValueError):
+            history.issue170_source(self.root, 'HEAD')
+
+    def test_source_root_replacement_during_decode_refuses(self):
+        backup = self.root.with_name(self.root.name + '-original')
+        def replace():
+            self.root.rename(backup)
+            self.addCleanup(shutil.rmtree, backup)
+            shutil.copytree(backup, self.root)
+        self._during_validation(replace)
+
+    def test_deadline_expiry_after_read_does_not_admit_the_catalogue(self):
+        from unittest import mock
+        original_operation, scopes = history._GitOperation, []
+        def operation(root):
+            scope = original_operation(root)
+            scopes.append(scope)
+            return scope
+        with mock.patch.object(history, '_GitOperation', side_effect=operation):
+            self._during_validation(lambda: setattr(scopes[0], '_deadline', 0))
+
+    def test_every_read_shares_one_scope_and_exact_blob_caps(self):
+        from unittest import mock
+        original, calls = history._git, []
+        def read(root, arguments, **options):
+            calls.append((arguments, options['limit'], options['_scope']))
+            return original(root, arguments, **options)
+        with mock.patch.object(history, '_git', side_effect=read):
+            source = history.issue170_source(self.root, 'HEAD')
+        self.assertEqual(source['sha256'], history.SOURCE_SHA256)
+        self.assertEqual(len({id(row[2]) for row in calls}), 1)
+        from getzilla.architecture_diff import _guarded_git_arguments
+        self.assertTrue(all(_guarded_git_arguments(args, None) for args, _, _ in calls))
+        self.assertEqual([(args[2], cap) for args, cap, _ in calls if args[:2] == ['cat-file', 'blob']],
+                         [(history.SOURCE_BLOB, history.SOURCE_SIZE), (history.MANIFEST_BLOB, 12201)])
+        self.assertTrue(all(0 < cap <= history.SOURCE_SIZE for _, cap, _ in calls))
+
+    def test_mismatched_object_size_refuses_before_payload_read(self):
+        from unittest import mock
+        original, payload_reads = history._git, []
+        def read(root, arguments, **options):
+            if arguments[:3] == ['ls-tree', '-l', '-z'] and arguments[-1] == history.SOURCE_PATH:
+                return original(root, arguments, **options).replace(
+                    str(history.SOURCE_SIZE).encode() + b'\t', str(history.SOURCE_SIZE + 1).encode() + b'\t')
+            if arguments[:2] == ['cat-file', 'blob']:
+                payload_reads.append(arguments)
+            return original(root, arguments, **options)
+        with mock.patch.object(history, '_git', side_effect=read), self.assertRaisesRegex(ValueError, 'GIT_BOUNDS'):
+            history.issue170_source(self.root, 'HEAD')
+        self.assertFalse(payload_reads)
+
+    def test_bounded_git_payload_overflow_refuses(self):
+        from unittest import mock
+        original = history._git
+        def read(root, arguments, **options):
+            if arguments == ['cat-file', 'blob', history.SOURCE_BLOB]:
+                options['limit'] = history.SOURCE_SIZE - 1
+            return original(root, arguments, **options)
+        with mock.patch.object(history, '_git', side_effect=read), self.assertRaisesRegex(ValueError, 'GIT_CUSTODY'):
+            history.issue170_source(self.root, 'HEAD')

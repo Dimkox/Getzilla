@@ -11,7 +11,8 @@ from pathlib import PurePosixPath
 import re
 import zlib
 
-from .project_ingestion import _git
+from .architecture import ArchitectureError
+from .architecture_diff import _GitOperation, _git
 
 PUBLICATION = 'b106b5cc5acc0dbbe4d3112446512a077cea546f'
 PUBLICATION_TREE = '98967459bf7e8ae91603ebf249e7314b0320fa59'
@@ -112,13 +113,17 @@ def source_members(raw: bytes) -> list[dict]:
     return sorted(rows, key=lambda row: row['path'])
 
 
-def _entry(root, ref, path):
-    rows = _git(root, 'ls-tree', '-z', ref, '--', path).stdout.split(b'\0')
+def _entry(root, ref, path, scope):
+    rows = _git(root, ['ls-tree', '-l', '-z', ref, '--', path], limit=256, _scope=scope).split(b'\0')
     if rows == [b'']:
         return None
     if len(rows) != 2 or rows[1] or rows[0].split(b'\t', 1)[1] != path.encode():
         raise ValueError('HISTORICAL_GIT_INVENTORY')
-    return rows[0].split(b'\t', 1)[0].split()
+    metadata = rows[0].split(b'\t', 1)[0].split()
+    expected = {SOURCE_PATH: SOURCE_SIZE, PREFIX + '/SHA256SUMS.json': 12201}
+    if len(metadata) != 4 or (path in expected and metadata[3] != str(expected[path]).encode()):
+        raise ValueError('HISTORICAL_GIT_BOUNDS')
+    return metadata[:3]
 
 
 def issue170_source(root, ref: str) -> dict | None:
@@ -128,26 +133,36 @@ def issue170_source(root, ref: str) -> dict | None:
     checksums and the four binary artifacts. No working file or caller-supplied
     manifest can substitute for the immutable Git blobs.
     """
-    archive = _entry(root, ref, SOURCE_PATH)
+    try:
+        with _GitOperation(root) as scope:
+            return _source_under_custody(root, ref, scope)
+    except ArchitectureError as error:
+        raise ValueError('HISTORICAL_GIT_CUSTODY') from error
+
+
+def _source_under_custody(root, ref, scope):
+    if ref == 'HEAD':
+        ref = _git(root, ['rev-parse', '--verify', 'HEAD^{commit}'], limit=128, _scope=scope).decode('ascii').strip()
+    if not isinstance(ref, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', ref):
+        raise ValueError('HISTORICAL_GIT_REF')
+    archive = _entry(root, ref, SOURCE_PATH, scope)
     if archive is None:
         return None
-    _git(root, 'merge-base', '--is-ancestor', PUBLICATION, ref)
-    tree = _entry(root, ref, PREFIX)
+    _git(root, ['merge-base', '--is-ancestor', PUBLICATION, ref], limit=1, _scope=scope)
+    tree = _entry(root, ref, PREFIX, scope)
     if (tree != [b'040000', b'tree', PUBLICATION_TREE.encode()]
-            or _entry(root, PUBLICATION, PREFIX) != tree
+            or _entry(root, PUBLICATION, PREFIX, scope) != tree
             or archive != [b'100644', b'blob', SOURCE_BLOB.encode()]
-            or _entry(root, ref, PREFIX + '/SHA256SUMS.json') != [b'100644', b'blob', MANIFEST_BLOB.encode()]):
+            or _entry(root, ref, PREFIX + '/SHA256SUMS.json', scope) != [b'100644', b'blob', MANIFEST_BLOB.encode()]):
         raise ValueError('HISTORICAL_PUBLICATION_IDENTITY')
-    for oid, size in ((SOURCE_BLOB, SOURCE_SIZE), (MANIFEST_BLOB, 12201)):
-        if _git(root, 'cat-file', '-s', oid).stdout.strip() != str(size).encode():
-            raise ValueError('HISTORICAL_GIT_BOUNDS')
-    raw = _git(root, 'cat-file', 'blob', SOURCE_BLOB).stdout
-    manifest = _git(root, 'cat-file', 'blob', MANIFEST_BLOB).stdout
+    raw = _git(root, ['cat-file', 'blob', SOURCE_BLOB], limit=SOURCE_SIZE, _scope=scope)
+    manifest = _git(root, ['cat-file', 'blob', MANIFEST_BLOB], limit=12201, _scope=scope)
     if (len(raw) != SOURCE_SIZE or hashlib.sha256(raw).hexdigest() != SOURCE_SHA256
             or len(manifest) != 12201 or hashlib.sha256(manifest).hexdigest() != MANIFEST_SHA256
             or json.loads(manifest).get('upstream-source.tar.gz') != SOURCE_SHA256):
         raise ValueError('HISTORICAL_PUBLICATION_DIGEST')
     members = source_members(raw)
+    scope.check(root)
     return {'path': SOURCE_PATH, 'classification': 'historical_source_data',
             'publication_commit': PUBLICATION, 'publication_tree': PUBLICATION_TREE,
             'git_blob': SOURCE_BLOB, 'sha256': SOURCE_SHA256, 'bytes': SOURCE_SIZE, 'mode': '100644',
