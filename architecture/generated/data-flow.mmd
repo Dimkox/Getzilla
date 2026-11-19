@@ -57,6 +57,7 @@ flowchart LR
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-DOCKER | data_flow | docker_api | DATA-CHECK-STATUS"| node_4e78270f61d78ed8
   node_81fcab772d947882 -->|"EDGE-LIVE-OBSERVER-POSTGRES | data_flow | postgresql | DATA-CHECK-STATUS"| node_15647433e781e546
   node_99c8497c4eb3c986 -->|"EDGE-OPTIONAL-GET-GITHUB | data_flow | https | DATA-CHECK-STATUS | DATA-REPOSITORY-SOURCE"| node_8b8a8cd21b180532
+  node_4ceddb2cec544a16 -->|"EDGE-PAID-AUTHORITY-JOURNAL | data_flow | sqlite | DATA-FACTORY-LANDING-INPUT"| node_7c8192807445a8a6
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https | DATA-PILOT-STATE"| node_8b8a8cd21b180532
   node_fd325b0205e2e68b -->|"EDGE-PILOT-STATE | data_flow | filesystem | DATA-PILOT-STATE"| node_814a7fe70af9f16d
   node_d0e570b2fbe52f98 -->|"EDGE-PUBLIC-API-JOURNAL | data_flow | sqlite | DATA-ATTESTATION | DATA-JOB-STATE"| node_184d4805d75dbf51

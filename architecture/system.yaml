@@ -552,6 +552,14 @@
       "path": "engineering/contracts/openapi/trust-ci.public.v1.json",
       "role": "bidirectional",
       "version": "1"
+    },
+    {
+      "compatibility": "bidirectional",
+      "id": "CONTRACT-PAID-EXECUTION-AUTHORITY-V1",
+      "kind": "json_schema",
+      "path": "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json",
+      "role": "bidirectional",
+      "version": "1"
     }
   ],
   "data_classifications": [
@@ -3381,29 +3389,6 @@
       "sync_or_async": "synchronous",
       "to": "NODE-FACTORY-LANDING-SQLITE",
       "type": "data_flow"
-    },
-    {
-      "allowed_data": [
-        "DATA-REPOSITORY-SOURCE"
-      ],
-      "authentication": "local_os",
-      "direction": "from_to",
-      "failure_behavior": {
-        "correlation_id": "not_required",
-        "idempotency": "not_required",
-        "max_retries": 0,
-        "mode": "fail_closed",
-        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
-        "terminal_action": "reject",
-        "timeout_ms": 5000
-      },
-      "from": "NODE-LOCAL-ROUTE-POLICY",
-      "id": "EDGE-ROUTE-TASK-ADMISSION",
-      "network_policy": "no_network",
-      "protocol": "python_import",
-      "sync_or_async": "synchronous",
-      "to": "NODE-LOCAL-TASK-ADMISSION",
-      "type": "dependency"
     }
   ],
   "nodes": [
