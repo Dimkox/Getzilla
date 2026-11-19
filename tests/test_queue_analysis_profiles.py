@@ -426,3 +426,19 @@ class QueueAnalysisProfileTests(unittest.TestCase):
                    and any(alias.name == 'artifact_catalog_source' for alias in node.names)]
         self.assertTrue(imports)
         self.assertTrue(all(node.module == 'security_artifacts' for node in imports))
+
+    def test_public_review_actual_policy_helpers_are_source_bound(self):
+        import importlib
+        from getzilla.verification_plan import policy_binding
+        labels = ('retrieval/public_review_inputs.py', 'retrieval/public_query_lineage.py',
+                  'retrieval/public_review_witness.py')
+        with tempfile.TemporaryDirectory() as directory:
+            before = policy_binding(Path(directory))
+            for label in labels:
+                with self.subTest(owner=label):
+                    module = importlib.import_module('getzilla.' + label[:-3].replace('/', '.'))
+                    changed = (ROOT / '.getzilla/getzilla' / label).read_bytes() + b'\n# actual owner mutation\n'
+                    with patch.object(module.__loader__, 'get_data', return_value=changed):
+                        after = policy_binding(Path(directory))
+                    self.assertEqual(after['implementation'][label], hashlib.sha256(changed).hexdigest())
+                    self.assertNotEqual(before['digest'], after['digest'])
