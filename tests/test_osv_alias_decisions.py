@@ -20,6 +20,7 @@ from getzilla import expanded_security as expanded  # noqa: E402
 from getzilla import security_cli  # noqa: E402
 from getzilla import verification  # noqa: E402
 from getzilla import util  # noqa: E402
+from tests.osv_owned_ports import snapshot_ports  # noqa: E402
 
 CVE='CVE-2026-12345'
 BAD=[' CVE-2026-12345 ', 'CVE-2026-12345,', 'CVE-2026-12345\n', 'cve-2026-12345']
@@ -48,19 +49,8 @@ def archive(records):
 
 def offline(module,records):
     payload=archive(records)
-    original_zip=zipfile.ZipFile
-    def opened(value,*args,**kwargs):
-        if isinstance(value,Path):
-            if value!=Path('/owned-db/PyPI/all.zip'):
-                raise AssertionError('foreign archive')
-            value=io.BytesIO(payload)
-        return original_zip(value,*args,**kwargs)
     with ExitStack() as stack:
-        stack.enter_context(patch.object(zipfile,'ZipFile',side_effect=opened))
-        if module is snapshot:
-            stack.enter_context(patch.object(snapshot,'read_snapshot',return_value=(payload,{})))
-        else:
-            stack.enter_context(patch.object(Path,'is_file',return_value=True))
+        snapshot_ports(stack,module,payload)
         stack.enter_context(denied_effects())
         data.osv_coverage(payload,'PyPI')
         return module.query_offline([module.Dependency('PyPI','owned','1.0.0','owned.lock')],Path('/owned-db'))
@@ -148,9 +138,18 @@ class AliasDecisionTests(unittest.TestCase):
         finding=module.Finding(dependency,'OSV-OWNED-1',aliases=[],raw_aliases=raw)
         config={'exclude':[],'accept':[{'id':accepted_id,'expires':'2099-01-01'}]}
         with ExitStack() as stack:
+            proof=snapshot_ports(stack,module,archive([record(raw)]))
+            def owned_findings(dependencies,database,*,now=None,source_evidence=None):
+                self.assertEqual(dependencies,[dependency])
+                self.assertEqual(database,Path('/owned-db'))
+                source_evidence.append(copy.deepcopy(proof))
+                return [finding]
             stack.enter_context(patch.object(module,'load_config',return_value=config))
             stack.enter_context(patch.object(module,'collect_dependencies',return_value=([dependency],[])))
-            stack.enter_context(patch.object(module,'query_offline',return_value=[finding]))
+            if module is legacy:
+                stack.enter_context(patch.object(module,'dependency_inventory',
+                    return_value=([dependency],[],{'fixture':'owned dependency'})))
+            stack.enter_context(patch.object(module,'query_offline',side_effect=owned_findings))
             stack.enter_context(denied_effects())
             return module.scan(Path('/owned-project'),environ={'GETZILLA_OSV_DB':'/owned-db'},today=date(2026,11,17))
 
@@ -272,8 +271,13 @@ class AliasDecisionTests(unittest.TestCase):
         script=ROOT/'scripts/getzilla_vulns.py'
         code=compile(script.read_bytes(),str(script),'exec')
         output=io.StringIO()
+        def recheck_projection(root,current,*,environ):
+            self.assertEqual(root,Path('/owned-project'))
+            self.assertIs(current,report)
+            self.assertEqual(output.getvalue(),'')
         with ExitStack() as stack:
             stack.enter_context(patch.object(legacy,'scan',return_value=report))
+            recheck=stack.enter_context(patch.object(legacy,'recheck_report',side_effect=recheck_projection))
             stack.enter_context(patch.object(util,'find_root',return_value=Path('/owned-project')))
             stack.enter_context(patch.object(sys,'argv',['getzilla_vulns.py']))
             stack.enter_context(patch.object(sys,'stdout',output))
@@ -282,6 +286,7 @@ class AliasDecisionTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as stopped:
                 exec(code,{'__file__':str(script),'__name__':'__main__'})
         self.assertEqual(stopped.exception.code,1)
+        self.assertEqual(recheck.call_count,1)
         self.assertNotIn('\x1b',output.getvalue())
         self.assertIn('\\u001b',output.getvalue())
         self.assertIn('\\n',output.getvalue())
@@ -293,14 +298,20 @@ class AliasDecisionTests(unittest.TestCase):
         script=ROOT/'scripts/getzilla_vulns.py'
         code=compile(script.read_bytes(),str(script),'exec')
         output=io.StringIO()
+        def recheck_projection(root,current,*,environ):
+            self.assertEqual(root,Path('/owned-project'))
+            self.assertIs(current,report)
+            self.assertEqual(output.getvalue(),'')
         with ExitStack() as stack:
             stack.enter_context(patch.object(legacy,'scan',return_value=report))
+            recheck=stack.enter_context(patch.object(legacy,'recheck_report',side_effect=recheck_projection))
             stack.enter_context(patch.object(util,'find_root',return_value=Path('/owned-project')))
             stack.enter_context(patch.object(sys,'argv',['getzilla_vulns.py','--json']))
             stack.enter_context(patch.object(sys,'stdout',output))
             stack.enter_context(denied_effects())
             with self.assertRaises(SystemExit):
                 exec(code,{'__file__':str(script),'__name__':'__main__'})
+        self.assertEqual(recheck.call_count,1)
         self.assertNotIn('\u202e',output.getvalue())
         self.assertEqual(json.loads(output.getvalue())['findings'][0]['raw_aliases'],finding['raw_aliases'])
 

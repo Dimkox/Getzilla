@@ -2,6 +2,7 @@
 from contextlib import ExitStack, contextmanager
 from datetime import date
 import copy
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla import known_vulns as legacy  # noqa: E402
 from getzilla import security_osv_snapshot as snapshot  # noqa: E402
 from getzilla import security_data as data  # noqa: E402
+from tests.osv_owned_ports import snapshot_ports  # noqa: E402
 
 
 def row(name='owned', **fields):
@@ -48,31 +50,8 @@ def denied_effects():
 @contextmanager
 def owned_query_ports(module, payload):
     """Only the owned archive port and synthetic dependency/config are permitted."""
-    original_zip = zipfile.ZipFile
-
-    def opened(value, *args, **kwargs):
-        if isinstance(value, Path):
-            if value != Path('/owned-db/PyPI/all.zip'):
-                raise AssertionError('outside owned archive')
-            value = io.BytesIO(payload)
-        return original_zip(value, *args, **kwargs)
-
-    def owned_file(path):
-        if path != Path('/owned-db/PyPI/all.zip'):
-            raise AssertionError('outside owned archive metadata')
-        return True
-
     with ExitStack() as stack:
-        stack.enter_context(patch.object(zipfile, 'ZipFile', side_effect=opened))
-        if module is snapshot:
-            def read_owned(database, source, **kwargs):
-                if database != Path('/owned-db') or source != 'osv:PyPI':
-                    raise AssertionError('outside owned snapshot')
-                data.osv_coverage(payload, 'PyPI')
-                return payload, {}
-            stack.enter_context(patch.object(snapshot, 'read_snapshot', side_effect=read_owned))
-        else:
-            stack.enter_context(patch.object(Path, 'is_file', owned_file))
+        snapshot_ports(stack, module, payload)
         stack.enter_context(denied_effects())
         yield
 
@@ -88,6 +67,9 @@ class UnknownVersionCoverageTests(unittest.TestCase):
                 'exclude': [], 'accept': [{'id': 'OSV-KNOWN', 'expires': '2099-01-01'},
                                            {'id': 'OSV-UNKNOWN', 'expires': '2099-01-01'}]}))
             stack.enter_context(patch.object(module, 'collect_dependencies', return_value=([dependency], ['owned.lock'])))
+            if module is legacy:
+                stack.enter_context(patch.object(module, 'dependency_inventory',
+                    return_value=([dependency], ['owned.lock'], {'fixture': 'owned dependency'})))
             return module.scan(Path('/owned-project'), environ={'GETZILLA_OSV_DB': '/owned-db'}, today=date(2026, 11, 17))
 
     def test_transport_retains_unknown_rows_and_exact_archive_bytes(self):
@@ -138,8 +120,12 @@ class UnknownVersionCoverageTests(unittest.TestCase):
                        {'ranges': None}, {'ranges': {}}, {'ranges': [None]}):
             payload = archive([record('OSV-KNOWN', row(versions=['1.0.0'])),
                                record('OSV-UNRELATED', row('other', **fields))])
-            with denied_effects(), self.assertRaisesRegex(data.SecurityDataError, 'malformed OSV (versions|ranges)'):
+            with denied_effects(), self.assertRaisesRegex(data.SecurityDataError,
+                    r'^invalid OSV snapshot for PyPI member_sha256=[0-9a-f]{64} id_sha256=[0-9a-f]{64}$') as error:
                 data.osv_coverage(payload, 'PyPI')
+            self.assertNotIn('OSV-UNRELATED', str(error.exception))
+            self.assertIn('member_sha256=' + hashlib.sha256(b'owned-1.json').hexdigest(), str(error.exception))
+            self.assertIn('id_sha256=' + hashlib.sha256(b'OSV-UNRELATED').hexdigest(), str(error.exception))
 
     def test_empty_explicit_bounds_are_unknown_not_all_versions(self):
         records = [record('OSV-UNKNOWN', row(versions=[], ranges=[]))]

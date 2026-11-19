@@ -32,7 +32,11 @@ _PATH = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z')
 
 
 class OnnxInspectionError(ValueError):
-    """Malformed, changed, unsupported wire structure or exhausted fixed bounds."""
+    """Refusal; optional locations describe only a completed known wire walk."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.diagnostics = None
 
 
 # Only these v1.19.1 field numbers and wire kinds are understood. A future or
@@ -436,8 +440,23 @@ class _Wire:
 
     def parse(self):
         result = self.message('Model', 0, self.size, 0)
-        if {item['location'] for item in self.references} != set(self.external):
-            _fail('external tensor closure mismatch')
+        self.current()
+        observed = {item['location'] for item in self.references}
+        declared = set(self.external)
+        if observed != declared:
+            # Every location was path/pin checked during the complete message
+            # walk. Both sets remain bounded by MAX_EXTERNAL_FILES and each
+            # string by MAX_STRING_BYTES. This is still the identical refusal,
+            # never an ignore-extra option or runtime/admission authority.
+            failure = OnnxInspectionError('external tensor closure mismatch')
+            failure.diagnostics = {
+                'status': 'metadata_unavailable', 'runtime_supported': False,
+                'wire_walk_complete': True,
+                'observed_locations': tuple(sorted(observed)),
+                'declared_locations': tuple(sorted(declared)),
+                'unused_locations': tuple(sorted(declared-observed)),
+            }
+            raise failure
         domains = {domain for domain, _ in self.opsets}
         if any(domain not in domains for domain, _ in self.operators):
             self.unsupported.add('operator_domain_without_opset')
@@ -507,7 +526,18 @@ def inspect_onnx(root: Path, graph: str, *, graph_bytes: int, graph_sha256: str,
                 _fail('graph hash or size mismatch')
             for current in checks:
                 current()
-            result = _Wire(descriptor, graph_bytes, expected, deadline).parse()
+            try:
+                result = _Wire(descriptor, graph_bytes, expected, deadline).parse()
+            except OnnxInspectionError as error:
+                if error.diagnostics is not None:
+                    # A completed wire walk does not establish current custody.
+                    # Refusals also need these checks before exposing its facts;
+                    # a changed file or expired deadline replaces the details.
+                    for current in checks:
+                        current()
+                    if time.monotonic() >= deadline:
+                        _fail('metadata deadline exceeded')
+                raise
             for current in checks:
                 current()
             if time.monotonic() >= deadline:

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:getzilla:research162:noanswer-resolutions:v1",
+  "$comment": "Actual coordinator resolution of linguist non-exhaustive scope only after complete first/second/adjudicated source coverage and all fixed-universe final cells2. query_report_digest is retrieval.contracts.digest(parsed accepted final language report), not raw SHA. Remaining ambiguity/any relevant cell refuses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "resolutions"
+  ],
+  "properties": {
+    "resolutions": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "query_report_digest",
+          "decision",
+          "reason"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "query_report_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "decision": {
+            "const": "confirmed-no-answer-from-complete-source-reviews"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        }
+      }
+    }
+  }
+}

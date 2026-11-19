@@ -17,7 +17,7 @@ source custody, catalog, route, policy and module changes invalidate the cut.
 No request flag or alternative catalog can enroll private data.
 
 The inventory remains bounded to4,000 paths,32MiB aggregate and1MiB/file.
-Each fresh batch has at most16 source files within the unchanged native broker
+Each fresh batch has at most128 source files within the unchanged native broker
 limits of128 documents,8MiB and two seconds. These source cuts grant no encoder,
 output, long index lifetime or remote disclosure permission. Output admission
 always refuses. The production Factory128-file/262KiB/two-second profile is
@@ -37,9 +37,9 @@ same current task, generation, dataset and custody before consumption.
 This observation is explicitly `local-observation-only`. CLI labels, local
 start/stop records and report bytes do not prove an independent native child
 or report delivery. The opaque PhaseA/B types have no production issuer.
-Actual native publication remains unavailable. An operator-witnessed public
-review profile, if selected later, needs its own concrete current witness
-contract and complete scientific checks; this source does not claim it exists.
+Actual native publication remains unavailable. The distinct [operator-witnessed public review action](public-review-witness.md)
+requires current owner publication and complete scientific checks. It grants
+reviewed-data facts only. No actual corpus witness is claimed here.
 
 No real corpus seal, artifact/window PhaseB, model resource admission, scientific
 primary eligibility, production ACL qualification or provider activation follows
