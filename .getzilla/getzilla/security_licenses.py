@@ -596,6 +596,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 result['gaps'].extend(output['gaps'])
                 if run_context is not None:
                     run_context.auxiliary('ci-install:'+consumer['build_sha256'],output)
+                    if output['status'] == 'pass':
+                        run_context.build_inputs(auxiliary['binding'],output)
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
             selected_required=run_context is not None and run_context.family_required(subject,kind)
@@ -763,6 +765,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                          else f"license policy and retained evidence verified for {len(result['details'])} exact package artifacts")
     if run_context is not None:
         return run_context.finish(result)
+    if result['status'] == 'pass' and target_binding is not None and 'ci_consumer' in target_binding:
+        from . import security_ci_inputs
+        security_ci_inputs.seal_evaluation(target_binding,result,_entry=security_ci_inputs._EVALUATION_ENTRY)
     return result
 
 
