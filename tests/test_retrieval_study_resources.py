@@ -18,6 +18,7 @@ class StudyResourceTests(unittest.TestCase):
                     'Privileged': False, 'CapDrop': ['ALL'], 'CapAdd': None,
                     'SecurityOpt': ['no-new-privileges:true'], 'Memory': 6442450944,
                     'MemorySwap': 6442450944, 'PidsLimit': 128, 'CpusetCpus': '2,3',
+                    'NanoCpus': 2000000000, 'Runtime': 'runc', 'CgroupnsMode': 'private',
                     'Devices': [], 'DeviceRequests': [], 'PidMode': '', 'IpcMode': 'none',
                     'LogConfig': {'Type': 'none'},
                     'Tmpfs': {'/tmp': 'rw,noexec,nosuid,nodev,size=67108864,mode=700'}},
@@ -41,7 +42,8 @@ class StudyResourceTests(unittest.TestCase):
         owner = self.owner()
         changes = [('NetworkMode', 'host'), ('MemorySwap', -1), ('PidsLimit', 0),
                    ('ReadonlyRootfs', False), ('CapAdd', ['SYS_ADMIN']),
-                   ('CpusetCpus', '2-4'), ('Devices', [{'PathOnHost': '/dev/nvidia0'}]),
+                   ('CpusetCpus', '2-4'), ('NanoCpus', 0), ('Runtime', 'nvidia'),
+                   ('Devices', [{'PathOnHost': '/dev/nvidia0'}]),
                    ('LogConfig', {'Type': 'json-file'})]
         for key, value in changes:
             item = self.fixture()
