@@ -4297,6 +4297,7 @@
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/optional-modules/reverse-engineering/0.1.0/elf.py",
         ".getzilla/optional-modules/mcp-jira/0.1.0",
+        ".getzilla/optional-modules/retrieval-research/0.1.0",
         ".getzilla/templates",
         ".grok",
         ".qwen",
