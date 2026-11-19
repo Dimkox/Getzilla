@@ -231,7 +231,8 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                     # host tool installations. Default project copies retain both.
                     # This opted-in metadata fixture owns an empty security world;
                     # quality tools and optional CI images stay outside its first commit.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
                 if Path(directory) == PROJECT / '.getzilla/runtime':
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
