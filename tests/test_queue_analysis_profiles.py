@@ -418,14 +418,13 @@ class QueueAnalysisProfileTests(unittest.TestCase):
             artifacts.package_key('Packagist', 'Owned/Package', '1.0')
 
     def test_structural_artifact_catalog_has_actual_artifact_owner(self):
-        from getzilla import security_artifacts as artifacts, security_license_contracts as contracts
-        self.assertIs(contracts.artifact_catalog_source, artifacts.artifact_catalog_source)
-        self.assertEqual(artifacts.artifact_catalog_source.__module__, 'getzilla.security_artifacts')
+        from getzilla import expanded_security as expanded, security_license_contracts as contracts
+        self.assertIs(contracts.artifact_catalog_source, expanded.artifact_catalog_source)
+        self.assertEqual(expanded.artifact_catalog_source.__module__, 'getzilla.expanded_security')
         tree = ast.parse((ROOT / '.getzilla/getzilla/expanded_security.py').read_bytes())
         imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
                    and any(alias.name == 'artifact_catalog_source' for alias in node.names)]
-        self.assertTrue(imports)
-        self.assertTrue(all(node.module == 'security_artifacts' for node in imports))
+        self.assertFalse(imports)
 
     def test_public_review_actual_policy_helpers_are_source_bound(self):
         import importlib

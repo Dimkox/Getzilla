@@ -495,4 +495,4 @@ def _family_age(record: dict, current: datetime, catalog_time: str) -> None:
         raise ArtifactError('artifact-stale', 'family acquisition is stale/future or catalog timestamp renews older evidence')
 
 
-from .security_artifacts import artifact_catalog_source as artifact_catalog_source
+from .expanded_security import artifact_catalog_source as artifact_catalog_source
