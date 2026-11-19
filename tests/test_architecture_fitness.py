@@ -47,7 +47,9 @@ class QueueSrcRootConsistencyTests(unittest.TestCase):
 
     def observe(self, *, folder='owned/src/pkg', ownership=None, extra=None,
                 consumer=None, helper=None, missing=False, initializer=True):
-        root = Path('closed-queue-src-fixture')
+        temporary = tempfile.TemporaryDirectory(prefix='closed-queue-src-fixture-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
         path = folder + '/consumer.py'
         sources = {path: self.consumer if consumer is None else consumer,
                    folder + '/helper.py': None if missing else self.helper if helper is None else helper}
