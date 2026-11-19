@@ -86,15 +86,21 @@ def _read_tool_payload() -> dict[str, Any]:
             except ValueError:
                 # Some native shell envelopes carry toolArgs as plain command
                 # text. A JSON-looking value still needs the strict decoder.
-                if (key != 'toolArgs' or not inputs.strip()
+                if all(name in {'apply_patch', 'functions.apply_patch'} for name in names):
+                    inputs = {'input': inputs}
+                elif (key != 'toolArgs' or not inputs.strip()
                         or inputs.lstrip()[0] in '{["' or inputs.strip() in {'null', 'true', 'false'}
                         or not all(name in _DEGRADED_SHELL_TOOLS for name in names)):
                     raise
-                inputs = {'command': inputs}
+                else:
+                    inputs = {'command': inputs}
             _payload_tree(inputs)
         if not isinstance(inputs, dict):
             raise ValueError('invalid-tool-request')
         value[key] = inputs
+    candidates = [value[key] for key in ('tool_input', 'toolInput', 'toolArgs') if key in value and value[key] is not None]
+    if candidates and any(candidate != candidates[0] for candidate in candidates):
+        raise ValueError('invalid-tool-request')
     return value
 
 
@@ -432,6 +438,12 @@ def _degraded_output(reason: str | None) -> str:
 def _degraded_tool(value: Any) -> str | None:
     if not isinstance(value, str) or not value or len(value) > 128:
         return None
+    if value == 'functions.exec_command':
+        value = 'exec_command'
+    elif value == 'functions.apply_patch':
+        value = 'apply_patch'
+    elif value.startswith('functions.mcp__') and re.fullmatch(r'functions\.mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+', value):
+        value = value.removeprefix('functions.')
     if value.lower() in {name.lower() for name in _DEGRADED_SHELL_TOOLS}:
         return 'Bash'
     if value.startswith('mcp__'):
@@ -560,7 +572,7 @@ except Exception as _lib_error:
     _fallback_request = _degraded_payload()
     print(_degraded_output(_INVALID_TOOL_REQUEST if _fallback_request is None else
                            _degraded_denial(*_fallback_request)))
-    raise SystemExit(0)
+    raise SystemExit(0 if (Path(__file__).resolve().parent / '_lib.py').is_file() else 1)
 
 
 _DENIAL_WINDOW_SECONDS = 15 * 60
@@ -981,6 +993,9 @@ def main() -> None:
             raise ValueError('invalid-tool-request')
         current_input = tool_input(payload)
         classified = True
+        if not (Path(__file__).resolve().parents[1] / 'getzilla/policy.py').is_file():
+            _deny(payload, current_tool, current_input, 'Mandatory policy module is missing.')
+            return
         try:
             from getzilla.state import bind_session
         except ImportError:
@@ -1080,7 +1095,8 @@ def main() -> None:
             emit(permission_output(False, _INVALID_TOOL_REQUEST))
             return
         record_degraded('pre_tool_use', error)
-        reason = _degraded_denial(locals().get('current_tool',''),locals().get('current_input',{}),root=locals().get('root'))
+        reason = (_DEGRADED_REASON if 'context' not in locals() else
+                  _degraded_denial(locals().get('current_tool',''),locals().get('current_input',{}),root=locals().get('root')))
         emit(permission_output(reason is None,reason))
 
 

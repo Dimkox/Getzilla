@@ -1179,8 +1179,20 @@ def prompt_text(payload: dict[str, Any]) -> str:
     return str(first(payload.get('prompt'), payload.get('userPrompt'), payload.get('user_prompt'), '') or '')
 
 
+def _native_tool_name(raw: str) -> str:
+    # Strip only native contracts we implement. Opaque orchestration code has
+    # no finite argument/target identity and cannot acquire shell authority.
+    if raw in {'functions.exec_command', 'functions.apply_patch'}:
+        return raw.removeprefix('functions.')
+    if raw.startswith('functions.mcp__') and re.fullmatch(r'functions\.mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+', raw):
+        return raw.removeprefix('functions.')
+    if raw == 'collaboration.spawn_agent':
+        return 'Agent'
+    return raw
+
+
 def tool_name(payload: dict[str, Any]) -> str:
-    raw = str(first(payload.get('tool_name'), payload.get('toolName'), '') or '')
+    raw = _native_tool_name(str(first(payload.get('tool_name'), payload.get('toolName'), '') or ''))
     return TOOL_ALIASES.get(raw, raw)
 
 
@@ -1195,7 +1207,12 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
             value = {'command': payload['toolArgs']}
     elif value is None:
         value = payload.get('toolArgs')
-    raw_tool = str(first(payload.get('tool_name'), payload.get('toolName'), ''))
+    original_tool = str(first(payload.get('tool_name'), payload.get('toolName'), ''))
+    raw_tool = _native_tool_name(original_tool)
+    if original_tool.startswith(('functions.', 'collaboration.')) and raw_tool == original_tool:
+        return {'_getzilla_input_error': 'Unknown or opaque native execution transport is refused.'}
+    if raw_tool == 'apply_patch' and isinstance(value, str):
+        value = {'input': value}
     if not isinstance(value, dict):
         if raw_tool == 'exec_command':
             return {'_getzilla_input_error': 'exec_command requires a command object.'}
@@ -1224,7 +1241,7 @@ def tool_input(payload: dict[str, Any]) -> dict[str, Any]:
                               and any(part.strip() for part in alias))
             if not valid:
                 mapped['_getzilla_input_error'] = 'exec_command requires cmd or a legacy command.'
-    if 'command' not in mapped and str(first(payload.get('tool_name'), payload.get('toolName'), '')) == 'apply_patch':
+    if 'command' not in mapped and raw_tool == 'apply_patch':
         patch = first(mapped.get('patch'), mapped.get('input'))
         if isinstance(patch, str):
             mapped['command'] = patch
