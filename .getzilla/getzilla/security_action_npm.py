@@ -211,9 +211,16 @@ def _qualify_source(result, source, *, supplemental=None):
     prefix = 'npm/' + source['sha256'] + '/'
     for parent, package in metadata.items():
         expression = package.get('license')
+        interpretation = None
+        if parent == archive_root:
+            from .security_action_supplier_terms import effective_metadata
+            interpretation = effective_metadata(source, package, supplemental, result['proofs'])
+            if interpretation is not None:
+                expression = interpretation['expression']
         if not isinstance(expression, str) or not expression:
             _fail('license-metadata-missing', 'npm component has no exact SPDX expression')
-        chosen, identifiers = _select_expression(expression, list(ALLOWED))
+        evidence_ids = [*ALLOWED, 'X11'] if interpretation is not None else list(ALLOWED)
+        chosen, identifiers = _select_expression(expression, evidence_ids)
         for name, body in owned[parent].items():
             for declared in re.findall(rb'(?m)^\s*(?://|/\*+|\*|#)?\s*SPDX-License-Identifier:\s*([^\r\n*]+)', body):
                 _, inline_ids = _select_expression(declared.decode('utf-8').strip(), list(ALLOWED))
@@ -250,6 +257,9 @@ def _qualify_source(result, source, *, supplemental=None):
                      'metadata_path': parent + '/package.json', 'expression': expression, 'requires': [],
                      'files': [{'path': name, 'sha256': _sha(retained[name]), 'bytes': len(retained[name])} for name in terms + notices],
                      'license_paths': terms, 'notice_paths': notices}
+        if interpretation is not None:
+            component['source_metadata_interpretation'] = dict(interpretation,
+                original_metadata_sha256=_sha(files[parent + '/package.json']))
         _license_evidence({name: retained[name] for name in terms + notices}, component, identifiers, chosen)
         if not terms:
             _fail('license-obligation-missing', 'npm component cannot inherit another component root license')
