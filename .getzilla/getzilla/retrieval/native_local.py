@@ -27,6 +27,8 @@ from .contracts import digest, sha
 from .extract import build_generation
 from .graph_packet import current_graph, prepare_graph_packet
 from .native_source import NativeSource
+from . import observation
+from .policy_inputs import BASE_INPUTS, CONTINUATION, input_paths
 
 
 CONTEXT_REASONS = frozenset({'source_file_limit', 'source_inventory_exceeded', 'source_bytes_exceeded',
@@ -41,9 +43,11 @@ def _diagnostic_stage(method):
     def guarded(self, *args, **kwargs):
         try:
             return method(self, *args, **kwargs)
-        except RetrievalError as error:
-            if str(error) in CONTEXT_REASONS:
-                self.failure_reason = str(error)
+        except BaseException as error:
+            self.failure_outcome = observation._outcome(error)
+            if (isinstance(error, RetrievalError) and error.args
+                    and type(error.args[0]) is str and error.args[0] in CONTEXT_REASONS):
+                self.failure_reason = error.args[0]
             raise
     return guarded
 
@@ -56,6 +60,7 @@ class _LocalHost(access.NativeAccessHost):
         self.request, self.workflow, self.binding, self.reference = object(), object(), object(), object()
         self.budget = Budget()
         self.failure_reason = None
+        self.failure_outcome = None
         self.reader = None
         self.packet = None
         self.route = state.require_route_owner(root, anchor=anchor)
@@ -67,18 +72,8 @@ class _LocalHost(access.NativeAccessHost):
         self.manifest = anchor.read(MANIFEST, source=True)
         self.continuation = self._continuation_bytes()
         managed = json.loads(self.manifest)
-        selected_modules = ['context-retrieval']
-        if sink.startswith('native-hook-'):
-            selected_modules.append('context-hook-' + sink.removeprefix('native-hook-'))
-        self.module_metadata = []
-        for name in selected_modules:
-            record = managed.get('components', {}).get('module:' + name, {})
-            paths = record.get('files', [])
-            if type(paths) is not list or len(paths) > 8 or any(
-                    type(path) is not str or not path.startswith('.getzilla/modules/' + name + '/')
-                    for path in paths):
-                raise RetrievalError('context_disabled')
-            self.module_metadata.extend(paths)
+        self.module_metadata = [path for path in input_paths(managed, sink, self.continuation is not None)
+                                if path not in BASE_INPUTS and path != CONTINUATION]
         if not admit_module(root, 'context-retrieval').get('allowed'):
             raise RetrievalError('context_disabled')
         if sink.startswith('native-hook-'):
@@ -117,6 +112,13 @@ class _LocalHost(access.NativeAccessHost):
     def check_current(self, binding, deadline):
         if binding is not self.binding or time.monotonic() >= deadline:
             raise access.NativeAccessError('native_access_denied')
+        self._check_configuration()
+        if self.reader is not None:
+            self.reader.recheck()
+        return access.AuthorityStamp(1, digest([sha(self.policy), sha(self.manifest),
+                                               sha(self.continuation or b'')]), digest(self.route))
+
+    def _check_configuration(self):
         self.anchor.check_cwd()
         if (state.require_route_owner(self.root, anchor=self.anchor) != self.route
                 or self.anchor.read('.getzilla/config/policy.json', source=True) != self.policy
@@ -130,18 +132,27 @@ class _LocalHost(access.NativeAccessHost):
                                 permission='context.hook.' + harness).get('allowed'):
                 raise access.NativeAccessError('native_access_stale')
             self._check_backend_profile()
+
+    def observation_current(self, budget):
+        """Check current access and held identities without restarting expired work."""
+        budget.check()
+        self._check_configuration()
         if self.reader is not None:
-            self.reader.recheck()
-        return access.AuthorityStamp(1, digest([sha(self.policy), sha(self.manifest),
-                                               sha(self.continuation or b'')]), digest(self.route))
+            if self.reader._paths(budget=budget) != self.reader.paths:
+                raise access.NativeAccessError('native_access_stale')
+            for path, descriptor, parent, expected, _ in self.reader.held:
+                budget.check()
+                self.reader._held_unchanged(path, descriptor, parent, expected)
 
     @_diagnostic_stage
     def load_authorized_cut(self, binding, query, deadline):
         if query.parameters != {'query_sha256': sha(self.query.encode())}:
             raise access.NativeAccessError('native_access_denied')
-        self.reader = NativeSource(self.root, self.anchor, self.resources, self.budget,
-            extra_metadata=tuple(self.module_metadata) + (
-                ('.getzilla/config/model-continuation.json',) if self.continuation is not None else ()))
+        with observation.stage('access_check'):
+            self.reader = NativeSource(self.root, self.anchor, self.resources, self.budget,
+                extra_metadata=tuple(self.module_metadata) + (
+                    ('.getzilla/config/model-continuation.json',) if self.continuation is not None else ()),
+                read_profile=self.sink)
         accepted = {document.path: document.original for document in self.reader.source.documents}
         documents = []
         # Include governing metadata and every scanned source in complete lineage.
@@ -197,6 +208,11 @@ class _LocalHost(access.NativeAccessHost):
             finally:
                 os.close(descriptor)
         generation = build_generation(source, budget=self.budget)
+        if self.observation is not None:
+            self.observation.metadata_from(source.source_identity, graph.generation_id,
+                {'graph_input': graph_input.identity, 'retrieval_generation': generation.identity,
+                 'query_sha256': sha(self.query.encode()), 'mandatory_sha256': sha(self.mandatory.encode()),
+                 'token_budget': self.token_budget, 'sink': self.sink})
         self.packet = prepare_graph_packet(source, generation, graph, self.query,
             mandatory=self.mandatory, token_budget=self.token_budget, budget=self.budget)
         self.packet['coverage_gaps'] = sorted(set(self.packet['coverage_gaps']) | self.reader.gaps)
@@ -214,6 +230,11 @@ class _LocalHost(access.NativeAccessHost):
         self.packet['native_counters'] = {**self.reader.counters,
             'context_output_bytes': len(self.packet['text'].encode()), 'model_calls': 0,
             'retrieval_ast_files': len(self.reader.source.documents)}
+        if self.observation is not None:
+            self.packet['trace_operation_id'] = self.observation.operation_id
+            self.packet['trace_observation_status'] = 'pending_delivery'
+        elif 'observation_publication' in self.route:
+            self.packet['trace_observation_status'] = 'capture_unavailable'
         # The fixed native emitter executes while held resources remain live.
         self.consumer(self.packet)
         return access.ExistingOperationDisposition('issued', None)
@@ -228,21 +249,41 @@ def _deliver(root, query, mandatory, consumer, *, sink, token_budget=8192):
     with ExitStack() as resources:
         anchor = resources.enter_context(native_root(root))
         host = _LocalHost(root, anchor, resources, query, mandatory, consumer, sink, token_budget)
+        host.observation = observation.capture(root, host.route, anchor, host.sink)
         broker = access.NativeAccessBroker._compose(host)
+        outcome = 'unknown'
+        observation_delivered = False
         try:
-            handle = broker.bind_native_request(host.request, host.workflow)
-            registered = access.RegisteredQuery('local-source-context/v1', ('current-project',),
-                                                {'query_sha256': sha(query.encode())})
-            cut = broker.load_authorized_cut(handle, registered, absolute_deadline=host.budget.deadline)
-            prepared = broker.prepare_owned_response(handle, 'shared-context/v1', cut, sink,
-                                                    absolute_deadline=host.budget.deadline)
-            result = broker.admit_response(handle, prepared)
-        except access.NativeAccessError:
-            if host.failure_reason is not None:
+            with observation.observing(host.observation):
+                handle = broker.bind_native_request(host.request, host.workflow)
+                registered = access.RegisteredQuery('local-source-context/v1', ('current-project',),
+                                                    {'query_sha256': sha(query.encode())})
+                cut = broker.load_authorized_cut(handle, registered, absolute_deadline=host.budget.deadline)
+                prepared = broker.prepare_owned_response(handle, 'shared-context/v1', cut, sink,
+                                                        absolute_deadline=host.budget.deadline)
+                result = broker.admit_response(handle, prepared)
+                outcome = 'succeeded' if result.status == 'issued' else 'unknown'
+        except BaseException as error:
+            outcome = host.failure_outcome or observation._outcome(error)
+            if isinstance(error, access.NativeAccessError) and host.failure_reason is not None:
+                outcome = 'timeout' if host.failure_reason == 'deadline_exceeded' else 'failed'
                 raise RetrievalError(host.failure_reason) from None
             raise
+        finally:
+            if host.observation is not None:
+                try:
+                    host.observation.finish(outcome)
+                    observation_delivered = observation.publish(root, host.observation, host)
+                except Exception as error:
+                    if observation._outcome(error) == 'cancelled':
+                        raise
+                    # Observation loss never repeats or changes an original read.
+                    pass
         return {'schema': 'getzilla-context-delivery-v1', 'status': result.status,
-                'sink': sink, 'private_egress_authorized': False, 'model_calls': 0}
+                'sink': sink, 'private_egress_authorized': False, 'model_calls': 0,
+                **({'trace_operation_id': host.observation.operation_id,
+                    'trace_observation_delivered': observation_delivered}
+                   if host.observation is not None else {})}
 
 
 def _write_stdout(value):

@@ -260,6 +260,42 @@ def load_local(root):
                 'scope': 'canonical_root_only', 'gaps': ['private_local_storage_unqualified']}
 
 
+def _scope_retrieval_policy(rows, proofs, anchor):
+    """Current local policy equivalence, never enterprise principal authority."""
+    grouped = {}
+    for row in rows:
+        operation = row.get('operation_id')
+        if type(operation) is str and re.fullmatch(r'retrieval_[0-9a-f]{40}', operation):
+            grouped.setdefault(operation, []).append(row)
+    if not grouped:
+        return rows, proofs, False
+    from .retrieval.policy_inputs import current_policy_digest
+    from .trace_contracts import RETRIEVAL_READ_PROFILES, validate_delivery
+    blocked, current = set(), {}
+    for operation, selected in grouped.items():
+        try:
+            # A row/profile is not trusted before the canonical native proof.
+            for row in selected:
+                validate_delivery(proofs[row['event_id']], row)
+            policies = [row for row in selected if row.get('event') == 'policy'
+                        and row.get('kind') == 'policy_observed' and 'read_profile' in row]
+            if len(policies) != 1:
+                raise ValueError
+            observed = policies[0]
+            profile = observed['read_profile']
+            if profile not in RETRIEVAL_READ_PROFILES or observed['decision'] != 'allow':
+                raise ValueError
+            if profile not in current:
+                current[profile] = current_policy_digest(anchor, profile)
+            if current[profile] != observed['policy_digest']:
+                raise ValueError
+        except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+            blocked.add(operation)
+    filtered = [row for row in rows if row.get('operation_id') not in blocked]
+    visible = {row.get('event_id') for row in filtered}
+    return filtered, {identity: value for identity, value in proofs.items() if identity in visible}, bool(blocked)
+
+
 def _load_local(root, anchor):
     denied = {'access': 'metadata_only', 'events': [], 'input_digest': None,
               'scope': 'canonical_root_only', 'gaps': ['private_local_storage_unqualified']}
@@ -331,8 +367,11 @@ def _load_local(root, anchor):
             # Unlike historical v3 observations, new v4 requires native
             # canonical/proof admission before it becomes a supplied cut.
             rows = [row for row in rows if row.get('schema_version') != 4 or row['event_id'] in proofs]
+        rows, proofs, retrieval_hidden = _scope_retrieval_policy(rows, proofs, anchor)
+        if retrieval_hidden:
+            gaps.append('retrieval_access_unavailable')
         return _LocalRead({'access': 'local_owner' if private else 'metadata_only', 'events': rows,
-                'input_digest': hashlib.sha256(raw).hexdigest(),
+                'input_digest': None if retrieval_hidden else hashlib.sha256(raw).hexdigest(),
                 'scope': 'canonical_root_only', 'delivery_proofs': proofs, 'gaps': sorted(set(gaps))}, token)
     except (OSError, ValueError, ImportError):
         return denied

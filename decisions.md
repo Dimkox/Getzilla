@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-11-19 — Capture retrieval facts in the existing observation path
+
+Publish native retrieval facts through the canonical route publication, delivery proof and journal, with actual read attempts and no paid claim. Bind disclosure of source metadata to the proved current local policy input set, including selected module and continuation bytes. Keep exact-byte restoration semantics explicit; enterprise revocation remains owned by the existing Factory authority and service epoch.
+
 ## 2026-10-23 — Bind return demand to scopes and imported members
 
 Bind queue return demand to its lexical scope and imported member, rather than the whole verifier module. Remove scalar-helper pruning because static syntax does not prove runtime receiver or import binding. Calibrate the finite module limit to 48 for the measured 35-module closure, with tighter per-importer limits of 2 MiB source, 400,000 AST nodes and 4,096 shared work units; cache reuse must preserve every charge.

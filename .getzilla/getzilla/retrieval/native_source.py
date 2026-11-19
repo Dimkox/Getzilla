@@ -6,7 +6,6 @@ profile. It is not an enterprise ACL or permission to send bytes to a provider.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 import stat
@@ -15,7 +14,8 @@ from .. import policy, state
 from ..source_admission import sensitive_class
 from ..source_secrets import rules_digest, scan_bytes
 from .budget import RetrievalError
-from .contracts import SourceDocument, SourceKey, SourceSnapshot, digest
+from .contracts import SourceDocument, SourceKey, SourceSnapshot
+from .policy_inputs import BASE_INPUTS, validate_policy, policy_digest
 
 MAX_FILES = 112
 MAX_BYTES = 8 * 1024 * 1024 - 65536
@@ -24,7 +24,7 @@ SKIP = {'.git', '.getzilla/runtime', '.getzilla/index', '.getzilla/config', '.ge
 
 
 class NativeSource:
-    def __init__(self, root, anchor, resources, budget, *, extra_metadata=()):
+    def __init__(self, root, anchor, resources, budget, *, extra_metadata=(), read_profile='native-local-stdout'):
         self.root, self.anchor, self.resources, self.budget = root, anchor, resources, budget
         self.held, self.gaps = [], set()
         self.counters = {'source_file_opens': 0, 'source_recheck_reads': 0,
@@ -32,14 +32,9 @@ class NativeSource:
         self.route = state.require_route_owner(root, anchor=anchor)
         if not state.current_session() or self.route.get('workspace') != str(root):
             raise RetrievalError('authority_unavailable')
-        self.metadata = {path: self._read(path) for path in ('.getzilla/config/policy.json',
-                                                          '.getzilla/managed-components.json', *extra_metadata)}
-        declared = json.loads(self.metadata['.getzilla/config/policy.json'])
-        if (type(declared) is not dict or declared.get('schema_version') != 2
-                or type(declared.get('secret_read_paths')) is not list
-                or any(type(item) is not str for item in declared['secret_read_paths'])):
-            raise RetrievalError('policy_unavailable')
-        self.policy_digest = digest([hashlib.sha256(raw).hexdigest() for raw in self.metadata.values()])
+        self.metadata = {path: self._read(path) for path in (*BASE_INPUTS, *extra_metadata)}
+        validate_policy(self.metadata[BASE_INPUTS[0]])
+        self.policy_digest = policy_digest(read_profile, self.metadata)
         self.git = self._git()
         self.paths = self._paths()
         documents, total = [], 0
@@ -104,14 +99,15 @@ class NativeSource:
     def _git(self):
         return self.anchor.git_source() if self.anchor.exists('.git', source=True) else None
 
-    def _paths(self):
+    def _paths(self, *, budget=None):
+        budget = self.budget if budget is None else budget
         result, entries = [], 0
         def visit(descriptor, prefix=''):
             nonlocal entries
             with os.scandir(descriptor) as iterator:
                 names = []
                 for entry in iterator:
-                    self.budget.check()
+                    budget.check()
                     entries += 1
                     if entries > 4096:
                         raise RetrievalError('source_inventory_exceeded')

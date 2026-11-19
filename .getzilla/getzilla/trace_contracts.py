@@ -25,6 +25,8 @@ KINDS = {
 STAGE_OPTIONAL = frozenset({'source_revision', 'index_revision', 'config_digest',
     'provider_digest', 'model_digest', 'candidate_count', 'context_bytes',
     'usage_input_tokens', 'usage_output_tokens', 'ttft_ns', 'timing_source'})
+RETRIEVAL_READ_PROFILES = frozenset({'native-local-stdout', 'native-hook-grok',
+    'native-hook-claude', 'native-hook-codex', 'native-hook-copilot', 'native-hook-gemini', 'native-hook-qwen'})
 EXTRA = {
     'operation': frozenset({'operation_id', 'outcome', 'elapsed_ns', 'attempt_id'}),
     'span': frozenset({'operation_id', 'span_id', 'parent_span_id', 'attempt_id',
@@ -208,6 +210,8 @@ def _validate(row):
     if event == 'task' and kind == 'selected':
         required = frozenset({'window_start'})
     allowed = COMMON | required | (STAGE_OPTIONAL if event == 'span' else frozenset())
+    if event == 'policy':
+        allowed |= {'read_profile'}
     # Check the closed keys before serializing or evaluating caller payload values.
     if not required <= row.keys() or row.keys() - allowed:
         raise ValueError
@@ -267,6 +271,10 @@ def _validate(row):
     if event == 'policy':
         if (row['decision'] not in ('allow', 'deny', 'unknown') or not _hex(row['policy_digest'])
                 or row['reason_code'] not in ('policy_allowed', 'policy_denied', 'policy_unavailable')):
+            raise ValueError
+        if 'read_profile' in row and (type(row['read_profile']) is not str
+                or row['read_profile'] not in RETRIEVAL_READ_PROFILES
+                or row['decision'] != 'allow' or row['reason_code'] != 'policy_allowed'):
             raise ValueError
     if event == 'evidence':
         if (row['evidence_kind'] not in ('approval', 'commit', 'test', 'ci', 'receipt', 'model', 'source', 'calculation')

@@ -12,6 +12,7 @@ import math
 import re
 
 from .budget import RetrievalError
+from .observation import stage
 
 
 def tokens(text):
@@ -36,7 +37,7 @@ def _ranking(chunks, scores):
             key=lambda i: (-scores[i], chunks[i].id))[:100], 1))
 
 
-def rank(chunks, query, budget):
+def _lexical(chunks, query, budget):
     if not isinstance(query, str):
         raise RetrievalError('invalid_query')
     if len(query.encode('utf-8')) > 4096:
@@ -69,11 +70,21 @@ def rank(chunks, query, budget):
                 tf = row.get(term, 0)
                 scores[index] += idf * tf * 2.2 / (tf + 1.2 * (.25 + .75 * lengths[index] / average))
     exact_rank, bm25_rank = _ranking(chunks, symbols), _ranking(chunks, scores)
-    fused, by_id = defaultdict(float), {c.id: c for c in chunks}
-    for arm in (exact_rank, bm25_rank):
-        for hit in arm:
-            fused[hit.chunk.id] += 1 / (60 + hit.rank)
-    rrf = tuple(RankedHit(by_id[key], fused[key], position) for position, key in enumerate(
-        sorted(fused, key=lambda k: (-fused[k], k))[:100], 1))
-    budget.check()
+    return exact_rank, bm25_rank
+
+
+def rank(chunks, query, budget):
+    with stage('lexical') as measured:
+        exact_rank, bm25_rank = _lexical(chunks, query, budget)
+        measured.result('succeeded' if exact_rank or bm25_rank else 'empty',
+                        candidate_count=len({hit.chunk.id for hit in (*exact_rank, *bm25_rank)}))
+    with stage('fusion') as measured:
+        fused, by_id = defaultdict(float), {c.id: c for c in chunks}
+        for arm in (exact_rank, bm25_rank):
+            for hit in arm:
+                fused[hit.chunk.id] += 1 / (60 + hit.rank)
+        rrf = tuple(RankedHit(by_id[key], fused[key], position) for position, key in enumerate(
+            sorted(fused, key=lambda k: (-fused[k], k))[:100], 1))
+        budget.check()
+        measured.result('succeeded' if rrf else 'empty', candidate_count=len(rrf))
     return {'exact_symbol': exact_rank, 'bm25': bm25_rank, 'rrf': rrf}
