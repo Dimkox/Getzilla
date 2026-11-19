@@ -60,8 +60,15 @@ with `independent_seals_required`. This command performs no ranks or model work.
 The public-artifact reader is not a private-source adapter and is never a query
 fallback when native authority is unavailable.
 
-Full issue162 still requires actual current-authority/native-sink integration,
-two-principal/two-project access and revocation tests, derivative deletion, real
+An explicitly selected [Factory retrieval profile](factory-retrieval.md) now
+connects current operator authority and task/fence to the existing protected
+result outbox and authenticated UDS. It uses the same registered source owner,
+Core algorithms and final release checks. Its deterministic controls include
+different principals, projects and tenants, group removal, source deletion and
+actual PostgreSQL/UDS delivery. These controls do not qualify a model backend.
+
+Full issue162 still requires durable derived-data retirement across the existing
+result journal and actual recipients, broader native/provider profiles, real
 optional dense integration and the independently sealed RU/EN/BGE-M3 experiment.
 BGE-M3 is not selected or loaded by this library. No benchmark quality, native ACL,
 provider, retention or complete-delivery claim follows from this checkpoint.

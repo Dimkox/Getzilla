@@ -66,9 +66,11 @@ bind a request.
 The initial fixed reader and computation are `factory.source-text/v1`. Scope
 locators come from `factory_source_scope(full_source_key)` over the existing
 server-owned LocalSourceAdapter, including every namespace component. Unknown
-scopes/parameters/computations/responses refuse. Report/retrieval transforms are
-not invented or registered by this bridge. Their151/native composition remains
-unavailable until implemented by the selected owners.
+scopes/parameters/computations/responses refuse. Fixed optional payload151
+profiles and the separate retrieval162 reader now compose with this same owner.
+They are disabled by default; installing the bridge does not select a profile.
+See [Factory retrieval](factory-retrieval.md) for its exact supported channel,
+current-authority checks and remaining durable-retention limitation.
 
 The bridge reuses the same source producer. Cached cuts and prepared responses
 recheck the actual registered reader, byte/hash/version and current custody, not
