@@ -12,6 +12,12 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, NamedTuple
 
+from .queue_analysis_profile import (
+    CONSUMER_PROFILE as _CONSUMER_PROFILE, GETZILLA_SELF_PROFILE as _GETZILLA_SELF_PROFILE,
+    QueueAnalysisProfile as _QueueAnalysisProfile,
+    select_profile as _queue_analysis_profile,
+)
+
 from .architecture import (
     ArchitectureError,
     ArchitectureSnapshot,
@@ -451,6 +457,7 @@ class _QueueFootprint(NamedTuple):
     side: str
     sources: tuple[_QueueSourceFootprint, ...] = ()
     work: tuple[tuple[str, int], ...] = ()
+    profile: tuple = _CONSUMER_PROFILE
 
 
 
@@ -458,14 +465,26 @@ class _QueueFootprint(NamedTuple):
 class _QueueBudget:
     """One importer/side ledger; cache reuse cannot remove logical charges."""
 
-    def __init__(self, side: str) -> None:
+    def __init__(self, side: str, *, profile=None) -> None:
         self.side = side
+        self.profile = profile if profile is not None else _CONSUMER_PROFILE
+        if (type(self.profile) is not _QueueAnalysisProfile
+                or self.profile[:4] not in {_CONSUMER_PROFILE[:4], _GETZILLA_SELF_PROFILE[:4]}):
+            raise ArchitectureError("queue resource profile is unavailable", code="fitness")
         self.sources: dict[tuple[str, str], _QueueSourceFootprint] = {}
         self.work: dict[str, int] = {}
         self.frames: list[dict[str, Any]] = []
         self.source_bytes = self.ast_nodes = self.logical_work = self.actual_work = 0
         self.summary_work = 0
         self.root_steps = 0
+
+    @property
+    def module_limit(self):
+        return MAX_QUEUE_ADAPTER_MODULES if self.profile.name == "consumer-v1" else self.profile.module_limit
+
+    @property
+    def byte_limit(self):
+        return MAX_QUEUE_ANALYSIS_BYTES if self.profile.name == "consumer-v1" else self.profile.byte_limit
 
     def refusal(self, message: str, category: str, limit: int | None, observed: int | None,
                 *, site: str = 'budget', cached: tuple[str, ...] = ()) -> ArchitectureError:
@@ -507,13 +526,13 @@ class _QueueBudget:
         previous = self.sources.get(key)
         # Every inspected source counts, including the importer, declarations
         # and transitive cache hits. Cache warmth cannot change admission.
-        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > MAX_QUEUE_ADAPTER_MODULES:
-            raise self.refusal('queue adapter module limit exceeded', QUEUE_MODULE_LIMIT_CATEGORY, MAX_QUEUE_ADAPTER_MODULES,
+        if previous is None and len({source.path for source in self.sources.values()} | {item.path}) > self.module_limit:
+            raise self.refusal('queue adapter module limit exceeded', QUEUE_MODULE_LIMIT_CATEGORY, self.module_limit,
                                len({source.path for source in self.sources.values()} | {item.path}))
         byte_total = self.source_bytes + (0 if previous else item.size)
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
-        if byte_total > MAX_QUEUE_ANALYSIS_BYTES:
-            raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', MAX_QUEUE_ANALYSIS_BYTES, byte_total)
+        if byte_total > self.byte_limit:
+            raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', self.byte_limit, byte_total)
         if node_total > MAX_QUEUE_ANALYSIS_AST_NODES:
             raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', MAX_QUEUE_ANALYSIS_AST_NODES, node_total)
         self.source_bytes, self.ast_nodes = byte_total, node_total
@@ -555,12 +574,12 @@ class _QueueBudget:
         if not self.frames or self.frames[-1] is not frame:
             raise ArchitectureError('queue work ledger scope mismatch', code='fitness')
         self.frames.pop()
-        return _QueueFootprint(self.side, tuple(sorted(frame['sources'].values())), tuple(sorted(frame['work'].items())))
+        return _QueueFootprint(self.side, tuple(sorted(frame['sources'].values())), tuple(sorted(frame['work'].items())), self.profile)
 
     def merge(self, footprint: _QueueFootprint | None) -> None:
         if footprint is None:
             return
-        if footprint.side != self.side:
+        if footprint.side != self.side or footprint.profile != self.profile:
             raise ArchitectureError('queue source cache side mismatch', code='fitness')
         for source in footprint.sources:
             self._source(source)
@@ -585,7 +604,8 @@ class _QueueResolutionCache(NamedTuple):
     source_modules: tuple[str, ...]
     paths: tuple[str, ...]
     values: dict[str, _QueueAdapterResolution]
-    demands: dict[tuple[str, frozenset[str] | None, bool], _QueueAdapterResolution]
+    demands: dict[tuple, _QueueAdapterResolution]
+    profile: tuple = _CONSUMER_PROFILE
 
 
 class _QueueAdapterNamesResult(NamedTuple):
@@ -3122,7 +3142,8 @@ def _queue_source_roots(snapshot: ArchitectureSnapshot) -> tuple[str, ...]:
 def _queue_module_inventory(root: Path, diff: ArchitectureDiff, side: str, source_roots: tuple[str, ...]) -> _QueueResolutionCache:
     paths = _repository_paths(root, diff, source_roots) if side == "head" else git_tree_paths(root, diff.base_sha, source_roots)
     modules = {relative.removesuffix("/__init__.py").removesuffix(".py").replace("/", ".") for path in paths for prefix in source_roots if not prefix or _matches(path, (prefix,)) for relative in (path[len(prefix) + 1:] if prefix else path,) if relative.endswith(".py")}
-    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {}, {})
+    return _QueueResolutionCache(tuple(sorted(modules)), tuple(sorted(path for path in paths if path.endswith(".py"))), {}, {},
+                                 _queue_analysis_profile(root, diff, side))
 
 
 def _prime_local_module_sources(
@@ -3766,8 +3787,10 @@ def _local_queue_resolution(
     callable_only: bool = False,
     budget: _QueueBudget | None = None,
 ) -> _QueueAdapterResolution:
-    budget = budget if budget is not None else _QueueBudget(side)
-    original_key = (module, requested, callable_only)
+    budget = budget if budget is not None else _QueueBudget(side, profile=cache.profile)
+    if budget.profile != cache.profile:
+        raise ArchitectureError("queue source cache profile mismatch", code="fitness")
+    original_key = (module, requested, callable_only) if cache.profile == _CONSUMER_PROFILE else (module, requested, callable_only, cache.profile)
     prefetched = cache.values.get(module)
     source_identity = tuple((path, hashlib.sha256(value).hexdigest())
                             for path, value, _package in prefetched.sources) if prefetched else ()
@@ -3794,7 +3817,7 @@ def _local_queue_resolution(
                 # Keep its topology/depth charge even though its stable function
                 # body is not expanded. The canonical declaration cache stays
                 # independent of whether this request has a parent.
-                if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
+                if len(visited | {module}) > budget.module_limit:
                     raise ArchitectureError('queue adapter module limit exceeded', code='limit')
                 _queue_check_depth(budget, len(resolving) + 1, site='declaration', module=module, side=side, active=resolving)
                 visited.add(module)
@@ -3837,7 +3860,7 @@ def _local_queue_resolution_impl(
     if module not in cache.source_modules:
         return _QueueAdapterResolution("not_queue", "local_module_missing")
     prefetched = cache.values.get(module)
-    demand_key = (module, requested, callable_only)
+    demand_key = (module, requested, callable_only) if cache.profile == _CONSUMER_PROFILE else (module, requested, callable_only, cache.profile)
     cached_declaration = cache.demands.get(demand_key)
     if callable_only and cached_declaration is not None and not cached_declaration.source_modules:
         return cached_declaration
@@ -3856,7 +3879,7 @@ def _local_queue_resolution_impl(
             cache.demands[demand_key] = result
             return result
     if module not in visited:
-        if len(visited) >= MAX_QUEUE_ADAPTER_MODULES:
+        if len(visited) >= budget.module_limit:
             raise ArchitectureError("queue adapter module limit exceeded", code="limit")
         visited.add(module)
     if prefetched is not None and prefetched.state != "prefetched":
@@ -3866,7 +3889,7 @@ def _local_queue_resolution_impl(
     _queue_check_depth(budget, len(resolving) + 1, site='active', module=module, side=side, active=resolving)
     cached = cache.demands.get(demand_key)
     if cached is not None and not (cached.source_modules & resolving):
-        if len(visited | cached.source_modules) > MAX_QUEUE_ADAPTER_MODULES:
+        if len(visited | cached.source_modules) > budget.module_limit:
             raise ArchitectureError('queue adapter module limit exceeded', code='limit')
         _queue_check_depth(budget, len(resolving) + cached.height, site='cached', module=module, side=side, active=resolving,
                            cached=cached.witness, cached_height=cached.height, cached_modules=cached.source_modules)
@@ -3966,7 +3989,7 @@ def _queue_adapter_names(
     source_preparation: _QueueSourcePreparation | None = None,
     budget: _QueueBudget | None = None,
 ) -> _QueueAdapterNamesResult:
-    budget = budget if budget is not None else _QueueBudget(side)
+    budget = budget if budget is not None else _QueueBudget(side, profile=cache.profile)
     proven: set[str] = set()
     unsupported = False
     modules: set[str] = set()
@@ -4111,7 +4134,7 @@ def _queue_adapter_names(
                         callback_demands.add(access)
     reachable = dependencies | set(dependency_result.frontier)
     relevant = [item for item in normalized if item[0].split(".")[0] not in _QUEUE_IMPORTS and (item[6] and reachable or item[2] in dependencies or item[2] in dependency_result.frontier_imports)]
-    _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
+    _prime_local_module_sources(root, diff, {item[0] for item in relevant}, side, cache, source_roots[:MAX_QUEUE_SOURCE_ROOTS], budget.module_limit - len(seen), budget)
     for target_module, target_name, local_name, access_name, level, whole_module, wildcard in normalized:
             if target_module.split(".")[0] in _QUEUE_IMPORTS or not (wildcard and reachable or local_name in dependencies or local_name in dependency_result.frontier_imports):
                 continue
@@ -4132,7 +4155,7 @@ def _queue_adapter_names(
             height = max(height, resolution.height if resolution.source_modules else 0)
             if target_name and not wildcard and target_name not in resolution.declared_exports and _is_local_package(cache, target_module):
                 target_module, target_name, whole_module = f"{target_module}.{target_name}", "", True
-                _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, MAX_QUEUE_ADAPTER_MODULES - len(seen), budget)
+                _prime_local_module_sources(root, diff, {target_module}, side, cache, bounded_source_roots, budget.module_limit - len(seen), budget)
                 resolution = resolve_import(target_module, demanded_members(access_name), split=True)
                 modules.update(resolution.source_modules)
                 if resolution.source_modules and resolution.height > height:
@@ -4237,7 +4260,9 @@ def _queue_signals(
     *, source_path: str = '<importer>', source: bytes | None = None, complete_module: bool = False,
     budget: _QueueBudget | None = None,
 ) -> _QueueProvenanceResult:
-    budget = budget if budget is not None else _QueueBudget(side)
+    budget = budget if budget is not None else _QueueBudget(side, profile=cache.profile)
+    if budget.profile != cache.profile or _queue_analysis_profile(root, diff, side) != cache.profile:
+        raise ArchitectureError("queue source cache profile changed", code="fitness")
     source_was_supplied = source is not None
     source = source if source is not None else ast.unparse(tree).encode('utf-8')
     budget.source(source_path, source)
@@ -4260,6 +4285,8 @@ def _queue_signals(
                                       complete_module=complete_module)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
+    if _queue_analysis_profile(root, diff, side) != cache.profile:
+        raise ArchitectureError("queue source cache profile changed", code="fitness")
     if adapters.unproved_queue_callback:
         raise _UnsupportedQueueCallbackError('queue-bearing callback return is unsupported', code='fitness')
     unresolved = bool((adapters.unsupported or analysis.uncertain) and analysis.signals)
@@ -4301,7 +4328,7 @@ def _new_queue_sources(
                 head_value = read_diff_file(root, diff, path, 'head')
             if head_value is None:
                 raise ArchitectureError('changed Python source is unavailable', code='missing')
-            head_budget = _QueueBudget('head')
+            head_budget = _QueueBudget('head', profile=head_cache.profile)
             stage = 'admit'
             with _source_span(path, side, 'admit'):
                 head_budget.source(path, head_value)
@@ -4322,7 +4349,7 @@ def _new_queue_sources(
                 base_value = read_diff_file(root, diff, path, "base")
             base = _QueueProvenanceResult("not_queue", "no_base_source", ())
             if base_value is not None:
-                base_budget = _QueueBudget('base')
+                base_budget = _QueueBudget('base', profile=base_cache.profile)
                 stage = 'admit'
                 with _source_span(path, side, 'admit'):
                     base_budget.source(path, base_value)

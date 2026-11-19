@@ -3958,12 +3958,21 @@ class ArchitectureFitnessTests(unittest.TestCase):
 
         object_id = repo.git("rev-parse", f"{head}:{paths[0]}").encode("ascii")
         negative = b"100644 blob " + object_id + b" -1\t" + paths[0].encode() + b"\0"
-        with patch.object(DIFF, "_git", return_value=negative):
+        actual_git = DIFF._git
+        def negative_metadata(project, arguments, **options):
+            return negative if 'ls-tree' in arguments else actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=negative_metadata):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "invalid Git blob size"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
         metadata = b"100644 blob " + object_id + b" 10\t" + paths[0].encode() + b"\0"
         malformed = object_id + b" blob 9\0VALUE = 1\n\0"
-        with patch.object(DIFF, "_git", side_effect=(metadata, malformed)):
+        def malformed_batch(project, arguments, **options):
+            if 'ls-tree' in arguments:
+                return metadata
+            if any(argument.startswith('--batch') for argument in arguments):
+                return malformed
+            return actual_git(project, arguments, **options)
+        with patch.object(DIFF, "_git", side_effect=malformed_batch):
             with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "unexpected Git blob batch header"):
                 DIFF.read_diff_files(repo.root, diff, (paths[0],))
 

@@ -41,7 +41,7 @@ def _module_source(module) -> bytes:
 
 def implementation_source_binding() -> dict:
     implementation = {}
-    for name in ('economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py', 'lock_profile_validation.py', 'continuity_authoring.py', 'agent_eval_authoring.py', 'grant_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
+    for name in ('queue_analysis_profile.py', 'economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py', 'lock_profile_validation.py', 'continuity_authoring.py', 'agent_eval_authoring.py', 'grant_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',

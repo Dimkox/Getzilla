@@ -2092,7 +2092,11 @@ def _git_blobs(root: Path, sha: str, paths: tuple[str, ...],
         _git(
             root,
             ["--literal-pathspecs", "ls-tree", "-lr", "-z", "--full-tree", sha, "--", *requested],
-            limit=min(MAX_GIT_OUTPUT_BYTES, 4_096 + sum(map(len, encoded))),
+            # Per record: six mode bytes, four type bytes, exact object-id
+            # width, at most twenty decimal size bytes, and five separators.
+            # Keep the absolute capture ceiling; size validation below still
+            # rejects objects above the unchanged analyzed-file limit.
+            limit=min(MAX_GIT_OUTPUT_BYTES, sum(len(path) + 6 + 4 + len(sha) + 20 + 5 for path in encoded)),
             _scope=_scope,
         ),
         operation="read Git batch tree metadata",
