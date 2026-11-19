@@ -24,12 +24,15 @@ class StudyResourceTests(unittest.TestCase):
                 'Mounts': [{'Type': 'bind', 'Source': '/fixture/model', 'Destination': '/model',
                             'RW': False, 'Propagation': 'rprivate'},
                            {'Type': 'bind', 'Source': '/fixture/software', 'Destination': '/software',
+                            'RW': False, 'Propagation': 'rprivate'},
+                           {'Type': 'bind', 'Source': '/fixture/worker', 'Destination': '/worker',
                             'RW': False, 'Propagation': 'rprivate'}]}
 
     def check(self, owner, value):
         return owner.validate_container_readback(value, image_id='sha256:' + 'a' * 64,
             cpu_ids=(2, 3), command=('python', 'worker'),
-            mounts={'/model': '/fixture/model', '/software': '/fixture/software'})
+            mounts={'/model': '/fixture/model', '/software': '/fixture/software',
+                    '/worker': '/fixture/worker'})
 
     def test_fixed_declarations_are_only_data_validation_not_authority(self):
         self.assertIsNone(self.check(self.owner(), self.fixture()))
