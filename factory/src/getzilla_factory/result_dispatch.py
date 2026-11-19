@@ -268,6 +268,7 @@ class ResultDispatcher:
         batch_size: int = 8,
         lease_seconds: int = 30,
         poll_seconds: float = 1.0,
+        protected_service=None,
     ) -> None:
         if not isinstance(dispatcher_id, str) or not IDENTIFIER.fullmatch(dispatcher_id):
             raise ValueError("invalid dispatcher identifier")
@@ -284,8 +285,16 @@ class ResultDispatcher:
         self.lease_seconds = lease_seconds
         self.poll_seconds = float(poll_seconds)
         self.last_error: Exception | None = None
+        if protected_service is not None:
+            from .access_release import AccessReleaseService
+            if type(protected_service) is not AccessReleaseService or poll_seconds > 0.05:
+                raise ValueError('protected dispatcher profile is unavailable')
+        self.protected_service = protected_service
 
     def run_once(self) -> int:
+        protected_count = self.protected_service.run_once() if self.protected_service is not None else 0
+        if self.store is None and self.protected_service is not None:
+            return protected_count
         self.store.reconcile_model_requests(self.dispatcher_id, limit=self.batch_size)
         claims = self.store.claim_model_requests(
             self.dispatcher_id, limit=self.batch_size, lease_seconds=self.lease_seconds
@@ -299,4 +308,4 @@ class ResultDispatcher:
                 self.store.start_model_request_dispatch(claim)
                 outcome = self.client.dispatch(claim)
             self.store.record_model_request_dispatch(claim, outcome)
-        return len(claims)
+        return protected_count + len(claims)

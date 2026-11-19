@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from . import _policy_legacy as _legacy
-from . import fsx
+from . import fsx, state
+from .supply_chain import check_tool_trust
 from ._policy_legacy import *  # noqa: F401,F403
 from ._policy_legacy import (
     DEFAULT_CONTROL_PLANE as _LEGACY_CONTROL_PLANE,
@@ -52,6 +53,8 @@ def sensitive_action(
         return 'protected-path-write'
     if _legacy_mcp_side_effect(tool, root):
         return 'external-write'
+    if not check_tool_trust(root, event)[0]:
+        return 'unverified-mcp'
     if tool != 'Bash':
         return None
     command = str(tool_input.get('command', '')) if isinstance(tool_input, dict) else str(tool_input)
@@ -126,6 +129,21 @@ def evaluate_pre_tool(
     intent_reason = mutation_block_reason(root, event, execution_cwd=directory)
     if intent_reason:
         return False, intent_reason
+    trusted, reason = check_tool_trust(root, event)
+    if not trusted:
+        return False, reason
+    try:
+        route = _legacy.get_active_route(root)
+        if route is None and state.route_authority_present(root):
+            if event.get('tool_name') not in {'Read', 'Glob', 'Grep', 'LS', 'ListDirectory'}:
+                return False, 'execution_store_unavailable: canonical task authority cannot be observed.'
+        if route and 'execution_store_required' in route:
+            from .execution import hook_stop_reason
+            stopped = hook_stop_reason(root, event)
+            if stopped is not None:
+                return False, stopped
+    except (ImportError, OSError, ValueError, TypeError, KeyError):
+        return False, 'execution_store_unavailable: required task control cannot be observed.'
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
@@ -203,6 +203,7 @@ class HttpLandingExecutionRequest:
     profile_digest: str
     input_digest: str
     payload: bytes
+    stop_capability: object = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -310,14 +311,16 @@ class HttpLandingNormalizer:
         result = None
         try:
             result = self._executor.run(HttpLandingExecutionRequest(
-                self._profile.profile_digest, request.source.input_digest, payload
+                self._profile.profile_digest, request.source.input_digest, payload,
+                stop_capability=request.stop_capability,
             ))
             self._validate_result(result)
         except (LandingProviderError, LandingContractError, OSError, ValueError) as exc:
             category = getattr(exc, "category", EXECUTOR_CODE_CATEGORIES.get(str(exc), "protocol"))
             return self._terminal(
                 request, "needs_human", "http_outcome_unusable", started, request_digest,
-                category=category, dispatched=True, http_status=getattr(exc, "http_status", None),
+                category=category, dispatched=getattr(exc, "dispatched", True),
+                http_status=getattr(exc, "http_status", None),
             )
         try:
             spec = decode_landing_draft(

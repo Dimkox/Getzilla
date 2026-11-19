@@ -20,6 +20,7 @@ from .state import (CLOSED_CHANGE_STATUSES, serialized_task, require_route_owner
 from .util import now_utc
 
 MAX_FILE_BYTES = 262_144
+MAX_PUBLIC_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 1_048_576
 MAX_FILES = 64
 # Rows can share report files or remain unrun; their finite limit is independent.
@@ -42,6 +43,7 @@ STAGES = frozenset({
 SCOPE_STAGES = frozenset({'scoped', 'approved', 'implementing', 'verifying', 'reviewing', 'ready'})
 _SHA = re.compile(r'[0-9a-f]{40}')
 _ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}')
+_PUBLIC_SOURCE_MODES = frozenset({0o444, 0o644, 0o555, 0o755})
 from .workflow_storage import CHANGE_ID as _CHANGE_ID
 _TEMPLATE = re.compile(
     r'\{\{(?:CHANGE_ID|TITLE|TASK|CREATED_AT|RISK|COMPLEXITY|DOMAINS|GOVERNANCE_AUTHORITY_NOTICE)\}\}'
@@ -71,9 +73,67 @@ def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
     return fsx.directory_identity(info, _identity(info))
 
 
-def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *, sync: bool = False) -> bytes:
+def _public_directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
+
+
+def _public_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (*_identity(info), info.st_uid, info.st_gid, info.st_nlink)
+
+
+def _admit_public_directory(info, owner, *, sticky_parent=False):
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in {0, owner}
+            or info.st_mode & 0o022 and not (
+                sticky_parent and info.st_uid == 0 and info.st_mode & stat.S_ISVTX)):
+        raise InspectionError('file_unsafe', 'public source ancestry is unqualified')
+
+
+def _open_public_source_root(root, handles, directories):
+    if not root.is_absolute() or '..' in root.parts or root.anchor != os.path.sep:
+        raise InspectionError('file_unsafe', 'public source root is unqualified')
+    root_info = root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode) or fsx.is_link(root_info):
+        raise InspectionError('file_unsafe', 'public source root is unqualified')
+    owner = root_info.st_uid
+    directory = fsx.open_dir(root.anchor, flags=fsx.O_CLOEXEC)
+    handles.append(directory)
+    _admit_public_directory(fsx.fstat_dir(directory), owner)
+    for index, component in enumerate(root.parts[1:]):
+        child = fsx.open_dir_at(directory, component, flags=fsx.O_CLOEXEC)
+        handles.append(child)
+        info = fsx.fstat_dir(child)
+        _admit_public_directory(info, owner, sticky_parent=index < len(root.parts[1:]) - 1)
+        directories.append((directory, component, _public_directory_identity(info)))
+        directory = child
+    if (_public_directory_identity(fsx.fstat_dir(directory)) != _public_directory_identity(root_info)
+            or any(saved != _public_directory_identity(fsx.lstat_at(parent, name))
+                   for parent, name, saved in directories)):
+        raise InspectionError('file_changed', 'public source root changed')
+    return directory, owner
+
+
+def validate_public_source_root(root: Path) -> None:
+    """Metadata observation only; no retained authority or kernel-CWD pin."""
+    if fsx.WINDOWS:
+        raise InspectionError('file_unavailable', 'public source custody is unavailable on this platform')
+    handles, directories = [], []
+    try:
+        _open_public_source_root(root, handles, directories)
+    except OSError:
+        raise InspectionError('file_unavailable', 'public source ancestry is unqualified') from None
+    finally:
+        for handle in reversed(handles):
+            fsx.close_dir(handle)
+
+
+def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *, sync: bool = False,
+                      single_link: bool = False, public_source: bool = False) -> bytes:
     """Open every component without following links; never block on a FIFO."""
     parts = _relative(relative)
+    if type(public_source) is not bool or (public_source and fsx.WINDOWS):
+        raise InspectionError('file_unavailable', 'public source custody is unavailable on this platform')
+    if public_source and (type(limit) is not int or not 0 <= limit <= MAX_PUBLIC_SOURCE_BYTES):
+        raise InspectionError('file_unsafe', 'public source byte limit is unqualified')
     if not fsx.WINDOWS and (
         any(not hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'O_CLOEXEC'))
         or os.open not in os.supports_dir_fd
@@ -83,12 +143,21 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
     handles: list[fsx.DirHandle] = []
     directories: list[tuple[fsx.DirHandle, str, tuple[int, ...]]] = []
     try:
-        directory = fsx.open_dir(root, flags=fsx.O_CLOEXEC)
-        handles.append(directory)
+        directory_identity = _public_directory_identity if public_source else _directory_identity
+        file_identity = _public_file_identity if public_source else _identity
+        owner = None
+        if public_source:
+            directory, owner = _open_public_source_root(root, handles, directories)
+        else:
+            directory = fsx.open_dir(root, flags=fsx.O_CLOEXEC)
+            handles.append(directory)
         for component in parts[:-1]:
             child = fsx.open_dir_at(directory, component, flags=fsx.O_CLOEXEC)
             handles.append(child)
-            directories.append((directory, component, _directory_identity(fsx.fstat_dir(child))))
+            info = fsx.fstat_dir(child)
+            if public_source:
+                _admit_public_directory(info, owner)
+            directories.append((directory, component, directory_identity(info)))
             directory = child
         descriptor = fsx.open_at(
             directory, parts[-1], (os.O_RDWR if sync and fsx.WINDOWS else os.O_RDONLY) | fsx.O_NOFOLLOW | fsx.O_CLOEXEC | fsx.O_NONBLOCK
@@ -97,12 +166,27 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise InspectionError('file_unsafe', 'selected input is not a regular file')
+        if single_link and before.st_nlink != 1:
+            raise InspectionError('file_unsafe', 'selected input has multiple links')
         if before.st_size > limit:
             raise InspectionError('file_too_large', 'selected input exceeds its byte limit')
+        def public_unchanged():
+            current = os.fstat(descriptor)
+            if (not stat.S_ISREG(current.st_mode) or current.st_uid != owner or current.st_nlink != 1
+                    or stat.S_IMODE(current.st_mode) not in _PUBLIC_SOURCE_MODES
+                    or file_identity(current) != file_identity(before)
+                    or file_identity(current) != file_identity(fsx.lstat_at(directory, parts[-1]))
+                    or any(saved != directory_identity(fsx.lstat_at(parent, name))
+                           for parent, name, saved in directories)):
+                raise InspectionError('file_unsafe', 'public source metadata is unqualified or changed')
         chunks: list[bytes] = []
         total = 0
         while True:
-            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
+            if public_source:
+                public_unchanged()
+                if total == limit:
+                    break
+            chunk = os.read(descriptor, min(65_536, limit + (0 if public_source else 1) - total))
             if not chunk:
                 break
             chunks.append(chunk)
@@ -110,15 +194,18 @@ def read_package_file(root: Path, relative: str, limit: int = MAX_FILE_BYTES, *,
             if total > limit:
                 raise InspectionError('file_too_large', 'selected input exceeds its byte limit')
         if (
-            _identity(before) != _identity(os.fstat(descriptor))
-            or _identity(before) != _identity(fsx.lstat_at(directory, parts[-1]))
+            file_identity(before) != file_identity(os.fstat(descriptor))
+            or (single_link and os.fstat(descriptor).st_nlink != 1)
+            or file_identity(before) != file_identity(fsx.lstat_at(directory, parts[-1]))
             or total != before.st_size
             or any(
-                identity != _directory_identity(fsx.lstat_at(parent, name))
+                identity != directory_identity(fsx.lstat_at(parent, name))
                 for parent, name, identity in directories
             )
         ):
             raise InspectionError('file_changed', 'selected input changed during the read')
+        if public_source:
+            public_unchanged()
         if sync:
             os.fsync(descriptor)
         return b''.join(chunks)

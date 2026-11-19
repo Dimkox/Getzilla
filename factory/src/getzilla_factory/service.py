@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Iterable
 
 from .brokers import ProposalBroker
-from .contracts import HEX64, TaskIntakeV1, canonical_digest
+from .contracts import HEX64, ContractError, TaskIntakeV1, canonical_digest
 from .execution_contracts import (
     ExecutionContractError,
     ExecutionSelectionV1,
@@ -15,7 +15,7 @@ from .execution_contracts import (
 )
 from .models import Actor, ExecutionStage, FailureClass, LeaseGrant, RunRole, TaskStatus
 from .protocol import CanonicalEvent, PROTOCOL_VERSION
-from .result_contracts import ResultEnvelopeV2
+from .result_contracts import ResultEnvelopeV2, ordinary_result_wire
 from .semantic_adjudication import adjudicate
 from .semantic_bridge import SemanticValidationInputsV1, build_semantic_subject
 from .semantic_contracts import (
@@ -37,7 +37,7 @@ from .workspace import (
     WorkspaceSnapshotV1,
     WorkspaceSnapshotUnavailable,
 )
-from .store import FenceError, StoreUnavailable
+from .store import FenceError, ResultReadUnavailable, StoreUnavailable
 
 
 class AuthorizationError(PermissionError):
@@ -140,7 +140,11 @@ class FactoryService:
         """Return a persisted envelope only through its repository-bound identity."""
         self._require(actor, "task:read", repository_id)
         try:
-            return self.store.result_envelope(repository_id, task_id, envelope_digest)
+            result = self.store.result_envelope(repository_id, task_id, envelope_digest)
+            ordinary_result_wire(result.to_dict(), grade='ordinary')
+            return result
+        except (ResultReadUnavailable, ContractError):
+            raise ResultAdmissionUnavailable('result envelope unavailable') from None
         except KeyError as exc:
             raise ResultAdmissionNotFound(envelope_digest) from exc
 
@@ -150,6 +154,29 @@ class FactoryService:
             raise AuthorizationError(f"missing scope: {scope}")
         if repository is not None and "*" not in actor.repositories and repository not in actor.repositories:
             raise AuthorizationError("repository is outside actor authorization")
+
+    def _check_landing_stop_actor(self, source, actor):
+        from .factory_stop import FactoryStopError
+        from .landing_contracts import LandingInputV1
+        from .landing_renderer import TARGET_BASE_SHA, TARGET_BASE_TREE, TARGET_REPOSITORY_ID
+        if (type(actor) is not Actor or type(source) is not LandingInputV1
+                or source.tenant_id != actor.actor_id
+                or (source.repository_id, source.exact_base_sha, source.exact_base_tree)
+                != (TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE)):
+            raise FactoryStopError('factory_stop_binding_required')
+        try:
+            self._require(actor, 'landing:submit', source.repository_id)
+            self._require(actor, 'task:read', source.repository_id)
+        except AuthorizationError:
+            raise FactoryStopError('factory_stop_binding_required') from None
+    async def _landing_stop_snapshot(self, source, actor):
+        self._check_landing_stop_actor(source, actor)
+        return await self.store.landing_stop_snapshot(source, actor)
+
+    def landing_stop_capability(self, source, *, actor: Actor, landing_store=None):
+        """Bind stop observation to actual server task/source/creator, never JSON claims."""
+        from .factory_stop import _issue_factory_capability
+        return _issue_factory_capability(self, source, actor, landing_store)
 
     def intake(
         self,

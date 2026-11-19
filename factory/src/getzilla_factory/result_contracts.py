@@ -16,6 +16,24 @@ from .v15_contracts import FrozenWire, closed, digest, identity, integer, safe_t
 
 
 RESULT_OUTCOMES = frozenset({"allow", "redacted", "rejected", "unavailable"})
+
+
+def ordinary_result_wire(value, *, grade, protected_binding=False):
+    """Reject protected/unknown provenance before the legacy payload DTO exists.
+
+    The persistent source grade is independent of outbox retention. Reserved
+    producer markers also fail closed for stale or alternative store adapters.
+    This classifies facts; it never authorizes a protected read.
+    """
+    if (type(value) is not dict or type(grade) is not str or grade != 'ordinary'
+            or protected_binding is not False):
+        raise ContractError('protected_result_unavailable')
+    owned = dict(value)
+    operation, policy = owned.get('source_operation'), owned.get('policy_version')
+    if (type(operation) is not str or type(policy) is not str
+            or operation.startswith('access:') or policy.startswith('access-local-')):
+        raise ContractError('protected_result_unavailable')
+    return owned
 RESULT_COMPLETENESS = frozenset({"complete", "missing"})
 RESULT_CHANNELS = frozenset(
     {

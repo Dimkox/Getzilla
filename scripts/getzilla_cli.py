@@ -54,6 +54,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     'git': ('getzilla_git.py', 'Git platform capabilities and offline remote identity'),
     'entire': ('getzilla_entire.py', 'optional Entire transport and Trails (extra:entire)'),
     'trust-ci': ('getzilla_trust_ci.py', 'set up and check the self-hosted Trust CI host (init, status)'),
+    'trust': ('getzilla_trust.py', 'audit existing public source trust declarations offline'),
     'deploy': ('getzilla_deploy.py', 'prepare publish commands or observe a local package with preflight'),
     'harness': ('getzilla_harness.py', 'check or regenerate the selected agent harness files'),
     'setup-agent': ('getzilla_setup_agent.py', 'configure the coding agent and its models'),
