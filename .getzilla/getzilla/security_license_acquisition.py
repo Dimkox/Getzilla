@@ -234,6 +234,10 @@ def acquire_pypi(dependencies: list[dict], destination: Path, *, inventory_diges
             retained_frontiers = previous.get('family_frontiers', [])
             if (retained or retained_frontiers) and previous.get('inventory_digest') != inventory_digest:
                 raise ArtifactError('artifact-inventory-binding', 'cannot carry family evidence into another source inventory')
+        if any(record.get('kind') == 'image' and record.get('origin', {}).get('kind') == 'held-oci-components/v1'
+                for record in retained):
+            from .security_image_licenses import replace_retained
+            retained = replace_retained(destination, retained, families)
         if family_preparation is not None:
             from .security_family_inputs import publish
             frontier = publish(destination, descriptor, family_preparation, inventory_digest=inventory_digest,

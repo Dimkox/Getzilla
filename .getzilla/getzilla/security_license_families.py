@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import PurePosixPath
-from .security_license_texts import _ANCILLARY_FILES
+from .security_license_texts import _ANCILLARY_FILES, _REVIEWED_BUNDLES
 from .security_artifacts import (
     MAX_ARTIFACT_BYTES,
     MAX_INDEX_BYTES,
@@ -16,8 +16,25 @@ from .security_artifacts import (
 from .security_data import _json
 
 
+def _term_identifiers(item, *, reference=False):
+    base = {'path', 'sha256'} if reference else {'path', 'sha256', 'bytes', 'validation'}
+    if set(item) == base | {'recognized_license'} and type(item['recognized_license']) is str:
+        return {item['recognized_license']}
+    if (set(item) == base | {'recognized_licenses'} and type(item['recognized_licenses']) is list
+            and item['sha256'] in _REVIEWED_BUNDLES
+            and item['recognized_licenses'] == list(_REVIEWED_BUNDLES[item['sha256']])):
+        return set(item['recognized_licenses'])
+    return None
+
+
 def finding_consistent(finding, allowed, select_expression):
     """Rejoin the retained record and component proof; never grant source authority."""
+    if (isinstance(finding, dict) and isinstance(finding.get('family_record'), dict)
+            and finding['family_record'].get('kind') == 'image'
+            and isinstance(finding['family_record'].get('origin'), dict)
+            and finding['family_record'].get('origin', {}).get('kind') == 'held-oci-components/v1'):
+        from .security_image_licenses import finding_consistent as held_image_consistent
+        return held_image_consistent(finding, allowed, select_expression)
     fields = {
         "kind",
         "reference",
@@ -157,10 +174,11 @@ def finding_consistent(finding, allowed, select_expression):
                 ):
                     return False
                 if key == "license_files":
+                    term_ids = _term_identifiers(item)
                     if (
-                        set(item) != {"path", "sha256", "bytes", "recognized_license", "validation"}
-                        or item.get("recognized_license") not in owners[path][2]
-                        or item["recognized_license"] not in allowed
+                        not term_ids
+                        or not term_ids <= owners[path][2]
+                        or not term_ids <= set(allowed)
                         or item["validation"] != "complete-standard-terms-and-retained-bytes"
                     ):
                         return False
@@ -189,7 +207,7 @@ def finding_consistent(finding, allowed, select_expression):
                     expected = {str(PurePosixPath(path).parent / name): sha for name, sha in contract[2]}
                     references = {}
                     for reference in item["required_files"]:
-                        if type(reference) is not dict or set(reference) != {"path", "sha256", "recognized_license"}:
+                        if type(reference) is not dict or not _term_identifiers(reference, reference=True):
                             return False
                         target = reference["path"]
                         term = term_records.get(target)
@@ -199,13 +217,13 @@ def finding_consistent(finding, allowed, select_expression):
                             or term is None
                             or owners[target][0] != owners[path][0]
                             or reference["sha256"] != term["sha256"]
-                            or reference["recognized_license"] != term["recognized_license"]
+                            or _term_identifiers(reference, reference=True) != _term_identifiers(term)
                         ):
                             return False
                         references[target] = reference["sha256"]
-                    if references != expected or not owners[path][2] <= {
-                        term_records[target]["recognized_license"] for target in references
-                    }:
+                    if references != expected or not owners[path][2] <= set().union(*(
+                        _term_identifiers(term_records[target]) for target in references
+                    )):
                         return False
                     ancillary_records[path] = item
                 paths.add(path)

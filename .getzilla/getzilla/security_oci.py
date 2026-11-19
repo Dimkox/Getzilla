@@ -503,7 +503,7 @@ def observe_final_files(image, retain):
                     if target.startswith(('/', '../')) or source is None or source['kind'] != 'file':
                         raise OCIError('Unproved component hardlink target')
                     row = dict(source, path=name, layer=layer['digest'], hardlink_source=dict(
-                        path=target, layer=source['layer'], sha256=source['sha256']))
+                        path=target, layer=source['layer'], sha256=source['sha256'], from_lower=target not in changes))
                 elif member.issym():
                     row.update(kind='symlink', target=member.linkname)
                 else:
@@ -537,6 +537,14 @@ def observe_final_files(image, retain):
                 _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
             removed_paths = {path for path, opaque in removals if not opaque}
             opaque_paths = {path for path, opaque in removals if opaque}
+            for row in changes.values():
+                source = row.get('hardlink_source', {})
+                if source.get('from_lower'):
+                    parts = source['path'].split('/')
+                    ancestors = ['/'.join(parts[:i]) for i in range(1, len(parts))]
+                    if ('' in opaque_paths or source['path'] in removed_paths or
+                            any(p in removed_paths or p in opaque_paths for p in ancestors)):
+                        raise OCIError('Whiteout removed component hardlink source before layer application')
             for path in list(final):
                 image._budget.tick()
                 parts = path.split('/')
