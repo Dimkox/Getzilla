@@ -183,7 +183,7 @@ class NativeTests(unittest.TestCase):
         self.server_script.write_text(PROGRAM)
         self.server_script.chmod(0o644)
         (self.root/'.getzilla/config').mkdir(exist_ok=True)
-        (self.root/'.getzilla/config/policy.json').write_text('{}')
+        (self.root/'.getzilla/config/policy.json').write_text('{"schema_version":2}')
         (self.root/'.getzilla/config/toolchain.json').write_text(json.dumps({'schema_version':1,'tools':[{
             'id':'fake-mcp','commands':['python3'],'managed':{'executable':str(self.binary),
             'sha256':hashlib.sha256(self.binary.read_bytes()).hexdigest(),'argv':[str(self.server_script)]}}]}))
@@ -192,7 +192,6 @@ class NativeTests(unittest.TestCase):
         for path in self.root.rglob('*'):
             if path.is_dir() and '.getzilla/runtime' not in str(path): path.chmod(0o755)
             if path.is_file() and '.getzilla/runtime/' not in str(path): path.chmod(0o644)
-        self.policy=self.enterContext(patch('getzilla.managed_execution._policy'))
         self.profile={'transport':'stdio','protocol':'2025-11-25','credential_scope':'local-uid:'+str(os.getuid()),
                       'tool_id':'fake-mcp','server_version':'1.0.0','endpoint':'stdio://fixture','tools':{'fixture_read':'read'}}
         class Authority:
@@ -209,12 +208,22 @@ class NativeTests(unittest.TestCase):
         self.plan=plan_activation(self.root,'mcp-jira',self.request,native=self.runtime,runtime=self.runtime,authority=self.authority)
         self.activate=lambda: commit_activation(self.root,self.plan,native=self.runtime,runtime=self.runtime,authority=self.authority)
 
+    def test_invalid_policy_denies_before_execution_allocation(self):
+        from getzilla import execution, execution_store
+        self.activate()
+        (self.root/'.getzilla/config/policy.json').write_text('{}')
+        with self.assertRaisesRegex(execution.ExecutionError, 'mcp_identity_unverified'):
+            self.runtime.call(tool='fixture_read',arguments={},intent_key='invalid-policy')
+        self.assertEqual(execution_store.load_registry(self.root)['records'], {})
+
     def test_T26_disabled_zero_provider_work_and_no_configuration_mutation(self):
         before={str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
-        self.policy.reset_mock(); calls=self.authority.calls
+        from getzilla import managed_execution
+        policy=self.enterContext(patch('getzilla.managed_execution._policy', wraps=managed_execution._policy))
+        calls=self.authority.calls
         result=self.runtime.call(tool='fixture_read',arguments={},intent_key='disabled')
         self.assertEqual(result['status'],'disabled')
-        self.assertEqual(self.authority.calls,calls); self.policy.assert_not_called()
+        self.assertEqual(self.authority.calls,calls); policy.assert_not_called()
         self.assertEqual(before,{str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
         self.fixture.assert_user_settings()
 
@@ -432,4 +441,8 @@ class PayloadTests(unittest.TestCase):
         core=[entry for entry in entries if entry.path.startswith('.getzilla/getzilla/')]
         archive=install.engine_archive_entry(core)
         with zipfile.ZipFile(io.BytesIO(archive.content)) as zipped:
-            self.assertFalse([name for name in zipped.namelist() if 'mcp-jira' in name or name.endswith('/transport.py')])
+            members=set(zipped.namelist())
+            self.assertIn('getzilla/retrieval/transport.py',members)
+            addon_roots=('optional-modules/mcp-jira/', 'modules/mcp-jira/',
+                         '.getzilla/optional-modules/mcp-jira/', '.getzilla/modules/mcp-jira/')
+            self.assertFalse([name for name in members if 'mcp-jira' in name or name.startswith(addon_roots)])
