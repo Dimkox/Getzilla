@@ -1,6 +1,6 @@
 # Retrieval engine and provenance
 
-The initial `getzilla.retrieval` library provides bounded Python function extraction,
+The initial `getzilla.retrieval` pure core provides bounded Python function extraction,
 exact identifier lookup, BM25 and explicit rank fusion. It performs no filesystem
 source discovery, network access, model loading or source authorization.
 
@@ -65,3 +65,12 @@ two-principal/two-project access and revocation tests, derivative deletion, real
 optional dense integration and the independently sealed RU/EN/BGE-M3 experiment.
 BGE-M3 is not selected or loaded by this library. No benchmark quality, native ACL,
 provider, retention or complete-delivery claim follows from this checkpoint.
+
+
+The optional issue370 native-local composition now adds actual owned-CWD source
+reads, current route-owner checks, existing Read policy and admission scanning,
+verified packets, local stdout and explicitly selected installed-harness sinks.
+See `docs/shared-context370.md` for its narrow scope, activation disclosure,
+strict-profile refusals, tested transport matrix and all NOT_TESTED model facts.
+It reuses this core and the existing graph store. It does not qualify enterprise
+ACLs, an actual backend/provider, private-egress confinement or model savings.

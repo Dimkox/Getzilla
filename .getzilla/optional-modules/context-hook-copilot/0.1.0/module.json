@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "context-hook-copilot",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {
+    "context-retrieval": "0.1.0"
+  },
+  "permissions": [
+    "context.hook.copilot"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "sink.json",
+      "sha256": "baad4d7bab837f0e4e4fa9b524967abb2526413bcc4acf0b577f4bac88465797",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}

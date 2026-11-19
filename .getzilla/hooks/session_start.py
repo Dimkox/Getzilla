@@ -73,6 +73,11 @@ def main() -> None:
     if len(context.encode('utf-8')) > 16384 and route:
         remaining = 16384 - len(model_note.encode('utf-8')) - 1
         context = f'{route_context(route, root, max_bytes=remaining)} {model_note}'
+    try:
+        from getzilla.retrieval.lifecycle import startup_note as context_startup_note, append_note
+        context = append_note(context, context_startup_note(root))
+    except (ImportError, ValueError, OSError):
+        pass  # Optional context failure cannot displace the mandatory handoff.
     # Copilot consumes top-level additionalContext. Other harnesses use the
     # existing SessionStart envelope. See docs/model-continuation.md.
     if harness() == 'copilot':
