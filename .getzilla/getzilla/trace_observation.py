@@ -110,6 +110,40 @@ def capture_phase(captured, kind, *, outcome=None, elapsed_ns=None):
     return row
 
 
+def _elapsed_observation(claim, key, finished):
+    """Only the validated native reap path publishes this projection.
+
+    Elapsed is the actual managed child's monotonic observation. No tariff,
+    CPU/GPU/energy, attempt identity or acceptance is inferred from it.
+    """
+    if type(finished.get('elapsed_ns')) is not int or finished['elapsed_ns'] < 0:
+        return None
+    from .trace_contracts import native_context, validate_v4
+    context = native_context(claim)
+    producer = digest({'context': context, 'claim_key': key,
+                       'claim_event': claim['event_id']})
+    def unknown(unit):
+        return {'value': None, 'unit': unit, 'unknown_reason': 'not_observed'}
+    payload = {'candidate_kind': 'local_usage', 'source_fact_digest': finished['event_id'],
+        'source_proof_ref': finished['event_id'], 'service_period': None,
+        'operation': {'claim_event_digest': claim['event_id'],
+            'operation_id': claim['operation_id'], 'attempt_id': claim['attempt_id'],
+            'producer_binding_digest': producer, 'physical_operation_digest': claim['event_id']},
+        'measurement_method': 'native_direct_child',
+        'elapsed': {'value': finished['elapsed_ns'], 'unit': 'elapsed_ns', 'unknown_reason': None},
+        'cpu': unknown('cpu_ns'), 'gpu': unknown('gpu_ns'), 'energy': unknown('microjoule'),
+        'peak_rss': unknown('byte')}
+    row = {'schema_version': 4, 'event': 'observation', 'kind': 'economics_observation',
+        'at': finished['at'], 'captured_at': finished['captured_at'], 'producer_version': 1,
+        'repository_digest': finished['repository_digest'], 'workspace_digest': finished['workspace_digest'],
+        'observer': {'profile': 'core_native', 'operation_id': claim['operation_id'],
+                     'context': context}, 'payload': payload}
+    row['event_id'] = digest({'definition': 'native-child-elapsed-v1', 'claim': claim['event_id'],
+                              'finished': finished['event_id']})
+    validate_v4(row)
+    return row
+
+
 def publish_observations(root, captured, rows, *, anchor=None):
     """After owned child reap, persist only under still-valid explicit A scope."""
     if type(captured) is not NativeClaim:
@@ -156,6 +190,16 @@ def publish_observations(root, captured, rows, *, anchor=None):
                     publication['dropped'] += 1
                     continue
                 publication['events'].append(copy.deepcopy(row))
+            economic = _elapsed_observation(captured.row, captured.key, finishes[0]) if len(starts) == len(finishes) == 1 and len(selected) == len(rows) == 2 else None
+            if economic is not None:
+                selected.append(economic)
+                if economic['event_id'] in present:
+                    if present[economic['event_id']] != economic:
+                        return False
+                elif len(publication['events']) < MAX_PENDING:
+                    publication['events'].append(economic)
+                else:
+                    publication['dropped'] += 1
             changed = copy.deepcopy(route)
             changed['observation_publication'] = publication
             changed['state_revision'] += 1
@@ -166,7 +210,7 @@ def publish_observations(root, captured, rows, *, anchor=None):
         if not deliver(root, route['route_id'], anchor=anchor):
             return False
         final = state.canonical_route(root, route['route_id'], anchor=anchor)['observation_publication']
-        return len(selected) == len(rows) == 2 and bool(starts and finishes) and all(final['delivery'].get(row['event_id'], {}).get('row_digest') == digest(row)
+        return len(rows) == 2 and len(selected) == 2 + int(economic is not None) and bool(starts and finishes) and all(final['delivery'].get(row['event_id'], {}).get('row_digest') == digest(row)
                                       for row in selected)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return False

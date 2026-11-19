@@ -133,7 +133,7 @@ def _validate_v4(row):
     if row['kind'] == 'economics_observation':
         # No unreviewed copy or generic-payload fallback. Integration waits for
         # the separately reviewed pure200 component and its exact validator.
-        from .route_metrics import validate_economics_payload
+        from .economics_contracts import validate_economics_payload
         validate_economics_payload(payload)
     else:
         opening = row['kind'] == 'native_coverage_open'
