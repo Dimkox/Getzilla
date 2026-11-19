@@ -24,6 +24,7 @@ from getzilla import verification_journal as diagnostics  # noqa: E402
 COMMANDS: dict[str, tuple[str, str]] = {
     'execution': ('getzilla_execution.py', 'owned bounded local execution: start, get, wait, cancel'),
     'hook': ('getzilla_hook.py', 'run one native project hook with unchanged stdin and exit status'),
+    'reverse': ('getzilla_reverse.py', 'optional static ELF interface and dependency reconstruction'),
     'search': ('getzilla_search_gateway.py', 'optional bounded universal web search, HTTP and MCP stdio'),
     'design-reference': ('getzilla_design_reference.py', 'explicit optional local JSON/CSS token reference'),
     'duplicates': ('getzilla_duplicates.py', 'read-only source duplication analysis (optional jscpd)'),
