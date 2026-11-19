@@ -4,8 +4,14 @@
 starts one existing source-pinned managed tool. It returns its registry execution
 ID. `get`, `wait ID --seconds N` and `cancel ID` use the same attempt. Wait is
 bounded to30seconds; an expired wait never restarts work. Timeout is1–300seconds.
-The current native session and canonical task determine ownership. No principal,
+First bind a native owner route and explicitly run `getzilla trust provision`
+for that task. The current native session and canonical task determine ownership. No principal,
 capability token, free shell command or model-provider request is a CLI input.
+
+An armed STOP still admits the closed literal `execution get`, `wait` and
+`cancel` forms through the hook. Wait uses its default or a decimal
+`--seconds` in(0,30]. New starts, shell tails and extra options stay refused.
+The normal secret and protected-path policy still runs for admitted controls.
 
 The explicit `linux-pinned-local-v1` profile requires Linux pidfds and bubblewrap
 with user, PID and network namespaces. The adapter checks the normal before-tool

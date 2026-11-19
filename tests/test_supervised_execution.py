@@ -325,3 +325,19 @@ class SupervisedExecutionTests(unittest.TestCase):
             self.assertEqual(item["execution_status"], "succeeded")
             self.assertIn("managed-par-public", item["output"]["preview"])
         self.assertEqual(len(store.load_registry(self.root)["records"]), 1)
+
+    def test_published_schema_accepts_the_real_supervisor_and_rejects_extra_authority(self):
+        import copy
+        import jsonschema
+
+        self.configure("pass")
+        self.assertEqual(self.finish(self.start()["execution_id"])["execution_status"], "succeeded")
+        schema = json.loads((ROOT / "schemas/execution-registry.v2.schema.json").read_text())
+        ledger = store.load_registry(self.root)
+        jsonschema.validate(ledger, schema)
+        invalid = copy.deepcopy(ledger)
+        next(iter(invalid["records"].values()))["supervisor"]["authority"] = "caller-controlled"
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(invalid, schema)
+        with self.assertRaises(store.RegistryError):
+            store._validate(invalid)

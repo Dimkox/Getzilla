@@ -522,12 +522,25 @@ def _control_command(root, value):
     if argv[:1] == ['getzilla']:
         argv = argv[1:]
     elif (len(argv) >= 2 and argv[0] in {'python3', 'python', str(Path(os.sys.executable).resolve())}
-          and argv[1] in {'scripts/getzilla_trust.py', str(root / 'scripts/getzilla_trust.py')}):
-        argv = ['trust', *argv[2:]]
+          and argv[1] in {'scripts/getzilla_trust.py', str(root / 'scripts/getzilla_trust.py'),
+                          'scripts/getzilla_execution.py', str(root / 'scripts/getzilla_execution.py')}):
+        family = 'execution' if Path(argv[1]).name == 'getzilla_execution.py' else 'trust'
+        argv = [family, *argv[2:]]
     else:
         return False
     if argv in (['status'], ['status', '--json']):
         return True
+    if argv[:1] == ['execution']:
+        control = argv[1:]
+        if (len(control) not in {2, 4} or control[0] not in {'get', 'wait', 'cancel'}
+                or re.fullmatch(r'[0-9a-f]{32}', control[1]) is None):
+            return False
+        if len(control) == 2:
+            return True
+        return (control[0] == 'wait' and control[2] == '--seconds'
+                and len(control[3]) <= 32
+                and re.fullmatch(r'(?:0|[1-9][0-9]*)(?:\.[0-9]+)?', control[3]) is not None
+                and 0 < float(control[3]) <= 30)
     if argv[:1] != ['trust']:
         return False
     argv = argv[1:]
