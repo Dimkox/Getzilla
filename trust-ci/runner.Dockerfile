@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/ci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
 
 ARG OPENGREP_VERSION=1.30.1

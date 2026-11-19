@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
 COPY tests ./tests
 COPY sql ./sql

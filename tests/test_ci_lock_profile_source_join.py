@@ -19,15 +19,15 @@ class CurrentCIProfileTests(unittest.TestCase):
     self.assertEqual(context['requirements'],primary)
     self.assertEqual(context['graph'],[primary])
     self.assertEqual(context['install_requirements'],{primary:hashlib.sha256((ROOT/primary).read_bytes()).hexdigest()})
-    for path in ['trust-ci/uv.lock','trust-ci/pyproject.toml','trust-ci/lock_profiles.py','trust-ci/lock-profiles.json']:
+    for path in ['trust-ci/uv.lock','trust-ci/pyproject.toml','trust-ci/lock_profiles.py','trust-ci/lock_profile_validation.py','trust-ci/lock-profiles.json']:
      self.assertEqual(context['source_inputs'][path],hashlib.sha256((ROOT/path).read_bytes()).hexdigest())
  def test_source_lock_profile_and_validator_tamper_refuse(self):
-  names=['Dockerfile.api','pyproject.toml','README.md','uv.lock','lock_profiles.py','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt']
+  names=['Dockerfile.api','pyproject.toml','README.md','uv.lock','lock_profiles.py', 'lock_profile_validation.py','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt']
   with tempfile.TemporaryDirectory() as directory:
    root=Path(directory);(root/'trust-ci').mkdir()
    for name in names:shutil.copyfile(ROOT/'trust-ci'/name,root/'trust-ci'/name)
    self.assertIsNotNone(target.ci_install_context(root,'trust-ci/Dockerfile.api'))
-   for name in ['uv.lock','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt','pyproject.toml','lock_profiles.py']:
+   for name in ['uv.lock','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt','pyproject.toml','lock_profiles.py','lock_profile_validation.py']:
     path=root/'trust-ci'/name;original=path.read_bytes();path.write_bytes(original+b' tampered')
     with self.subTest(name=name):self.assertIsNone(target.ci_install_context(root,'trust-ci/Dockerfile.api'))
     path.write_bytes(original)
@@ -35,7 +35,7 @@ class CurrentCIProfileTests(unittest.TestCase):
    self.assertIsNone(target.ci_install_context(root,'trust-ci/Dockerfile.api'))
 
  def test_self_consistent_binding_cannot_hide_wrong_locked_project_version(self):
-  names=['Dockerfile.api','pyproject.toml','README.md','uv.lock','lock_profiles.py','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt']
+  names=['Dockerfile.api','pyproject.toml','README.md','uv.lock','lock_profiles.py', 'lock_profile_validation.py','lock-profiles.json','requirements-runtime.txt','requirements-test.txt','requirements-runner.txt']
   with tempfile.TemporaryDirectory() as directory:
    root=Path(directory);(root/'trust-ci').mkdir()
    for name in names:shutil.copyfile(ROOT/'trust-ci'/name,root/'trust-ci'/name)
