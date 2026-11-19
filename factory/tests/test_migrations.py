@@ -57,6 +57,10 @@ ACCESS_026_027 = (
     (27, "027_factory_access_release.sql", "6347ca2b6b016cff0ac50b8c0e0b0d88be40e2d6b0236b62ecc68968b16801e0"),
 )
 
+WORKFLOW_028 = (
+    (28, "028_workflow_admission_evidence.sql", "fe0e7806b1e72c7ab3bfc172490b54161fd65a822ad2067fd8783400a49ba167"),
+)
+
 
 class MigrationTests(unittest.TestCase):
     def setUp(self):
@@ -442,10 +446,10 @@ class MigrationTests(unittest.TestCase):
 
     def test_packaged_migrations_are_contiguous_and_factory_only(self):
         migrations = discover_migrations()
-        self.assertEqual([item.version for item in migrations], list(range(1, 28)))
-        self.assertEqual(len({item.sha256 for item in migrations}), 27)
+        self.assertEqual([item.version for item in migrations], list(range(1, 29)))
+        self.assertEqual(len({item.sha256 for item in migrations}), 28)
         self.assertEqual(tuple((item.version, item.name, item.sha256) for item in migrations),
-                         BASELINE_001_025 + ACCESS_026_027)
+                         BASELINE_001_025 + ACCESS_026_027 + WORKFLOW_028)
         for item in migrations:
             self.assertIn("factory.", item.sql)
             self.assertNotIn("trust_ci", item.sql.lower())

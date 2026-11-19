@@ -1034,6 +1034,8 @@ def compile_task_graph(root: Path, change_id: str, bundle: SourceBundle, route: 
         if missing:
             raise WorkflowArtifactError(f"task has missing dependencies: {sorted(missing)}", code="dependency")
         task["depends_on"] = sorted(id_by_key[key] for key in raw_tasks_by_key(interim, task["key"], raw_tasks))
+        if task["task_id"] in task["depends_on"]:
+            raise WorkflowArtifactError("task depends on itself", code="self-dependency")
         dependencies[task["task_id"]] = set(task["depends_on"])
     pending = {task_id: len(values) for task_id, values in dependencies.items()}
     dependents: dict[str, set[str]] = {task_id: set() for task_id in dependencies}

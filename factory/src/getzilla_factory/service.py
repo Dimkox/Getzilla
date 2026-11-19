@@ -470,7 +470,8 @@ class FactoryService:
 
     def claim(
         self, *, owner: str, role: RunRole, repositories: Iterable[str], lease_seconds: int, actor: Actor, now: datetime,
-        idempotency_key: str | None = None, correlation_id: str | None = None
+        idempotency_key: str | None = None, correlation_id: str | None = None,
+        workflow_candidate=None,
     ):
         self._require(actor, "task:claim")
         repositories = tuple(sorted(set(repositories)))
@@ -485,7 +486,36 @@ class FactoryService:
         return self.store.claim(
             ClaimRequest(actor.actor_id, role, repositories, lease_seconds), actor, now,
             idempotency_key=idempotency_key, correlation_id=correlation_id,
+            **({"workflow_candidate": workflow_candidate} if workflow_candidate is not None else {}),
         )
+
+    def workflow_intake_bindings(self, *, actor: Actor):
+        self._require(actor, "task:execute")
+        self._require(actor, "task:claim")
+        boundary = self.store.workflow_boundary
+        if boundary is None:
+            from .workflow import WorkflowRejected
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        self._require(actor, "task:execute", boundary.repository_id)
+        if actor.kind != "worker":
+            raise AuthorizationError("workflow admission requires worker")
+        return self.store.workflow_intake_bindings(owner=actor.actor_id)
+
+    def workflow_ready(self, *, node_key=None, actor: Actor):
+        self._require(actor, "task:execute")
+        self._require(actor, "task:claim")
+        boundary = self.store.workflow_boundary
+        if boundary is None:
+            from .workflow import WorkflowRejected
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        self._require(actor, "task:execute", boundary.repository_id)
+        if actor.kind != "worker":
+            raise AuthorizationError("workflow admission requires worker")
+        return self.store.workflow_ready(owner=actor.actor_id, node_key=node_key)
+
+    def workflow_context(self, grant, *, actor: Actor):
+        self._require_grant_actor(grant, actor, "task:execute")
+        return self.store.workflow_context(grant)
 
     def claim_execution(
         self,
@@ -499,6 +529,7 @@ class FactoryService:
         now: datetime,
         idempotency_key: str | None = None,
         correlation_id: str | None = None,
+        workflow_candidate=None,
     ):
         self._require(actor, "task:execute")
         if actor.kind != "worker" or owner != actor.actor_id:
@@ -526,13 +557,16 @@ class FactoryService:
             now=now,
             idempotency_key=lease_key,
             correlation_id=correlation_id,
+            workflow_candidate=workflow_candidate,
         )
         if grant is None:
             return None
         try:
             if grant.owner != owner or grant.role is not role:
                 raise ExecutionContractError("grant_identity_mismatch")
-            material = self.store.execution_material(grant)
+            material = self.store.execution_material(grant, **(
+                {"workflow_candidate": workflow_candidate} if workflow_candidate is not None else {}
+            ))
             selected_data = selected.to_dict()
             packet = TaskPacketV1.from_dict(
                 {
@@ -583,6 +617,7 @@ class FactoryService:
                     actor,
                     idempotency_key=start_key,
                     correlation_id=correlation_id,
+                    **({"workflow_candidate": workflow_candidate} if workflow_candidate is not None else {}),
                 )
             )
         except Exception as exc:

@@ -135,3 +135,58 @@ Stages are immutable and verified before pointer activation. Ambiguous effects a
 The three files in `runtime/` implement immutable-release installation with separate control and exact landing checkouts. The installer creates default-off release files; credential provisioning and systemd activation are separate operator actions. The observed installed services are described in the dated runtime record. The template selects Qwen Omni for capabilities; actual billed development cost remains unknown.
 
 Historical observation: a separately authorized `qwen-intl` / `qwen-plus` synthetic normalization used 735 input and 117 output units in 8,598 ms on the prior source. That does not establish current-HEAD connectivity or Omni/multimodal acceptance. The user's earlier `data_inspection_failed` is an observed rejection with undetermined trigger. Mocked refusal/SSE and defensive Unicode, path, DOCX and PDF fixtures prove local handling, without identifying live moderation triggers.
+
+## Workflow DAG admission
+
+Migration 028 adds a read-only proof function over existing tables. It grants
+Factory runtime only function execution; semantic tables stay private.
+The trusted `server.build_app` composition accepts `workflow_root` and
+`workflow_repository`. Install the native `getzilla` runtime on its Python import
+path and bind the native session to the authenticated worker principal. Pending
+or stale scope acknowledgments block admission. The adapter reads the current
+native route, specification, source manifest
+and stored graph. It recompiles and converges them before admission. A missing
+runtime or source cannot grant a task. No runner or provider becomes eligible
+through this adapter.
+
+Use ordinary Factory intake with `source_type=api`,
+`source_id=workflow:v1:<change_id>:<node_key>`. Obtain the exact current
+`source_digest` from `POST /v2/workflow/intake-bindings` with `{}` before intake.
+This descriptor works before any Factory task exists. Its version 1 digest binds
+the graph, node and native authority, including principal and authority epoch.
+A handoff cannot relabel an earlier owner's accepted result as current.
+Each node uses the exact current route, canonical native specification digest,
+head and AC IDs. INV/FORBID and the complete specification remain in the bound
+workflow context; the v1 Factory intake still accepts AC IDs only. Repeating an
+intake uses existing idempotency and generation rules. A changed graph or native authority requires
+fresh intake. A source ID longer than 128 characters requires scope enrichment.
+
+`POST /v2/workflow/ready` with `{}` returns the deterministic ready/blocked set.
+With `{"node_key":"a"}`, it returns a candidate containing only node key, existing
+Factory task ID and snapshot digest. Send that object as `workflow_candidate` to
+the existing execution claim endpoint. The ordinary claim path excludes workflow
+intents, so it cannot bypass readiness or fall back to a different queued task.
+The API accepts no result status or permission decision from a caller.
+
+Admission holds the native transition lock, graph CAS lock, existing intake
+identity advisory locks, and current task row locks through lease issuance.
+Current source, owner and accepted evidence are checked again at packet material
+and execution start. A dependency requires a current fenced workspace result and
+a persisted deterministic semantic `pass` for that exact run/packet/specification.
+Imported checkboxes and terminal proposals cannot satisfy it. Existing capacity,
+budget, retries, leases and stale-fence rules remain in force.
+
+`POST /v2/workflow/context` with the current `grant` restores context version 1.
+It includes the complete specification, declared decision/source documents,
+AC/INV/FORBID, graph and source digests, task/intent mapping, prerequisite proof,
+verification and original limits. The packet's existing `legacy_intent_digest`
+resolves to the same accepted intent; the packet schema stays at v1. Context over
+1 MiB or unavailable mandatory scope is blocked without truncation. The trusted
+source manifest must include the node's relevant decision documents. Direct file
+edits do not publish a new active graph; use the existing graph CAS write path.
+
+Controlled tests exercise native compile/converge, the production claim method,
+packet creation, replay, contention, cancellation and handoff. The disposable
+PostgreSQL case additionally exercises actual locks, task generations and retry
+fences when `FACTORY_TEST_DATABASE_URL` is supplied. These fixtures do not qualify
+a live writer or a production execution profile.
