@@ -18,7 +18,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 
 from getzilla.verification import CheckResult, _python
-from getzilla import fsx, python_test_runner, verification, queue_refusal
+from getzilla import fsx, python_test_runner, verification, queue_refusal, verification_unittest, verification_journal_contracts
 from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
@@ -1520,7 +1520,9 @@ class CoverageLayout(unittest.TestCase):
                               str(Path(pytest_progress.__file__).resolve()),
                               str(Path(python_test_runner.diagnostics.__file__).resolve()),
                               str(Path(python_test_runner.actions.__file__).resolve()),
-                              str(Path(queue_refusal.__file__).resolve())], after.get_option('run:omit'))
+                              str(Path(queue_refusal.__file__).resolve()),
+                              str(Path(verification_unittest.__file__).resolve()),
+                              str(Path(verification_journal_contracts.__file__).resolve())], after.get_option('run:omit'))
             self.assertEqual(original, config.read_bytes())
             fresh = root / 'ambiguous-overlay'
             fresh.mkdir()
@@ -1537,7 +1539,7 @@ class CoverageLayout(unittest.TestCase):
             config = root / '.coveragerc'
             config.write_text('[report]\nfail_under = 100\n')
             before = config.read_bytes()
-            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py')]
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py', 'verification_unittest.py', 'verification_journal_contracts.py')]
             owned = root / 'owned.py'
             for path in [*external, owned]:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
@@ -1547,7 +1549,9 @@ class CoverageLayout(unittest.TestCase):
                  patch.object(pytest_progress, '__file__', str(external[1])), \
                  patch.object(python_test_runner.diagnostics, '__file__', str(external[2])), \
                  patch.object(python_test_runner.actions, '__file__', str(external[3])), \
-                 patch.object(queue_refusal, '__file__', str(external[4])):
+                 patch.object(queue_refusal, '__file__', str(external[4])), \
+                 patch.object(verification_unittest, '__file__', str(external[5])), \
+                 patch.object(verification_journal_contracts, '__file__', str(external[6])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
@@ -1575,7 +1579,7 @@ class CoverageLayout(unittest.TestCase):
             before = config.read_bytes()
             package = root / '.getzilla/getzilla'
             package.mkdir(parents=True)
-            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py')]
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py', 'verification_unittest.py', 'verification_journal_contracts.py')]
             for path in owned:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
             output = root / 'overlay'
@@ -1584,7 +1588,9 @@ class CoverageLayout(unittest.TestCase):
                  patch.object(pytest_progress, '__file__', str(owned[1])), \
                  patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])), \
                  patch.object(python_test_runner.actions, '__file__', str(owned[3])), \
-                 patch.object(queue_refusal, '__file__', str(owned[4])):
+                 patch.object(queue_refusal, '__file__', str(owned[4])), \
+                 patch.object(verification_unittest, '__file__', str(owned[5])), \
+                 patch.object(verification_journal_contracts, '__file__', str(owned[6])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
