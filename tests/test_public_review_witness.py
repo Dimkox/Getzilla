@@ -151,11 +151,24 @@ class PublicReviewWitnessTests(unittest.TestCase):
             from dataclasses import replace
             with self.assertRaisesRegex(ValueError, 'public_witness_unavailable'):
                 witness._witness(root, path, replace(tiny, profile=witness._PRODUCTION.profile))
-            if mutation == 'source_cut':
+            if mutation == 'assurance':
+                registration['groups'][0]['delivery_assurance'] = 'authenticated-native-bridge'
+                wrong = save(prefix + '/wrong-assurance.json', registration)['path']
+                with self.assertRaisesRegex(ValueError, 'public_witness_delivery_assurance_invalid'):
+                    witness._witness(root, wrong, tiny)
+                self.assertEqual(witness._consume(reference, tiny)['facts']['cells'], 40)
+            elif mutation == 'source_cut':
                 from getzilla.retrieval.public_review_witness import _reviewed_source_cut
                 with _reviewed_source_cut(reference, batch=0, composition=tiny) as (broker, handle, cut):
                     self.assertEqual(len(cut.documents), 4)
                     broker.check_current(handle)
+                    observation = witness._check_reviewed_source_batch(reference, broker, handle, tiny)
+                    self.assertEqual(observation['documents'], 4)
+                    self.assertEqual(witness._check_reviewed_source_dataset(reference, ((broker, handle),), tiny)['documents'], 4)
+                    with self.assertRaises(ValueError):
+                        witness._check_reviewed_source_dataset(reference, ((broker, handle), (broker, handle)), tiny)
+                    with self.assertRaises(ValueError):
+                        witness.check_reviewed_public_source_batch(reference, broker, handle)
                     (root / groups[0]['reports'][0]['path']).write_bytes(b'Changed actual review custody.')
                     with self.assertRaises(ValueError):
                         broker.check_current(handle)
@@ -201,6 +214,9 @@ class PublicReviewWitnessTests(unittest.TestCase):
 
     def test_conflicting_registration_cannot_overwrite_owned_witness(self):
         self._owned_roundtrip('conflict')
+
+    def test_observation_notes_cannot_claim_authenticated_native_delivery(self):
+        self._owned_roundtrip('assurance')
 
     def test_owned_review_source_cut_checks_report_custody_before_use(self):
         self._owned_roundtrip('source_cut')
