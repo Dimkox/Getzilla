@@ -51,6 +51,25 @@ def _change_state(root: Path) -> tuple[dict[str, Any] | None, str | None]:
     return state, change_id or str(state.get('change_id') or '') or None
 
 
+def _external_check_contracts() -> dict[str, Any]:
+    """Describe conditional source contracts, never select or observe protection."""
+    return {
+        'public': {
+            'gate': 'github-actions',
+            'security_context': 'getzilla-security/verified@<policy-sha12>',
+            'security_context_condition': 'only if separately selected and qualified',
+            'app_binding': 'approved numeric GitHub App ID',
+        },
+        'private': {
+            'gate': 'trust-ci',
+            'security_context': 'adaptive-trust-ci/verified@<policy-sha12>',
+            'app_binding': 'approved numeric GitHub App ID',
+        },
+        'exact_head_required': True,
+        'local_evidence_is_remote_authority': False,
+    }
+
+
 def prepare_deploy(root: Path, *, record: bool) -> dict[str, Any]:
     route = get_active_route(root)
     if not route:
@@ -68,6 +87,7 @@ def prepare_deploy(root: Path, *, record: bool) -> dict[str, Any]:
     commands, head_sha = _human_commands(root, version)
     if not commands or not head_sha:
         return _fail('cannot resolve exact release commit')
+    contracts = _external_check_contracts()
     result = {
         'ok': True,
         'recorded': False,
@@ -75,9 +95,17 @@ def prepare_deploy(root: Path, *, record: bool) -> dict[str, Any]:
         'change_id': change_id,
         'version': version,
         'head_sha': head_sha,
+        'external_status_required': 'repository-selected protected-PR checks on the exact PR SHA',
+        'external_status_contracts': contracts,
+        'external_checks_observed': False,
         'notice': (
-            'Prepare-only local evidence. Merge must already have occurred through the protected PR path '
-            'with adaptive-trust-ci/verified on the exact PR SHA.'
+            'Prepare-only local evidence; external checks and protection have not been observed. '
+            'Merge must already have occurred through the protected PR path on the exact PR SHA. '
+            'Public repositories require their selected GitHub Actions checks; '
+            f"{contracts['public']['security_context']} applies only if separately selected and qualified. "
+            f"Private repositories require {contracts['private']['security_context']}. "
+            'Read back actual protection, exact-head results and approved numeric App bindings; '
+            'this preparation does not select, activate or prove an external check.'
         ),
     }
     if not record:
@@ -93,7 +121,9 @@ def prepare_deploy(root: Path, *, record: bool) -> dict[str, Any]:
             'version': version,
             'change_id': change_id,
             'head_sha': head_sha,
-            'external_status_required': 'adaptive-trust-ci/verified',
+            'external_status_required': result['external_status_required'],
+            'external_status_contracts': contracts,
+            'external_checks_observed': False,
         },
     )
     result['recorded'] = True
