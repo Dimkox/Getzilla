@@ -223,7 +223,7 @@ def _degraded_patterns() -> tuple[str, ...] | None:
             os.close(descriptor)
 
 
-def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
+def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...], *, allow_directory=False) -> bool:
     """Check names and symlink metadata only. Directories and expansions need the full policy."""
     if (not isinstance(value, str) or not value or len(value) > 4096
             or any(char in value for char in '$`*?[]{}~\x00\r\n')):
@@ -238,11 +238,12 @@ def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]
         path = Path(raw)
         path = path if path.is_absolute() else directory / path
         resolved = path.resolve()
-        if resolved.is_dir():
+        is_directory = resolved.is_dir()
+        if is_directory and not allow_directory:
             return False
         for candidate in (path, resolved):
             name = candidate.as_posix().lower()
-            if any(fnmatch.fnmatchcase(candidate.name.lower(), public) for public in _DEGRADED_PUBLIC_NAMES):
+            if not is_directory and any(fnmatch.fnmatchcase(candidate.name.lower(), public) for public in _DEGRADED_PUBLIC_NAMES):
                 enclosing = candidate.parent.as_posix().lower().rstrip('/') + '/'
                 stronger = [pattern for pattern in patterns if pattern != '**/.ssh/**']
                 if not any(fnmatch.fnmatchcase(enclosing, pattern.lower())
@@ -251,6 +252,13 @@ def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...]
             if any(fnmatch.fnmatchcase(name, pattern.lower())
                    or fnmatch.fnmatchcase(name, '*/' + pattern.lower()) for pattern in patterns):
                 return False
+            if is_directory:
+                for parent in (candidate, *candidate.parents):
+                    names = (parent.as_posix().lower(), parent.as_posix().lower().rstrip('/') + '/')
+                    if any(fnmatch.fnmatchcase(item, pattern.lower())
+                           or fnmatch.fnmatchcase(item, '*/' + pattern.lower())
+                           for item in names for pattern in patterns):
+                        return False
         return True
     except (OSError, ValueError, RuntimeError):
         return False
@@ -292,8 +300,21 @@ def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...
         return False
     name = _degraded_executable(words[0])
     operands = words[1:]
-    if name in {'ls', 'pwd', 'echo', 'printf'}:
+    if name in {'pwd', 'echo', 'printf'}:
         return True
+    if name == 'ls':
+        paths, options = [], True
+        for word in operands:
+            if options and word == '--':
+                options = False
+            elif options and word.startswith('-'):
+                if (re.fullmatch(r'-[1adlAh]+', word) is None
+                        and word not in {'--all', '--almost-all', '--directory', '--color=never'}):
+                    return False
+            else:
+                paths.append(word)
+        return len(paths) <= 128 and all(_degraded_public_path(
+            path, directory, patterns, allow_directory=True) for path in (paths or ['.']))
     if name == 'git':
         return bool(operands) and operands[0] == 'status' and all(word.startswith('-') for word in operands[1:])
     if name not in {'cat', 'head', 'tail', 'wc', 'get-content', 'gc', 'type'}:
@@ -322,6 +343,8 @@ def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...
 
 
 def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ..., *, root: Path | None = None) -> str | None:
+    if tool.startswith('mcp__'):
+        return 'mcp_identity_unverified: external MCP identity is unsupported while the policy is unavailable.'
     if _degraded_intake_required(root):
         affected = tool in _DEGRADED_WRITE_TOOLS or tool in _DEGRADED_SHELL_TOOLS or tool.startswith('mcp__')
         if tool in _DEGRADED_SHELL_TOOLS and isinstance(inputs, dict):
@@ -411,6 +434,8 @@ def _degraded_tool(value: Any) -> str | None:
         return None
     if value.lower() in {name.lower() for name in _DEGRADED_SHELL_TOOLS}:
         return 'Bash'
+    if value.startswith('mcp__'):
+        return value
     if value.lower() in _DEGRADED_READ_TOOLS or (value.startswith('mcp__') and 'read' in value.lower()):
         return 'Read'
     if value.lower() in {name.lower() for name in _DEGRADED_WRITE_TOOLS} | {'write', 'create', 'str_replace', 'search_replace'}:

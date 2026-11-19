@@ -17,6 +17,28 @@ FAILURES = ('.getzilla/getzilla/policy.py', '.getzilla/getzilla/fsx.py')
 
 
 class DegradedReadMetadataTests(unittest.TestCase):
+    def test_failed_policy_never_promotes_unknown_mcp_read_identity(self) -> None:
+        for failure in FAILURES:
+            with project_copy() as root:
+                self.fixture(root, failure)
+                for tool in ('mcp__unverified__read_file', 'mcp__unknown__read'):
+                    with self.subTest(failure=failure, tool=tool):
+                        self.assertEqual(self.decision(root, {
+                            'tool_name': tool, 'tool_input': {'path': 'README.md'}}), 'deny')
+
+    def test_failed_policy_lists_only_bounded_public_directory_metadata(self) -> None:
+        for failure in FAILURES:
+            with project_copy() as root:
+                self.fixture(root, failure)
+                protected = root / '.ssh'
+                protected.mkdir()
+                (protected / 'fixture-name').write_text('inert fixture', encoding='utf-8')
+                for command, expected in (('ls', 'allow'), ('ls sub', 'allow'),
+                                          ('ls .ssh', 'deny'), ('ls -R .', 'deny')):
+                    with self.subTest(failure=failure, command=command):
+                        self.assertEqual(self.decision(root, {
+                            'tool_name': 'Bash', 'tool_input': {'command': command}}), expected)
+
     def fixture(self, root: Path, failure: str | None) -> None:
         (root / 'README.md').write_text('synthetic public text\n', encoding='utf-8')
         (root / '.env').write_text('synthetic no-secret marker\n', encoding='utf-8')
