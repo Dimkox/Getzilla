@@ -169,6 +169,9 @@ class NativeAccessHost(ABC):
     def delegate_native_request(self, binding, child_launch, deadline):
         raise NativeAccessError()
 
+    def discard_native_request(self, binding):
+        """Release owned ephemeral references; never grants or recalls disclosure."""
+
 
 class _Opaque:
     __slots__ = ()
@@ -269,6 +272,23 @@ class NativeAccessBroker:
         binding = self._call('bind_native_request', native_request, workflow_resource, deadline)
         _require(binding is not None)
         return self._mint(binding, deadline)
+
+    def discard(self, handle):
+        """Cancel pending owned work and drop derivatives, including expired handles.
+
+        Bytes already returned to a recipient and an already admitted transport
+        cannot be recalled. Persistent retention belongs to the native host.
+        """
+        with self._lock:
+            _require(type(handle) is NativeReadHandle and handle in self._requests,
+                     'native_access_denied')
+            request = self._requests[handle]
+            _require(not request.busy, 'native_access_conflict')
+            del self._requests[handle]
+        try:
+            self._call('discard_native_request', request.binding)
+        finally:
+            request.captured = request.cut = request.prepared = request.binding = None
 
     @contextmanager
     def _operation(self, handle, absolute_deadline=None):

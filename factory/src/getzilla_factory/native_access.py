@@ -113,6 +113,19 @@ class FactoryNativeAccessHost(NativeAccessHost):
 
     def load_authorized_cut(self, binding, query, deadline):
         self.check_current(binding, deadline)
+        if query.reader_id == 'factory.retrieval162/v1':
+            from .retrieval_access import RetrievalQuery
+            parameters = query.parameters
+            if (query.scope_ids != ('current-destination',)
+                    or set(parameters) != {'query', 'destination_id', 'token_budget'}):
+                raise NativeAccessError('native_access_denied')
+            request = RetrievalQuery(parameters['query'], parameters['destination_id'], parameters['token_budget'])
+            captured = self._service._capture_retrieval_sources(binding.session, binding.workflow.grant,
+                binding.workflow.execution_packet_digest, request, deadline)
+            documents = tuple(SourceDocument(SourceDependency(key, version, digest, digest, 'identity/v1'), raw)
+                for raw, (key, version, digest) in zip(captured.chunks, captured.lineage, strict=True))
+            binding.captured = captured
+            return CapturedRead(documents, captured)
         if (query.reader_id != 'factory.source-text/v1' or query.parameters != {}
                 or any(scope not in self._scopes for scope in query.scope_ids)):
             raise NativeAccessError('native_access_denied')
@@ -127,7 +140,9 @@ class FactoryNativeAccessHost(NativeAccessHost):
 
     def prepare_owned_response(self, binding, captured, computation, response, deadline):
         self.check_current(binding, deadline)
-        if (computation != 'factory.source-text/v1' or response not in self._destinations
+        expected = ('factory.retrieval162/v1' if binding.captured is not None
+                    and binding.captured.retrieval_query is not None else 'factory.source-text/v1')
+        if (computation != expected or response not in self._destinations
                 or type(captured.native_ref) is not _CapturedSources
                 or captured.native_ref is not binding.captured):
             raise NativeAccessError()
@@ -148,3 +163,10 @@ class FactoryNativeAccessHost(NativeAccessHost):
         # its dispatcher repeats current admission before the actual registered UDS.
         result = self._service.release(binding.session, reference.identifier, absolute_deadline=deadline)
         return ExistingOperationDisposition(result['status'], result['operation_id'])
+
+    def discard_native_request(self, binding):
+        if type(binding) is not _Binding or binding.issuer is not self._issuer:
+            raise NativeAccessError('native_access_denied')
+        captured, binding.captured = binding.captured, None
+        if captured is not None and captured.retrieval_query is not None:
+            self._service._discard_retrieval_capture(captured)

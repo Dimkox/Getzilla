@@ -124,6 +124,7 @@ class _CapturedSources:
     deadline: float
     profile: tuple
     classifications: tuple = ()
+    retrieval_query: object | None = None
 
 
 @dataclass(repr=False)
@@ -132,6 +133,16 @@ class _Entry:
     expires: float
     state: str = 'pending'
     request: str | None = None
+
+
+@dataclass(frozen=True, repr=False)
+class _Retired:
+    """Only bounded replay/accounting facts; no source or prepared payload."""
+    identifier: str
+    authority: tuple
+    deadline: float
+    consumed: bool = True
+    native_capture: None = None
 
 
 class _NativeQueue:
@@ -172,6 +183,15 @@ class _NativeQueue:
             self._entries.pop(entry.prepared.identifier, None)
             entry.state = 'blocked'
 
+    def _discard(self, identifier):
+        with self._lock:
+            for key, entry in tuple(self._entries.items()):
+                if entry.prepared.identifier == identifier:
+                    old = entry.prepared
+                    entry.prepared = _Retired(old.identifier, old.authority, old.deadline)
+                    entry.state = 'blocked'
+                    del self._entries[key]
+
     def _ready(self):
         with self._lock:
             now = time.monotonic()
@@ -186,14 +206,23 @@ class _NativeQueue:
 class AccessReleaseService:
     """Trusted co-composition. Its queue has no public restoration or sink callback API."""
 
-    def __init__(self, store, authority, sources, destinations, *, payload_profile=None):
+    def __init__(self, store, authority, sources, destinations, *, payload_profile=None, retrieval_profile=None):
         if (type(store) is not PostgresFactoryStore or type(authority) is not AccessAuthority
                 or type(sources) is not LocalSourceAdapter or type(destinations) is not dict
                 or not 1 <= len(destinations) <= 256
                 or any(type(client) is not UdsResultHandoffClient or client._transport is not None
                        or client._timeout > 2 for client in destinations.values())):
             raise AccessError('access_profile_unavailable')
-        if payload_profile is not None:
+        if payload_profile is not None and retrieval_profile is not None:
+            raise AccessError('access_profile_unavailable')
+        self._retrieval_enabled = retrieval_profile is not None
+        if retrieval_profile is not None:
+            try:
+                from .retrieval_access import RetrievalProfile
+                payload_profile = RetrievalProfile(retrieval_profile)
+            except (ImportError, ValueError, TypeError):
+                raise AccessError('access_profile_unavailable') from None
+        elif payload_profile is not None:
             try:
                 from .payload_access import PayloadProfile
                 payload_profile = PayloadProfile(payload_profile)
@@ -230,9 +259,54 @@ class AccessReleaseService:
             canonical_digest([[list(key), item.version, item.digest, item.classification]
                               for key, item in sorted(self._sources._sources.items())]))
 
-    def _capture_native_sources(self, session, grant, packet, sources, deadline):
+    def _capture_retrieval_sources(self, session, grant, packet, query, deadline):
+        """Candidate filters come from this task and current destination authority."""
+        from .retrieval_access import RetrievalQuery
+        if (not self._retrieval_enabled or type(query) is not RetrievalQuery
+                or query.destination not in self._destinations):
+            raise AccessError('access_denied')
+        _remaining_bounds(deadline)
+        with self._store._transaction(**_remaining_bounds(deadline)) as cursor:
+            context, _attempt = self._context(cursor, grant, packet)
+        self._authority._live()
+        self._authority._credential_live(session)
+        with self._authority._source:
+            snapshot, _actor, _principal = self._authority._current(session)
+            destination = snapshot.destinations.get(query.destination)
+            if destination is None or destination['repository_id'] != context.repository_id:
+                raise AccessError('access_denied')
+            partition = destination['tenant_id'], destination['project_id']
+        keys = []
+        for key, source in sorted(self._sources._sources.items()):
+            _remaining_bounds(deadline)
+            if (key[:2] != partition or source.repository != context.repository_id
+                    or source.workspace != context.workspace_handle):
+                continue
+            wire = dict(zip(('tenant', 'project', 'provider', 'site', 'resource'), key))
+            if not self._authority.authorize(session, wire, source.version, 'source:read'):
+                continue
+            try:
+                self._authority.release_binding(session, ((key, source.version, source.digest),), query.destination)
+            except AccessError as error:
+                if str(error) == 'access_denied':
+                    continue
+                raise
+            self._payload_profile.classification(source.classification)
+            _allowed_path(source.relative_path, context, 'access_denied')
+            if not source.relative_path.endswith('.py'):
+                raise AccessError('source_unavailable')
+            keys.append(wire)
+            if len(keys) > 128:
+                raise AccessError('source_unavailable')
+        if not keys:
+            raise AccessError('source_unavailable')
+        return self._capture_native_sources(session, grant, packet, keys, deadline, retrieval_query=query)
+
+    def _capture_native_sources(self, session, grant, packet, sources, deadline, *, retrieval_query=None):
         """The same actual producer, retained for the optional trusted-parent bridge."""
         _remaining_bounds(deadline)
+        if self._retrieval_enabled != (retrieval_query is not None):
+            raise AccessError('access_denied')
         actor = self._authority.actor(session)
         if (actor.kind != 'worker' or actor.actor_id != grant.owner or 'task:execute' not in actor.scopes
                 or type(sources) is not list or not 1 <= len(sources) <= 128):
@@ -261,7 +335,8 @@ class AccessReleaseService:
             size += len(raw)
         _remaining_bounds(deadline)
         return _CapturedSources(session, grant, packet, context, attempt,
-                                tuple(chunks), tuple(lineage), deadline, self._native_profile(), classifications)
+                                tuple(chunks), tuple(lineage), deadline, self._native_profile(), classifications,
+                                retrieval_query)
 
     def _revalidate_native_sources(self, captured, context, attempt, deadline):
         if (type(captured) is not _CapturedSources or context != captured.context
@@ -288,6 +363,8 @@ class AccessReleaseService:
         if (type(captured) is not _CapturedSources or type(destination) is not str
                 or destination not in self._destinations or captured.profile != self._native_profile()):
             raise AccessError('access_denied')
+        if captured.retrieval_query is not None and captured.retrieval_query.destination != destination:
+            raise AccessError('access_denied')
         deadline = min(deadline, captured.deadline)
         _remaining_bounds(deadline)
         session, grant, packet = captured.session, captured.grant, captured.execution_packet
@@ -300,15 +377,15 @@ class AccessReleaseService:
         # source operation to bypass existing result/outbox idempotency.
         identifier = (canonical_digest({'contract': 'factory-native-source-stage/v1',
             'task': grant.task_id, 'run': grant.run_id, 'fence': grant.fence,
-            'packet': packet, 'attempt': attempt, 'stage': 'factory.source-text/v1'})
+            'packet': packet, 'attempt': attempt, 'stage':
+            'factory.source-text/v1' if captured.retrieval_query is None else 'factory.retrieval162/v1'})
             if native_revalidate or self._payload_profile is not None else secrets.token_hex(32))
         identity = dict(repository_id=context.repository_id, task_id=grant.task_id, run_id=grant.run_id,
             fence=grant.fence, packet_digest=grant.packet_digest, attempt_id=attempt,
             source_operation='access:' + identifier, source_digest=source_digest)
         native_payload = None
         if self._payload_profile is not None:
-            native_payload = self._payload_profile.prepare(chunks, lineage, captured.classifications,
-                min(262144, context.max_output_bytes), deadline)
+            native_payload = self._prepare_payload(captured, deadline)
             chunks = (native_payload.payload,)
         # The actual trusted adapter above owns every input and dependency. Reuse the
         # existing sanitizer policy, without changing the default unqualified inspect().
@@ -335,7 +412,7 @@ class AccessReleaseService:
             # renewing its target/deadline. Durable replay remains the existing
             # result-command/outbox constraint, including across process restart.
             self._prepared = {key: item for key, item in self._prepared.items()
-                              if item.native_capture is not None or item.deadline > now}
+                              if type(item) is _Retired or item.native_capture is not None or item.deadline > now}
             existing = self._prepared.get(identifier)
             if existing is not None:
                 if existing.consumed or now >= existing.deadline:
@@ -350,6 +427,37 @@ class AccessReleaseService:
                 raise AccessError('access_queue_unavailable')
             self._prepared[identifier] = prepared
         return {'prepared_id': identifier}
+
+    def _prepare_payload(self, captured, deadline):
+        if self._retrieval_enabled:
+            return self._payload_profile.prepare(captured, self._sources._sources,
+                min(262144, captured.context.max_output_bytes), deadline)
+        return self._payload_profile.prepare(captured.chunks, captured.lineage, captured.classifications,
+            min(262144, captured.context.max_output_bytes), deadline)
+
+    def _retire_retrieval(self, identifier):
+        """Drop owned ephemeral derivatives; durable outbox is a separate owner."""
+        with self._lock:
+            prepared = self._prepared.get(identifier)
+            if (type(prepared) is not _Prepared or prepared.native_capture is None
+                    or prepared.native_capture.retrieval_query is None):
+                return
+            self._prepared[identifier] = _Retired(identifier, prepared.authority, prepared.deadline)
+        self._queue._discard(identifier)
+
+    def _discard_retrieval_capture(self, captured):
+        with self._lock:
+            identifiers = tuple(key for key, item in self._prepared.items()
+                if type(item) is _Prepared and item.native_capture is captured)
+        for identifier in identifiers:
+            self._retire_retrieval(identifier)
+
+    def _expire_retrieval(self):
+        with self._lock:
+            identifiers = tuple(key for key, item in self._prepared.items()
+                if type(item) is _Prepared and item.deadline <= time.monotonic())
+        for identifier in identifiers:
+            self._retire_retrieval(identifier)
 
     def _verify_native_payload(self, prepared):
         if self._payload_profile is None:
@@ -373,8 +481,7 @@ class AccessReleaseService:
             channel='native_tool_result', content_type='text/plain', policy_version='access-local-text/v1')
         if any(getattr(prepared.envelope, key) != value for key, value in expected_scope.items()):
             raise AccessError('access_denied')
-        current = self._payload_profile.prepare(capture.chunks, capture.lineage, capture.classifications,
-            min(262144, capture.context.max_output_bytes), min(prepared.deadline, capture.deadline))
+        current = self._prepare_payload(capture, min(prepared.deadline, capture.deadline))
         binding = json.loads(prepared.binding_wire)
         expected_binding = {'contract': 'factory-owned-access-release/v1',
             'execution_packet_digest': prepared.execution_packet,
@@ -450,6 +557,7 @@ class AccessReleaseService:
         return {'status': 'queued', 'operation_id': 'factory-result:' + request}
 
     def run_once(self):
+        self._expire_retrieval()
         count = 0
         for entry in self._queue._ready():
             if self._stop.is_set():
@@ -489,6 +597,7 @@ class AccessReleaseService:
                 self.last_error = type(error).__name__
             finally:
                 self._queue._abort(entry)
+                self._retire_retrieval(prepared.identifier)
         return count
 
     def start(self):
@@ -511,3 +620,8 @@ class AccessReleaseService:
         self._queue.wakeup.set()
         if self._thread is not None:
             self._thread.join(3)
+        if self._retrieval_enabled:
+            with self._lock:
+                identifiers = tuple(self._prepared)
+            for identifier in identifiers:
+                self._retire_retrieval(identifier)

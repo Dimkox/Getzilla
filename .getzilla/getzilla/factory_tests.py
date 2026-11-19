@@ -51,6 +51,7 @@ _DATABASE_CLASSES = {
     "test_runtime_capability_postgres.RuntimeCapabilityPostgresTests": "FACTORY_TEST_DATABASE_URL must name a disposable database",
     "test_execution_persistence_postgres.FreshClusterArtifactAttestorMigrationTests": "FACTORY_FRESH_CLUSTER_DATABASE_URL must name an empty disposable PG17 cluster",
     "test_postgres_fixture_reset.FixtureResetPostgresTests": "requires exact disposable PostgreSQL",
+    "test_retrieval_access_postgres.RetrievalAccessPostgresTests": "owned disposable PostgreSQL is required",
 }
 _LINUX_CASES = frozenset({
     "test_real_child_has_fixed_identity_health_logs_and_bounded_shutdown",
