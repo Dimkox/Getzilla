@@ -1,0 +1,1299 @@
+{
+  "commit": "8352756ccddbb7b9f13da2da689ef633d968e30f",
+  "corpus": "large",
+  "files": [
+    {
+      "bytes": 1280,
+      "candidate": true,
+      "git_blob": "e82d5f3907de09586bf82107ecb780997d6a5c1c",
+      "lines": 30,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/__init__.py",
+      "sha256": "a52c18443cac6b9d1cedc2a2fabbe54ddbc16b4b1b7677f63b9969295ee6ee08"
+    },
+    {
+      "bytes": 6977,
+      "candidate": true,
+      "git_blob": "f85cd9514e2f0962029539c9d152fef2452c4959",
+      "lines": 162,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/_cpu_capacity.py",
+      "sha256": "30a5997a93cffa1e54496806402df4e8989467699ea2a58c11184086af42f453"
+    },
+    {
+      "bytes": 117827,
+      "candidate": true,
+      "git_blob": "ec588457fac3e84f99d7659899a3ee27610924cb",
+      "lines": 2680,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/_policy_legacy.py",
+      "sha256": "f0b474c8b8c0d29f93e0bd0cab75dcc8a477325d1b08104813f91dde5d44bb26"
+    },
+    {
+      "bytes": 5647,
+      "candidate": true,
+      "git_blob": "4e48407b59e718c6a741393fc6fcabbff9f9d63f",
+      "lines": 134,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/adoption_state.py",
+      "sha256": "1a6ff84fb450b9a7fa35288f2745248df52294a94cb2a332080b0cf591fbd2a9"
+    },
+    {
+      "bytes": 18370,
+      "candidate": true,
+      "git_blob": "5d802ddb8722bd7bb534e8121bdba2a216b333ff",
+      "lines": 369,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/agent_lifecycle.py",
+      "sha256": "4db01d289c26ea2a1ab5e14faa15c92343e27ef370b014732cc1ae9ad9c00050"
+    },
+    {
+      "bytes": 17784,
+      "candidate": true,
+      "git_blob": "6dd352977c61f536b8f2d29dc107613ef33489d1",
+      "lines": 429,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/agent_setup.py",
+      "sha256": "d4a877269948c6c98111de83a8f1c42f188ab6130737469614dd635e4d07efc4"
+    },
+    {
+      "bytes": 153007,
+      "candidate": true,
+      "git_blob": "2f4d0b2c596d235fc745531b58a0a21d3cdbb6d4",
+      "lines": 3801,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/architecture.py",
+      "sha256": "516fa09ccbb98d192ce1bbe0e312bf192604fdb2aeb30ebb461493ad5a5d1906"
+    },
+    {
+      "bytes": 12187,
+      "candidate": true,
+      "git_blob": "81460ae04691f42645eb1f801712874edcbf78e8",
+      "lines": 322,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/architecture_diagrams.py",
+      "sha256": "368bf300e37d225bee991dc07757632eedcfc75f274f43a6a68ae22cdd9098e4"
+    },
+    {
+      "bytes": 68776,
+      "candidate": true,
+      "git_blob": "b795af7f53381550d4e7c3fd47e936fd31f2b419",
+      "lines": 1705,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/architecture_diff.py",
+      "sha256": "03659fc78586f55461c225af9cf22c43cf32f52bde72d2f19e32d685a5ad2f4f"
+    },
+    {
+      "bytes": 170247,
+      "candidate": true,
+      "git_blob": "bc24beace535f6ab5beed0153a8bf5988aae06c7",
+      "lines": 3669,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/architecture_fitness.py",
+      "sha256": "c809d149b962ee8378685074780434544b0ddd21cb9a5cd8068505e164564d6f"
+    },
+    {
+      "bytes": 13084,
+      "candidate": true,
+      "git_blob": "055e48be382e7b78d4cb57214523cb7c4cb94338",
+      "lines": 258,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/baseline.py",
+      "sha256": "4ac7ce419d3985848644438ad1993f27b8602c312d37ed5dde73fe3b52d17715"
+    },
+    {
+      "bytes": 5539,
+      "candidate": true,
+      "git_blob": "f17aeb0cb30e8a59f56b36fbd0918c3b6c9aeda3",
+      "lines": 101,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/bitrix_checks.py",
+      "sha256": "f27e2c04eda4d3f4ae59e8485fc3e353916217d8805792d207f223157a4bd609"
+    },
+    {
+      "bytes": 18487,
+      "candidate": true,
+      "git_blob": "18009fff05e2add9ae3be09c35cdc65339e0a340",
+      "lines": 401,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/branch_lifecycle.py",
+      "sha256": "90b939e132427bea9b778eaef4b1fc653aa326cc9bab76e1665309785532c3bb"
+    },
+    {
+      "bytes": 8215,
+      "candidate": true,
+      "git_blob": "b39c2ab91d8b2a975d5ccc3b2c3ea952c2e2e228",
+      "lines": 184,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/change.py",
+      "sha256": "6b08adb9656145e654beebee40a9747cd0d2087d3f637272de109d9534adc4de"
+    },
+    {
+      "bytes": 6360,
+      "candidate": true,
+      "git_blob": "d1b27d2dc45da88d5009581e36c2c6e310653c51",
+      "lines": 106,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/ci_evidence.py",
+      "sha256": "3d19f86c181678118b7c9735ab66dcc9821896bae83f4241bed2bead516c85f9"
+    },
+    {
+      "bytes": 20487,
+      "candidate": true,
+      "git_blob": "5b295d627c4456942bc1b28e23174b4d9d4506a9",
+      "lines": 490,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/ci_gate.py",
+      "sha256": "95c1c2309d3421a3b88e32062dbaf9c8387f9b54e6d007cba0f6ca122634f1ea"
+    },
+    {
+      "bytes": 4697,
+      "candidate": true,
+      "git_blob": "39dba14196066103f705f40e26fe080e2231238e",
+      "lines": 111,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/claim_check.py",
+      "sha256": "60e1a313bf6917790206a7bbaa6f56b5b534f2947b478a1d576c22e564560870"
+    },
+    {
+      "bytes": 97,
+      "candidate": true,
+      "git_blob": "1a3268998b51f17c1169261883e87af11ca78ac1",
+      "lines": 1,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/__init__.py",
+      "sha256": "9fb7a57e5e81710000e6dcd29a2c0277253ffdb1dc0791bfe3afa78fde278f25"
+    },
+    {
+      "bytes": 6827,
+      "candidate": true,
+      "git_blob": "b585d277dc4f62d7ee397959d7542d96e8b26046",
+      "lines": 143,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/architecture_bindings.py",
+      "sha256": "2992119197c5b01969892fcb7d673c3d2cb2f6c1280f1fd98b70b91a90e499df"
+    },
+    {
+      "bytes": 2303,
+      "candidate": true,
+      "git_blob": "7749ff57f6cee4df5fa8bad919a56c158f31e0ec",
+      "lines": 43,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/builder.py",
+      "sha256": "0ab1f86291d8287c470313b43956ecdfd141af96ed2235bde065f4177cbf3618"
+    },
+    {
+      "bytes": 6188,
+      "candidate": true,
+      "git_blob": "eea350f5a1c65fbde759c05680ee20abb8bc948e",
+      "lines": 127,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/cli.py",
+      "sha256": "486e6d8db27bbbcbbbfe1a0c4ff176b5d11f898b90bd76cadff22fdadac3eeb0"
+    },
+    {
+      "bytes": 6969,
+      "candidate": true,
+      "git_blob": "b187de93dc622a890f4bf1a2425e6029e3d99ab1",
+      "lines": 142,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/impact.py",
+      "sha256": "2a1460c4422cc81bf8fda7956c10293a62c88a4d367d3ea59ce4b096866bfa06"
+    },
+    {
+      "bytes": 2543,
+      "candidate": true,
+      "git_blob": "f2fda1a6ea2bfdf86d594f8f44e53cdc29b7f84f",
+      "lines": 49,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/incremental.py",
+      "sha256": "c55dde76382887e13734d7b64e62739db7d5ead50c5b8370c447d1024ad8dbd7"
+    },
+    {
+      "bytes": 15159,
+      "candidate": true,
+      "git_blob": "21ea4df1159341612d2d38a2244d8e547898b001",
+      "lines": 371,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/models.py",
+      "sha256": "764a930ab01ccb276d9c10082ec44ebd1193c8a8302d5f14fb8185efb70d4f85"
+    },
+    {
+      "bytes": 6980,
+      "candidate": true,
+      "git_blob": "623e5f3bf58e91f49866af6843b37aec8a99563d",
+      "lines": 130,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/python_calls.py",
+      "sha256": "37234b5656f98eccaf4f3a2d71756c4d3b0a0ceaae83eeeacc63cad5f2f70579"
+    },
+    {
+      "bytes": 9341,
+      "candidate": true,
+      "git_blob": "dbb683475d9bb1db7195deb0068cb9dd79e25e6c",
+      "lines": 227,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/python_parser.py",
+      "sha256": "958f4872cc60dc0ff9c38e08a3a276f22891fd76f94167e944ae2ec88daa25fe"
+    },
+    {
+      "bytes": 7720,
+      "candidate": true,
+      "git_blob": "73797bc48c285a6e292236024df07e440f9c370b",
+      "lines": 166,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/python_resolver.py",
+      "sha256": "e68d3a72c79a23c5f55321265174054cb19b3ac5f750aac1501b92b25465d1ec"
+    },
+    {
+      "bytes": 9566,
+      "candidate": true,
+      "git_blob": "474eaaf95119b532bca21763a9bd1afcbc929d15",
+      "lines": 183,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/store.py",
+      "sha256": "1c6ab9bfbd0569e9e2638d8501b34f66e6568df7f591fc1325043d2ccf8f543e"
+    },
+    {
+      "bytes": 5611,
+      "candidate": true,
+      "git_blob": "8328b5304d58acf2fa96bac99be23a71b78d3a7a",
+      "lines": 107,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/code_graph/task_bindings.py",
+      "sha256": "14f390796469611e6de682f277ec3e70a84338a4f21a4c29f528742c6040243b"
+    },
+    {
+      "bytes": 4156,
+      "candidate": true,
+      "git_blob": "db9a80c67214302c5707396c3c571c3b2ec768f2",
+      "lines": 92,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/compliance_scaffold.py",
+      "sha256": "f2b0e434761ca8dfd8d061787b75b5b16158d74dee3916afdc1e8362e79502fd"
+    },
+    {
+      "bytes": 26590,
+      "candidate": true,
+      "git_blob": "cedd8b4182b6ba48a89caf2d9ada2aeda9bf1b92",
+      "lines": 550,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/cost_guard.py",
+      "sha256": "64f10eaacd6ad4d9ea29a5053156019aa9d3498d22ef94ed7c1ef27d40e8278a"
+    },
+    {
+      "bytes": 12145,
+      "candidate": true,
+      "git_blob": "c110fff05ee04f991930be2a6c61fadb95201306",
+      "lines": 317,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/demo.py",
+      "sha256": "9969e8f97d1be9128a643a1c40a998b1999b98b3ce092acad18405d4ed98d086"
+    },
+    {
+      "bytes": 7583,
+      "candidate": true,
+      "git_blob": "aa31f8c1ac4e1a96d08cbcb35e5cc7347939cded",
+      "lines": 188,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/demo_http.py",
+      "sha256": "0f9e219d0863b7da457e122275e031df442e6ef17b9925d394fd6284dd202c29"
+    },
+    {
+      "bytes": 3591,
+      "candidate": true,
+      "git_blob": "ddf11a2e23e1ee1e31b88c67692863b5578d750d",
+      "lines": 100,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/deploy.py",
+      "sha256": "86221b3490cd3f50c91c9f178fda4b5903415a324871626c0f5d1b97ebcf5172"
+    },
+    {
+      "bytes": 13484,
+      "candidate": true,
+      "git_blob": "c1dda705c82bbf2803939ccd79401c4ee735c9e4",
+      "lines": 314,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/diff_risk.py",
+      "sha256": "fb5ec00b85c8e8de6d3286895de4e71a891c4d3b8f2ce42205c71967983e8b07"
+    },
+    {
+      "bytes": 7029,
+      "candidate": true,
+      "git_blob": "f15a3dfdb0f9c022b99fd1874f3c99110e92ad8e",
+      "lines": 142,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/doctor.py",
+      "sha256": "f3fafaf71acb1eaae487768c1d64dce6b64ce351f505ee929a004e822bfc43cb"
+    },
+    {
+      "bytes": 7673,
+      "candidate": true,
+      "git_blob": "7fefe9dc2fcdede8cdc21e4067d6f5431049a1c4",
+      "lines": 153,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/enforcement.py",
+      "sha256": "c24b148a52d0a2aab4d4c2354cce04304d9dedb878b0a2a143b79c597b0ec406"
+    },
+    {
+      "bytes": 25143,
+      "candidate": true,
+      "git_blob": "965f0e4201a75d1bfb2955eddf369a8586bd65c7",
+      "lines": 455,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/eu_ai_act.py",
+      "sha256": "6d544bfca6ce276dff57443feadb774fa9c3a0cafde5fea9d967334e36e3b87e"
+    },
+    {
+      "bytes": 24709,
+      "candidate": true,
+      "git_blob": "84220a4d98acd83515ac2ebeaeea02ad0eae4dce",
+      "lines": 617,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/fsx.py",
+      "sha256": "6f73a8917412707e096351d526c54c23f12961db8c5f90ce2bb0f7ab561246ab"
+    },
+    {
+      "bytes": 116113,
+      "candidate": true,
+      "git_blob": "dd15eb94ba278e6f568ec4ac457706e4ddf13371",
+      "lines": 3120,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/governance.py",
+      "sha256": "09d456c3ec1bf057e9b363a6561798da8beac2784a989bc9816096f06e81fe63"
+    },
+    {
+      "bytes": 16417,
+      "candidate": true,
+      "git_blob": "0bfa7d633339ed5746cf12a066c70795fb4fae1c",
+      "lines": 375,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/harnesses.py",
+      "sha256": "397860dda4a209f6ad51dca4300d5410057fbaafe45b41d5548a5c4afad377f6"
+    },
+    {
+      "bytes": 23505,
+      "candidate": true,
+      "git_blob": "35487bd10af2fdd1e5823a4cf203bf951580b35d",
+      "lines": 498,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/history.py",
+      "sha256": "a240e426e5183ba8fcd78a23f3aa9b87b973e5d410552512656eb229406c04d2"
+    },
+    {
+      "bytes": 2551,
+      "candidate": true,
+      "git_blob": "96e813b24368728ac9492d95682ce1b2d1b93020",
+      "lines": 66,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/hook_health.py",
+      "sha256": "f920a4cc4515d88e708975787a9e423d9986e4e23eea1d933d580d2b11614967"
+    },
+    {
+      "bytes": 25356,
+      "candidate": true,
+      "git_blob": "82b254243e979d0f3a86e937709d5b34e3de0104",
+      "lines": 515,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/human_gates.py",
+      "sha256": "6f5306495cc19bb2e2c963a131d47dd21d3435118ba6b545722cf8f68b802038"
+    },
+    {
+      "bytes": 1912,
+      "candidate": true,
+      "git_blob": "f9487ea303bd755fc6ff4c74f0fcac453852c3f4",
+      "lines": 56,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/interpreter.py",
+      "sha256": "4dd227a3d2d588a51cf21dde2ca844ae45708af790bb3b573cbfac827dea7379"
+    },
+    {
+      "bytes": 24563,
+      "candidate": true,
+      "git_blob": "5ffeb6e27f27dce9d034dbfb6b7b7737d180a0f2",
+      "lines": 557,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/known_vulns.py",
+      "sha256": "aaa4227228fa4402cfd496f70e8c8418798a855b46163d59b238bd1bbbfa5c7b"
+    },
+    {
+      "bytes": 4202,
+      "candidate": true,
+      "git_blob": "6c2f02b9b33c6da1009979c8eebb9882a32ba2b8",
+      "lines": 69,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/light_lane.py",
+      "sha256": "05815fcc41fab3a5a83d89079cd16ea89d7d7cb8a5193aeb1b14da538f867380"
+    },
+    {
+      "bytes": 12186,
+      "candidate": true,
+      "git_blob": "530660a61477d24baba612d08d9bc2a106e01ac5",
+      "lines": 320,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/manifest.py",
+      "sha256": "ab9f3c50fb47cfc14681492e4ce08863da9b90646dc50fbc48b5a6ead525dd52"
+    },
+    {
+      "bytes": 13390,
+      "candidate": true,
+      "git_blob": "4232730628f904de68d10b08a59998a9283c0ce2",
+      "lines": 261,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/metrics_journal.py",
+      "sha256": "06b5bd26523b64bb8c90dd8e2212bde83c1d47a0e2a6062286c36126a1dee48c"
+    },
+    {
+      "bytes": 6550,
+      "candidate": true,
+      "git_blob": "74dd785bcd54d5bafed434916b42889d5eefd120",
+      "lines": 132,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/on_demand.py",
+      "sha256": "20cbfffe36a2c598a991fa8cbeeac831cf0eecf34416f88f56f4ac18370161c1"
+    },
+    {
+      "bytes": 28384,
+      "candidate": true,
+      "git_blob": "a1c56b232f5e9f1d84145e38a6a23b3a410045c6",
+      "lines": 547,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/package_status.py",
+      "sha256": "46d0f00e1971cc13d8e6b553cb3b9a31b2d1dcde04c24f12d445adfabfe1b077"
+    },
+    {
+      "bytes": 15672,
+      "candidate": true,
+      "git_blob": "fc76c9528261d7d2678d2f5e41a2c3c7c7e05148",
+      "lines": 333,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/parallel.py",
+      "sha256": "6a1119d8f2b8be46d0d3669fa5c22a647062ea986953203f72d98638cd34e380"
+    },
+    {
+      "bytes": 14937,
+      "candidate": true,
+      "git_blob": "e68018d0d8f9ffc4d50622a425bc37f9a0fc9c08",
+      "lines": 339,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/path_hints.py",
+      "sha256": "242c1b4a0387401aa7dd622557232d47953b9efd8988901eb7c66458ca496864"
+    },
+    {
+      "bytes": 6529,
+      "candidate": true,
+      "git_blob": "babc34d6f19f83c4e964e290c8d657f50ac06bb5",
+      "lines": 147,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/policy.py",
+      "sha256": "659266190d8a1ca2627254fb26bbf6a0448704af005fbd88da16525ec4053d1f"
+    },
+    {
+      "bytes": 13258,
+      "candidate": true,
+      "git_blob": "274001a4e178261109506c9ce38355399de117b0",
+      "lines": 252,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/project_adoption.py",
+      "sha256": "267c520cce80f8bed2776dfc960e757416d1a39c8b08214c9a67802478c53373"
+    },
+    {
+      "bytes": 11131,
+      "candidate": true,
+      "git_blob": "5bf6e5c450ac77f6198af23f791cbf755b76e11b",
+      "lines": 219,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/project_ingestion.py",
+      "sha256": "3189fdc5a903e0ceb07c44a571c108f9a1d9701c0171c01ba4d4d27b65ccc03e"
+    },
+    {
+      "bytes": 10605,
+      "candidate": true,
+      "git_blob": "142802b4a3cef389bfebe2a685994126c2e98747",
+      "lines": 261,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/protected_write.py",
+      "sha256": "84830ce22594521abde550e9239f9f0c31195cd037178dcc8ac93013589935d6"
+    },
+    {
+      "bytes": 28742,
+      "candidate": true,
+      "git_blob": "2eb10cfd698173fe4bee6d111f419dff3e062c42",
+      "lines": 645,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/python_test_runner.py",
+      "sha256": "78a036c72ee143080c0b61ee307cb5533b68ea5a767921d1ac9102a133576249"
+    },
+    {
+      "bytes": 7331,
+      "candidate": true,
+      "git_blob": "638cb493488687afbccb4350b997bba71325c49d",
+      "lines": 178,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/quality_gates.py",
+      "sha256": "8e780b15d1a2448a3be8437d4a2e24aa7df35efd1f24a1209d7e4199ad859cf8"
+    },
+    {
+      "bytes": 50938,
+      "candidate": true,
+      "git_blob": "f068e706f3086e24c096fffe115d9a1de2449cf4",
+      "lines": 1222,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/queue_provenance.py",
+      "sha256": "268e59aee08c337f586111ed2a3426efd1862838e6b30e1722fe7ba972e94f13"
+    },
+    {
+      "bytes": 49171,
+      "candidate": true,
+      "git_blob": "b9b47081fdea6ea3ed93f754eca227e1de625bff",
+      "lines": 1128,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/receipts.py",
+      "sha256": "886d63a231636fd91c545baa400f6b3a7d436ee0907a0c6dc8687dfa7ba76bc3"
+    },
+    {
+      "bytes": 10467,
+      "candidate": true,
+      "git_blob": "fdf0e0ff09c8060898cee4c4d6ba45630a78511e",
+      "lines": 208,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/release_state.py",
+      "sha256": "68cdf04fa14f2fa2a2544126d97522503c5bf3b966e6474a522b92c70548879c"
+    },
+    {
+      "bytes": 19435,
+      "candidate": true,
+      "git_blob": "8603105c9c3eebc1b5799bec24725376f4a0539c",
+      "lines": 407,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/repo.py",
+      "sha256": "a56a7703c443ae865917e5cfb21e4c88fe578657766207828777e59c69dff87f"
+    },
+    {
+      "bytes": 12774,
+      "candidate": true,
+      "git_blob": "ee68a36b58d25c8e9aa983c2d1c3c7c93a9a645a",
+      "lines": 218,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/review_plan.py",
+      "sha256": "a360d8374f16f1370df610d69332a68d0d2de5609df25c5a07e5bbb185d04d29"
+    },
+    {
+      "bytes": 7778,
+      "candidate": true,
+      "git_blob": "eb15b258e20015d90626444c31fec9ed813a5f50",
+      "lines": 142,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/review_source.py",
+      "sha256": "d9d62098128d9c48e1ad82966a88ad898e46e6c1c85250eb02c83a8d2207a8be"
+    },
+    {
+      "bytes": 8767,
+      "candidate": true,
+      "git_blob": "886dc94141a546d5158437f7b800c532bf7ccad7",
+      "lines": 203,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/risk_terms.py",
+      "sha256": "c1fadb04811d6ac93565bb0d1ce00247bf158a94eb31ed85c7147bef80217304"
+    },
+    {
+      "bytes": 7325,
+      "candidate": true,
+      "git_blob": "f145de24745cbcf634ad9c151d5f91f832df956d",
+      "lines": 137,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/route_metrics.py",
+      "sha256": "f17cfff59e09299f2e6ba4381021653e24a31aa98a43a32272fb5748f8c74835"
+    },
+    {
+      "bytes": 35839,
+      "candidate": true,
+      "git_blob": "b7f3949b433642c4b11c09c4c6692bf2f477bb70",
+      "lines": 760,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/router.py",
+      "sha256": "78199d612f0f5503b2e57cde028c2fe8d5df576175fcf20a8aa3578fabdf4544"
+    },
+    {
+      "bytes": 13092,
+      "candidate": true,
+      "git_blob": "6cc5d413440102e0398286ed6e601b0613cea286",
+      "lines": 375,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/shell_targets.py",
+      "sha256": "f6e75bf97877664823da51642e3878862838eff97ae72e81a6cf8b0ef9fc64ad"
+    },
+    {
+      "bytes": 7632,
+      "candidate": true,
+      "git_blob": "3399d437d74d10892d7046d619004d0acace822f",
+      "lines": 151,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_admission.py",
+      "sha256": "5112ba43e82b63983fe3d29e2624247cf45d0b0c786d147c6581f62c59770b78"
+    },
+    {
+      "bytes": 2011,
+      "candidate": true,
+      "git_blob": "357b16f5a5e340e8578b6bcb4917c39b2be4cf1e",
+      "lines": 46,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_baseline.py",
+      "sha256": "5c6d6320d9e63902cfbebb0b479fa7fa4cdb2299375979a1cd213dc8bac987e0"
+    },
+    {
+      "bytes": 7686,
+      "candidate": true,
+      "git_blob": "b1ca78243d027690cc2041d1fef286f19482ab10",
+      "lines": 169,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_git.py",
+      "sha256": "55673dd2fb674b04a65b69ce01f6312b0b22387daed8ca31f904a5f8683a7c94"
+    },
+    {
+      "bytes": 8599,
+      "candidate": true,
+      "git_blob": "a34da04c6807d36dcb0336aba7cb4bce84868c8d",
+      "lines": 178,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_inventory.py",
+      "sha256": "4bdfeeb34781d5e17968519aabc7692f4462d8d015bfd88ef53999b01993ae3b"
+    },
+    {
+      "bytes": 5687,
+      "candidate": true,
+      "git_blob": "8a850d635561b5d0bc3c1d52028159afd7738e27",
+      "lines": 118,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_managed_layer.py",
+      "sha256": "e659f3f58178a5599c3a4fe3c9e319742b61066d10d27cd3da888ab9f62f0f4d"
+    },
+    {
+      "bytes": 18185,
+      "candidate": true,
+      "git_blob": "e7efa6cb5d26dd2771c8806413aca3a3ac075982",
+      "lines": 411,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_models.py",
+      "sha256": "f7eb6157a4055318ce4eaf3f84bb9078c6bb63acecc02481ebb261f487678d31"
+    },
+    {
+      "bytes": 6138,
+      "candidate": true,
+      "git_blob": "e78d3411945549f784017cfa92a310b3c8cb8a98",
+      "lines": 152,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_paths.py",
+      "sha256": "938685c0763d0dec1f9fc2366ba2a27e76fa581dd826478a76f882377cc8e1c5"
+    },
+    {
+      "bytes": 3459,
+      "candidate": true,
+      "git_blob": "4460e8b85c5f6abfb2444b3af098de50e40f33ae",
+      "lines": 68,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_provenance.py",
+      "sha256": "f48b70035d282d5b697ee8162e4ac23c13a31e4a438d09f9982f7fce044fdd93"
+    },
+    {
+      "bytes": 7393,
+      "candidate": true,
+      "git_blob": "13fd6f317da41a444bd3f679e1aa8a8e5f97e651",
+      "lines": 164,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_secrets.py",
+      "sha256": "4d7b9dff0862261aa91a1213930cddfca2af3c7171081d721973ec783fd319a8"
+    },
+    {
+      "bytes": 2925,
+      "candidate": true,
+      "git_blob": "1c37901a4262fd1a08e3137e8cd3b6ed62a3216d",
+      "lines": 69,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_shadow.py",
+      "sha256": "22c8a5e7e7b01b859b59c18ff47f3fed5e9705a72210ed9a616c2faf46438854"
+    },
+    {
+      "bytes": 7869,
+      "candidate": true,
+      "git_blob": "7c7a06f4b31713a3cd2fa9e41a9b75088613755d",
+      "lines": 172,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_snapshot.py",
+      "sha256": "5b709446d2bf6621e6d618d10cff5e954455a55fcafc86718d8bc62abbe05ef0"
+    },
+    {
+      "bytes": 4289,
+      "candidate": true,
+      "git_blob": "4a638c6e11dc4fe4510726f5b9821ef542fe2409",
+      "lines": 81,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/source_verification.py",
+      "sha256": "7bf00924a38ad6f9a07d371dcecf1ab8ed37470a97e591f0f26ee526d05a3a9a"
+    },
+    {
+      "bytes": 36447,
+      "candidate": true,
+      "git_blob": "365308c71de8a53cc4ab26c622bdce0e1401f641",
+      "lines": 889,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/spec.py",
+      "sha256": "795e8e7e99d2bbdbcdf30cc90c99387bb122d5e225a01937dfa0870f4f2dec1c"
+    },
+    {
+      "bytes": 20119,
+      "candidate": true,
+      "git_blob": "13eea0997de3046926631c7e8328cdb7ec63573e",
+      "lines": 375,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/stack_runners.py",
+      "sha256": "e4b0ae68d2be9cb85004a108008b78eb0fa0293b0c12feba8a1e2231099e4a37"
+    },
+    {
+      "bytes": 20626,
+      "candidate": true,
+      "git_blob": "4b90efc8d7a776471c751c2a7da258fd1bcbd2d0",
+      "lines": 462,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/stack_toolchains.py",
+      "sha256": "2c5186ab9df174cfad28cb3de8d6155be75f96e5ba4f5f8ca5fd027c49d98d74"
+    },
+    {
+      "bytes": 7919,
+      "candidate": true,
+      "git_blob": "eadd5aa8fe5b73aa4fb4909ce36be04c812ad0ce",
+      "lines": 166,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/stacks.py",
+      "sha256": "9a40b41ee4def4b600f16ca96c1294b9dc67046a73a54f80c27e91eff28bb0ad"
+    },
+    {
+      "bytes": 11648,
+      "candidate": true,
+      "git_blob": "b1a5fa16e52b2ad34546b1d39fd194b6086912a0",
+      "lines": 251,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/startup_cpu.py",
+      "sha256": "cd7fa81f07fc77dea7004e1b7107dddf1a6e61e1e1993e11c6a4d893b1284a9e"
+    },
+    {
+      "bytes": 23599,
+      "candidate": true,
+      "git_blob": "e1468e3d212608fdb9e8936fa4d8d3a825b04021",
+      "lines": 577,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/state.py",
+      "sha256": "330ae6eabd657583bac5e1092f5ea6dbbdeddf4295d9ccc7d426cf061fdf2642"
+    },
+    {
+      "bytes": 6929,
+      "candidate": true,
+      "git_blob": "8ca32eded148a6bb2aef98d152f79ff07a4f9da2",
+      "lines": 207,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/toolchain.py",
+      "sha256": "93c7b7faa73d3c25435ac382db47b31d5f75c13d9ac4457eb040b44cf3599642"
+    },
+    {
+      "bytes": 48688,
+      "candidate": true,
+      "git_blob": "554a62a44523407e0dbbfacf513d34d6e9c5fb03",
+      "lines": 906,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/trust_ci_setup.py",
+      "sha256": "9d5fc2da4de57acf0d905452ef5971ea7cbf9e1c96e415571d51ebd6f0c6f4db"
+    },
+    {
+      "bytes": 23553,
+      "candidate": true,
+      "git_blob": "577a877322082af808a6cb3ddae1226b0dcc2cd8",
+      "lines": 525,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/updater.py",
+      "sha256": "a3f0aef98302cdb3b4cac1be88faeaf9ace20fabb2ca9dab6b0fc50a9c82d228"
+    },
+    {
+      "bytes": 18645,
+      "candidate": true,
+      "git_blob": "a03f004d649b0620a718af09568cfae81d1aab98",
+      "lines": 501,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/util.py",
+      "sha256": "b7c7c820fbbfcb86f4790ad647ef4fa8cabf26d9993cea523e0d6446b8ae70cc"
+    },
+    {
+      "bytes": 130143,
+      "candidate": true,
+      "git_blob": "255cc5078951b259e7fa3494079759335197d0b1",
+      "lines": 2798,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/verification.py",
+      "sha256": "a3dab2ba8926866763f957715d46b1b9cb1abd3353361b77f78dae37693818cf"
+    },
+    {
+      "bytes": 18887,
+      "candidate": true,
+      "git_blob": "62a7be898d3d2da5b686d98d26431b6a22074057",
+      "lines": 402,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/verification_dispositions.py",
+      "sha256": "a60104aeece5a5f565655e7f4d74bfaf781ff4101d011f923ed851b498596c2d"
+    },
+    {
+      "bytes": 17212,
+      "candidate": true,
+      "git_blob": "75b81d734a30e524cab7509baec9313f84a0c3ab",
+      "lines": 382,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/verification_scope.py",
+      "sha256": "9e489f3124c5801b88f2fad609102492b3e6cca05f61410a0ecc01c00b1568ac"
+    },
+    {
+      "bytes": 86741,
+      "candidate": true,
+      "git_blob": "db603fead9dd9307029520593bf79e7c9757ad1f",
+      "lines": 1943,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/workflow_artifacts.py",
+      "sha256": "3f6a0508dd3ca3f7902d7d515084a099560400c0490628f855a6a886b4b65579"
+    },
+    {
+      "bytes": 1675,
+      "candidate": true,
+      "git_blob": "b9b81de60a5f7775a716862869138ca9d3c5abae",
+      "lines": 37,
+      "mode": "100644",
+      "path": ".getzilla/getzilla/workflow_storage.py",
+      "sha256": "a4b9401d98f111d3b17df46787ad52650739d8b0014685cefbb6098086b0e51a"
+    },
+    {
+      "bytes": 7580,
+      "candidate": true,
+      "git_blob": "2d67ecba2d9ab34317239778d466474ac3cbcbb7",
+      "lines": 135,
+      "mode": "100755",
+      "path": "scripts/adopt_existing.py",
+      "sha256": "8b776bd027f36c717b1020a1e7962129f8032bb9bf97e4087f7c8746b3a21034"
+    },
+    {
+      "bytes": 3911,
+      "candidate": true,
+      "git_blob": "7fa402860bab7a05e20af301035fa589574d7637",
+      "lines": 81,
+      "mode": "100755",
+      "path": "scripts/branch_lifecycle.py",
+      "sha256": "a8f28c00502bdbf3ec081a8db97c6ef94e114a87f3c5c4534d671fb8e1e21533"
+    },
+    {
+      "bytes": 360,
+      "candidate": true,
+      "git_blob": "ca0d90de69b93b3f64e0f530a747b05f5762ce96",
+      "lines": 16,
+      "mode": "100644",
+      "path": "scripts/generate_manifest.py",
+      "sha256": "64bc0204d67fd4ecfbf0b55b74cd9d641a4993a058e06d7386cc2cd5430190fb"
+    },
+    {
+      "bytes": 4888,
+      "candidate": true,
+      "git_blob": "210e512f640dfec268cf0e49055ec79ca22d40a8",
+      "lines": 104,
+      "mode": "100644",
+      "path": "scripts/getzilla_agent.py",
+      "sha256": "a355fc3047112c8e0f4432b8ae1881bbd546c0a6cce8df2c5d9c3804d37df5fb"
+    },
+    {
+      "bytes": 2745,
+      "candidate": true,
+      "git_blob": "75e1d92c58e36fbdcc3212b521d79e9e67df66a9",
+      "lines": 90,
+      "mode": "100644",
+      "path": "scripts/getzilla_approve.py",
+      "sha256": "1455ef6983074ef4262739cf57c4bd2c70e9dce4dafbc9f5036d1a74ba17fa48"
+    },
+    {
+      "bytes": 6968,
+      "candidate": true,
+      "git_blob": "9fe40ee0b17c247fdce1c21d0aceb98b54b545e3",
+      "lines": 173,
+      "mode": "100644",
+      "path": "scripts/getzilla_architecture.py",
+      "sha256": "37f0193720255bf433d39d2addcced0fab3418b4a90370e488f05f66ddbae9d0"
+    },
+    {
+      "bytes": 6570,
+      "candidate": true,
+      "git_blob": "d97c6f7ee20c9e79e944eb1fc203f83519cf9780",
+      "lines": 162,
+      "mode": "100644",
+      "path": "scripts/getzilla_artifacts.py",
+      "sha256": "d0490e76b073f2ee0866c06c299d9ac0d688c57aee64299d7da0a125b267f320"
+    },
+    {
+      "bytes": 23746,
+      "candidate": true,
+      "git_blob": "677f94e6ac54ad0cddf9a21fb2a8c8289d056db5",
+      "lines": 491,
+      "mode": "100755",
+      "path": "scripts/getzilla_audit_bundle.py",
+      "sha256": "30341af6ef497d98edb2da808b23869ae1116b2f7de2b5149a305492691b658b"
+    },
+    {
+      "bytes": 2075,
+      "candidate": true,
+      "git_blob": "5c30471c8d28ad2924f19f2efcaf7a73c4d62f73",
+      "lines": 51,
+      "mode": "100755",
+      "path": "scripts/getzilla_baseline.py",
+      "sha256": "c3d6153d4eb053505405d130a7506a81b7ed117ba235578052428e956219e7f8"
+    },
+    {
+      "bytes": 1025,
+      "candidate": true,
+      "git_blob": "e4980eb214b5cb6c9881203cb813e76b8f1d55f5",
+      "lines": 33,
+      "mode": "100644",
+      "path": "scripts/getzilla_change.py",
+      "sha256": "8efe8573af7df52d5f7ab786da84715b04dbb2b801f39c3a816b445b77a74b66"
+    },
+    {
+      "bytes": 6177,
+      "candidate": true,
+      "git_blob": "6a450b52165df2c5352c4b1de6094096779a5b2c",
+      "lines": 134,
+      "mode": "100644",
+      "path": "scripts/getzilla_ci.py",
+      "sha256": "aef6f0666a3ab24f414d84a8e2e6fa8e0ee48d860af11cbbd0c8a294a68555d7"
+    },
+    {
+      "bytes": 706,
+      "candidate": true,
+      "git_blob": "8f86b9981b35701fd100801e0774e791ad342387",
+      "lines": 17,
+      "mode": "100644",
+      "path": "scripts/getzilla_ci_evidence.py",
+      "sha256": "cd0219af9b61bbee97548619f7011cd47c13ca18c6244d2fc2ce3b7e6c894a93"
+    },
+    {
+      "bytes": 6934,
+      "candidate": true,
+      "git_blob": "5eb57291860bcd1a9b09926b6218e1e7f983cbea",
+      "lines": 124,
+      "mode": "100644",
+      "path": "scripts/getzilla_cli.py",
+      "sha256": "39dbb7d9224ee0aecd17ef418ef110839f7f147b6fc33201c87477f6ac967ed6"
+    },
+    {
+      "bytes": 1808,
+      "candidate": true,
+      "git_blob": "12fb97106e5b142202676c9950a2005117c49810",
+      "lines": 46,
+      "mode": "100644",
+      "path": "scripts/getzilla_compliance.py",
+      "sha256": "bc661b23137fc80ede6c1ecb023584f4d56e3c9052d1bcd9dcab739f713fd383"
+    },
+    {
+      "bytes": 1915,
+      "candidate": true,
+      "git_blob": "797ebd194ee99ecaf1eba84815b40a207893af8f",
+      "lines": 51,
+      "mode": "100755",
+      "path": "scripts/getzilla_components.py",
+      "sha256": "abfb1d4fed9a53016cc828f37405561d8e9abc4a61908994902b634f14392df3"
+    },
+    {
+      "bytes": 1787,
+      "candidate": true,
+      "git_blob": "98ecb0afb7f7ce8ab0e7633a99e0f4c447263737",
+      "lines": 57,
+      "mode": "100644",
+      "path": "scripts/getzilla_demo.py",
+      "sha256": "9321e3814bec4bd390e251a4fedbf319af96a894785402a830a32829a4540226"
+    },
+    {
+      "bytes": 946,
+      "candidate": true,
+      "git_blob": "ef4c8c55709c5cd7d7ad0450d8ace29fdd2630c3",
+      "lines": 27,
+      "mode": "100644",
+      "path": "scripts/getzilla_deploy.py",
+      "sha256": "6b7def6c0e85f0625f0ba50723e0b6e7f46b5bfd5c7e0156848df1fba7e01f6a"
+    },
+    {
+      "bytes": 2659,
+      "candidate": true,
+      "git_blob": "dab4ebe79d00dfb8945fc60aff3f08670e2378f3",
+      "lines": 63,
+      "mode": "100644",
+      "path": "scripts/getzilla_doctor.py",
+      "sha256": "53be14cbafa04c04e05c93b9706ec06485f532dd28b6bf686b1787b109248c48"
+    },
+    {
+      "bytes": 621,
+      "candidate": true,
+      "git_blob": "e14b7f8b1f7c2f08b784615cb3a6942ad476c3c1",
+      "lines": 16,
+      "mode": "100644",
+      "path": "scripts/getzilla_evidence.py",
+      "sha256": "a744c69a861cc3d9bd140faac176264bd889007ce5b437826da7d748f2fbf5a4"
+    },
+    {
+      "bytes": 1944,
+      "candidate": true,
+      "git_blob": "7e3483c084aead42e4df816372071eed41c11aa0",
+      "lines": 54,
+      "mode": "100644",
+      "path": "scripts/getzilla_gate.py",
+      "sha256": "6ee521981a577ac582a9d192a9228ab01f20d80ac5428a2f1ec792995419cf01"
+    },
+    {
+      "bytes": 6412,
+      "candidate": true,
+      "git_blob": "5e04029b70d35dd8b3c0e09e4a75386e3b2a15fd",
+      "lines": 174,
+      "mode": "100755",
+      "path": "scripts/getzilla_governance.py",
+      "sha256": "e0ee12c74d8602d44be970940ec39247953ea1e43552a0616471874f7e81b534"
+    },
+    {
+      "bytes": 365,
+      "candidate": true,
+      "git_blob": "9822d5208d2c3ce983b408ac7fd403f960a7abfa",
+      "lines": 14,
+      "mode": "100755",
+      "path": "scripts/getzilla_graph.py",
+      "sha256": "7fd643c25ac1795078006f4014c35633fc210c3be13afd247d2333475b1770dd"
+    },
+    {
+      "bytes": 1014,
+      "candidate": true,
+      "git_blob": "98a630861da0241525f16b0f864d96ee231d3c7d",
+      "lines": 32,
+      "mode": "100644",
+      "path": "scripts/getzilla_harness.py",
+      "sha256": "8340770e668df9075a8f1826a24f5230c854d0c6e966488c796561d111407005"
+    },
+    {
+      "bytes": 955,
+      "candidate": true,
+      "git_blob": "1db5f9a607234dd1276debbe519a1e868a235dcf",
+      "lines": 28,
+      "mode": "100644",
+      "path": "scripts/getzilla_history.py",
+      "sha256": "69b5ad3847f57997895ed356ff74080c37d9f183c54d69c1994af4adee718daf"
+    },
+    {
+      "bytes": 4226,
+      "candidate": true,
+      "git_blob": "eb8e84685ac6bbfe43401200896287f86a39b432",
+      "lines": 93,
+      "mode": "100644",
+      "path": "scripts/getzilla_landing_publish.py",
+      "sha256": "323ec43b09f7a6c7b590ab93f81ace01ea69e24314b1a128bb57b61e35219726"
+    },
+    {
+      "bytes": 1897,
+      "candidate": true,
+      "git_blob": "8939167a99e0648029d066c175d63dd79c83da53",
+      "lines": 41,
+      "mode": "100644",
+      "path": "scripts/getzilla_m8.py",
+      "sha256": "fa91c7de255309b772bb0198125ae8b6a758cbc952febe6aa80d081506ad411b"
+    },
+    {
+      "bytes": 2272,
+      "candidate": true,
+      "git_blob": "362668f46b67b1a52feba33998db9ea6a9f99f4a",
+      "lines": 51,
+      "mode": "100755",
+      "path": "scripts/getzilla_par.py",
+      "sha256": "172a36ea1d7e2348faaa951bed795aa5f90d9c0ac6a105151c5902c0ec7fcc50"
+    },
+    {
+      "bytes": 1168,
+      "candidate": true,
+      "git_blob": "a4780b3ea6bc38a716312c49e9fc8c7689166b0b",
+      "lines": 37,
+      "mode": "100755",
+      "path": "scripts/getzilla_protected_write.py",
+      "sha256": "8b79b2dd81afdbbc8610d58d7c5d3cb6f4a2542bb3b4f56c82463bcc6651d9e0"
+    },
+    {
+      "bytes": 3245,
+      "candidate": true,
+      "git_blob": "53cbab7c7e7bc699c7817f8e252193d4b2e9487c",
+      "lines": 74,
+      "mode": "100755",
+      "path": "scripts/getzilla_report.py",
+      "sha256": "6541c32620dad8609a90f862db450280debdf835b69a4edbf2f19d8df3b7c7b3"
+    },
+    {
+      "bytes": 2111,
+      "candidate": true,
+      "git_blob": "9b232f47ba7d0e37a78ae2c59537c9374574d8f5",
+      "lines": 43,
+      "mode": "100644",
+      "path": "scripts/getzilla_review.py",
+      "sha256": "bc230c1597b8f3ad78de2a89a4d08437c5cdceeda52564d37f8e4c35fa4b988a"
+    },
+    {
+      "bytes": 2574,
+      "candidate": true,
+      "git_blob": "65c33cae6ad52da6f73ed561d55a7b16b40ee440",
+      "lines": 61,
+      "mode": "100755",
+      "path": "scripts/getzilla_risk_terms.py",
+      "sha256": "e51887f402eeafd70f80951dc64fd96d08308d71dd9757d8b0e496d0568e4ae1"
+    },
+    {
+      "bytes": 2050,
+      "candidate": true,
+      "git_blob": "ef58785b37f5ecf81dbd8c8bf49d3ae29e519050",
+      "lines": 50,
+      "mode": "100644",
+      "path": "scripts/getzilla_route.py",
+      "sha256": "4a007edf4e8cd6cc80cf90b50df3e8c9f676b413bae6a5d40a56caeee9c3386b"
+    },
+    {
+      "bytes": 2894,
+      "candidate": true,
+      "git_blob": "6a7ee05e6bfc61bbe2542b699233de82295c772a",
+      "lines": 73,
+      "mode": "100644",
+      "path": "scripts/getzilla_setup_agent.py",
+      "sha256": "f62d9f9e8db4d6240975b4434fdd4cf0e40566bb7bec8b239baf6e6dfc7a70a5"
+    },
+    {
+      "bytes": 4534,
+      "candidate": true,
+      "git_blob": "d11ea2466e2892511d012cae0b6c801caec7ebb1",
+      "lines": 122,
+      "mode": "100644",
+      "path": "scripts/getzilla_spec.py",
+      "sha256": "050c35bdb2627bf9fc88aaff8783cfba721bbe86e10d95a49fb628600ad6f7da"
+    },
+    {
+      "bytes": 2967,
+      "candidate": true,
+      "git_blob": "c6faf29e229128b50bf411a04b1ae6ecd93d2ba4",
+      "lines": 61,
+      "mode": "100644",
+      "path": "scripts/getzilla_startup_cpu.py",
+      "sha256": "8e6ca968b7030bdbe1fc2ed4125903dc41dd80a74eecf89d30f939ac40a1f334"
+    },
+    {
+      "bytes": 1558,
+      "candidate": true,
+      "git_blob": "a00db01fd26f489d90898e70fa67618245ab6c07",
+      "lines": 45,
+      "mode": "100644",
+      "path": "scripts/getzilla_status.py",
+      "sha256": "892f2aca65e30d6125a758cb2a758a2d490bba189bfbf906df0ae31e49823de4"
+    },
+    {
+      "bytes": 4574,
+      "candidate": true,
+      "git_blob": "3510f09734d356cd7a75b551a58d797003eb8081",
+      "lines": 85,
+      "mode": "100644",
+      "path": "scripts/getzilla_trust_ci.py",
+      "sha256": "aa00f8fd8fd8d1825833b0acd12781f4a68bed697cbf1c9e74feab877735de6d"
+    },
+    {
+      "bytes": 221,
+      "candidate": true,
+      "git_blob": "feb2272e04633117c5c79620f1380ad64c06bffd",
+      "lines": 11,
+      "mode": "100644",
+      "path": "scripts/getzilla_update.py",
+      "sha256": "8b0733bcf2ae6d02f7e8cc7474b8ed5d77f394e262e178dcd3dfbf01fcaadc03"
+    },
+    {
+      "bytes": 16657,
+      "candidate": true,
+      "git_blob": "d2b5279ce6f6c6b2563342e1e9fdf389976ac710",
+      "lines": 327,
+      "mode": "100644",
+      "path": "scripts/getzilla_upgrade.py",
+      "sha256": "4351d2c62fc56832531dca780f5ddbffcf1364acfddd0538e6acc781ba069653"
+    },
+    {
+      "bytes": 5116,
+      "candidate": true,
+      "git_blob": "57a8a90648357e54659ab94257feefb493c5b5f0",
+      "lines": 107,
+      "mode": "100644",
+      "path": "scripts/getzilla_verify.py",
+      "sha256": "e697a8f01657ac2766c3898d6b98737f3842eabf9a291b722dcc5b3debe06772"
+    },
+    {
+      "bytes": 3370,
+      "candidate": true,
+      "git_blob": "6c4eca24de399745d379b323b18175626d80ae6d",
+      "lines": 64,
+      "mode": "100644",
+      "path": "scripts/getzilla_vulns.py",
+      "sha256": "553ae6c72d907fe37303863a7bd33419ffe4c2ed566a8d076430dd0e955b1d7d"
+    },
+    {
+      "bytes": 79371,
+      "candidate": true,
+      "git_blob": "979fed4c37ac64f9f3b968f699fac98ac970110f",
+      "lines": 1982,
+      "mode": "100644",
+      "path": "scripts/install_into.py",
+      "sha256": "7566730e56912ec4e0946c726f6ebd767d9e038c8e5189945acd9b1c3f1288c5"
+    },
+    {
+      "bytes": 42860,
+      "candidate": true,
+      "git_blob": "02750f18d0166d33a91422533e7b9939a6e0641e",
+      "lines": 1148,
+      "mode": "100644",
+      "path": "scripts/package_stack.py",
+      "sha256": "33f9ab9bd23e0ebc93bc162ca89463056ed75effbb6d6570de7f1f1baf8a2e1f"
+    },
+    {
+      "bytes": 363,
+      "candidate": true,
+      "git_blob": "7c8b7d83669ff76faef1742e7ca18778b84615a5",
+      "lines": 16,
+      "mode": "100644",
+      "path": "scripts/verify_manifest.py",
+      "sha256": "905a8fef967f54b4cd73808b5fcea9af884311364181ee5d309beb51be8e4953"
+    },
+    {
+      "bytes": 5738,
+      "candidate": false,
+      "lines": 130,
+      "mode": "100644",
+      "path": "tests/test_code_graph_e2e.py",
+      "sha256": "b39828a7ce880504842804f81ef5193457c4b1f4c5f3039dd31528f4e1a45a75"
+    },
+    {
+      "bytes": 4999,
+      "candidate": false,
+      "lines": 105,
+      "mode": "100644",
+      "path": "tests/test_code_graph_incremental.py",
+      "sha256": "4e9a2190b54428b092c182a4e7962d3a4f3acbeec61348e797c9ffddb2aa314a"
+    },
+    {
+      "bytes": 5607,
+      "candidate": false,
+      "lines": 124,
+      "mode": "100644",
+      "path": "tests/test_code_graph_store.py",
+      "sha256": "6ddd7eb9289a4c06b4b46e210d6dc345b490fdf4e500d5b14a28664b01a5e6e8"
+    },
+    {
+      "bytes": 6019,
+      "candidate": false,
+      "lines": 152,
+      "mode": "100644",
+      "path": "tests/test_factory_v15_context_schema.py",
+      "sha256": "3683b6ec1cd6e8dc5d3f53f1ed5763a4faf68f2766fe28355f8a1790fcd3619f"
+    }
+  ],
+  "snapshot_sha256": "0e1bee6911d81feb2c740be863fbb7c8d5df568657cfc4697699bea352d3f362"
+}
