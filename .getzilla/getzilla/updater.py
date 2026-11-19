@@ -337,11 +337,15 @@ def update_osv(fetch: Fetch, root: Path, *, now: datetime | None = None,
                 evidence = copy_snapshot(source_database, database, f'osv:{ecosystem}',
                                          now=now, required_scope={ecosystem})
             else:
-                data = fetch(f'{OSV_BUCKET}/{ecosystem}/all.zip')
+                from .security_acquisition import _body, fetch_public
+                url = f'{OSV_BUCKET}/{ecosystem}/all.zip'
+                response = (fetch_public if fetch is _default_fetch else fetch)(url)
+                data = _body(response, url)
                 current = now if now is not None else datetime.now(timezone.utc)
                 evidence = publish_snapshot(
                     database, f'osv:{ecosystem}', data,
-                    acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download'},
+                    acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                                 'producer': 'getzilla-native-osv-acquisition-v1'},
                     coverage=osv_coverage(data, ecosystem), now=current)
             detail = f"{evidence['payload_size'] // 1024} KiB; verified sync {evidence['acquisition']['last_verified_sync_utc']}"
             if evidence.get('compatibility_export_warning'):

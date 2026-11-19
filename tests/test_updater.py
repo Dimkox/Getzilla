@@ -32,14 +32,19 @@ from tests._support import offline_mirror, project_copy, run_hook
 
 
 
-def _zip_bytes(name: str, padding: int = 64) -> bytes:
-    ecosystem = next((item for item in updater.OSV_ECOSYSTEMS if f'/{item}/' in name), 'PyPI')
+def _zip_bytes(name: str, padding: int = 64, *, ecosystem: str | None = None) -> bytes:
+    ecosystem = ecosystem or next((item for item in updater.OSV_ECOSYSTEMS if f'/{item}/' in name), 'PyPI')
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
         archive.writestr('osv-test.json', json.dumps({'id': name, 'padding': 'x' * padding, 'affected': [{
             'package': {'ecosystem': ecosystem, 'name': 'fixture'}, 'versions': ['1.0.0'],
         }]}).encode())
     return buffer.getvalue()
+
+
+def _qualified_zip(url):
+    from getzilla.security_acquisition import FetchResult
+    return FetchResult(_zip_bytes(url), url, url, 200)
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -58,7 +63,11 @@ class QualifiedOSVUpdaterTests(unittest.TestCase):
             mirror = updater.Mirror.from_environ({updater.MIRROR_ENV: str(source)})
             results = updater._run_from_mirror(base / 'state', mirror, run=lambda *_: None,
                                               which=lambda _: None, components=('osv',))
-            self.assertTrue(all(result.status == 'ok' for result in results), results)
+            self.assertTrue(all(result.status == 'ok' for result in results if result.component.startswith('osv:')), results)
+            freshness = [result for result in results if result.component == 'freshness']
+            self.assertEqual(len(freshness), 1)
+            self.assertEqual(freshness[0].status, 'fail')
+            self.assertIn('current official targets are unestablished', freshness[0].detail)
             after = security_data.read_snapshot(base / 'state/osv', 'osv:PyPI')[1]
             self.assertEqual(after['acquisition'], before['acquisition'])
 
@@ -170,7 +179,7 @@ class UpdaterTests(unittest.TestCase):
 
     def test_failed_refresh_keeps_original_verified_time_and_payload(self) -> None:
         now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-        updater.update_osv(_zip_bytes, self.root, now=now)
+        updater.update_osv(_qualified_zip, self.root, now=now)
         pointer = self.root / 'osv/PyPI/snapshot.json'
         original = pointer.read_bytes()
         failed = updater.update_osv(lambda url: b'PKpartial', self.root, now=now + timedelta(hours=1))
@@ -182,7 +191,7 @@ class UpdaterTests(unittest.TestCase):
     def test_mirror_copy_cannot_refresh_an_old_valid_archive(self) -> None:
         now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
         source = Path(self._tmp.name) / 'mirror'
-        updater.update_osv(_zip_bytes, source, now=now - timedelta(hours=71))
+        updater.update_osv(_qualified_zip, source, now=now - timedelta(hours=71))
         mirror = updater.Mirror(source, {}, {})
         copied = updater.update_osv(mirror.fetch, self.root, now=now)
         self.assertTrue(all(item.status == 'ok' for item in copied), copied)

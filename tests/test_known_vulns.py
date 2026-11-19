@@ -564,7 +564,7 @@ class NativeAliasTests(unittest.TestCase):
     def test_offline_alias_admission_precedes_every_record_filter(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
-                _mirror(Path(database), 'PyPI', [self.record(case)])
+                _tampered_mirror(Path(database), 'PyPI', [self.record(case)])
                 with self.assertRaises(KV.VulnerabilityError):
                     KV.query_offline([self.dependency], Path(database))
 
@@ -613,10 +613,13 @@ class NativeAliasTests(unittest.TestCase):
     def test_nullable_archive_publication_roundtrips_through_actual_reader(self):
         with tempfile.TemporaryDirectory() as database:
             data = self.archive([self.record(aliases=None)])
-            target = Path(database)/'PyPI/all.zip'
-            written = KV.download_database(Path(database), ['PyPI'], fetch=lambda _url, _body: data)
+            from getzilla.security_acquisition import FetchResult
+            from getzilla.security_data import read_snapshot
+            target = Path(database)/'PyPI/snapshot.json'
+            written = KV.download_database(Path(database), ['PyPI'],
+                fetch=lambda url, _body: FetchResult(data, url, url, 200))
             self.assertEqual(written, [str(target)])
-            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(read_snapshot(Path(database), 'osv:PyPI')[0], data)
             [finding] = KV.query_offline([self.dependency], Path(database))
             self.assertEqual(finding.aliases, [])
 
@@ -662,6 +665,7 @@ class CliTests(unittest.TestCase):
         ]}
         output = io.StringIO()
         with mock.patch.object(KV, 'scan', return_value=report), \
+                mock.patch.object(KV, 'recheck_report', return_value=None), \
                 mock.patch('getzilla.util.find_root', return_value=ROOT), \
                 mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
                 mock.patch.object(sys, 'argv', ['getzilla_vulns.py']), \
