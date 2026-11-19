@@ -19,7 +19,7 @@ from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BY
                                  artifact_identity, select_artifact, package_key, package_metadata, read_file, verify_origin, safe_parts)
 from .security_artifacts import family_evidence, select_family
 from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _json, _timestamp
-from .security_license_texts import recognized_license, reviewed_ancillary
+from .security_license_texts import recognized_license, recognized_license_bundle, reviewed_ancillary
 from .security_deliveries import verify_deliveries
 
 POLICY_PATH = '.getzilla/config/license-policy.json'
@@ -285,7 +285,8 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
         if 'GNU GENERAL PUBLIC LICENSE' in text and not any('GPL-' in value for value in identifiers):
             raise ArtifactError('license-conflict', 'GPL license text conflicts with distribution SPDX metadata')
         text_license = recognized_license(text)
-        if text_license is None:
+        text_identifiers = (text_license,) if text_license is not None else recognized_license_bundle(text)
+        if text_identifiers is None:
             ancillary=reviewed_ancillary(text)
             if ancillary is None:
                 raise ArtifactError('license-text-review', f'license text is incomplete, modified or outside the qualified templates: {path}')
@@ -305,12 +306,15 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
                         or hashlib.sha256(complete).hexdigest()!=expected_sha):
                     raise ArtifactError('license-obligation-missing','ancillary declaration requires its exact independently retained complete terms')
                 identifier=recognized_license(complete.decode('utf-8'))
-                if identifier is None:
+                reference_identifiers=(identifier,) if identifier is not None else recognized_license_bundle(complete.decode('utf-8'))
+                if reference_identifiers is None:
                     raise ArtifactError('license-text-review','ancillary reference does not independently contain recognized complete terms')
-                if identifier not in identifiers:
+                if not set(reference_identifiers) <= identifiers:
                     raise ArtifactError('license-conflict','ancillary reference conflicts with the distribution SPDX expression')
-                reference_terms.add(identifier)
-                references.append({'path':reference,'sha256':expected_sha,'recognized_license':identifier})
+                reference_terms.update(reference_identifiers)
+                terms_identity=({'recognized_license':identifier} if identifier is not None else
+                    {'recognized_licenses':list(reference_identifiers)})
+                references.append({'path':reference,'sha256':expected_sha,**terms_identity})
             # Every referenced branch is checked, even when metadata permits OR.
             # Ancillary bytes themselves never enter recognized or license_files.
             if not identifiers<=reference_terms:
@@ -320,11 +324,13 @@ def _license_evidence(files: dict[str, bytes], metadata: dict, identifiers: set[
                 'ancillary_kind':ancillary['kind'],'expression':ancillary['expression'],
                 'validation':'exact-reviewed-ancillary-with-independent-complete-terms','required_files':references})
             continue
-        if text_license not in identifiers:
+        if not set(text_identifiers) <= identifiers:
             raise ArtifactError('license-conflict', 'complete license text conflicts with the distribution SPDX expression')
-        recognized.add(text_license)
+        recognized.update(text_identifiers)
+        terms_identity=({'recognized_license':text_license} if text_license is not None else
+            {'recognized_licenses':list(text_identifiers)})
         licenses.append({'path': path, 'sha256': hashlib.sha256(body).hexdigest(),
-                         'bytes': len(body), 'recognized_license': text_license, 'validation': 'complete-standard-terms-and-retained-bytes'})
+                         'bytes': len(body), **terms_identity, 'validation': 'complete-standard-terms-and-retained-bytes'})
     if not set(chosen) <= recognized:
         raise ArtifactError('license-obligation-missing', 'selected SPDX branch lacks complete retained license terms')
     for path, body in sorted(files.items()):
@@ -609,7 +615,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 for component in evidence['components']:
                     chosen, identifiers = _select_expression(component['expression'], policy['auto_allow'])
                     owned = {item['path'] for item in component['files']}
-                    files = {name: body for name, body in evidence['files'].items() if name in owned}
+                    shared = set(component['license_paths'] + component['notice_paths']) if evidence.get('held_image') else set()
+                    files = {name: body for name, body in evidence['files'].items() if name in owned | shared}
                     license_files, notice_files = _license_evidence(files, component, identifiers, chosen)
                     if any(not files.get(path, b'').strip() for path in component['notice_paths']):
                         raise ArtifactError('license-obligation-missing', 'declared component NOTICE is empty')

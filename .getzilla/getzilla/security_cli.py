@@ -336,12 +336,19 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
                 'selected_run':selected} if selected is not None else {})}
 
 
-def _prepare_families(inventory,artifacts,tools,families,*,now=None):
+def _prepare_families(inventory,artifacts,tools,families,*,now=None,run_context=None):
     """Acquire finite source data; the common catalog reader owns all charging."""
     from .security_release_tool_inputs import prepare as prepare_release
     from .security_action_inputs import prepare_actions
     providers=[]
     selected=list(families or [])
+    if run_context is not None and inventory['images']:
+        from .security_license_scope import Scope
+        from .security_image_licenses import prepare_families as prepare_images
+        if not isinstance(run_context, Scope):
+            raise SecurityDataError('image family preparation needs actual selected-run scope')
+        run_context.validate(inventory,run_context.binding)
+        selected.extend(prepare_images(artifacts,inventory,run_context.binding['source'],run_context.binding['run'],now=now))
     if any(row.get('kind')=='release-tool' for row in inventory['tools']):
         with _preparation_step('release-tool-source'):
             release=prepare_release(inventory,artifacts,tools,now=now)
@@ -442,7 +449,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
                 with _preparation_step('package-artifacts'):
                     family_options={}
                     if run_context is not None:
-                        families,preparation=_prepare_families(inventory,artifacts,tools,families,now=now)
+                        families,preparation=_prepare_families(inventory,artifacts,tools,families,now=now,run_context=run_context)
                         family_options={'family_preparation':preparation}
                     bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now, families=families,
                                           **python_options,**family_options)
@@ -927,11 +934,11 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 ecosystems = sorted({item['ecosystem'] for item in inventory['dependencies']})
                 if inventory['dependencies'] or inventory['images']:
                     acquire('feed-acquisition', lambda: refresh_feeds(database, ecosystems, now=now))
-                if inventory['dependencies']:
+                if inventory['dependencies'] or inventory['tools'] or inventory['images']:
                     def package_artifacts():
                         family_options={}
                         if run_context is not None:
-                            selected,preparation=_prepare_families(inventory,artifacts,tools,None,now=now)
+                            selected,preparation=_prepare_families(inventory,artifacts,tools,None,now=now,run_context=run_context)
                             family_options=dict(families=selected,family_preparation=preparation)
                         bundle = acquire_pypi(required_dependencies, artifacts, inventory_digest=inventory['digest'], now=now,
                             **python_options,**family_options)
