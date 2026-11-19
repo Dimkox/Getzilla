@@ -9,10 +9,26 @@ Until that owner and genuine operation admission exist, execution is unavailable
 from __future__ import annotations
 
 from .budget import RetrievalError
-from .contracts import hex_digest
+from .contracts import digest, hex_digest
 
 MEMORY_BYTES = 6442450944
 TMPFS_OPTIONS = frozenset({'rw', 'noexec', 'nosuid', 'nodev', 'size=67108864', 'mode=700'})
+
+
+def resource_profile():
+    """Fresh data projection; never a process, execution or resource permit."""
+    return {'schema_version': 1, 'profile': 'issue162-owned-offline-v1',
+            'cpu_count': 2, 'memory_bytes': MEMORY_BYTES, 'swap_bytes': 0,
+            'pids': 128, 'uid': 65532, 'gid': 65532, 'network': 'none',
+            'read_only_root': True, 'mounts': ['/model', '/software', '/worker'],
+            'mounts_read_only': True, 'mount_propagation': 'rprivate',
+            'capabilities': [], 'no_new_privileges': True, 'seccomp': 'filter',
+            'gpu': False, 'tmpfs_bytes': 67108864, 'docker_logs': 'none',
+            'ort_intra_threads': 1, 'ort_inter_threads': 1, 'blas_threads': 1,
+            'batch_size': 1, 'hard_timeout_max_seconds': 14400}
+
+
+RESOURCE_PROFILE_SHA256 = digest(resource_profile())
 
 
 def _cpus(values):
@@ -29,7 +45,7 @@ def validate_container_readback(observed, *, image_id, cpu_ids, command, mounts)
     if (type(image_id) is not str or not image_id.startswith('sha256:')
             or not hex_digest(image_id[7:]) or type(command) is not tuple or not command
             or any(type(arg) is not str or not arg for arg in command)
-            or type(mounts) is not dict or set(mounts) != {'/model', '/software'}
+            or type(mounts) is not dict or set(mounts) != {'/model', '/software', '/worker'}
             or any(type(path) is not str or not path.startswith('/')
                    or '/..' in path or '\x00' in path for path in mounts.values())):
         raise RetrievalError('offline_profile_mismatch')
@@ -51,7 +67,7 @@ def validate_container_readback(observed, *, image_id, cpu_ids, command, mounts)
                 or frozenset(host['Tmpfs']['/tmp'].split(',')) != TMPFS_OPTIONS):
             raise RetrievalError('offline_profile_mismatch')
         actual_mounts = observed['Mounts']
-        if type(actual_mounts) is not list or len(actual_mounts) != 2:
+        if type(actual_mounts) is not list or len(actual_mounts) != 3:
             raise RetrievalError('offline_profile_mismatch')
         seen = set()
         for item in actual_mounts:
