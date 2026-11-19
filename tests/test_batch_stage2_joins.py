@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 sys.path.insert(0, str(ROOT / 'trust-ci' / 'src'))
 
 import getzilla
-from getzilla import verification_plan
+from getzilla import verification_plan, verification_policy_source
 from adaptive_trust_ci import cli, http_response
 from tests.test_batch_composition_joins import _Registry, pure
 
@@ -33,8 +33,8 @@ class StageTwoJoinTests(unittest.TestCase):
         def source(module):
             return content[0] if module.filename == 'cost_guard.py' else module.filename.encode()
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module', side_effect=imported), \
-                mock.patch.object(verification_plan, '_module_source', side_effect=source), \
+                mock.patch.object(verification_policy_source.importlib, 'import_module', side_effect=imported), \
+                mock.patch.object(verification_policy_source, '_module_source', side_effect=source), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             before = verification_plan.policy_binding(Path('owned-stage-two'))
             self.assertIn('cost_guard.py', before['implementation'])

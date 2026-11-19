@@ -32,8 +32,8 @@ def descriptors(requirements):
 
 
 def _observe(binding, subject, requirements):
-    from . import security_image_backend as native
-    from . import security_image_producer as producer
+    from . import security_image_authority as native
+    from . import security_image_authority as producer
     from .security_ci_inputs import validate_binding
 
     if (
@@ -74,7 +74,7 @@ def _observe(binding, subject, requirements):
 def prove_ci(binding, dep, record, scope, condition_profile):
     from .security_license_exceptions import PROFILES, scope_for
     from .security_python_target import digest
-    from . import security_image_producer as producer
+    from . import security_image_authority as producer
 
     profile = PROFILES.get(condition_profile)
     if not profile or not profile.get("internal_ci") or not profile.get("supplements"):
@@ -104,7 +104,7 @@ def prove_ci(binding, dep, record, scope, condition_profile):
 
 
 def validate(proof, subject, requirements):
-    from . import security_image_producer as producer
+    from . import security_image_authority as producer
 
     if (
         type(proof) is not _Proof

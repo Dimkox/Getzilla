@@ -362,7 +362,7 @@ def _publish(project, payload):
 
 
 def apply_latest(project, agent, home, *, fetch=None, windows=os.name == 'nt'):
-    from .updater import _release_fetch
+    from .release_transport import _release_fetch
     try:
         acquired = _acquire(home, agent, fetch or _release_fetch, windows=windows)
         token = _SCOPE.set(tuple(p for p, _ in acquired.values()))
@@ -379,10 +379,10 @@ def apply_latest(project, agent, home, *, fetch=None, windows=os.name == 'nt'):
 
 
 def prepare_latest(home, *, fetch=None):
-    from .updater import _release_fetch
+    from .release_transport import _release_fetch
     try:
         payloads = _acquire(home, 'claude', fetch or _release_fetch)
-        from .updater import _replace_bytes
+        from .release_transport import _replace_bytes
         _replace_bytes(home/'workflow-current.json', canonical({name: identity for name, (_, identity) in payloads.items()}), mode=0o600)
         return [Step('baseline:'+name, 'ok', f'fresh exact {identity["version"]} source={identity["commit"]}; payload={payload.asset_digest}; project activation remains separate')
                 for name, (payload, identity) in payloads.items()]
@@ -392,7 +392,7 @@ def prepare_latest(home, *, fetch=None):
 
 def inspect_current(home, project=None, agent=None, *, fetch=None):
     from .baseline import BaselineStatus
-    from .updater import _release_fetch
+    from .release_transport import _release_fetch
     try:
         acquired = _acquire(home, agent or 'claude', fetch or _release_fetch, windows=os.name == 'nt')
         details = {'freshness': 'fresh-official-source', 'workflow': {c: i for c, (_, i) in acquired.items()}}

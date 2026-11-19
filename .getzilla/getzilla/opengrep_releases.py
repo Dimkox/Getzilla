@@ -73,7 +73,7 @@ def verify_active(executable: Path, *, fetch, key):
 
 
 def install(fetch, root, key, *, run):
-    from .updater import Result, _replace_bytes, _sha256_file, OPENGREP_ASSETS
+    from .release_transport import Result, _replace_bytes, _sha256_file, OPENGREP_ASSETS
     target = resolve(fetch, key)
     data = fetch(target.url)
     expected = members(target, data)

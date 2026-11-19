@@ -10,13 +10,14 @@ from a hostile process with the same operating-system identity.
 from contextlib import contextmanager, nullcontext
 import gzip
 import hashlib
+from . import security_image_authority as authority
+from .security_image_authority import CI_BYTES as CI_BYTES, CI_MEMORY as CI_MEMORY
 import json
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import stat
-import sys
 import tarfile
 import tempfile
 import time
@@ -37,16 +38,13 @@ OPAQUE_ATTESTATION = 'application/vnd.in-toto+json'
 LIMITS = {'max_images': 512, 'max_compressed_bytes': 512 * 1024 * 1024,
           'max_unpacked_bytes': 512 * 1024 * 1024, 'max_storage_bytes': 512 * 1024 * 1024,
           'max_manifest_bytes': 16 * 1024 * 1024, 'max_layers': 10000, 'deadline_seconds': 900}
-CI_BYTES = 8 * 1024 ** 3
-CI_MEMORY = 12 * 1024 ** 3
 _MAX_TAR_ENTRIES = 100000
 
 
 def active_limits():
     """JSON is a declaration; only the existing measured native job raises bounds."""
     limits = dict(LIMITS)
-    native = sys.modules.get(__package__ + '.security_image_backend')
-    if native is not None and native.measured_ci_profile():
+    if authority.measured_ci_profile():
         for key in ('max_compressed_bytes', 'max_unpacked_bytes', 'max_storage_bytes'):
             limits[key] = CI_BYTES
     return limits
@@ -150,7 +148,7 @@ class _Budget:
         self._native = None
         self._guard = None
         if any(profile[key] > LIMITS[key] for key in LIMITS):
-            self._native = sys.modules[__package__ + '.security_image_backend']
+            self._native = authority
             self._guard = self._native._GUARD
         self.image_ordinal = -1
         self._layer_facts = {}
@@ -243,14 +241,14 @@ class _Decoded:
     def __init__(self, stream, budget):
         self.stream, self.budget = stream, budget
         self.digest = hashlib.sha256()
-        self.bytes = 0
+        self._decoded_bytes = 0
 
     def read(self, size=-1):
         # tarfile streaming requests are bounded; never accept an unbounded read.
         size = 65536 if size < 0 else min(size, 65536)
         value = self.stream.read(size)
         self.budget.charge('unpacked', len(value), phase='layer-decoded')
-        self.bytes += len(value)
+        self._decoded_bytes += len(value)
         self.digest.update(value)
         return value
 
@@ -332,7 +330,7 @@ def _parse_layer(raw, media, expected, budget, *, visit=None):
             pass
         if 'sha256:' + stream.digest.hexdigest() != expected:
             raise OCIError('OCI uncompressed layer digest differs')
-    return stream.bytes, declared, entries
+    return stream._decoded_bytes, declared, entries
 
 
 class VerifiedOCIImage:
@@ -427,7 +425,7 @@ def read_members(image, paths, *, member_limit=2 * 1024 * 1024, total_limit=16 *
                     raise OCIError('Requested OCI evidence is truncated')
                 changes[name] = body
             with verified(layer['digest']) as (stream, size):
-                image._budget.charge('compressed', size)
+                image._budget.charge('compressed', size, phase='blob-compressed')
                 _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
             for path in removed:
                 selected.pop(path, None)
@@ -533,7 +531,7 @@ def observe_final_files(image, retain):
                         retained += count
                 changes[name] = row
             with verified(layer['digest']) as (stream, size):
-                image._budget.charge('compressed', size, phase='component-read')
+                image._budget.charge('compressed', size, phase='blob-compressed')
                 _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
             removed_paths = {path for path, opaque in removals if not opaque}
             opaque_paths = {path for path, opaque in removals if opaque}

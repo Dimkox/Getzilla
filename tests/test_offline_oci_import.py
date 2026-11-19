@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import importlib.util
 import io
+import sys
 import json
 from pathlib import Path
 import tarfile
@@ -22,7 +23,9 @@ class OfflineOCIImportTests(unittest.TestCase):
     def api(self):
         p = W / ".getzilla/getzilla/security_oci.py"
         self.assertTrue(p.is_file(), "missing bounded OCI consumer")
-        spec = importlib.util.spec_from_file_location("owned_new_oci", p)
+        sys.path.insert(0, str(W / ".getzilla"))
+        import getzilla  # noqa: F401 establish the real source package for relative authority imports
+        spec = importlib.util.spec_from_file_location("getzilla.owned_new_oci", p)
         result = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(result)
         return result

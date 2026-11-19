@@ -66,10 +66,10 @@ class StopMetadataTests(unittest.TestCase):
             return SimpleNamespace(st_size=runner.OUTPUT_LIMIT if output or late_output and 'stop' in calls else 0)
         with ExitStack() as scope:
             enter = scope.enter_context
-            enter(patch.object(journal, 'current', return_value=None))
+            enter(patch.object(runner, '_action_current', return_value=None))
             enter(patch.object(runner, '_cancellation', return_value=nullcontext(cancellation)))
             enter(patch.object(runner, '_output_file', side_effect=lambda *a, **k: nullcontext(Capture())))
-            enter(patch.object(runner.fsx, 'owned_popen', side_effect=OSError('PRIVATE-SPAWN') if spawn_error else None,
+            enter(patch.object(runner, 'owned_popen', side_effect=OSError('PRIVATE-SPAWN') if spawn_error else None,
                                             return_value=process))
             enter(patch.object(runner, '_stop', side_effect=stop))
             enter(patch.object(runner, 'os', SimpleNamespace(fstat=size, name=os.name)))
@@ -317,11 +317,11 @@ class StopMetadataTests(unittest.TestCase):
             root = Path(directory)
             process = SimpleNamespace(args=['fake'], returncode=code, poll=lambda: code)
             enter = stack.enter_context
-            enter(patch.object(runner.fsx, 'owned_popen', return_value=process))
-            enter(patch.object(runner.fsx, 'owned_job', return_value=None))
+            enter(patch.object(runner, 'owned_popen', return_value=process))
+            enter(patch.object(runner, 'owned_job', return_value=None))
             enter(patch.object(runner, '_cancellation', return_value=nullcontext(runner.Cancellation())))
             enter(patch.object(runner, '_unittest_result', side_effect=lambda result, path: result))
-            enter(patch.object(journal, 'current', return_value=None))
+            enter(patch.object(runner, '_action_current', return_value=None))
             combined = runner.ProcessResult([], 124, stop_metadata=journal.StopMetadata(decision='deadline'))
             enter(patch.object(runner, 'execute', return_value=combined))
             if error:
@@ -342,7 +342,7 @@ class StopMetadataTests(unittest.TestCase):
             def writer(self):
                 raise RuntimeError('PRIVATE sink')
         error = ValueError('primary')
-        with patch.object(journal, 'current', return_value=Poison()), self.assertRaises(ValueError) as caught:
+        with patch.object(runner, '_action_current', return_value=Poison()), self.assertRaises(ValueError) as caught:
             with journal.core_stop_scope():
                 raise error
         self.assertIs(caught.exception, error)
@@ -352,12 +352,13 @@ class StopMetadataTests(unittest.TestCase):
         same_origin_private_module_preserves_closed_metadata(self)
 
     def test_closed_security_refusals_keep_execution_record(self):
-        from getzilla import security_cli, security_tools
+        from getzilla import security_cli, security_tools, public_security_context
         result, _ = self.execute(code=124)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch.object(security_cli, 'execute', return_value=result), \
-                    patch.object(security_cli, '_environment', return_value={}):
+            with patch.object(public_security_context, 'execute', return_value=result), \
+                    patch.object(security_cli, 'execute', return_value=result), \
+                    patch.object(public_security_context, '_environment', return_value={}):
                 with self.assertRaises(security_cli.SecurityDataError) as caught:
                     security_cli._git(root, ['fake'], root)
                 self.assertEqual(self.details(caught.exception), self.details(result))
@@ -436,7 +437,7 @@ class StopMetadataTests(unittest.TestCase):
             enter(patch.object(runner, '_application_coverage_config', return_value=root/'.coveragerc'))
             enter(patch.object(runner, '_environment', return_value={}))
             enter(patch.object(runner, 'execute', return_value=result))
-            enter(patch.object(journal, 'current', return_value=None))
+            enter(patch.object(runner, '_action_current', return_value=None))
             core = runner.run_core_tests(root, 'pr', 0)
             self.assertIs(core.tests, result)
             self.assertEqual(self.details(core.tests)['decision'], 'child_exit')

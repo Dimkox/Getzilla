@@ -152,7 +152,7 @@ class CleanupMetadataTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(tempfile, 'TemporaryFile', side_effect=factory), \
-                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, 'owned_popen', return_value=Finished()), \
                 patch.object(python_test_runner, '_stop', side_effect=OSError('PRIVATE_STOP_VALUE')), \
                 patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
             with self.assertRaises(ValueError) as caught:
@@ -190,8 +190,8 @@ class CleanupMetadataTests(unittest.TestCase):
 
                 combine = runner.ProcessResult(['public-combine'], 0, cleanup_error='PRIVATE_COMBINE',
                     cleanup_metadata=runner.CleanupMetadata((runner.CleanupFact('owned_stop_reap', 'permission', 13),)))
-                with patch.object(fsx, 'owned_popen', side_effect=spawn), \
-                        patch.object(fsx, 'owned_job', return_value=None), \
+                with patch.object(python_test_runner, 'owned_popen', side_effect=spawn), \
+                        patch.object(python_test_runner, 'owned_job', return_value=None), \
                         patch.object(runner, '_unittest_result', side_effect=complete), \
                         patch.object(runner, 'execute', return_value=combine) as combine_call, \
                         patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
@@ -299,7 +299,7 @@ class CleanupMetadataTests(unittest.TestCase):
                 return 0
 
         with tempfile.TemporaryDirectory() as directory, \
-                patch.object(fsx, 'owned_popen', return_value=Finished()), \
+                patch.object(python_test_runner, 'owned_popen', return_value=Finished()), \
                 patch.object(python_test_runner, '_stop', side_effect=PermissionError(13, 'PRIVATE_STOP_CANARY')), \
                 patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
             result = execute(['inert-owned-process'], Path(directory), {}, timeout=900)
@@ -345,7 +345,7 @@ class CleanupMetadataTests(unittest.TestCase):
                 with patch.object(python_test_runner, 'select_engine', return_value=(2, 'pytest-xdist')), \
                         patch.object(python_test_runner, '_tool_versions', return_value={'engine': 'pytest-xdist'}), \
                         patch.object(python_test_runner, 'execute', side_effect=controlled), \
-                        patch.object(fsx, 'owned_popen', side_effect=AssertionError('actual backend forbidden')), \
+                        patch.object(python_test_runner, 'owned_popen', side_effect=AssertionError('actual backend forbidden')), \
                         patch.object(subprocess, 'Popen', side_effect=AssertionError('actual backend forbidden')):
                     core = python_test_runner.run_core_tests(root, 'pr', 2)
                 self.assertEqual(len(responses), 3)
@@ -1455,6 +1455,7 @@ class CoverageLayout(unittest.TestCase):
             self.assertEqual(['a.py', 'b.py', harness, str(Path(fsx.__file__).resolve()),
                               str(Path(pytest_progress.__file__).resolve()),
                               str(Path(python_test_runner.diagnostics.__file__).resolve()),
+                              str(Path(python_test_runner.actions.__file__).resolve()),
                               str(Path(queue_refusal.__file__).resolve())], after.get_option('run:omit'))
             self.assertEqual(original, config.read_bytes())
             fresh = root / 'ambiguous-overlay'
@@ -1472,7 +1473,7 @@ class CoverageLayout(unittest.TestCase):
             config = root / '.coveragerc'
             config.write_text('[report]\nfail_under = 100\n')
             before = config.read_bytes()
-            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'queue_refusal.py')]
+            external = [Path(outside) / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py')]
             owned = root / 'owned.py'
             for path in [*external, owned]:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
@@ -1481,7 +1482,8 @@ class CoverageLayout(unittest.TestCase):
             with patch.object(fsx, '__file__', str(external[0])), \
                  patch.object(pytest_progress, '__file__', str(external[1])), \
                  patch.object(python_test_runner.diagnostics, '__file__', str(external[2])), \
-                 patch.object(queue_refusal, '__file__', str(external[3])):
+                 patch.object(python_test_runner.actions, '__file__', str(external[3])), \
+                 patch.object(queue_refusal, '__file__', str(external[4])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:
@@ -1509,7 +1511,7 @@ class CoverageLayout(unittest.TestCase):
             before = config.read_bytes()
             package = root / '.getzilla/getzilla'
             package.mkdir(parents=True)
-            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'queue_refusal.py')]
+            owned = [package / name for name in ('fsx.py', 'pytest_progress.py', 'verification_journal.py', 'verification_actions.py', 'queue_refusal.py')]
             for path in owned:
                 path.write_text('value = 1\nif value == 2:\n value = 3\n')
             output = root / 'overlay'
@@ -1517,7 +1519,8 @@ class CoverageLayout(unittest.TestCase):
             with patch.object(fsx, '__file__', str(owned[0])), \
                  patch.object(pytest_progress, '__file__', str(owned[1])), \
                  patch.object(python_test_runner.diagnostics, '__file__', str(owned[2])), \
-                 patch.object(queue_refusal, '__file__', str(owned[3])):
+                 patch.object(python_test_runner.actions, '__file__', str(owned[3])), \
+                 patch.object(queue_refusal, '__file__', str(owned[4])):
                 try:
                     overlay = python_test_runner._application_coverage_config(config, output, root=root)
                 except TypeError:

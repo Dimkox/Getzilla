@@ -282,7 +282,7 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
     from .state import get_active_route, update_route, task_transition
     from .package_status import synchronize_accounting
-    from .verification import _git_range_selection
+    from .git_ranges import _git_range_selection
     route = get_active_route(root)
     if not route:
         raise ValueError('no active route to reconcile')
@@ -328,7 +328,7 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
 def validate_review_plan(root: Path, route: dict) -> list[str]:
     if 'risk_assessment' not in route:
         return []  # legacy records keep their original receipt contract
-    from .verification import _git_range_selection
+    from .git_ranges import _git_range_selection
     expected = assess(root, route, _git_range_selection(root, route, 'pr'))
     if expected['risk_assessment']['status'] != 'complete':
         return ['review plan has incomplete source assessment']

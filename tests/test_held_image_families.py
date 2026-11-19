@@ -6,8 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_image_component_licenses as fixtures
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_licenses as image_licenses
-from getzilla import security_image_producer as producer, security_image_backend as native
+from getzilla import security_image_producer as producer
 from getzilla.security_artifacts import family_evidence, ArtifactError
 
 
@@ -41,7 +42,7 @@ class HeldFamilyTests(fixtures.ImageComponentTests):
                     declared_inventory=inv,
                     images={images[0].reference: images[0]},
                 )
-                with patch.object(native, "_GUARD", guard), patch.object(producer, "_LIVE", state):
+                with patch.object(image_authority, "_GUARD", guard), patch.object(image_authority, "_LIVE", state):
                     yield artifacts, inv, source, run, state
 
         return owned()

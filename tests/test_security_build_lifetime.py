@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend, security_image_producer as producer
 from getzilla.security_build_inputs import _instructions
 
@@ -37,7 +38,7 @@ class BuildLifetimeControls(unittest.TestCase):
         guard = object()
         builder = self.builder(guard)
         with (
-            mock.patch.object(backend, "_GUARD", guard),
+            mock.patch.object(image_authority, "_GUARD", guard),
             mock.patch.object(backend.BuildKit, "_daemon_alive", return_value=True),
             mock.patch.object(backend.BuildKit, "_volume_usage", return_value={}),
             mock.patch("getzilla.architecture_diff._run_capped", return_value=(0, b"", b"")) as port,
@@ -51,7 +52,7 @@ class BuildLifetimeControls(unittest.TestCase):
                 with self.subTest(change=change):
                     builder._in_build = change == "busy"
                     builder.deadline = time.monotonic() - 1 if change == "expired" else time.monotonic() + 3
-                    with mock.patch.object(backend, "_GUARD", object() if change == "foreign" else guard):
+                    with mock.patch.object(image_authority, "_GUARD", object() if change == "foreign" else guard):
                         before = port.call_count
                         with self.assertRaises(backend.BackendUnavailable):
                             builder.prune()
@@ -75,7 +76,7 @@ class BuildLifetimeControls(unittest.TestCase):
         builder.last_prune_usage = dict(before)
         recipe = dict(dockerfile="/owned/Dockerfile", context="/owned", platform="linux/amd64", arguments={})
         with (
-            mock.patch.object(backend, "_GUARD", guard),
+            mock.patch.object(image_authority, "_GUARD", guard),
             mock.patch.object(backend.BuildKit, "_daemon_alive", return_value=True),
             mock.patch.object(backend.BuildKit, "_volume_usage", side_effect=[before, failed]),
             mock.patch("getzilla.architecture_diff._run_capped", return_value=(1, b"", b"owned ENOSPC")),
@@ -103,8 +104,8 @@ class BuildLifetimeControls(unittest.TestCase):
             builder = self.builder(guard)
             info = SimpleNamespace(f_blocks=2097152, f_frsize=4096, f_bfree=3, f_bavail=2)
             with (
-                mock.patch.object(backend, "_GUARD", guard),
-                mock.patch.object(backend, "measured_ci_profile", return_value=True),
+                mock.patch.object(image_authority, "_GUARD", guard),
+                mock.patch.object(image_authority, "measured_ci_profile", return_value=True),
                 mock.patch.object(os, "fstatvfs", return_value=info) as port,
             ):
                 self.assertEqual(
@@ -116,7 +117,7 @@ class BuildLifetimeControls(unittest.TestCase):
                     builder._volume_usage()
                 self.assertEqual(port.call_count, 1)
                 proof["volume_identity"] = (identity.st_dev, identity.st_ino)
-                with mock.patch.object(backend, "measured_ci_profile", return_value=False):
+                with mock.patch.object(image_authority, "measured_ci_profile", return_value=False):
                     with self.assertRaises(backend.BackendUnavailable):
                         builder._volume_usage()
                 self.assertEqual(port.call_count, 1)

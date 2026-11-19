@@ -59,8 +59,13 @@ class SummaryTests(unittest.TestCase):
 
 class RecordingTests(unittest.TestCase):
     def setUp(self) -> None:
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        saved = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, saved)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.fchdir, saved)
         self.root = Path(tmp.name)
         (self.root / '.getzilla').mkdir()
         previous = Path.cwd()

@@ -94,7 +94,7 @@ def _binding(value):
         if value['closure_graphs']['inventory_sha256']!=value['inventory_sha256']:
             _refuse()
     if 'ci_uses' in value:
-        from .security_image_producer import validate_ci_uses
+        from .security_image_authority import validate_ci_uses
         validate_ci_uses(value['ci_uses'],value['source'],value['run'])
         if 'ci_consumer' not in value and (value['ci_uses']['inventory_sha256']!=value['inventory_sha256']
                 or value['ci_uses']['closure_graphs_sha256']!=digest(value.get('closure_graphs'))):

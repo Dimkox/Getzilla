@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_oci as oci, security_image_backend as native
 from getzilla import security_image_producer as producer, security_cli as cli
 
@@ -98,7 +99,7 @@ class BudgetFaultControls(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "charge"
         ]
-        self.assertEqual(len(calls), 12)
+        self.assertEqual(len(calls), 14)
         phases = []
         for call in calls:
             phase = next((value.value for value in call.keywords if value.arg == "phase"), None)
@@ -125,8 +126,8 @@ class BudgetFaultControls(unittest.TestCase):
     def test_live_ci_profile_and_lifetime_never_silently_become_default(self):
         guard = object()
         with (
-            mock.patch.object(native, "_GUARD", guard),
-            mock.patch.object(native, "measured_ci_profile", return_value=True),
+            mock.patch.object(image_authority, "_GUARD", guard),
+            mock.patch.object(image_authority, "measured_ci_profile", return_value=True),
         ):
             profile = dict(oci.active_limits(), images=[], platform="linux/amd64")
             self.assertEqual(profile["max_storage_bytes"], 8 * 1024**3)
@@ -135,10 +136,9 @@ class BudgetFaultControls(unittest.TestCase):
             with self.assertRaises(oci.OCIError) as caught:
                 ledger.charge("storage", 1)
             self.assertEqual(getattr(caught.exception, "detail", {}).get("limit"), 8 * 1024**3)
-            with mock.patch.object(native, "_GUARD", object()), self.assertRaisesRegex(oci.OCIError, "lifetime"):
+            with mock.patch.object(image_authority, "_GUARD", object()), self.assertRaisesRegex(oci.OCIError, "lifetime"):
                 ledger.charge("entries", 1)
-        with mock.patch.object(
-            native, "measured_ci_profile", side_effect=native.BackendUnavailable("owned proof refusal")
+        with mock.patch.object(image_authority, "measured_ci_profile", side_effect=native.BackendUnavailable("owned proof refusal")
         ):
             with self.assertRaises(native.BackendUnavailable):
                 oci.active_limits()

@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import public_security_context
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend, security_image_job as job, security_oci as oci
 from getzilla import security_cli as cli, security_tools as tools, security_image_registry as registry
 from getzilla import security_image_producer as producer
@@ -63,7 +65,7 @@ class CapacityControls(unittest.TestCase):
                     controls=controls,
                 ),
             )
-            stack.enter_context(mock.patch.object(backend, "_GUARD", guard))
+            stack.enter_context(mock.patch.object(image_authority, "_GUARD", guard))
             real_stat = os.stat
             stack.enter_context(
                 mock.patch.object(
@@ -73,9 +75,7 @@ class CapacityControls(unittest.TestCase):
                 )
             )
             stack.enter_context(
-                mock.patch.object(
-                    backend,
-                    "_filesystem",
+                mock.patch.object(image_authority, "_filesystem",
                     side_effect=lambda path: 0x63677270 if str(path) == "/sys/fs/cgroup" else 0x01021994,
                 )
             )
@@ -89,7 +89,7 @@ class CapacityControls(unittest.TestCase):
         profile.update(max_storage_bytes=8 * GIB, max_compressed_bytes=8 * GIB, max_unpacked_bytes=8 * GIB)
         with (
             mock.patch.dict(os.environ, GETZILLA_CI_IMAGE_BYTES=str(8 * GIB)),
-            mock.patch.object(backend, "_GUARD", None),
+            mock.patch.object(image_authority, "_GUARD", None),
         ):
             with self.assertRaises(oci.OCIError):
                 oci._profile(profile)
@@ -119,7 +119,7 @@ class CapacityControls(unittest.TestCase):
             memory = ["MemTotal: 999999999 kB\nMemAvailable: 14680064 kB\n"]
             with (
                 mock.patch.object(job, "_memory_read", read),
-                mock.patch.object(backend, "_filesystem", return_value=0x63677270),
+                mock.patch.object(image_authority, "_filesystem", return_value=0x63677270),
             ):
                 admitted = job._memory_admission(parent)
                 self.assertEqual(admitted["remaining_bytes"], 14 * GIB)
@@ -152,7 +152,7 @@ class CapacityControls(unittest.TestCase):
 
     def test_large_profile_needs_held_physical_proof_not_guard_dictionary(self):
         self.assertTrue(callable(getattr(oci, "active_limits", None)), "need measured active limits")
-        with mock.patch.object(backend, "_GUARD", (Path("/not-a-volume"), object(), [], {"ci_corpus": True})):
+        with mock.patch.object(image_authority, "_GUARD", (Path("/not-a-volume"), object(), [], {"ci_corpus": True})):
             with self.assertRaises(backend.BackendUnavailable):
                 oci.active_limits()
 
@@ -169,14 +169,14 @@ class CapacityControls(unittest.TestCase):
             with self.assertRaises(backend.BackendUnavailable):
                 oci._profile(large)
             capacity.f_blocks += 1
-            with mock.patch.dict(backend._GUARD[3], volume_fd=-1):
+            with mock.patch.dict(image_authority._GUARD[3], volume_fd=-1):
                 with self.assertRaises(backend.BackendUnavailable):
                     oci._profile(large)
             (group / "memory.max").write_text(str(2 * GIB))
             with self.assertRaises(backend.BackendUnavailable):
                 oci._profile(large)
             (group / "memory.max").write_text(str(12 * GIB))
-            with mock.patch.object(backend, "_GUARD", None):
+            with mock.patch.object(image_authority, "_GUARD", None):
                 with self.assertRaises(oci.OCIError):
                     budget.tick()
 
@@ -192,8 +192,8 @@ class CapacityControls(unittest.TestCase):
         )
         with (
             self.physical_model() as (volume, _group, _capacity),
-            mock.patch.object(cli, "validate_selection_authority"),
-            mock.patch.object(cli, "current_context", return_value=None),
+            mock.patch.object(public_security_context, "validate_selection_authority"),
+            mock.patch.object(public_security_context, "current_context", return_value=None),
         ):
             roots = {name: str(volume / name) for name in ("database", "artifacts", "tools")}
             args = ({}, inventory, roots, {}, "3" * 64)
@@ -208,7 +208,7 @@ class CapacityControls(unittest.TestCase):
                 transport=SimpleNamespace(get=mock.Mock(side_effect=AssertionError("network denied")))
             )
             self.assertEqual(collector.limits["max_storage_bytes"], 8 * GIB)
-            with mock.patch.object(backend, "_GUARD", None):
+            with mock.patch.object(image_authority, "_GUARD", None):
                 with self.assertRaises(cli.SecurityDataError):
                     cli.validate_input_profile(declared, *args, now=now)
                 with self.assertRaises(tools.SecurityDataError):
@@ -292,7 +292,7 @@ class CapacityControls(unittest.TestCase):
             self.assertEqual(producer._pipeline_tools({"tools": str(requested)}, volume), volume / "tools")
             with self.assertRaises(backend.BackendUnavailable):
                 producer._pipeline_tools({"tools": str(requested)}, volume / "foreign")
-            with mock.patch.object(backend, "_GUARD", None):
+            with mock.patch.object(image_authority, "_GUARD", None):
                 self.assertEqual(producer._pipeline_tools({"tools": str(requested)}, volume), requested)
 
     def test_ci_image_writer_refuses_external_root_and_parent_link_without_spill(self):

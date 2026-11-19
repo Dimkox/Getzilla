@@ -40,7 +40,7 @@ def install_npm(target: Target, data: bytes, root: Path, node: Path, *, run=exec
 
 def publish_command(root: Path, command: str, arguments: list[str]) -> Path:
     """CAS protects user customizations; this ledger never qualifies upstream code."""
-    from .updater import _replace_bytes
+    from .release_transport import _replace_bytes
     if not re.fullmatch('[a-z][a-z0-9-]*', command) or any('\n' in a or '\r' in a or '\0' in a for a in arguments):
         raise ValueError('unsafe managed command')
     bin_directory = root/'bin'

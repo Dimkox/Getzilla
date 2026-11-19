@@ -9,7 +9,7 @@ import re
 import sys
 from types import CellType, FunctionType, MemberDescriptorType, ModuleType
 
-from .process_limits import OUTPUT_LIMIT
+from .verification_actions import OUTPUT_LIMIT
 
 
 def policy_diagnostic(allowed, reason):

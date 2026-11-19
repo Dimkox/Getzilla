@@ -20,7 +20,7 @@ def _refuse():
 
 
 def scope(parent, index):
-    from .security_image_producer import validate_ci_uses
+    from .security_image_authority import validate_ci_uses
 
     uses = validate_ci_uses(parent["ci_uses"], parent["source"], parent["run"])
     if type(index) is not int or not 0 <= index < len(uses["consumers"]):
@@ -135,7 +135,7 @@ def validate_binding(value):
 
 def seal_evaluation(binding, output, *, _entry=None):
     """Only the evaluator's completed live CI result can discharge build inputs."""
-    from .security_image_producer import _LIVE
+    from .security_image_authority import _LIVE
     if _entry is not _EVALUATION_ENTRY:
         _refuse()
     validate_binding(binding)
@@ -153,7 +153,7 @@ def seal_evaluation(binding, output, *, _entry=None):
 
 
 def validated_evaluation(binding, output):
-    from .security_image_producer import _LIVE
+    from .security_image_authority import _LIVE
     validate_binding(binding)
     row = _LIVE.get('ci_license_evaluations', {}).get(id(output))
     if (type(row) is not tuple or len(row) != 4 or row[0] is not _RESULT_SEAL or row[1] is not output
@@ -173,7 +173,7 @@ def verify_custody(binding, dependency, wheel_files, paths):
 
 def verify_custody_batch(binding, entries):
     """Batch exact final WHEEL/LICENSE/NOTICE reads once per image installation."""
-    from .security_image_producer import ci_member_evidence
+    from .security_image_authority import ci_member_evidence
 
     validate_binding(binding)
     inventory, _ = scope(binding, binding["ci_consumer"])
@@ -286,13 +286,14 @@ def observe_base(builder, base, volume, budget):
     import uuid
     from pathlib import Path
     from . import security_image_backend as native
+    from . import security_image_authority as authority
     from .security_image_producer import _write, _unpack_export
     from .security_oci import active_limits, import_layouts, read_members, canonical, INDEX
 
     if (
         type(builder) is not native.BuildKit
-        or native._GUARD is None
-        or builder.guard is not native._GUARD
+        or authority._GUARD is None
+        or builder.guard is not authority._GUARD
         or type(base) is not str
         or not re.fullmatch(r"[A-Za-z0-9._:/-]+@sha256:[a-f0-9]{64}", base)
     ):

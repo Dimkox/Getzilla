@@ -981,7 +981,7 @@ def select_architecture_comparison_base(
     *,
     _trusted_ranges: Any = None,
 ) -> ArchitectureBaseSelection:
-    from .verification import GitRangeSelection, _git_range_selection, _RANGE_MODES
+    from .git_ranges import GitRangeSelection, _git_range_selection, _RANGE_MODES
     range_mode = 'pr'
     if _trusted_ranges is not None:
         if (type(_trusted_ranges) is not GitRangeSelection
@@ -1032,7 +1032,7 @@ def select_architecture_comparison_base(
             if target.comparison_base_sha not in (target.target_sha, head):
                 raise ArchitectureError('architecture target is not contained by candidate', code='git')
             if target.comparison_base_sha == head and route_base != head:
-                from .receipts import _qualified_architecture_comparison
+                from .git_ranges import _qualified_architecture_comparison
                 qualified = _qualified_architecture_comparison(root, route or {}, head)
                 if qualified is not None:
                     old_base = _git(root, ['merge-base', '--all', qualified.comparison_base_sha, head])
@@ -1998,7 +1998,7 @@ def diff_architecture(
         if type(_trusted_base_selection) is not ArchitectureBaseSelection:
             raise ArchitectureError('architecture base selection is foreign', code='git')
         from .state import get_active_route
-        from .verification import _git_range_selection, _RANGE_MODES
+        from .git_ranges import _git_range_selection, _RANGE_MODES
         if (type(_trusted_base_selection.range_mode) is not str
                 or _trusted_base_selection.range_mode not in {'fast', *_RANGE_MODES}
                 or _trusted_base_selection.candidate_sha != _head_commit(repository)

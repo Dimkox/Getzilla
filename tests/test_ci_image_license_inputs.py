@@ -11,6 +11,7 @@ from tests import test_offline_oci_import as fixtures
 from tests.test_offline_oci_import import LAYER, CONFIG, MANIFEST
 
 
+from getzilla import security_image_authority as image_authority
 class RequestedImageMembersTests(unittest.TestCase):
     setUp = fixtures.OfflineOCIImportTests.setUp
     blob = fixtures.OfflineOCIImportTests.blob
@@ -194,7 +195,6 @@ class CIImageTargetBindingTests(unittest.TestCase):
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
         from unittest.mock import patch
-        from getzilla import security_image_backend as native, security_image_producer as producer
         from getzilla import security_python_target as target
 
         self.target = target
@@ -264,10 +264,10 @@ class CIImageTargetBindingTests(unittest.TestCase):
         )
         self.guard = ("owned-test-namespace", "nonce", [], {})
         self.live = dict(source=self.source, run=self.run, native_guard=self.guard, ci_uses=self.uses)
-        self.patch_native = patch.object(native, "_GUARD", self.guard)
+        self.patch_native = patch.object(image_authority, "_GUARD", self.guard)
         self.patch_native.start()
         self.addCleanup(self.patch_native.stop)
-        self.patch_live = patch.object(producer, "_LIVE", self.live)
+        self.patch_live = patch.object(image_authority, "_LIVE", self.live)
         self.patch_live.start()
         self.addCleanup(self.patch_live.stop)
         self.parent = dict(
@@ -366,7 +366,6 @@ class CIImageTargetBindingTests(unittest.TestCase):
 
     def test_image_binding_rejects_target_pin_image_and_guard_tamper(self):
         import copy
-        from getzilla import security_image_backend as native
 
         api = self.inputs()
         inventory, binding = api.scope(self.parent, 0)
@@ -378,10 +377,10 @@ class CIImageTargetBindingTests(unittest.TestCase):
                 next(iter(altered[field].values()))["hashes"] = ["8" * 64]
             with self.assertRaises(ValueError):
                 self.target._binding(altered)
-        native._GUARD = None
+        image_authority._GUARD = None
         with self.assertRaises(ValueError):
             api.scope(self.parent, 0)
-        native._GUARD = self.guard
+        image_authority._GUARD = self.guard
         altered = copy.deepcopy(self.parent)
         altered["ci_uses"]["consumers"][0]["image"] = "other@sha256:" + "8" * 64
         with self.assertRaises(ValueError):
@@ -437,13 +436,13 @@ class CIImageTargetBindingTests(unittest.TestCase):
         }
         prefix = "usr/local/lib/python3.12/site-packages/"
         actual = {prefix + k: v for k, v in files.items()}
-        with patch("getzilla.security_image_producer.ci_member_evidence", return_value=actual):
+        with patch("getzilla.security_image_authority.ci_member_evidence", return_value=actual):
             proof = api.verify_custody(
                 binding, inventory["dependencies"][0], files, ["owned-1.0.dist-info/licenses/LICENSE"]
             )
         self.assertEqual(len(proof["members"]), 2)
         for altered in [dict(actual, **{prefix + "owned-1.0.dist-info/licenses/LICENSE": b"altered"}), {}]:
-            with patch("getzilla.security_image_producer.ci_member_evidence", return_value=altered):
+            with patch("getzilla.security_image_authority.ci_member_evidence", return_value=altered):
                 with self.assertRaises(ValueError):
                     api.verify_custody(
                         binding, inventory["dependencies"][0], files, ["owned-1.0.dist-info/licenses/LICENSE"]
@@ -498,7 +497,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
         actual = {"usr/local/lib/python3.12/site-packages/owned-1.0.dist-info/WHEEL": wheel_body}
         with (
             tempfile.TemporaryDirectory() as temporary,
-            patch("getzilla.security_image_producer.ci_member_evidence", return_value=actual),
+            patch("getzilla.security_image_authority.ci_member_evidence", return_value=actual),
         ):
             root = Path(temporary)
             (root / "manifest.json").write_text(json.dumps(dict(records=[])))
@@ -697,7 +696,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
         }
         with (
             tempfile.TemporaryDirectory() as temporary,
-            patch("getzilla.security_image_producer.ci_member_evidence", return_value=actual),
+            patch("getzilla.security_image_authority.ci_member_evidence", return_value=actual),
         ):
             artifacts = Path(temporary)
             (artifacts / "manifest.json").write_text(json.dumps(dict(records=[])))
@@ -803,7 +802,7 @@ class CIImageTargetBindingTests(unittest.TestCase):
         original = dict(digest="5" * 64, complete=True, gaps=[], dependencies=[dict(self.dep)], tools=[], images=[])
         with (
             tempfile.TemporaryDirectory() as temporary,
-            patch("getzilla.security_image_producer.ci_member_evidence", return_value=actual),
+            patch("getzilla.security_image_authority.ci_member_evidence", return_value=actual),
         ):
             artifacts = Path(temporary)
             acquire_pypi(

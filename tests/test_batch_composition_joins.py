@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import verification_plan, verification_journal
+from getzilla import verification_plan, verification_journal, verification_policy_source
 # Preload before the pure boundary.
 from getzilla import verification_tool_workspace  # noqa: F401
 from tests import _support
@@ -113,8 +113,8 @@ class PolicySourceJoinTests(unittest.TestCase):
             return SimpleNamespace(filename=filename)
 
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module', side_effect=imported), \
-                mock.patch.object(verification_plan, '_module_source',
+                mock.patch.object(verification_policy_source.importlib, 'import_module', side_effect=imported), \
+                mock.patch.object(verification_policy_source, '_module_source',
                                   side_effect=lambda module: contents.get(module.filename, module.filename.encode())), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             baseline = verification_plan.policy_binding(Path('owned-source-only'))
@@ -139,8 +139,8 @@ class PolicySourceJoinTests(unittest.TestCase):
                      'architecture_diff.py', 'architecture_fitness.py', 'receipts.py', 'review_plan.py',
                      'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py'}
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module', side_effect=imported), \
-                mock.patch.object(verification_plan, '_module_source', side_effect=lambda module: module.filename.encode()), \
+                mock.patch.object(verification_policy_source.importlib, 'import_module', side_effect=imported), \
+                mock.patch.object(verification_policy_source, '_module_source', side_effect=lambda module: module.filename.encode()), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             observed = verification_plan.policy_binding(Path('owned-source-only'))
             self.assertTrue(providers <= set(observed['implementation']))

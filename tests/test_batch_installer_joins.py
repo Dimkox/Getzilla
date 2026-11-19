@@ -7,7 +7,8 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import baseline, updater, verification, verification_plan
+from getzilla import release_transport
+from getzilla import baseline, verification, verification_plan, verification_policy_source
 from tests.test_batch_composition_joins import _Registry, pure
 
 POLICY = ('baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py',
@@ -25,9 +26,9 @@ class InstallerCompositionJoinTests(unittest.TestCase):
                 return SimpleNamespace(is_file=lambda: True, is_symlink=lambda: False,
                     stat=lambda: SimpleNamespace(st_size=len(contents[name])), read_bytes=lambda: contents[name])
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module',
+                mock.patch.object(verification_policy_source.importlib, 'import_module',
                                   side_effect=lambda name, package: SimpleNamespace(filename=name)), \
-                mock.patch.object(verification_plan, '_module_source', side_effect=lambda module: module.filename.encode()), \
+                mock.patch.object(verification_policy_source, '_module_source', side_effect=lambda module: module.filename.encode()), \
                 mock.patch.object(getzilla, 'STACK_DIR', Registry()), pure():
             before = verification_plan.policy_binding(Path('owned-installer'))
             self.assertIn('toolchain.json', before['implementation'])
@@ -40,8 +41,8 @@ class InstallerCompositionJoinTests(unittest.TestCase):
         def imported(name, package):
             return SimpleNamespace(filename=name.removeprefix('.')+'.py')
         with mock.patch.object(verification_plan, '_POLICY_PATHS', ()), \
-                mock.patch.object(verification_plan.importlib, 'import_module', side_effect=imported), \
-                mock.patch.object(verification_plan, '_module_source',
+                mock.patch.object(verification_policy_source.importlib, 'import_module', side_effect=imported), \
+                mock.patch.object(verification_policy_source, '_module_source',
                                   side_effect=lambda module: content.get(module.filename, module.filename.encode())), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             initial = verification_plan.policy_binding(Path('owned-installer'))
@@ -76,7 +77,7 @@ class InstallerCompositionJoinTests(unittest.TestCase):
                 mock.patch.object(Path, 'is_file', return_value=True), \
                 mock.patch.object(baseline, 'detect_agent', return_value='codex'), \
                 mock.patch.object(baseline, 'inspect', return_value=status), \
-                mock.patch.object(updater, 'home_dir', return_value=Path('owned-home')), pure():
+                mock.patch.object(release_transport, 'home_dir', return_value=Path('owned-home')), pure():
             result, metadata = verification._workflow_baseline_check(Path('owned-project'), 'pr')
             text = verification._vulnerability_detail({'id':'OSV-owned', 'aliases':['GHSA-owned'],
                 'raw_aliases':['provider\x1b[31mtext'], 'package':'owned', 'version':'1'})

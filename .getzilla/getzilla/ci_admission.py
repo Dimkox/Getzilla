@@ -323,7 +323,7 @@ def _git(root, *args):
 def _reobserve_scope(root,directory,record,run_id,attempt):
     from .security_license_scope import declaration_expectation
     from .ci_security_context import selected_run_environment
-    from .security_cli import ci_run_context
+    from .public_security_context import ci_run_context
     override=os.environ.get('GETZILLA_OPERATOR_CHECKER','')
     checker=override or os.environ.get('GETZILLA_BASE_SHA','')
     identity=record['checker']
@@ -402,7 +402,7 @@ def security_envelope(root, checker, selected_ref, selection, report_path, outpu
     if report.get('status')=='pass-for-selected-run':
         try:
             from .security_license_scope import declaration_expectation
-            from .security_cli import ci_run_context
+            from .public_security_context import ci_run_context
             env,_=selected_run_environment(os.environ,source['head'])
             raw_inputs=_bytes(report_path.parent/'security-run-inputs.json')
             if len(raw_inputs)>2*1024*1024:

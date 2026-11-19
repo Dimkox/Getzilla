@@ -23,10 +23,10 @@ from pathlib import Path
 
 from . import verification_dispositions as dispositions
 from .python_test_runner import execute
-from .verification_journal import retain_stop, stop_details, updated_stop
+from .verification_actions import retain_stop, stop_details, updated_stop
 from .security_acquisition import MAX_DOWNLOAD, TRIVY_ARCHIVE_SHA256, TRIVY_VERSION, trivy_binary
 from .security_data import MAX_AGE_SECONDS, SecurityDataError
-from .updater import OPENGREP_ASSETS
+from .release_transport import OPENGREP_ASSETS
 
 TRUSTED_ROOT = Path(__file__).resolve().parents[2]
 TRIVY_DB_URL = 'ghcr.io/aquasecurity/trivy-db:2'

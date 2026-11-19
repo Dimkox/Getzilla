@@ -11,6 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend
 from getzilla import security_image_producer as producer
 from getzilla.security_image_registry import RegistryError
@@ -68,7 +69,7 @@ class FaultControls(unittest.TestCase):
                 builder.guard, builder.client, builder.address = guard, 'owned-buildctl', 'unix:///owned/private.sock'
                 builder.deadline = time.monotonic() + 5
                 builder.env = {'PATH': os.defpath, 'OWNED_SECRET': 'DO_NOT_EXPORT_ENV'}
-                with mock.patch.object(backend, '_GUARD', guard), \
+                with mock.patch.object(image_authority, '_GUARD', guard), \
                      mock.patch.object(backend.BuildKit, '_daemon_alive', return_value=True), \
                      mock.patch('getzilla.architecture_diff._run_capped', return_value=(1, b'', stderr)) as command, \
                      mock.patch('subprocess.Popen', side_effect=AssertionError('actual process denied')):

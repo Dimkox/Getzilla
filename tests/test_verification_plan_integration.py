@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from getzilla import verification
+from getzilla import verification, verification_scope
 
 
 class OwnedReceiptFixtureTests(unittest.TestCase):
@@ -228,8 +228,8 @@ class RequiredDispatchTests(unittest.TestCase):
             with contextlib.ExitStack() as patches:
                 patches.enter_context(mock.patch.dict('os.environ', {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}, clear=True))
                 for module, name, value in ((api, 'tree_fingerprint', 'a' * 64),
-                        (verification, '_existing_quality_paths', []), (verification, 'python_check_selection', (True, True)),
-                        (verification, '_semgrep_config', None), (verification, '_trivy_config_present', False)):
+                        (verification_scope, '_existing_quality_paths', []), (verification_scope, 'python_check_selection', (True, True)),
+                        (verification_scope, '_semgrep_config', None), (verification_scope, '_trivy_config_present', False)):
                     patches.enter_context(mock.patch.object(module, name, return_value=value))
                 patches.enter_context(mock.patch('getzilla.stacks.planned_stack_checks', return_value=[]))
                 rows = api._native_obligations(root, 'pr', {}, {}, files=[], profiles=['base'], bases=[], documents=None)
@@ -318,7 +318,7 @@ class RequiredDispatchTests(unittest.TestCase):
             self.assertEqual(result[-1].name, 'factory-postgres-exit')
 
     def test_shared_selectors_compile_without_commands_or_installation(self):
-        self.assertTrue(callable(getattr(verification, 'python_check_selection', None)))
+        self.assertTrue(callable(getattr(verification_scope, 'python_check_selection', None)))
         self.assertTrue(callable(getattr(verification, 'node_check_selection', None)))
         self.assertTrue(callable(getattr(verification, 'composer_check_selection', None)))
         with tempfile.TemporaryDirectory(prefix='owned-selector-plan-') as directory:

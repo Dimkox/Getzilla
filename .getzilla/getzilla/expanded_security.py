@@ -107,7 +107,7 @@ def _source_descriptor(root: Path, database: Path, source_id: str, now: datetime
 
 
 def _selection_authority(root, env):
-    from .security_cli import source_binding, ci_run_context
+    from .public_security_context import source_binding, ci_run_context
     from .security_tools import TRUSTED_ROOT
     from .public_security_context import current_context, validate_context
     with tempfile.TemporaryDirectory(prefix='selection-binding-', dir=Path(root).parent) as directory:
@@ -122,7 +122,7 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
     from .security_artifacts import MAX_INDEX_BYTES, read_file
     from .security_data import _json
     from .security_oci import source_bindings, validate_selection
-    from .security_cli import validate_selection_authority, validate_input_profile
+    from .public_security_context import validate_selection_authority, validate_input_profile
     env = os.environ if environ is None else environ
     selected = env.get('GETZILLA_SECURITY_IMAGE_ARTIFACTS')
     declaration = env.get('GETZILLA_SECURITY_IMAGE_SELECTION')
@@ -161,7 +161,7 @@ def selected_inventory(root: Path, *, environ: dict[str, str] | None = None, now
         factory_inputs=factory_declaration(root,inventory,load_policy(TRUSTED_ROOT),scratch=Path(roots['tools']))
     package_ci_uses=None
     if 'python_ci_uses' in profile:
-        from .security_image_producer import ci_use_observations
+        from .security_image_authority import ci_use_observations
         package_ci_uses=ci_use_observations(root,inventory,before,run,package_graphs)
     validate_input_profile(profile, before, inventory, roots, run, _policy_digest(TRUSTED_ROOT),
                            now=now, image_artifacts=catalog, image_selection=selection,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
@@ -182,7 +182,7 @@ def current_inventory(root: Path, *, environ=None, now=None) -> dict[str, Any]:
     selection = read_image_selection(Path(path)) if path else None
     if selection is None:
         return collect_inventory(root)
-    from .security_cli import validate_selection_authority
+    from .public_security_context import validate_selection_authority
     before, run = _selection_authority(root, env)
     validate_selection_authority(before, run, selection, now=_clock(now))
     result = declared_inventory(root, selection)

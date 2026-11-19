@@ -571,7 +571,7 @@ def set_active_route(root: Path, route: dict[str, Any]) -> None:
             raise ActiveChangeConflict(binding[0], binding[1], route['route_id'])
     _commit_route(root, route, expected=existing)
     if existing is None:
-        from .route_metrics import record_route
+        from .metrics_journal import record_route
         record_route(root, route)
 
 
@@ -851,7 +851,7 @@ def add_approval(
             approvals = []
         approvals.append(approval)
         dump_json(approvals_path(root), approvals[-200:])
-    from .route_metrics import record
+    from .metrics_journal import record
     record(root, 'grant', approval.get('route_id'), event_id='grant:' + approval['id'], scope=approval['scope'])
     return approval
 

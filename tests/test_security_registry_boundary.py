@@ -17,6 +17,7 @@ import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend, security_image_registry as registry
 from getzilla import security_image_producer as producer
 
@@ -149,7 +150,7 @@ class RegistryBoundaryControls(unittest.TestCase):
             }
             builder = SimpleNamespace(client=sys.executable, socket=endpoint, deadline=time.monotonic() + 2)
             with (
-                mock.patch.object(backend, "_GUARD", (volume, object(), [])),
+                mock.patch.object(image_authority, "_GUARD", (volume, object(), [])),
                 mock.patch.object(tempfile, "tempdir", str(volume)),
                 mock.patch.object(producer.stat, "S_ISSOCK", return_value=True),
                 mock.patch.object(registry.BoundedHTTP, "bootstrap") as bootstrap,
@@ -165,7 +166,7 @@ class RegistryBoundaryControls(unittest.TestCase):
             volume = Path(directory)
             request = dict(tools=str(volume / "tools"))
             with (
-                mock.patch.object(backend, "_GUARD", (volume, object(), [])),
+                mock.patch.object(image_authority, "_GUARD", (volume, object(), [])),
                 mock.patch("builtins.open", side_effect=PermissionError(13, "PRIVATE_PATH_MARKER")),
                 self.assertRaises(backend.BackendUnavailable) as error,
             ):

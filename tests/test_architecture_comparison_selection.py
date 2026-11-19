@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 from getzilla.architecture_diff import select_architecture_comparison_base
 from getzilla.architecture_diff import ArchitectureError, diff_architecture
-from getzilla import architecture_diff
+from getzilla import architecture_diff, verification_policy_source
 from getzilla.architecture import load_architecture
 from getzilla.architecture_fitness import _change_separation
 from getzilla import receipts, verification_plan
@@ -401,7 +401,7 @@ class DerivedComparisonTests(unittest.TestCase):
             module.__loader__ = module.__spec__.loader
             return module
         library = SimpleNamespace(import_module=owned, machinery=importlib.machinery, util=importlib.util)
-        patches.enter_context(patch.object(verification_plan, 'importlib', library))
+        patches.enter_context(patch.object(verification_policy_source, 'importlib', library))
         patches.enter_context(patch.object(getzilla, 'STACK_DIR', sdk))
         self.policy_sdk = sdk
         plan = verification_plan.current_required_plan(self.root, mode='pr')
@@ -828,7 +828,7 @@ class OwnedPolicyProviderTests(unittest.TestCase):
         provider = sdk / 'process_limits.py'
         provider.write_text('OUTPUT_LIMIT = 1024\n')
         library = SimpleNamespace(import_module=owned, machinery=importlib.machinery, util=importlib.util)
-        with patch.object(verification_plan, 'importlib', library), patch.object(getzilla, 'STACK_DIR', sdk):
+        with patch.object(verification_policy_source, 'importlib', library), patch.object(getzilla, 'STACK_DIR', sdk):
             first = verification_plan.policy_binding(root)
             provider.write_text('OUTPUT_LIMIT = 512\n')
             second = verification_plan.policy_binding(root)

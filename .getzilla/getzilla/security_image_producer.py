@@ -20,136 +20,21 @@ import tempfile
 import time
 
 from .security_artifacts import read_file
+from . import security_image_authority as authority
+from .security_image_authority import (  # noqa: F401 compatibility function/seal aliases
+    _LICENSE_ENTRY,
+    _MEMBER_SEAL,
+    ci_member_evidence,
+    ci_use_observations,
+    require_builds,
+    validate_ci_uses,
+)
 from .security_image_backend import BuildKit, _ACTIVE, BackendUnavailable, _diagnostic
 from .security_image_registry import Registry, RegistryError
 from .security_inventory import collect_inventory, declared_inventory
 from .security_oci import LIMITS, active_limits, INDEX, MANIFEST, OCIError, canonical, document, _descriptor, import_layouts
 
-_LIVE = None
-_LICENSE_ENTRY = object()
 _PHASE = 'opening'
-_MEMBER_SEAL = object()
-
-
-def require_builds(inventory, source, run):
-    builds = inventory.get('builds', [])
-    if not builds:
-        return
-    if _LIVE is None or _LIVE['source'] != source or _LIVE['run'] != run:
-        raise BackendUnavailable('current source builds require the live owned producer')
-    expected = {row['build_sha256'] for row in builds}
-    if expected != set(_LIVE['builds']):
-        raise BackendUnavailable('current build recipes differ from actual completed builds')
-    for row in builds:
-        matches = [use for use in inventory['images'] if use['manifest'] == row['manifest']
-                   and use['line'] == row['line'] and use['source_reference'] == row['source_reference']]
-        if len(matches) != 1 or matches[0]['reference'] != _LIVE['builds'][row['build_sha256']]:
-            raise BackendUnavailable('current build output differs from actual completed graph')
-
-
-def ci_use_observations(root,inventory,source,run,graphs):
-    """Current owned CI consumers only; no restored JSON or host-to-image target credit."""
-    if _LIVE is None:
-        return None
-    from . import security_image_backend as native
-    from .security_cli import validate_selection_authority
-    from .security_python_target import digest,_subject
-    if native._GUARD is None or _LIVE.get('native_guard') is not native._GUARD:
-        raise BackendUnavailable('CI use observation needs the live owned namespace')
-    validate_selection_authority(source,run)
-    require_builds(inventory,source,run)
-    if inventory.get('builds')!=_LIVE.get('build_inputs'):
-        raise BackendUnavailable('CI consumer graph differs from actual completed build inputs')
-    consumers=[]
-    for row in sorted(inventory.get('builds',[]),key=lambda item:(item['dockerfile'],item['build_sha256'])):
-        recipe=row['dockerfile']
-        from .security_python_target import ci_install_context
-        context = ci_install_context(root, recipe)
-        if context is None:
-            continue
-        requirements = context['requirements']
-        installed = context['install_requirements']
-        proof=graphs.get('evidence',{})
-        expected=graphs.get('graphs',{}).get('trust-ci/pyproject.toml#runtime',[])
-        if (context['graph'] not in expected or recipe not in proof
-                or any(proof.get(path) != sha for path, sha in installed.items())):
-            continue
-        if hashlib.sha256(read_file(root,recipe,4*1024*1024)).hexdigest()!=proof[recipe]:
-            raise BackendUnavailable('current CI consumer source changed')
-        consumer = dict(recipe=recipe,recipe_sha256=row['recipe_sha256'],build_sha256=row['build_sha256'],
-            image=_LIVE['builds'][row['build_sha256']],requirements=requirements,
-            requirements_sha256=proof[requirements],install_requirements=installed,distribution='internal',purpose='isolated-public-ci',
-            image_target_observed=False)
-        observed = _LIVE.get('base_targets',{}).get(row['recipe_sha256'])
-        if observed is not None:
-            from .security_python_target import source_pins
-            consumer.update(image_target_observed=True,base=observed['base'],target=observed['target'],
-                supported_tags=observed['supported_tags'],site_packages=observed['site_packages'],
-                base_observation={key:observed[key] for key in ('observer_manifest','observer_config','observer_recipe_sha256')
-                                  if key in observed},
-                source_pins=source_pins(root,inventory,observed['target']),
-                dependencies=[dict(dep) for dep in inventory['dependencies'] if dep.get('ecosystem')=='PyPI'
-                    and (dep.get('manifest') in installed or dep.get('manifest')=='trust-ci/pyproject.toml'
-                         and (dep.get('usage') in {'runtime','build'} or dep.get('usage')=='optional'
-                              and requirements=='trust-ci/requirements-test.txt'))])
-        consumers.append(consumer)
-    subjects={}
-    for dep in inventory['dependencies']:
-        if dep.get('ecosystem')!='PyPI':
-            continue
-        indexes=[]
-        for index,consumer in enumerate(consumers):
-            manifest=dep['manifest']
-            direct=manifest in consumer['install_requirements']
-            project=manifest=='trust-ci/pyproject.toml' and (
-                dep['usage'] in {'runtime','build'} or dep['usage']=='optional'
-                and consumer['requirements']=='trust-ci/requirements-test.txt')
-            if direct or project:
-                indexes.append(index)
-        if indexes:
-            subjects[digest(_subject(dep))]=indexes
-    value=dict(schema_version=1,source=source,run=run,inventory_sha256=inventory['digest'],
-        closure_graphs_sha256=digest(graphs),subjects=subjects,consumers=consumers,
-        assurance='observed CI use only; original production/customer uses and image targets remain separate')
-    _LIVE['ci_uses']=json.loads(json.dumps(value))
-    return json.loads(json.dumps(value))
-
-
-def validate_ci_uses(value,source,run):
-    from . import security_image_backend as native
-    if (_LIVE is None or native._GUARD is None or _LIVE.get('native_guard') is not native._GUARD
-            or _LIVE['source']!=source or _LIVE['run']!=run or _LIVE.get('ci_uses')!=value):
-        raise BackendUnavailable('current CI use observation cannot be restored from declarations')
-    return json.loads(json.dumps(value))
-
-
-def ci_member_evidence(value,source,run,index,paths):
-    from .security_oci import read_members, scanner_identity
-    uses=validate_ci_uses(value,source,run)
-    if type(index) is not int or not 0<=index<len(uses['consumers']):
-        raise BackendUnavailable('CI installation consumer is missing')
-    consumer=uses['consumers'][index]
-    image=_LIVE.get('images',{}).get(consumer['image'])
-    if image is None or image.reference!=consumer['image'] or consumer.get('image_target_observed') is not True:
-        raise BackendUnavailable('CI installation image proof is missing')
-    facts=_LIVE.setdefault('member_facts',{})
-    fact=facts.get(consumer['image'])
-    valid=type(fact) is tuple and len(fact)==3 and fact[0] is _MEMBER_SEAL and fact[1] is image
-    previous=fact[2] if valid else {}
-    # Reuse decoded data only after fresh hashes of the entire actual graph.
-    # No saved JSON can produce the seal or the live imported image object.
-    if valid:
-        scanner_identity(dict(Metadata=dict(ImageID=image.config_digest)),image)
-    missing=[path for path in paths if path not in previous]
-    if missing:
-        current=read_members(image,missing)
-        retained=_LIVE.get('member_fact_bytes',0)+sum(len(body) for body in current.values())
-        if retained>16*1024*1024:
-            raise BackendUnavailable('CI installation evidence exceeds retained byte bound')
-        previous={**previous,**current}
-        facts[consumer['image']]=(_MEMBER_SEAL,image,previous)
-        _LIVE['member_fact_bytes']=retained
-    return {path:previous[path] for path in paths}
 
 
 def _write(root, relative, raw):
@@ -168,17 +53,16 @@ def _write(root, relative, raw):
 
 def _ci_write(root, relative, raw):
     """Image outputs stay below held native volume, including through parents."""
-    from . import security_image_backend as native
     from .security_oci import _Root
     root, relative = Path(root), Path(relative)
-    if (not root.is_relative_to(native._GUARD[0]) or relative.is_absolute()
+    if (not root.is_relative_to(authority._GUARD[0]) or relative.is_absolute()
             or not relative.parts or '..' in relative.parts or len(relative.parts) > 64):
         raise BackendUnavailable('CI image output leaves its held volume')
     held = _Root(root)
     fd = None
     try:
         fd = os.dup(held.fd)
-        if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+        if os.fstat(fd).st_dev != os.fstat(authority._GUARD[3]['volume_fd']).st_dev:
             raise BackendUnavailable('CI image output filesystem differs')
         for name in relative.parts[:-1]:
             try:
@@ -188,7 +72,7 @@ def _ci_write(root, relative, raw):
             child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
             os.close(fd)
             fd = child
-            if os.fstat(fd).st_dev != os.fstat(native._GUARD[3]['volume_fd']).st_dev:
+            if os.fstat(fd).st_dev != os.fstat(authority._GUARD[3]['volume_fd']).st_dev:
                 raise BackendUnavailable('CI image output parent leaves its bounded filesystem')
         try:
             output = os.open(relative.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -304,8 +188,7 @@ def _choice_name(expression):
 @contextmanager
 def produce(root, source, run, volume, builder):
     """Acquire actual source graphs and build four recipes covering five uses."""
-    global _LIVE
-    if _LIVE is not None or type(builder) is not BuildKit:
+    if authority._LIVE is not None or type(builder) is not BuildKit:
         raise BackendUnavailable('nested build producer is forbidden')
     root, volume = Path(root), Path(volume)
     deadline = time.monotonic() + LIMITS['deadline_seconds']
@@ -396,12 +279,11 @@ def produce(root, source, run, volume, builder):
     with ExitStack() as verified:
         imported=verified.enter_context(import_layouts(catalog, inventory, profile, volume,_budget=shared_budget))
         from .public_security_context import selection_document, project_catalog
-        from .security_cli import _clock
+        from .public_security_context import _clock
         selection = selection_document(inventory, source, run, _clock().isoformat())
         declared = declared_inventory(root, selection)
         catalog = project_catalog(catalog, declared['digest'])
-        from . import security_image_backend as native
-        _LIVE = dict(source=source, run=run, builds=completed,native_guard=native._GUARD,
+        authority._LIVE = dict(source=source, run=run, builds=completed,native_guard=authority._GUARD,
             build_inputs=json.loads(json.dumps(declared['builds'])),base_targets=base_targets,
             root=root,declared_inventory=json.loads(json.dumps(declared)),
             images={image.reference:image for image in imported})
@@ -409,8 +291,7 @@ def produce(root, source, run, volume, builder):
             require_builds(declared, source, run)
             yield selection, catalog
         finally:
-            _LIVE = None
-
+            authority._LIVE = None
 
 def _event(stage):
     global _PHASE
@@ -421,8 +302,7 @@ def _event(stage):
 
 def _pipeline_tools(request, volume):
     if active_limits()['max_storage_bytes'] > LIMITS['max_storage_bytes']:
-        from . import security_image_backend as native
-        if Path(volume) != native._GUARD[0]:
+        if Path(volume) != authority._GUARD[0]:
             raise BackendUnavailable('CI tools root differs from held image volume')
         return Path(volume) / 'tools'
     return Path(request['tools'])
@@ -435,12 +315,11 @@ def _postdrop_preflight(request, volume, builder):
     import _ssl
     import _socket
     import zlib
-    from . import security_image_backend as native
     from .security_image_registry import BoundedHTTP, RegistryError
     check = 'postdrop-volume'
     try:
         volume = Path(volume)
-        if native._GUARD is None or native._GUARD[0] != volume or os.geteuid() == 0:
+        if authority._GUARD is None or authority._GUARD[0] != volume or os.geteuid() == 0:
             raise ValueError('owned dropped controller required')
         tools = _pipeline_tools(request, volume)
         check = 'postdrop-resolver'
@@ -575,7 +454,7 @@ def _worker():
                 control_readback={name: (Path('/sys/fs/cgroup') / name).read_text(encoding='utf-8').strip()
                                   for name in ('memory.max', 'memory.swap.max', 'pids.max', 'cpu.max')},
                 owned_child_created=child > 1,
-                cgroup_root_identity=native._GUARD[3],
+                cgroup_root_identity=authority._GUARD[3],
                 ordinary_file_verified=read_file(volume, 'owned-control', 4096) == b'owned kernel control\n'))
         keys = {'kind', 'root', 'database', 'artifacts', 'tools', 'profile', 'preparation', 'report', 'pins', 'run', 'uid', 'gid'}
         if (set(request) != keys or request['kind'] != 'pipeline' or type(request['uid']) is not int
@@ -730,7 +609,7 @@ def _offline_tool_control(request, volume):
 def _fault(error):
     kind = type(error)
     from .security_oci import bound_fault
-    from .security_cli import _preparation_fault
+    from .public_security_context import _preparation_fault
     detail = dict(error.detail) if kind in (BackendUnavailable, RegistryError) else bound_fault(error)
     detail.pop('preparation', None)
     preparation = _preparation_fault(error)

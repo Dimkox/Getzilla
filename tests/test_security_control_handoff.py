@@ -16,6 +16,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_image_backend as backend
 
 NAMES = ("memory.max", "memory.swap.max", "pids.max", "cgroup.procs", "cpu.max")
@@ -170,11 +171,9 @@ class RootControlHandoffTests(unittest.TestCase):
                         os.setuid(uid)
                         real_stat = os.stat
                         with ExitStack() as stack:
-                            stack.enter_context(mock.patch.object(backend, "_GUARD", guard))
+                            stack.enter_context(mock.patch.object(image_authority, "_GUARD", guard))
                             stack.enter_context(
-                                mock.patch.object(
-                                    backend,
-                                    "_filesystem",
+                                mock.patch.object(image_authority, "_filesystem",
                                     side_effect=lambda p: 0x63677270 if str(p) == "/sys/fs/cgroup" else 0x01021994,
                                 )
                             )

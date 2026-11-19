@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
+from getzilla import security_image_authority as image_authority
 from getzilla import security_license_exceptions as ex
-from getzilla import security_image_producer as producer
-from getzilla import security_image_backend as native
+from getzilla import security_license_supplements  # noqa: F401 preload before owned no-I/O control
 from getzilla import security_ci_inputs as ci
 
 
@@ -82,17 +82,15 @@ class InternalProfiles(unittest.TestCase):
         )
         guard = object()
         live = dict(native_guard=guard, source=binding["source"], run=binding["run"])
-        self.enterContext(patch.object(native, "_GUARD", guard))
-        self.enterContext(patch.object(producer, "_LIVE", live))
+        self.enterContext(patch.object(image_authority, "_GUARD", guard))
+        self.enterContext(patch.object(image_authority, "_LIVE", live))
         self.enterContext(patch.object(ci, "validate_binding", lambda b: b))
         self.enterContext(patch.object(ex, "scope_for", lambda *a: values[-1]))
         gpl = (ROOT / ".getzilla/config/license-exception-inputs/factory-source-delivery-v1/GPL-3.0.txt").read_bytes()
         mpl = (ROOT / ".getzilla/config/license-exception-inputs/ci-internal-v1/MPL-2.0-debian.txt").read_bytes()
         self.bodies = {"usr/share/common-licenses/GPL-3": gpl, "usr/share/common-licenses/MPL-2.0": mpl}
         self.enterContext(
-            patch.object(
-                producer,
-                "ci_member_evidence",
+            patch.object(image_authority, "ci_member_evidence",
                 lambda uses, source, run, index, paths: {p: self.bodies[p] for p in paths},
             )
         )
@@ -150,7 +148,7 @@ class InternalProfiles(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify(v, proof)
         self.bodies["usr/share/common-licenses/GPL-3"] = original
-        producer._LIVE["run"] = {"run_id": "other"}
+        image_authority._LIVE["run"] = {"run_id": "other"}
         with self.assertRaises(ValueError):
             self.verify(v, proof)
 
