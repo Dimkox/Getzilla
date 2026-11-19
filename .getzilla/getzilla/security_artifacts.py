@@ -27,8 +27,79 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
 from . import manifest as file_manifest
-from .security_osv_snapshot import VulnerabilityError, _pypi_key, _semver_key, normalize_name
+from typing import Any
 from .security_data import _json
+
+class VulnerabilityError(RuntimeError):
+    pass
+
+
+# Preserve the existing public exception/pickle lookup through the exact alias.
+VulnerabilityError.__module__ = __package__ + ".security_osv_snapshot"
+
+
+def normalize_name(ecosystem: str, name: str) -> str:
+    if ecosystem == 'PyPI':
+        return re.sub(r'[-_.]+', '-', name).lower()
+    if ecosystem in {'Packagist', 'npm'}:
+        return name.lower()
+    return name
+
+
+def _semver_key(version: str) -> tuple[Any, ...]:
+    """SemVer 2.0.0 precedence; build metadata never changes precedence."""
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported SemVer version')
+    match = re.fullmatch(
+        r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+        r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+        r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', version)
+    if match is None:
+        raise VulnerabilityError(f'unsupported SemVer version: {version!r}')
+    pre = []
+    if match[4] is not None:
+        for part in match[4].split('.'):
+            if part.isdigit():
+                if len(part) > 1 and part[0] == '0':
+                    raise VulnerabilityError(f'unsupported SemVer prerelease: {version!r}')
+                pre.append((0, int(part)))
+            else:
+                pre.append((1, part))
+    return (int(match[1]), int(match[2]), int(match[3]),
+            (0, tuple(pre)) if match[4] is not None else (1, ()))
+
+
+def _pypi_key(version: str) -> tuple[Any, ...]:
+    """Qualified canonical PEP 440 subset, not a full PEP 440 normalizer.
+
+    Supports [epoch!]release[a|b|rcN][.postN][.devN][+local]. Alternative
+    suffix spellings/separators and leading v/whitespace are refused.
+    """
+    if not isinstance(version, str) or len(version) > 512:
+        raise VulnerabilityError('unsupported PyPI version (canonical PEP 440 subset)')
+    match = re.fullmatch(
+        r'(?:(?P<epoch>[0-9]+)!)?(?P<release>[0-9]+(?:\.[0-9]+)*)'
+        r'(?:(?P<pre>a|b|rc)(?P<pre_n>[0-9]+))?'
+        r'(?:\.post(?P<post>[0-9]+))?(?:\.dev(?P<dev>[0-9]+))?'
+        r'(?:\+(?P<local>[a-z0-9]+(?:\.[a-z0-9]+)*))?', version.lower())
+    if match is None:
+        raise VulnerabilityError(f'unsupported PyPI version (canonical PEP 440 subset): {version!r}')
+    release = [int(part) for part in match['release'].split('.')]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    if match['pre']:
+        pre = (0, {'a': 0, 'b': 1, 'rc': 2}[match['pre']], int(match['pre_n']))
+    elif match['dev'] is not None and match['post'] is None:
+        pre = (-1, 0, 0)
+    else:
+        pre = (1, 0, 0)
+    post = (-1, 0) if match['post'] is None else (0, int(match['post']))
+    dev = (1, 0) if match['dev'] is None else (0, int(match['dev']))
+    local = (0, ()) if match['local'] is None else (1, tuple(
+        (1, int(part)) if part.isdigit() else (0, part) for part in match['local'].split('.')))
+    return int(match['epoch'] or 0), tuple(release), pre, post, dev, local
+
+
 
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 MAX_INDEX_BYTES = 16 * 1024 * 1024

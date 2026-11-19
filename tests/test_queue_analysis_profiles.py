@@ -200,7 +200,7 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             before = policy_binding(root)
-            for name in ('queue_source_resolution', 'queue_source_scan', 'cpu_budget', 'architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
+            for name in ('security_artifacts', 'security_osv_snapshot', 'queue_source_resolution', 'queue_source_scan', 'cpu_budget', 'architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
                          'security_license_source_conditions', 'security_license_go_term_variants'):
                 with self.subTest(owner=name):
                     module = importlib.import_module('getzilla.' + name)
@@ -390,3 +390,15 @@ class QueueAnalysisProfileTests(unittest.TestCase):
                         after = policy_binding(root)
                     self.assertEqual(after['implementation'][label], hashlib.sha256(changed).hexdigest())
                     self.assertNotEqual(before['digest'], after['digest'])
+
+    def test_artifact_identity_keys_do_not_import_vulnerability_orchestration(self):
+        from getzilla import security_artifacts as artifacts, security_osv_snapshot as osv
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_artifacts.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_osv_snapshot'
+                             for node in ast.walk(tree)))
+        for name in ('VulnerabilityError', 'normalize_name', '_pypi_key', '_semver_key'):
+            self.assertIs(getattr(artifacts, name), getattr(osv, name))
+        self.assertEqual(artifacts.VulnerabilityError.__module__, 'getzilla.security_osv_snapshot')
+        self.assertEqual(artifacts.package_key('PyPI', 'Owned_Package', '1.0.0'),
+                         artifacts.package_key('PyPI', 'owned-package', '1'))
+        self.assertLess(artifacts._semver_key('1.0.0-alpha.1'), artifacts._semver_key('1.0.0'))
