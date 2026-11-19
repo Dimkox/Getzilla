@@ -25,6 +25,9 @@ from .security_artifacts import (
 
 MAGIC = b"\xff Go buildinf:"
 H1 = re.compile(r"h1:[A-Za-z0-9+/]{43}=")
+# This Go-only envelope admits the observed 10,877-member wazero source ZIP.
+# The generic package/OCI/Action archive member limit stays unchanged.
+GO_MAX_MEMBERS = 16384
 
 
 def fail(code, message):
@@ -239,7 +242,7 @@ def verify_module_proof(proof, path, version, checksum):
         or (proof["module"], proof["version"], proof["h1"]) != (path, version, checksum)
         or not H1.fullmatch(checksum)
         or not isinstance(proof["files"], dict)
-        or not 0 < len(proof["files"]) <= MAX_MEMBERS
+        or not 0 < len(proof["files"]) <= GO_MAX_MEMBERS
         or not isinstance(proof["terms"], dict)
         or any(not name.startswith(prefix) for name in proof["files"])
         or _h1(proof["files"]) != checksum
@@ -626,7 +629,7 @@ def _go_zip(payload, prefix):
         disk
         or other
         or on_disk != count
-        or count > MAX_MEMBERS
+        or count > GO_MAX_MEMBERS
         or central_size > MAX_INDEX_BYTES
         or end + 22 + comment != len(payload)
     ):
@@ -980,8 +983,10 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
         source = saved(proof["modules"][key])
         terms = verify_module_proof(source, module["path"], module["version"], module["h1"])
         origin_data = source.get("origin")
+
         def escaped(text):
             return "".join("!" + c.lower() if c.isupper() else c for c in text)
+
         source_url = (
             "https://proxy.golang.org/" + escaped(module["path"]) + "/@v/" + escaped(module["version"]) + ".zip"
         )
@@ -1047,6 +1052,9 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
             "subject": subject,
             "context": record["context"],
             "proofs": evidence,
+            "go_module_sources": [
+                {"module": key, "h1": module["h1"], "uses": module["uses"]} for key, module in sorted(required.items())
+            ],
             "go_module_assurance": "actual embedded/source-lock module identities; standard Go runtime included; no reproducible compiler or host OS/kernel claim",
         },
         "bound_bytes": len(payload) + sum(item["bytes"] for item in evidence),
