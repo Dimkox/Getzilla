@@ -29,6 +29,45 @@ class CurrentWorkflowTests(unittest.TestCase):
                                                (('.agents/skills/inert/SKILL.md', body, 0o644),))
         return {'superpowers': (payload, {'version': version, 'commit': version*40})}
 
+    def test_current_workflow_keeps_mandatory_security_availability(self):
+        from getzilla import baseline
+        import zipfile
+        acquired = self.acquire('a', b'current inert skill')
+        relative, body, mode = acquired['superpowers'][0].files[0]
+        target = self.project / relative
+        target.parent.mkdir(parents=True)
+        target.write_bytes(body)
+        target.chmod(mode)
+        (self.home / 'workflow-current.json').write_text('{}')
+        with patch.object(self.module, '_acquire', return_value=acquired):
+            missing = baseline.inspect(self.home, self.project, 'qwen', which=lambda name: None, environ={})
+            self.assertFalse(missing.complete)
+            self.assertEqual(missing.missing, ['SECURITY_BASELINE_MISSING:osv', 'SECURITY_BASELINE_MISSING:opengrep'])
+            self.assertEqual(missing.details['freshness'], 'fresh-official-source')
+            # Malformed layout is no security installation. Workflow stays valid.
+            (self.home / 'osv').mkdir()
+            (self.home / 'osv/corrupt.json').write_text('not an OSV archive')
+            (self.home / 'bin/opengrep').mkdir(parents=True)
+            corrupt = baseline.inspect(self.home, self.project, 'qwen', which=lambda name: None, environ={})
+            self.assertEqual(corrupt.missing, missing.missing)
+            online = baseline.inspect(self.home, self.project, 'qwen',
+                                      which=lambda name: '/inert/bin/opengrep',
+                                      environ={'GETZILLA_OSV_ONLINE': '1'})
+            self.assertTrue(online.complete, online.missing)
+            self.assertEqual(online.details['security'], {'osv': True, 'opengrep': True})
+            (self.home / 'bin/opengrep').rmdir()
+            (self.home / 'bin/opengrep').write_bytes(b'inert availability fixture')
+            (self.home / 'osv/PyPI').mkdir()
+            with zipfile.ZipFile(self.home / 'osv/PyPI/all.zip', 'w') as archive:
+                archive.writestr('inert.json', '{}')
+            valid = baseline.inspect(self.home, self.project, 'qwen', which=lambda name: None, environ={})
+            self.assertTrue(valid.complete, valid.missing)
+            self.assertEqual(valid.details['security'], {'osv': True, 'opengrep': True})
+            target.write_bytes(b'tampered current payload')
+            tampered = baseline.inspect(self.home, self.project, 'qwen', which=lambda name: None, environ={})
+            self.assertFalse(tampered.complete)
+            self.assertTrue(any(item.startswith('CURRENT_WORKFLOW_UNESTABLISHED:') for item in tampered.missing))
+
     def test_fresh_payload_updates_owned_bytes_but_preserves_user_edit(self):
         with patch.object(self.module, '_acquire', return_value=self.acquire('a', b'first')), \
              patch.object(self.module.state, 'route_authority_present', return_value=False):
