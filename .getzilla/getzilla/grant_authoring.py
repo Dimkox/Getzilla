@@ -336,5 +336,3 @@ def _extend_protected_path_approval(
         if observed == snapshot:
             return state._extension_result('refused', 'EXTENSION_NOT_PUBLISHED')
         return state._extension_result('unknown', 'EXTENSION_PUBLICATION_UNVERIFIED')
-
-

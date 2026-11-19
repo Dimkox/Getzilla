@@ -96,4 +96,3 @@ class SnapshotStore(reader.SnapshotReader):
                         self.native.close(handle)
                 else:
                     self.native.close(handle)
-

@@ -16,13 +16,28 @@ from getzilla.optional_modules import _validate_installed
 
 # Sibling modules are loaded by the optional native host, never by Core startup.
 from .transport import Session, Reply
-from .admission import gate, scope_key
+from .admission import gate, scope_key, local_supervisor_consuming
 
 MODULE = 'mcp-jira'
 
 
 def owner_prefix(owner):
     return hashlib.sha256((owner.owner_handle + '\0' + owner.generation).encode()).hexdigest()
+
+
+def _supported_profile(profile):
+    fields = {'transport', 'protocol', 'credential_scope', 'tool_id', 'endpoint', 'tools', 'server_version'}
+    return (managed.supported() and isinstance(profile, dict) and set(profile) == fields
+        and profile['transport'] == 'stdio' and profile['protocol'] == '2025-11-25'
+        and profile['credential_scope'] == 'local-uid:' + str(os.getuid())
+        and isinstance(profile['tool_id'], str) and 1 <= len(profile['tool_id']) <= 128
+        and isinstance(profile['endpoint'], str) and profile['endpoint'].startswith('stdio://')
+        and len(profile['endpoint']) <= 2048
+        and isinstance(profile['server_version'], str) and 1 <= len(profile['server_version']) <= 64
+        and all(32 <= ord(char) < 127 for char in profile['server_version'])
+        and isinstance(profile['tools'], dict) and 1 <= len(profile['tools']) <= 32
+        and all(isinstance(name, str) and 1 <= len(name) <= 128 and mode == 'read'
+                for name, mode in profile['tools'].items()))
 
 
 class Runtime:
@@ -52,8 +67,7 @@ class Runtime:
     def inspect_owned(self, request, owner, handle):
         profiles = self.profile.get('servers', {'default': self.profile})
         if (request.native_profile != 'managed-stdio-v1' or not isinstance(profiles, dict) or not 1 <= len(profiles) <= 16
-                or any(not isinstance(profile, dict) or profile.get('transport') != 'stdio'
-                    or profile.get('credential_scope') != 'local-uid:' + str(os.getuid()) for profile in profiles.values())):
+                or any(not _supported_profile(profile) for profile in profiles.values())):
             raise execution.ExecutionError('mcp_profile_unsupported')
         if request.scope_digest != hashlib.sha256(json.dumps(self.profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest():
             raise execution.ExecutionError('mcp_profile_scope_changed')
@@ -61,6 +75,12 @@ class Runtime:
         return NativeProfileProofV1(request.digest(), owner.generation, owner.owner_handle)
 
     def current(self):
+        if not self._local_current():
+            return False
+        self.authority.validate_activation(self.request, self.handle)
+        return True
+
+    def _local_current(self):
         # Check disabled state before provider config, authority, credentials or
         # process admission. This read creates no file and loads no credential.
         with BoundRoot(self.root) as binding:
@@ -71,6 +91,16 @@ class Runtime:
                     or record['module']['runtime']['state'] != 'enabled'):
                 return False
             _validate_installed(binding, MODULE, record)
+            # The host may import an identical source artifact, but it must not
+            # attest different executing bytes against an installed artifact.
+            home = Path(__file__).resolve().parent
+            prefix = '.getzilla/modules/' + MODULE + '/'
+            with BoundRoot(home) as source:
+                for path in record['files']:
+                    if path.startswith(prefix) and path.endswith('.py'):
+                        actual = source.read(path[len(prefix):], limit=1048576)
+                        if actual is None or actual.sha256 != record['owned'][path]['sha256'] or actual.mode != 0o644:
+                            return False
             if self.request is not None and set(record['module']['grants']) != set(self.request.operations):
                 return False
             active = record['module']['runtime']
@@ -80,14 +110,17 @@ class Runtime:
                 return False
         if self.request.scope_digest != hashlib.sha256(json.dumps(self.profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest():
             return False
-        self.authority.validate_activation(self.request, self.handle)
-        return True
+        caller = execution.trusted_caller(self.root)
+        return (self.request.task_id, self.request.owner_id, self.request.authority_epoch) == (
+            caller.logical_task_id, caller.session_id, caller.authority_epoch)
 
     def attest_tool(self, root, event):
         from getzilla.supply_chain import ManagedToolIdentity
         if Path(root).resolve() != self.root or not self.current():
             raise ValueError('mcp_disabled')
         profile = self.selected_profile((event.get('tool_input') or {}).get('server_id'))
+        if not _supported_profile(profile):
+            raise ValueError('mcp_profile_unqualified')
         name = event.get('tool_name')
         prefix = 'mcp__managed_stdio__'
         if not isinstance(name, str) or not name.startswith(prefix) or profile['tools'].get(name[len(prefix):]) != 'read':
@@ -96,10 +129,19 @@ class Runtime:
         if not isinstance(version, str) or not 1 <= len(version) <= 64:
             raise ValueError('mcp_version_unqualified')
         selected = managed._tool(self.root, profile['tool_id'])
+        managed._policy(self.root, selected)
+        with ExitStack() as stack:
+            actual = managed.Binary(self.root, selected.executable, selected.digest)
+            stack.callback(actual.close)
+            bootstrap = managed.Binary(self.root, str(Path(sys.executable).resolve()))
+            stack.callback(bootstrap.close)
+            sandbox = managed.Binary(self.root, '/usr/bin/bwrap')
+            stack.callback(sandbox.close)
+            host_dependencies = {'bootstrap': bootstrap.digest, 'sandbox': sandbox.digest}
         with BoundRoot(self.root) as binding:
             record = read_state(self.root, binding=binding).manifest['components']['module:' + MODULE]['module']
             dependencies = hashlib.sha256(json.dumps(dict(dependencies=record['dependencies'],
-                descriptor=record['runtime']['descriptor_sha256']), sort_keys=True).encode()).hexdigest()
+                descriptor=record['runtime']['descriptor_sha256'], host=host_dependencies), sort_keys=True).encode()).hexdigest()
         return ManagedToolIdentity(record['manifest_sha256'], selected.digest,
             record['version'] + '/' + profile['protocol'] + '/' + version, dependencies,
             hashlib.sha256((str(self.root) + '\0' + profile['credential_scope']).encode()).hexdigest())
@@ -112,7 +154,8 @@ class Runtime:
             records = execution_store.load_registry(self.root)['records']
             pending = [record for record in records.values() if (record.get('mcp_request_id') or '').startswith(prefix)
                        and (record['execution_status'] in {'running', 'cancel_requested'}
-                            or record['cleanup_status'] in {'pending', 'failed', 'unconfirmed'})]
+                            or record['cleanup_status'] in {'pending', 'failed', 'unconfirmed'}
+                            or local_supervisor_consuming(record))]
             if not pending:
                 return QuiescenceProofV1(owner.owner_handle, owner.generation, 0)
             for record in pending:
@@ -167,7 +210,13 @@ class Runtime:
                 if error.code in {'backend_saturated', 'registry_full'}:
                     raise execution.ExecutionError('resource_busy') from error
                 raise
-            return {'execution': result, 'reply': backend.reply, 'result_status': 'available' if backend.reply is not None else 'not_retained', 'management': 'managed',
+            try:
+                release_allowed = self.current()
+            except (ValueError, OSError):
+                release_allowed = False
+            if not release_allowed:
+                backend.reply = None
+            return {'execution': result, 'reply': backend.reply, 'result_status': ('available' if backend.reply is not None else 'not_retained') if release_allowed else 'denied', 'management': 'managed',
                     'remote_termination_confirmed': False}
 
 
@@ -183,7 +232,7 @@ class Backend(managed.Backend):
         return self.runtime.host_budget.allocation_lock()
 
     def admit_resources(self, registry, request):
-        if request.label != self.label or not self.runtime.current():
+        if request.label != self.label or not self.runtime._local_current():
             raise execution.ExecutionError('mcp_disabled')
         reason = gate(self.runtime.host_budget.snapshot(self.runtime.root, registry), self.label)
         if reason:
@@ -306,10 +355,22 @@ class SupervisorBackend(Backend):
             process.stdin.close()
         output=bytearray()
         end=deadline+4
+        last_authority_check=0
         with selectors.DefaultSelector() as selector:
             os.set_blocking(process.stdout.fileno(),False)
             selector.register(process.stdout,selectors.EVENT_READ)
             while time.monotonic()<end:
+                if time.monotonic()-last_authority_check >= .2:
+                    last_authority_check=time.monotonic()
+                    try:
+                        allowed=self.runtime.current()
+                    except (ValueError,OSError):
+                        allowed=False
+                    if not allowed:
+                        try:
+                            execution.cancel(root,caller,admission.execution_id,backend=managed.Backend())
+                        except (ValueError,OSError):
+                            pass
                 if selector.select(min(.02,max(0,end-time.monotonic()))):
                     chunk=os.read(process.stdout.fileno(),min(65536,CAP+1-len(output)))
                     if not chunk: break

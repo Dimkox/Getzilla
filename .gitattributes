@@ -15,3 +15,5 @@ scripts/install.ps1 text eol=lf
 engineering/benchmarks/issue162/** -text whitespace=-trailing-space
 # Frozen issue170 observations retain original CSV line endings and log bytes.
 engineering/benchmarks/issue170/** -text whitespace=-trailing-space
+# Retained upstream licence input is bound to its original complete bytes.
+.getzilla/config/license-exception-inputs/ci-internal-v1/MPL-2.0-debian.txt -text whitespace=-trailing-space

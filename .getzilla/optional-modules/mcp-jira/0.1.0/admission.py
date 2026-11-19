@@ -16,7 +16,8 @@ def gate(registry, label, *, now=None, read_only=True):
     records = [record for record in registry['records'].values()
                if record['input']['display']['label'].startswith('mcp-')]
     active = [record for record in records if record['execution_status'] in {'running', 'cancel_requested'}
-              or record['cleanup_status'] in {'pending', 'failed', 'unconfirmed'}]
+              or record['cleanup_status'] in {'pending', 'failed', 'unconfirmed'}
+              or record.get('local_supervisor_consuming') is True]
     scoped = [record for record in records if record['input']['display']['label'] == label]
     owned = [record for record in active if record['input']['display']['label'] == label]
     unresolved = [record for record in records if record.get('operation_outcome') == 'unknown']
@@ -99,4 +100,21 @@ class HostBudget:
                     records[str(project) + ':' + key] = {name: value.get(name) for name in
                         ('execution_status', 'cleanup_status', 'terminal_reason', 'retention_until', 'remote_task_id', 'operation_outcome')}
                     records[str(project) + ':' + key]['input'] = {'display': {'label': label}}
+                    records[str(project) + ':' + key]['local_supervisor_consuming'] = local_supervisor_consuming(value)
         return {'records': records}
+
+
+def local_supervisor_consuming(record):
+    """A flushed protocol body is not a stopped supervisor. Unknown stays charged."""
+    identity = record.get('supervisor')
+    if identity is None:
+        return False
+    from getzilla import supervised_execution
+    supervised_execution.reap()
+    try:
+        return supervised_execution._host_identity(identity['host_pid']) == identity['start_ticks']
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        # Includes unreaped zombies and unavailable host observations.
+        return True
