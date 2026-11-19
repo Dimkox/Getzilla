@@ -35,6 +35,7 @@ from .architecture_diff import (
     ChangedArtifact,
     _committed_worktree_diff,
     diff_architecture,
+    git_binding_scope,
     git_tree_paths,
     read_diff_file,
     read_diff_files,
@@ -4674,6 +4675,7 @@ def _bind_applicability_inventory(
     )
 
 
+@git_binding_scope()
 def evaluate_fitness(
     root: Path | str,
     snapshot: ArchitectureSnapshot,
@@ -4772,6 +4774,7 @@ def evaluate_fitness(
     )
 
 
+@git_binding_scope()
 def architecture_evidence(
     root: Path | str,
     *,

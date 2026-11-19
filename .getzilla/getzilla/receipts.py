@@ -617,6 +617,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     return ArchitectureBaseSelection(**witness)
 
 
+@git_binding_scope()
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],
