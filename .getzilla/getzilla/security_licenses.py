@@ -699,7 +699,7 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     license_files, notice_files = _license_evidence(license_inputs, metadata, identifiers, chosen,
                         final_wheel=dep['ecosystem']=='PyPI' and record['filename'].endswith('.whl'))
                 except ArtifactError as original:
-                    from .security_license_exceptions import retention_paths, scope_for, verify_exception
+                    from .security_license_exceptions import PROFILES, matching_profile, retention_paths, scope_for, verify_exception
                     requested = retention_paths(policy,dep)
                     if not requested:
                         raise
@@ -707,7 +707,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                         if requested - set(files):
                             files.update(archive_files(payload,record['filename'],requested=requested-set(files)))
                         scope = factory_scope if factory_scope is not None else scope_for(dep,target_binding,observed)
-                        exception = verify_exception(policy,dep,record,files,metadata,distribution,scope)
+                        supplements = None
+                        if target_binding is not None and 'ci_consumer' in target_binding:
+                            condition = matching_profile(policy,dep,record,distribution,scope)
+                            if PROFILES[condition].get('supplements'):
+                                from .security_license_supplements import prove_ci
+                                supplements = prove_ci(target_binding,dep,record,scope,condition)
+                        exception = verify_exception(policy,dep,record,files,metadata,distribution,scope,supplements=supplements)
                     except ArtifactError as condition:
                         raise ArtifactError(condition.code, str(condition)+'; original license diagnostic ['+original.code+']: '+str(original)) from condition
                     exception['detail']['original_diagnostic'] = dict(code=original.code,message=str(original))
