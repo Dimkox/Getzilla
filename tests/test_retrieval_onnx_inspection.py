@@ -362,3 +362,43 @@ class OnnxInspectionTests(unittest.TestCase):
              self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'deadline') as caught:
             self.inspect(external=files)
         self.assertIsNone(getattr(caught.exception, 'diagnostics', None))
+
+    def test_midwalk_custody_changes_replace_completed_closure_diagnostic(self):
+        original = self.inspector._Wire.message
+        files = self.external()
+        for change in ['same-bytes-graph-replacement', 'external-mode', 'root-mode']:
+            def message(wire, kind, start, end, depth):
+                result = original(wire, kind, start, end, depth)
+                if kind == 'Model':
+                    if change == 'same-bytes-graph-replacement':
+                        replacement = self.path.with_suffix('.replacement')
+                        replacement.write_bytes(self.path.read_bytes())
+                        os.replace(replacement, self.path)
+                    elif change == 'external-mode':
+                        (self.root / 'onnx/model.onnx_data').chmod(0o666)
+                    else:
+                        self.root.chmod(0o777)
+                return result
+            try:
+                with self.subTest(change=change), patch.object(self.inspector._Wire, 'message', message), \
+                     self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'custody') as caught:
+                    self.inspect(external=files)
+                self.assertIsNone(caught.exception.diagnostics)
+            finally:
+                self.root.chmod(0o700)
+                (self.root / 'onnx/model.onnx_data').chmod(0o600)
+
+    def test_expired_deadline_after_parse_refusal_replaces_diagnostic(self):
+        original = self.inspector._Wire.parse
+        files = self.external()
+        with patch.object(self.inspector.time, 'monotonic', return_value=100) as clock:
+            def parse(wire):
+                try:
+                    return original(wire)
+                except self.inspector.OnnxInspectionError:
+                    clock.return_value = 131
+                    raise
+            with patch.object(self.inspector._Wire, 'parse', parse), \
+                 self.assertRaisesRegex(self.inspector.OnnxInspectionError, 'deadline') as caught:
+                self.inspect(external=files)
+        self.assertIsNone(caught.exception.diagnostics)

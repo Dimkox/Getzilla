@@ -526,7 +526,18 @@ def inspect_onnx(root: Path, graph: str, *, graph_bytes: int, graph_sha256: str,
                 _fail('graph hash or size mismatch')
             for current in checks:
                 current()
-            result = _Wire(descriptor, graph_bytes, expected, deadline).parse()
+            try:
+                result = _Wire(descriptor, graph_bytes, expected, deadline).parse()
+            except OnnxInspectionError as error:
+                if error.diagnostics is not None:
+                    # A completed wire walk does not establish current custody.
+                    # Refusals also need these checks before exposing its facts;
+                    # a changed file or expired deadline replaces the details.
+                    for current in checks:
+                        current()
+                    if time.monotonic() >= deadline:
+                        _fail('metadata deadline exceeded')
+                raise
             for current in checks:
                 current()
             if time.monotonic() >= deadline:
