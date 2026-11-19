@@ -143,7 +143,7 @@ class TrustHookTests(unittest.TestCase):
             self.assertEqual(result['decision'], 'deny', result)
 
     def test_degraded_policy_and_library_refuse_mcp(self):
-        for relative in ('.getzilla/getzilla/policy.py', '.grok/hooks/_lib.py'):
+        for relative in ('.getzilla/getzilla/policy.py', '.getzilla/hooks/_lib.py'):
             with self.subTest(relative=relative), project_copy() as root:
                 (root / relative).write_text('raise ImportError("fixture failure")\n', encoding='utf-8')
                 code, result, error = run_hook(root, 'pre_tool_use.py',

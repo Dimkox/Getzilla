@@ -22,7 +22,7 @@ SOURCE = '.getzilla/config/toolchain.json'
 
 class PayloadBoundaryTests(unittest.TestCase):
     def raw_hook(self, root, raw):
-        result = subprocess.run([sys.executable, '-B', str(root / '.grok/hooks/pre_tool_use.py')],
+        result = subprocess.run([sys.executable, '-B', str(root / '.getzilla/hooks/pre_tool_use.py')],
                                 cwd=root, input=raw, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(b'PRIVATE-SENTINEL', result.stdout + result.stderr)
@@ -52,17 +52,17 @@ class PayloadBoundaryTests(unittest.TestCase):
 
     def test_bootstrap_decoder_failure_denies_when_library_is_unavailable(self):
         with project_copy() as root:
-            (root / '.grok/hooks/_lib.py').write_text('raise ImportError("fixture failure")\n')
+            (root / '.getzilla/hooks/_lib.py').write_text('raise ImportError("fixture failure")\n')
             result = self.raw_hook(root, b'{"tool_name":"Read",PRIVATE-SENTINEL')
             self.assertEqual(result['decision'], 'deny', result)
             self.assertIn('invalid_tool_request', result.get('reason', ''))
 
     def test_bootstrap_denial_uses_each_native_harness_verdict_schema(self):
         with project_copy() as root:
-            (root / '.grok/hooks/_lib.py').write_text('raise ImportError("fixture failure")\n')
+            (root / '.getzilla/hooks/_lib.py').write_text('raise ImportError("fixture failure")\n')
             for harness in ('grok', 'claude', 'qwen', 'codex', 'gemini', 'copilot'):
                 with self.subTest(harness=harness):
-                    result = subprocess.run([sys.executable, '-B', str(root / '.grok/hooks/pre_tool_use.py'),
+                    result = subprocess.run([sys.executable, '-B', str(root / '.getzilla/hooks/pre_tool_use.py'),
                                              '--harness', harness], cwd=root,
                                             input=b'{"tool_name":"Read",PRIVATE-SENTINEL',
                                             capture_output=True, timeout=15)

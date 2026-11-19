@@ -321,6 +321,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
         self.enterContext(mock.patch.object(self, 'longMessage', False))
+        # Isolate grant classification from the separate trusted-tool admission gate.
+        self.enterContext(mock.patch('getzilla.policy.check_tool_trust', return_value=(True, None)))
         # These names carry the write verb inside the name and used to pass with no grant (#193).
         from getzilla.policy import mcp_side_effect, sensitive_action
         writes = ('issue_write', 'sub_issue_write', 'pull_request_review_write', 'add_issue_comment',

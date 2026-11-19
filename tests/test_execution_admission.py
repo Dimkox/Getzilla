@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from getzilla import continuity, execution, execution_store as store, state
-from tests.test_execution import CountingBackend, FakeClock, owned_route
+from tests.execution_contract_support import CountingBackend, FakeClock, owned_route
 
 
 class BoundaryClock(FakeClock):

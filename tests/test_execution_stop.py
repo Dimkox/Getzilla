@@ -13,7 +13,7 @@ import textwrap
 from unittest.mock import patch
 
 from getzilla import continuity, execution, execution_store as store, policy, state
-from tests.test_execution import CountingBackend, owned_route
+from tests.execution_contract_support import CountingBackend, owned_route
 
 
 @unittest.skipIf(os.name == 'nt', 'public source ACL custody is not qualified on Windows')

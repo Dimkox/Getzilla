@@ -49,10 +49,12 @@ class CountingBackend:
         self.cancels += 1
         return True
 
-def owned_route(root, session='owner', task='Fix a README typo.'):
+def owned_route(root, session='owner', task='Fix a README typo.', *, provision=True):
     state.bind_session(session)
     route = build_route(root, task, session).to_dict()
     state.set_active_route(root, route)
+    if provision:
+        execution.provision(root, execution.trusted_caller(root))
     return state.get_active_route(root)
 
 def observe_saved_attempt(path, execution_id, result):

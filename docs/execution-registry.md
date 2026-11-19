@@ -1,9 +1,10 @@
 # Execution registry contract
 
-This private composition adopts the scoped #225 source as an UNVERIFIED dependency.
-The main parallel runner has no shared preview helper. Core output sharing and its
-retained assertion remain explicitly unsupported until ordered Core composition;
-registry output redaction is exercised independently. This does not qualify #225.
+This composition retains the shared Core preview assertion and bounded historical
+counter checks. Local contract tests do not qualify a production backend.
+The complete installed payload can remain unavailable for source observation:
+the public vendored certifi `cacert.pem` also matches the current conservative
+sensitive-path refusal. The real installed recovery assertion remains required.
 
 The optional `getzilla.execution` Python API records one attempt per scoped intent.
 It uses `.getzilla/runtime/executions/registry.json`, with version 1 retained for
