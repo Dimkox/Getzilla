@@ -1,21 +1,17 @@
 """General task scope/time admission. Local delegation is never merge authority.
 
-The owner delegates actual normalized arguments through the existing exact grant
-mechanism. The hook cannot originate consent or extend a deadline. Safe local
-observation/bootstrap remains usable before task delegation. Unsupported opaque
-transports are rejected by the mandatory hook before reaching this module.
+The canonical execution registry owns exact source/session/task bindings,
+immutable arguments, deadlines and one-use claims. Historical per-tool grant
+records are not a second execution ledger. Safe observations remain available;
+effects require an explicit qualified backend through execution.submit.
 """
 
-from datetime import datetime, timezone
 import hashlib
 import json
-import math
 import re
 from pathlib import Path
 import shlex
 
-from .state import approvals_path, get_active_route, has_valid_approval, runtime_lock
-from .util import load_json, dump_json
 
 SCOPE = "task-execution"
 ACTION = "task-tool-execute"
@@ -84,99 +80,22 @@ def _safe_observation(root, tool, inputs):
     return all(word.startswith("-") or _inside(root, word) for word in words[1:])
 
 
-def _remaining(root, resource):
-    if not has_valid_approval(root, SCOPE, action=ACTION, resource=resource):
-        return None
-    records = load_json(approvals_path(root), [])
-    now = datetime.now(timezone.utc)
-    remaining = []
-    for record in records if isinstance(records, list) else []:
-        if not isinstance(record, dict) or record.get("scope") != SCOPE or resource not in record.get("resources", []):
-            continue
-        if record.get("source") not in {"explicit-user-consent", "standing-user-consent"}:
-            continue
-        if not isinstance(record.get("id"), str) or not re.fullmatch("[0-9a-f]{16}", record["id"]):
-            continue
-        used = record.get("consumed_resources", [])
-        if not isinstance(used, list) or any(not isinstance(item, str) for item in used) or resource in used:
-            continue
-        try:
-            created = datetime.fromisoformat(record["created_at"])
-            expires = datetime.fromisoformat(record["expires_at"])
-            if created.tzinfo is None or expires.tzinfo is None or not created <= now < expires:
-                continue
-            if not 0 < (expires - created).total_seconds() <= 86400:
-                continue
-            # has_valid_approval must validate this exact record, not another
-            # stale record with the same resource but a longer deadline.
-            from .state import _active_change_id, _repository_identity
-            from .util import git_head, tree_fingerprint
-
-            route = get_active_route(root) or {}
-            if any(
-                record.get(k) != v
-                for k, v in {
-                    "schema_version": 2,
-                    "authorization": "delegated-local-grant",
-                    "repository": _repository_identity(root),
-                    "route_id": route.get("route_id"),
-                    "change_id": _active_change_id(root),
-                    "git_head": git_head(root),
-                    "grant_binding_digest": tree_fingerprint(root),
-                }.items()
-            ) or ACTION not in record.get("actions", []):
-                continue
-            remaining.append(((expires - datetime.now(timezone.utc)).total_seconds(), record.get("id")))
-        except (KeyError, TypeError, ValueError, RuntimeError):
-            continue
-    return max(remaining) if remaining else None
-
-
-def _bounded_shell(inputs, remaining, raw_tool):
-    timeout = inputs.get("timeout_ms", inputs.get("timeout"))
-    if raw_tool == "Bash" and type(timeout) is int and 0 < timeout <= min(600000, math.floor(remaining * 1000)):
-        return True
-    command = inputs.get("command")
-    if isinstance(command, str) and any(char in command for char in ("$", "`", "\n", ";", "&", "|")):
-        return False
-    try:
-        words = shlex.split(command) if isinstance(command, str) else []
-        if len(words) < 4 or words[:2] != ["/usr/bin/timeout", "--signal=KILL"]:
-            return False
-        seconds = float(words[2].removesuffix("s"))
-        return math.isfinite(seconds) and 0 < seconds <= min(600, remaining)
-    except (ValueError, TypeError):
-        return False
-
-
 def evaluate_task_execution(
     root: Path, tool: str, inputs: dict, *, raw_tool: str | None = None
 ) -> tuple[bool, str | None]:
+    """Compatibility observation API; it never issues a second dispatch claim.
+
+    Managed effects use execution.submit with a trusted caller and an explicitly
+    qualified cooperative backend. A boolean hook verdict cannot carry that
+    backend's source/session/deadline and single-use dispatch capability.
+    """
+    if not isinstance(tool, str) or not isinstance(inputs, dict):
+        return False, "Legacy execution arguments are invalid."
+    from ._policy_legacy import evaluate_pre_tool
+    allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': inputs})
+    if not allowed:
+        return allowed, reason
     if _safe_observation(root, tool, inputs):
         return True, None
-    route = get_active_route(root)
-    if not isinstance(route, dict) or route.get("schema_version") != 1 or not route.get("route_id"):
-        return False, "Task execution denied: mandatory task route missing or invalid."
-    try:
-        resource = task_execution_resource(tool, inputs)
-        # Persist one-shot consumption before the host side effect. A lost
-        # response cannot silently authorize a second write or grant renewal.
-        with runtime_lock(root, "approvals"):
-            admission = _remaining(root, resource)
-            if admission is None or admission[0] <= 0:
-                return (
-                    False,
-                    "Task execution denied: exact owner-delegated scope or time allowance missing, expired, consumed or stale.",
-                )
-            remaining, grant_id = admission
-            if tool == "Bash" and not _bounded_shell(inputs, remaining, raw_tool):
-                return False, "Task execution denied: actual shell timeout must fit the remaining owner time allowance."
-            records = load_json(approvals_path(root), [])
-            for record in records:
-                if record.get("id") == grant_id:
-                    record["consumed_resources"] = [*record.get("consumed_resources", []), resource]
-                    dump_json(approvals_path(root), records)
-                    return True, None
-            return False, "Task execution denied: delegated scope changed during admission."
-    except (ValueError, TypeError, RuntimeError, OSError):
-        return False, "Task execution denied: scope/time authority invalid."
+    return False, ("Legacy task execution verdict is unsupported for effects; use the canonical "
+                   "execution.submit registry with a trusted caller and a qualified cooperative backend.")

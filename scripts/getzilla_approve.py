@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser(
         'never satisfy external Trust CI approvals.'
     )
 )
-parser.add_argument('scope', choices=['production', 'external-write', 'protected-path', 'task-execution'])
+parser.add_argument('scope', choices=['production', 'external-write', 'protected-path'])
 parser.add_argument('--reason', required=True)
 parser.add_argument('--ttl', type=int, default=15, help='Minutes; 1..1440')
 parser.add_argument('--extend', help='Existing protected grant ID; explicitly replace its full literal file set')
@@ -51,7 +51,6 @@ parser.add_argument(
         'github-release',
         'external-write',
         'protected-path-write',
-        'task-tool-execute',
     ],
 )
 parser.add_argument(

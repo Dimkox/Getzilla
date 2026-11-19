@@ -1,192 +1,91 @@
-"""General nonpaid task admission binds actual args and finite owner delegation."""
-
-from datetime import datetime, timedelta, timezone
+"""Legacy verdicts cannot create a parallel execution ledger or dispatch twice."""
+from pathlib import Path
 import json
-import subprocess
-import sys
+import tempfile
 import unittest
 from unittest.mock import patch
-
-from tests._support import PROJECT, project_copy, run_hook
-
-sys.path.insert(0, str(PROJECT / ".getzilla"))
+from tests._support import PROJECT, project_copy, run_hook, activate_owned_route
+import sys
+sys.path.insert(0, str(PROJECT / '.getzilla'))
+from getzilla import execution_admission as admission
 from getzilla.router import build_route
-from getzilla.state import add_approval, set_active_route
-
+from getzilla.state import add_approval
 
 class TaskExecutionAdmissionTests(unittest.TestCase):
     def fixture(self, root):
-        subprocess.run(["git", "remote", "add", "origin", "https://github.com/example/task.git"], cwd=root, check=True)
-        set_active_route(root, build_route(root, "Fix a local source defect", "task-admission").to_dict())
+        activate_owned_route(root, build_route(root, 'Fix ordinary source', 'legacy-observation').to_dict())
 
     def test_ordinary_source_write_needs_exact_task_scope(self):
         with project_copy(git=True) as root:
             self.fixture(root)
-            code, data, _ = run_hook(
-                root,
-                "pre_tool_use.py",
-                {
-                    "cwd": str(root),
-                    "tool_name": "Write",
-                    "tool_input": {"file_path": "source.py", "content": "approved"},
-                },
-            )
-            self.assertEqual(code, 0)
-            self.assertEqual(data["decision"], "deny")
-            self.assertIn("task", data["reason"].lower())
+            allowed, reason = admission.evaluate_task_execution(root, 'Write', {'file_path': 'source.py', 'content': 'x'})
+            self.assertFalse(allowed)
+            self.assertIn('execution.submit', reason)
+            self.assertFalse((root/'source.py').exists())
 
     def test_exact_authorized_action_works_and_changed_args_deny(self):
-        from getzilla.execution_admission import task_execution_resource
-
         with project_copy(git=True) as root:
             self.fixture(root)
-            inputs = {"file_path": "source.py", "content": "approved"}
-            add_approval(
-                root,
-                "task-execution",
-                "Owner delegated this exact task action",
-                5,
-                actions=["task-tool-execute"],
-                resources=[task_execution_resource("Write", inputs)],
-                source="explicit-user-consent",
-            )
-            self.assertEqual(
-                run_hook(root, "pre_tool_use.py", {"cwd": str(root), "tool_name": "Write", "tool_input": inputs})[1][
-                    "decision"
-                ],
-                "allow",
-            )
-            for changed in ({**inputs, "content": "outside scope"}, {**inputs, "file_path": "other.py"}):
-                self.assertEqual(
-                    run_hook(root, "pre_tool_use.py", {"cwd": str(root), "tool_name": "Write", "tool_input": changed})[
-                        1
-                    ]["decision"],
-                    "deny",
-                )
+            for content in ('first', 'changed'):
+                inputs = {'file_path': 'source.py', 'content': content}
+                with self.assertRaises(ValueError):
+                    add_approval(root, 'task-execution', 'retired ledger', actions=['task-tool-execute'],
+                                 resources=[admission.task_execution_resource('Write', inputs)])
+                self.assertFalse(admission.evaluate_task_execution(root, 'Write', inputs)[0])
 
     def test_elapsed_window_expiry_denies_even_with_matching_args(self):
-        from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
-
         with project_copy(git=True) as root:
             self.fixture(root)
-            inputs = {"file_path": "source.py", "content": "approved"}
-            add_approval(
-                root,
-                "task-execution",
-                "Owner exact delegation",
-                1,
-                actions=["task-tool-execute"],
-                resources=[task_execution_resource("Write", inputs)],
-                source="explicit-user-consent",
-            )
-            future = datetime.now(timezone.utc) + timedelta(minutes=2)
-            with patch("getzilla.state.datetime") as clock:
-                clock.now.return_value = future
-                clock.fromisoformat.side_effect = datetime.fromisoformat
-                self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])
+            runtime = root/'.getzilla/runtime'
+            (runtime/'approvals.json').write_text(json.dumps([{'scope':'task-execution','expires_at':'2099-01-01T00:00:00Z'}]))
+            self.assertFalse(admission.evaluate_task_execution(root, 'Bash', {'command':'touch result', 'timeout_ms':1})[0])
+            self.assertFalse((root/'result').exists())
 
     def test_shell_must_fit_remaining_time_and_cannot_extend_with_grant(self):
-        from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
-
         with project_copy(git=True) as root:
             self.fixture(root)
-            for command, expected in [
-                ("/usr/bin/timeout --signal=KILL 5s python3 -m unittest tests.test_structure", True),
-                ("python3 -m unittest tests.test_structure", False),
-                ("/usr/bin/timeout --signal=KILL 3600s python3 -m unittest tests.test_structure", False),
-            ]:
-                inputs = {"command": command}
-                add_approval(
-                    root,
-                    "task-execution",
-                    "Owner exact bounded command",
-                    1,
-                    actions=["task-tool-execute"],
-                    resources=[task_execution_resource("Bash", inputs)],
-                    source="explicit-user-consent",
-                )
-                self.assertEqual(evaluate_task_execution(root, "Bash", inputs)[0], expected)
+            for timeout in (1, 600000, 86400000):
+                self.assertFalse(admission.evaluate_task_execution(root, 'Bash',
+                    {'command':'/usr/bin/timeout --signal=KILL 5s touch result','timeout_ms':timeout})[0])
 
     def test_safe_observation_and_readonly_bootstrap_stay_usable(self):
-        from getzilla.execution_admission import evaluate_task_execution
-
         with project_copy(git=True) as root:
             self.fixture(root)
-            for tool, inputs in [
-                ("Read", {"path": "README.md"}),
-                ("Bash", {"command": "git status --short"}),
-                ("Bash", {"command": "python3 scripts/getzilla_status.py"}),
-            ]:
-                self.assertTrue(evaluate_task_execution(root, tool, inputs)[0])
-            self.assertFalse(
-                evaluate_task_execution(root, "Bash", {"command": "git status --short; python3 attacker.py"})[0]
-            )
-            self.assertFalse(evaluate_task_execution(root, "Read", {"path": "../outside.txt"})[0])
+            for tool, inputs in (('Read',{'path':'README.md'}),('Bash',{'command':'git status --short'}),
+                                 ('Bash',{'command':'python3 scripts/getzilla_status.py'})):
+                self.assertTrue(admission.evaluate_task_execution(root, tool, inputs)[0])
+            self.assertFalse(admission.evaluate_task_execution(root,'Read',{'path':'../outside.txt'})[0])
+            self.assertFalse(admission.evaluate_task_execution(root,'Read',{'path':'.env'})[0])
 
     def test_read_tool_preprocessor_is_not_safe_observation(self):
-        from getzilla.execution_admission import evaluate_task_execution
         with project_copy(git=True) as root:
-            self.fixture(root)
-            self.assertFalse(evaluate_task_execution(root, "Glob", {"pattern": "../outside/*.txt"})[0])
-            for command in ("rg --pre=worker.py pattern README.md", "rg --pre worker.py pattern README.md"):
-                self.assertFalse(evaluate_task_execution(root, "Bash", {"command": command})[0])
+            for command in ('rg --pre helper pattern .', 'git status; touch result'):
+                self.assertFalse(admission.evaluate_task_execution(root,'Bash',{'command':command})[0])
+            self.assertFalse(admission.evaluate_task_execution(root,'Glob',{'pattern':'../outside/*'})[0])
 
     def test_fresh_native_read_works_without_route_grant_or_old_receipt(self):
         with project_copy(git=True) as root:
-            runtime = root / ".getzilla/runtime"
-            self.assertFalse((runtime / "active-route.json").exists())
-            for name, inputs in [
-                ("functions.read_file", {"path": "README.md"}),
-                ("functions.exec_command", {"cmd": "git status --short"}),
-            ]:
-                code, data, _ = run_hook(root, "pre_tool_use.py", {
-                    "cwd": str(root), "tool_name": name, "tool_input": inputs,
-                })
-                self.assertEqual(code, 0)
-                self.assertEqual(data["decision"], "allow")
-            code, data, _ = run_hook(root, "pre_tool_use.py", {
-                "cwd": str(root), "tool_name": "functions.write_file",
-                "tool_input": {"path": "source.py", "content": "outside owner scope"},
-            })
-            self.assertEqual(data["decision"], "deny")
-            self.assertFalse((root / "source.py").exists())
+            for tool, inputs in (('functions.read_file',{'path':'README.md'}),
+                                 ('functions.write_file',{'path':'source.py','content':'ordinary source'})):
+                code, result, _ = run_hook(root,'pre_tool_use.py',{'cwd':str(root),'tool_name':tool,'tool_input':inputs})
+                self.assertEqual(code,0)
+                self.assertEqual(result['decision'],'allow')
+            self.assertFalse((root/'source.py').exists(), 'a hook verdict is not an executed effect')
 
     def test_runtime_claims_and_source_change_cannot_mint_or_reuse_authority(self):
-        from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
-
         with project_copy(git=True) as root:
-            self.fixture(root)
-            inputs = {"file_path": "source.py", "content": "approved"}
-            (root / ".getzilla/runtime/task-authority.json").write_text(
-                json.dumps({"approved": True, "deadline": 9999999999})
-            )
-            self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])
-            add_approval(
-                root,
-                "task-execution",
-                "Owner exact delegation",
-                5,
-                actions=["task-tool-execute"],
-                resources=[task_execution_resource("Write", inputs)],
-                source="explicit-user-consent",
-            )
-            (root / "source.py").write_text("changed source")
-            self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])
+            for phase in ('original','changed'):
+                (root/'source.py').write_text(phase)
+                self.assertFalse(admission.evaluate_task_execution(root,'Write',{'file_path':'source.py','content':'effect'})[0])
+                self.assertEqual((root/'source.py').read_text(),phase)
 
     def test_exact_task_action_is_one_shot(self):
-        from getzilla.execution_admission import evaluate_task_execution, task_execution_resource
-
         with project_copy(git=True) as root:
             self.fixture(root)
-            inputs = {"file_path": "source.py", "content": "approved"}
-            add_approval(
-                root,
-                "task-execution",
-                "Owner delegated one exact action",
-                5,
-                actions=["task-tool-execute"],
-                resources=[task_execution_resource("Write", inputs)],
-                source="explicit-user-consent",
-            )
-            self.assertTrue(evaluate_task_execution(root, "Write", inputs)[0])
-            self.assertFalse(evaluate_task_execution(root, "Write", inputs)[0])
+            inputs={'file_path':'source.py','content':'effect'}
+            self.assertEqual(admission.task_execution_resource('Write',inputs),admission.task_execution_resource('Write',dict(inputs)))
+            self.assertNotEqual(admission.task_execution_resource('Write',inputs),
+                                admission.task_execution_resource('Write',{**inputs,'content':'changed'}))
+            for _ in range(2):
+                self.assertFalse(admission.evaluate_task_execution(root,'Write',inputs)[0])
+            self.assertFalse((root/'.getzilla/runtime/approvals.json').exists())
