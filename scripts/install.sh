@@ -119,6 +119,8 @@ main() {
     printf '\nGetzilla installation is incomplete in %s: health=%s, agent/provider=%s. Follow the errors and next steps above.\n' "$home" "$doctor_status" "$agent_status"
     return 3
   fi
+  # Optional notification runs only after every mandatory stage and final check.
+  "$python" "$home/scripts/getzilla_install_analytics.py" --ready </dev/null >/dev/null 2>&1 || true
   cat <<EOF
 
 Next:
