@@ -1189,7 +1189,7 @@ def scan(root: Path, *, environ: dict[str, str] | None = None, fetch: Fetch = _d
     if dependency_inventory(root, load_config(root))[2] != inventory:
         raise VulnerabilityError('security policy or inventory changed during the query')
     if report['source_mode'] in {'offline', 'query'}:
-        from .security_data import SecurityDataError, confirm_snapshots
+        from .security_data import confirm_snapshots
         try:
             confirm_snapshots(Path(database), report['source_evidence'], now=now)
         except SecurityDataError as error:
