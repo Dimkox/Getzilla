@@ -49,6 +49,8 @@ class FamilyConditionsTests(unittest.TestCase):
         allowed=conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=False)
         with self.assertRaises(ArtifactError):licenses._select_expression(component['expression'],allowed)
         self.assertEqual(len(licenses.ALLOWED),6)
+        with self.assertRaises(ArtifactError):licenses._select_expression('X11',list(licenses.ALLOWED))
+        self.assertEqual(licenses._select_expression('X11',['X11'])[0],['X11'])
         self.assertEqual(conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=True),list(licenses.ALLOWED))
         changed=copy.deepcopy(self.source_modules);changed[0]['h1']='h1:other'
         self.assertEqual(conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=True,source_modules=changed),list(licenses.ALLOWED))

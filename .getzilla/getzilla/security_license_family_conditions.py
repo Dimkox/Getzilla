@@ -11,6 +11,7 @@ from __future__ import annotations
 TEXTS = {'26be8a79415737dfe8edf1be62e71afeb8c770ed5a5605a06270d5701830f47c': ('BSD-3-Clause',),
  '28ca54ff46a27183631aa262673d13e3c829d909059f5c861da835fe1783fbec': ('MPL-2.0',),
  '2ba4d89aab98b9f2fb760a8fe7d05ed1c7d06be44c79f1ceb02cf9ce6e61c9a8': ('MPL-2.0',),
+ '3325702108f9d65db464595854e509f2a1be9ffdc1ae82a7e99fa63c92c404c9': ('MIT',),
  '3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04': ('MPL-2.0',),
  '60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d': ('MPL-2.0',),
  '6c7088eb877b5d7e6e0e9d27e822ea25fcda2e83f9eba59bb5f1418a656796e0': ('MPL-2.0',),

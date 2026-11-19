@@ -275,6 +275,14 @@
       "source": "https://sources.debian.org/data/main/n/node-chainsaw/0.1.0-1/debian/copyright",
       "source_sha256": "50052e6460b658e38cb910e62ea03580f60627b6b4909142eedff10ad7132987",
       "scope": "text identification only; original package MIT/X11 metadata needs exact source interpretation and selected Action permission"
+    },
+    "3325702108f9d65db464595854e509f2a1be9ffdc1ae82a7e99fa63c92c404c9": {
+      "identifiers": [
+        "MIT"
+      ],
+      "text": "Copyright 2015 James Halliday <mail@substack.net> (http://substack.net)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\nTHE SOFTWARE.\n",
+      "source": "https://sources.debian.org/data/main/n/node-buffers/0.1.1-2/debian/copyright",
+      "scope": "text identification only; metadata absence needs exact source interpretation"
     }
   }
 }
