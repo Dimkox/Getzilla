@@ -19,6 +19,68 @@ from getzilla.python_source_proof import namespace_is_closed
 
 
 class ArchitectureDependencyBoundaryTests(unittest.TestCase):
+    def test_fixed_asset_reads_exclude_component_publication(self):
+        from getzilla import baseline_assets, component_state, fsx
+        self.assertIs(component_state.mode_matches, getattr(fsx, 'mode_matches', None))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/baseline_assets.py').read_bytes())
+        selected = _queue_export_slice(tree, frozenset({'load', 'preflight_destination', 'validate_resources'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'component_state'
+                             for node in ast.walk(selected)))
+        self.assertIs(baseline_assets.BoundRoot, fsx.ReadOnlyBoundRoot)
+        import stat
+        for windows in (False, True):
+            with mock.patch.object(fsx, 'WINDOWS', windows):
+                for actual in (0o444, 0o644, 0o664, 0o755):
+                    for expected in (0o444, 0o644, 0o755):
+                        wanted = (bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR)
+                                  if windows else stat.S_IMODE(actual) == expected)
+                        self.assertEqual(fsx.mode_matches(actual, expected), wanted)
+
+    def test_grant_read_consumers_use_the_exact_shared_readonly_root(self):
+        from getzilla import fsx
+        from getzilla.component_state import BoundRoot
+        for name in ('read', '__init__', 'check', '__exit__'):
+            self.assertIs(getattr(BoundRoot, name), getattr(fsx.ReadOnlyBoundRoot, name))
+        for name in ('util', 'state'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'component_state'
+                                 for node in ast.walk(tree)))
+        import subprocess
+        code = ("import sys,tempfile,hashlib;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+                "from getzilla import util,state;"
+                "root=Path(sys.argv[2]);file=root/'owned';file.write_bytes(b'owned');"
+                "assert util.file_sha256(file,strict_root=root)==hashlib.sha256(b'owned').hexdigest();"
+                "assert 'getzilla.component_state' not in sys.modules")
+        with tempfile.TemporaryDirectory() as directory:
+            observed = subprocess.run([sys.executable, '-B', '-c', code, str(ROOT / '.getzilla'), directory],
+                                      capture_output=True, text=True, timeout=10)
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+
+    def test_review_policy_consumers_do_not_import_prompt_routing(self):
+        from getzilla import router, review_plan
+        self.assertIs(router.escalate_route, getattr(review_plan, 'escalate_route', None))
+        self.assertIs(router.load_routing_config, getattr(review_plan, 'load_routing_config', None))
+        self.assertIs(router.REVIEW_EVIDENCE, getattr(review_plan, 'REVIEW_EVIDENCE', None))
+        self.assertIs(router.DEFAULT_ROUTING, getattr(review_plan, 'DEFAULT_ROUTING', None))
+        for name in ('verification', 'review_plan'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'router'
+                                 for node in ast.walk(tree)))
+        with tempfile.TemporaryDirectory() as directory:
+            result = review_plan.escalate_route({'risk': 'low', 'delivery_lane': 'light'},
+                                                'high', Path(directory))
+        self.assertEqual(result['effective_risk'], 'high')
+        self.assertEqual(result['added_reviewers'], review_plan.DEFAULT_ROUTING['review_floors']['delivery'])
+
+    def test_factory_input_declaration_excludes_trusted_builder_execution(self):
+        from getzilla import security_factory_inputs, security_factory_build
+        self.assertTrue(callable(security_factory_build.prepare))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_factory_inputs.py').read_bytes())
+        projection = _queue_export_slice(tree, frozenset({'declaration', 'validate_declaration', 'verify'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_factory_build'
+                             for node in ast.walk(projection)))
+        self.assertEqual(security_factory_inputs.PROFILE, 'ubuntu-24.04-x86_64-cpython312')
+
     def test_bare_module_package_fallback_uses_supplied_paths(self):
         from getzilla import architecture_fitness as fitness
         self.assertEqual(fitness._module_package('tools/standalone.py'), 'tools')
@@ -44,10 +106,12 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
         owners = ('verification_actions.py', 'git_ranges.py', 'governance_records.py',
                   'security_image_authority.py', 'release_transport.py', 'verification_policy_source.py',
                   'workflow_inputs.py', 'workflow_cas.py', 'workflow_storage.py', 'live_evidence.py',
-                  'agent_eval_authoring.py', 'security_license_contracts.py', 'grant_authoring.py',
+                  'agent_eval_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'grant_authoring.py',
                   'intake_authoring.py', 'security_publication.py', 'security_windows_publication.py',
                   'verification_scope.py', 'public_security_context.py', 'metrics_journal.py',
-                  'architecture_fitness.py', 'python_source_proof.py', 'queue_refusal.py')
+                  'architecture_fitness.py', 'python_source_proof.py', 'queue_refusal.py',
+                  'economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py',
+                  'router.py', 'review_plan.py', 'fsx.py', 'component_state.py', 'baseline_assets.py')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             original = policy_binding(root)['implementation']
@@ -350,7 +414,7 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
         from getzilla.verification_plan import policy_binding
         with tempfile.TemporaryDirectory() as directory:
             implementation = policy_binding(Path(directory))['implementation']
-        for name in ('agent_eval_authoring.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
+        for name in ('agent_eval_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
             with self.subTest(name=name):
                 self.assertIn(name, implementation)
                 self.assertEqual(implementation[name], hashlib.sha256(

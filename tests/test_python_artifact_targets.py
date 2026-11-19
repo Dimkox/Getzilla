@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT/'.getzilla'))
 from getzilla import security_image_authority as image_authority
 from getzilla import security_license_acquisition as acquisition, security_artifacts as artifacts
 from getzilla import security_licenses as licenses, security_cli as cli
+from getzilla import security_license_contracts as license_contracts
 from getzilla import security_image_producer as producer, expanded_security as expanded
 
 NOW = datetime(2026, 11, 18, tzinfo=timezone.utc)
@@ -42,15 +43,19 @@ class PythonArtifactTargetTests(unittest.TestCase):
         recipe='trust-ci/Dockerfile.api'
         requirements='trust-ci/requirements.txt'
         (self.root/'trust-ci').mkdir()
-        raw=b'owned exact completed recipe data'
-        (self.root/recipe).write_bytes(raw)
-        row=dict(dockerfile=recipe,recipe_sha256='1'*64,build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
+        from getzilla.security_tools import TRUSTED_ROOT
+        build_requirements='trust-ci/requirements-build.txt'
+        raw=(TRUSTED_ROOT/recipe).read_bytes()
+        for path in (recipe,requirements,build_requirements):
+            (self.root/path).write_bytes((TRUSTED_ROOT/path).read_bytes())
+        row=dict(dockerfile=recipe,recipe_sha256=hashlib.sha256(raw).hexdigest(),build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
         dep=dict(ecosystem='PyPI',name='owned',version='1',manifest=requirements,usage='runtime-and-development',extras=[])
         original=dict(dep,manifest='factory/uv.lock')
         inventory=dict(digest='a'*64,builds=[row],dependencies=[dep,original],images=[dict(manifest='compose.yml',line=1,
             source_reference='compose-build:api',reference='owned@sha256:'+'3'*64)])
-        graphs=dict(graphs={'trust-ci/pyproject.toml#runtime':[[requirements]]},
-            evidence={recipe:hashlib.sha256(raw).hexdigest(),requirements:'4'*64})
+        graphs=dict(graphs={'trust-ci/pyproject.toml#runtime':[[requirements,build_requirements]]},
+            evidence={path:hashlib.sha256((self.root/path).read_bytes()).hexdigest()
+                      for path in (recipe,requirements,build_requirements)})
         guard=object()
         live=dict(source=source,run=run,builds={'2'*64:'owned@sha256:'+'3'*64},build_inputs=[row],native_guard=guard)
         with mock.patch.object(image_authority, '_GUARD',guard),mock.patch.object(image_authority, '_LIVE',live):
@@ -143,7 +148,7 @@ class PythonArtifactTargetTests(unittest.TestCase):
                 manifest_sha256=mh,source_head='a'*40,profile=factory.PROFILE,target_environment=environment,host_enforced=True)
         def fetch(url,*,maximum):
             return json.dumps(index).encode() if url==artifacts.pypi_index_url('owned','1.0') else payload
-        with mock.patch.object(factory,'_command',side_effect=command),mock.patch.object(licenses,'load_policy',return_value=policy):
+        with mock.patch.object(factory,'_command',side_effect=command),mock.patch.object(license_contracts,'load_policy',return_value=policy):
             result=factory.prepare(self.root/'candidate',artifacts_root,tools,binding,checker,now=NOW,fetch=fetch)
         self.assertEqual(len(calls),2)
         self.assertEqual(len(result['inventory']['dependencies']),1)

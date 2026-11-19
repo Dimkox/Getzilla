@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import STACK_DIR, state
-from .component_state import BoundRoot, ComponentStateError, component_transaction, mode_matches, path_parts
+from .fsx import ReadOnlyBoundRoot as BoundRoot, ComponentStateError, mode_matches, path_parts
 from .policy import evaluate_pre_tool
 from .skill_preflight import canonical, digest, parse_json
 from .skill_sandbox import MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, OUTPUT_PREFIXES
@@ -341,3 +341,9 @@ def materialize(project: Path, payload: AssetPayload) -> dict:
                 'permissions_granted': False, 'native_execution': False}
     except (ComponentStateError, OSError) as exc:
         raise ValueError('UNSAFE_BASELINE_DESTINATION') from exc
+
+
+def component_transaction(root: Path, *, timeout: float = 5.0):
+    """Legacy publication facade; fixed-asset readers do not load writer state."""
+    from .component_state import component_transaction as transaction
+    return transaction(root, timeout=timeout)

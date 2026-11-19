@@ -1109,9 +1109,9 @@ def has_valid_approval(
         # Production human gates decide per action; the grant itself binds the exact target.
         if gate_block_reason(root, scope, action, resource if scope == 'external-write' else None):
             return False
-    from .component_state import BoundRoot
+    from .fsx import ReadOnlyBoundRoot
     try:
-        with BoundRoot(root) as binding:
+        with ReadOnlyBoundRoot(root) as binding:
             _snapshot, approvals = _read_approvals(root, binding)
     except (OSError, ValueError):
         return False
@@ -1219,9 +1219,9 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
 
     An agent that recorded a grant and was refused again needs the reason, not a bare repeat.
     """
-    from .component_state import BoundRoot
+    from .fsx import ReadOnlyBoundRoot
     try:
-        with BoundRoot(root) as binding:
+        with ReadOnlyBoundRoot(root) as binding:
             _snapshot, approvals = _read_approvals(root, binding)
     except (OSError, ValueError):
         return ''

@@ -422,8 +422,8 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
 
 def file_sha256(path: Path, *, strict_root: Path | None = None) -> str:
     if strict_root is not None:
-        from .component_state import BoundRoot
-        with BoundRoot(strict_root) as binding:
+        from .fsx import ReadOnlyBoundRoot
+        with ReadOnlyBoundRoot(strict_root) as binding:
             snapshot = binding.read(path.relative_to(strict_root).as_posix())
             if snapshot is None:
                 raise ValueError('grant source disappeared')

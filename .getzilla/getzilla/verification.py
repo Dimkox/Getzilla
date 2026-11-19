@@ -2204,7 +2204,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     route = get_active_route(root) if route else None
     if route and (route.get('delivery_lane') == 'light' or route.get('light_lane_candidate') or 'light_diff' in route):
         from .light_lane import inspect_light_diff
-        from .router import escalate_route
+        from .review_plan import escalate_route
         light = inspect_light_diff(root, sorted({item.comparison_base_sha for item in git_ranges.bases}),
             risk=str(diff_metadata.get('effective_risk', 'high')),
             complete=diff_metadata.get('status') == 'computed' and not diff_metadata.get('gaps') and not git_ranges.findings)
