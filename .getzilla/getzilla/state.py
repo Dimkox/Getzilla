@@ -744,6 +744,154 @@ def _normalize_grant_resource(scope: str, raw: str) -> str:
     return resource
 
 
+class GrantExtensionError(ValueError):
+    """Fixed diagnostic; never a request to mint a replacement grant."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _grant_digest(value: Any) -> str:
+    import hashlib
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+
+
+def _grant_time(value: Any) -> datetime:
+    if type(value) is not str or len(value) > 40:
+        raise ValueError('invalid grant timestamp')
+    result = datetime.fromisoformat(value)
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError('invalid grant timestamp')
+    return result
+
+
+_EXTENSION_FIELDS = {'schema_version', 'kind', 'request_id', 'parent_id',
+                     'parent_record_sha256', 'request_sha256'}
+_FORMER_FIELDS = {'schema_version', 'source', 'repository', 'route_id', 'logical_task_id', 'authority_epoch',
+                  'owner_session_id', 'session_id', 'change_id', 'binding', 'git_branch', 'anchor_commit',
+                  'git_head', 'grant_binding_digest', 'resources', 'created_at'}
+_SUPERSESSION_FIELDS = {'schema_version', 'kind', 'status', 'id', 'parent_record_sha256', 'former',
+                       'request_id', 'request_sha256', 'successor_id', 'successor_record_sha256',
+                       'superseded_at', 'expires_at'}
+
+
+def _grant_hex(value: Any, width: int) -> bool:
+    return type(value) is str and re.fullmatch('[0-9a-f]{' + str(width) + '}', value) is not None
+
+
+def _extension_metadata(value: Any) -> None:
+    if (type(value) is not dict or set(value) != _EXTENSION_FIELDS or type(value['schema_version']) is not int
+            or value['schema_version'] != 1
+            or value['kind'] != 'exact-protected-path-extension'
+            or not _grant_hex(value['request_id'], 32) or not _grant_hex(value['parent_id'], 16)
+            or not all(_grant_hex(value[key], 64) for key in ('parent_record_sha256', 'request_sha256'))):
+        raise ValueError('unsupported extension metadata')
+
+
+def approval_record_kind(value: Any) -> str:
+    """Closed non-authority history, ordinary v2 authority, or inactive legacy."""
+    if type(value) is not dict:
+        raise ValueError('unsupported grant record')
+    if type(value.get('schema_version')) is int and value['schema_version'] == 2:
+        if 'kind' in value or 'status' in value:
+            raise ValueError('unsupported grant kind or status')
+        if 'extension' in value:
+            _extension_metadata(value['extension'])
+            if value.get('scope') != 'protected-path' or value.get('binding') != BRANCH_RESOURCES_BINDING:
+                raise ValueError('unsupported extension scope')
+        return 'active'
+    if type(value.get('schema_version')) is int and value['schema_version'] == 3:
+        if (set(value) != _SUPERSESSION_FIELDS or value['kind'] != 'protected-path-grant-supersession-v1'
+                or value['status'] != 'superseded' or not _grant_hex(value['id'], 16)
+                or not _grant_hex(value['successor_id'], 16) or not _grant_hex(value['request_id'], 32)
+                or not all(_grant_hex(value[key], 64) for key in
+                           ('parent_record_sha256', 'request_sha256', 'successor_record_sha256'))):
+            raise ValueError('unsupported grant supersession')
+        former = value['former']
+        if (type(former) is not dict or set(former) != _FORMER_FIELDS
+                or type(former['schema_version']) is not int or former['schema_version'] != 2
+                or former['binding'] != BRANCH_RESOURCES_BINDING or former['source'] not in APPROVAL_SOURCES
+                or type(former['authority_epoch']) is not int or former['authority_epoch'] < 0
+                or not _grant_hex(former['grant_binding_digest'], 64)
+                or former['anchor_commit'] != former['git_head']
+                or type(former['git_head']) is not str
+                or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', former['git_head'])
+                or any(type(former[key]) is not str or not former[key] or len(former[key]) > 1024
+                       for key in ('repository', 'route_id', 'logical_task_id', 'owner_session_id', 'session_id', 'git_branch'))
+                or former['change_id'] is not None and type(former['change_id']) is not str):
+            raise ValueError('unsupported former grant binding')
+        if _extension_resources(former['resources']) != former['resources']:
+            raise ValueError('noncanonical former resources')
+        for timestamp in (value['superseded_at'], value['expires_at'], former['created_at']):
+            _grant_time(timestamp)
+        return 'supersession'
+    if type(value.get('schema_version')) is int and value['schema_version'] == 1 and 'kind' not in value and 'status' not in value:
+        return 'inactive'
+    raise ValueError('unsupported grant record')
+
+
+def _read_approvals(root: Path, binding) -> tuple[Any, list[dict[str, Any]]]:
+    from .spec import _pairs_object, _reject_constant
+    snapshot = binding.read('.getzilla/runtime/approvals.json', limit=1_048_576)
+    if snapshot is None:
+        return None, []
+    try:
+        rows = json.loads(snapshot.content, object_pairs_hook=_pairs_object, parse_constant=_reject_constant)
+        if type(rows) is not list or len(rows) > 200:
+            raise ValueError('unsupported approval store')
+        identifiers = [row.get('id') for row in rows if type(row) is dict]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError('duplicate approval identifier')
+        for row in rows:
+            approval_record_kind(row)
+        validate_approval_history(rows)
+        return snapshot, rows
+    except (ValueError, TypeError, RecursionError) as error:
+        raise ValueError('unsupported approval store') from error
+
+
+def validate_approval_history(rows: list[dict]) -> None:
+    """Check retained links without requiring pruned history or following successors for authority."""
+    for row in rows:
+        approval_record_kind(row)
+    for row in rows:
+        if approval_record_kind(row) != 'supersession':
+            continue
+        successors = [candidate for candidate in rows if candidate.get('id') == row['successor_id']]
+        if not successors:
+            continue
+        if len(successors) != 1:
+            raise ValueError('ambiguous supersession link')
+        successor = successors[0]
+        kind = approval_record_kind(successor)
+        if kind == 'supersession':
+            digest = successor['parent_record_sha256']
+        elif kind == 'active':
+            digest = _grant_digest(successor)
+            if successor.get('extension') != {
+                'schema_version': 1, 'kind': 'exact-protected-path-extension',
+                'request_id': row['request_id'], 'parent_id': row['id'],
+                'parent_record_sha256': row['parent_record_sha256'], 'request_sha256': row['request_sha256'],
+            }:
+                raise ValueError('conflicting supersession metadata')
+        else:
+            raise ValueError('conflicting supersession kind')
+        if digest != row['successor_record_sha256']:
+            raise ValueError('conflicting supersession digest')
+
+
+def _extension_resources(resources: Any) -> list[str]:
+    if type(resources) not in (list, tuple) or not 1 <= len(resources) <= 1024:
+        raise ValueError('invalid extension resources')
+    if any(type(value) is not str or len(value.encode('utf-8')) > 4096 for value in resources):
+        raise ValueError('invalid extension resources')
+    if sum(len(value.encode('utf-8')) for value in resources) > 262144:
+        raise ValueError('invalid extension resources')
+    return sorted({_normalize_grant_resource('protected-path', value) for value in resources})
+
+
 @serialized_task
 def add_approval(
     root: Path,
@@ -846,14 +994,229 @@ def add_approval(
         'expires_at': (now + timedelta(minutes=ttl_minutes)).isoformat(timespec='seconds'),
     }
     with runtime_lock(root, 'approvals'):
-        approvals = load_json(approvals_path(root), [])
-        if not isinstance(approvals, list):
-            approvals = []
+        from .component_state import BoundRoot
+        with BoundRoot(root) as binding:
+            _snapshot, approvals = _read_approvals(root, binding)
         approvals.append(approval)
         dump_json(approvals_path(root), approvals[-200:])
     from .route_metrics import record
     record(root, 'grant', approval.get('route_id'), event_id='grant:' + approval['id'], scope=approval['scope'])
     return approval
+
+
+def _extension_context(root: Path) -> tuple[dict, dict]:
+    from .continuity import context_binding, has_task_context, scope_gaps, task_identity
+    try:
+        route = require_route_owner(root)
+        head = git_head(root)
+        branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
+        if (not has_task_context(route) or not head or not branch or not current_session()
+                or scope_gaps(root, route)):
+            raise ValueError('unqualified context')
+        return route, {
+            'repository': _repository_identity(root), 'route_id': route['route_id'],
+            'logical_task_id': task_identity(route), 'authority_epoch': route['authority_epoch'],
+            'owner_session_id': route['session_id'], 'session_id': current_session(),
+            'change_id': _active_change_id(root), 'git_head': head, 'git_branch': branch,
+            'scope_binding': context_binding(root, route),
+        }
+    except (KeyError, OSError, RuntimeError, ValueError):
+        raise GrantExtensionError('EXTENSION_AUTHORITY_MISMATCH') from None
+
+
+def _extension_parent_shape(parent: dict) -> None:
+    fields = _FORMER_FIELDS | {'id', 'authorization', 'scope', 'actions', 'reason', 'expires_at'}
+    if (set(parent) not in (fields, fields | {'extension'})
+            or approval_record_kind(parent) != 'active'
+            or parent.get('authorization') != 'delegated-local-grant'
+            or parent.get('scope') != 'protected-path'
+            or parent.get('actions') != ['protected-path-write']
+            or parent.get('binding') != BRANCH_RESOURCES_BINDING
+            or parent.get('source') not in APPROVAL_SOURCES
+            or not _grant_hex(parent.get('id'), 16)
+            or not _grant_hex(parent.get('grant_binding_digest'), 64)
+            or type(parent.get('authority_epoch')) is not int
+            or parent['authority_epoch'] < 0
+            or any(type(parent.get(key)) is not str or not parent[key]
+                   for key in ('repository', 'route_id', 'logical_task_id', 'owner_session_id',
+                               'session_id', 'git_branch', 'reason'))
+            or parent.get('change_id') is not None and type(parent['change_id']) is not str
+            or type(parent.get('anchor_commit')) is not str
+            or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', parent['anchor_commit'])
+            or parent.get('git_head') != parent['anchor_commit']):
+        raise GrantExtensionError('UNSUPPORTED_EXTENSION_BINDING')
+    try:
+        if _extension_resources(parent['resources']) != parent['resources']:
+            raise ValueError('noncanonical resources')
+        created, expires = _grant_time(parent['created_at']), _grant_time(parent['expires_at'])
+        if not created < expires or expires - created > timedelta(days=1):
+            raise ValueError('unqualified lifetime')
+    except (KeyError, TypeError, ValueError):
+        raise GrantExtensionError('UNSUPPORTED_EXTENSION_BINDING') from None
+
+
+def _extension_current(root: Path, parent: dict, context: dict, route: dict,
+                       *, combined: list[str] | None = None) -> str:
+    # Revalidate the captured record without consulting a store that may now contain its tombstone.
+    if any(parent[key] != context[key] for key in context if key not in {'git_head', 'scope_binding'}):
+        raise GrantExtensionError('EXTENSION_AUTHORITY_MISMATCH')
+    now = datetime.now(timezone.utc)
+    if not _grant_time(parent['created_at']) <= now < _grant_time(parent['expires_at']):
+        raise GrantExtensionError('EXTENSION_PARENT_NOT_CURRENT')
+    if git_output(root, 'merge-base', '--is-ancestor', parent['anchor_commit'], context['git_head']) is None:
+        raise GrantExtensionError('EXTENSION_PARENT_NOT_CURRENT')
+    try:
+        old_digest = tree_fingerprint(root, parent['resources'], anchor=parent['anchor_commit'], strict=True)
+        digest = (tree_fingerprint(root, combined, anchor=parent['anchor_commit'], strict=True)
+                  if combined is not None else old_digest)
+    except (OSError, ValueError):
+        raise GrantExtensionError('EXTENSION_SOURCE_UNQUALIFIED') from None
+    if old_digest != parent['grant_binding_digest']:
+        raise GrantExtensionError('EXTENSION_PARENT_NOT_CURRENT')
+    return digest
+
+
+def _extension_result(status: str, code: str, grant: dict | None = None) -> dict[str, Any]:
+    return {'status': status, 'code': code, 'grant': grant,
+            'inspection_required': status == 'unknown', 'retryable': False}
+
+
+def extend_protected_path_approval(
+    root: Path, parent_id: str, request_id: str, reason: str, ttl_minutes: int = 15, *,
+    actions: list[str] | tuple[str, ...], resources: list[str] | tuple[str, ...],
+    source: str = 'standing-user-consent',
+) -> dict[str, Any]:
+    """Replace one current protected grant with an explicitly delegated strict superset.
+
+    One store publication contains both the non-authority history and the ordinary successor.
+    A request ID is only an idempotency key; it does not supply consent or recover revoked authority.
+    """
+    try:
+        return _extend_protected_path_approval(
+            root, parent_id, request_id, reason, ttl_minutes, actions=actions, resources=resources, source=source)
+    except GrantExtensionError:
+        raise
+    except (OSError, ValueError):
+        raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED') from None
+
+
+@serialized_task
+def _extend_protected_path_approval(
+    root: Path, parent_id: str, request_id: str, reason: str, ttl_minutes: int, *,
+    actions: list[str] | tuple[str, ...], resources: list[str] | tuple[str, ...], source: str,
+) -> dict[str, Any]:
+    from .component_state import BoundRoot
+    if (type(actions) not in (list, tuple) or len(actions) != 1
+            or type(actions[0]) is not str or actions[0] != 'protected-path-write'):
+        raise GrantExtensionError('UNSUPPORTED_EXTENSION_SCOPE')
+    try:
+        if (not _grant_hex(parent_id, 16) or not _grant_hex(request_id, 32)
+                or type(reason) is not str or not reason.strip() or len(reason.encode('utf-8', 'strict')) > 1024
+                or type(ttl_minutes) is not int or not 1 <= ttl_minutes <= 1440
+                or type(source) is not str or source not in APPROVAL_SOURCES):
+            raise ValueError('invalid request')
+        full_set = _extension_resources(resources)
+    except (UnicodeError, TypeError, ValueError):
+        raise GrantExtensionError('INVALID_EXTENSION_REQUEST') from None
+    request_digest = _grant_digest({'parent_id': parent_id, 'request_id': request_id,
+                                   'reason': reason.strip(), 'ttl_minutes': ttl_minutes,
+                                   'actions': ['protected-path-write'], 'resources': full_set, 'source': source})
+    route, context = _extension_context(root)
+    with runtime_lock(root, 'approvals'), BoundRoot(root) as binding:
+        try:
+            snapshot, rows = _read_approvals(root, binding)
+        except (OSError, ValueError):
+            raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED') from None
+        parents = [row for row in rows if row.get('id') == parent_id]
+        if len(parents) != 1:
+            raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED')
+        parent = parents[0]
+        requests = [row for row in rows if row.get('request_id') == request_id
+                    or type(row.get('extension')) is dict and row['extension'].get('request_id') == request_id]
+        if requests:
+            if any((row.get('request_sha256') if approval_record_kind(row) == 'supersession'
+                    else row['extension']['request_sha256']) != request_digest for row in requests):
+                raise GrantExtensionError('EXTENSION_REQUEST_CONFLICT')
+            if approval_record_kind(parent) != 'supersession' or parent['request_id'] != request_id:
+                raise GrantExtensionError('EXTENSION_REPLAY_NOT_CURRENT')
+            successors = [row for row in rows if row.get('id') == parent['successor_id']]
+            if len(successors) != 1:
+                raise GrantExtensionError('EXTENSION_REPLAY_NOT_CURRENT')
+            successor = successors[0]
+            if (approval_record_kind(successor) != 'active'
+                    or _grant_digest(successor) != parent['successor_record_sha256']
+                    or successor.get('extension') != {
+                        'schema_version': 1, 'kind': 'exact-protected-path-extension', 'request_id': request_id,
+                        'parent_id': parent_id, 'parent_record_sha256': parent['parent_record_sha256'],
+                        'request_sha256': request_digest}):
+                raise GrantExtensionError('EXTENSION_REPLAY_NOT_CURRENT')
+            _extension_parent_shape(successor)
+            try:
+                _extension_current(root, successor, context, route)
+                if _extension_context(root)[1] != context or binding.read('.getzilla/runtime/approvals.json') != snapshot:
+                    raise ValueError('changed replay')
+            except (OSError, ValueError):
+                raise GrantExtensionError('EXTENSION_REPLAY_NOT_CURRENT') from None
+            return _extension_result('replayed', 'EXTENSION_REPLAYED', successor)
+        if approval_record_kind(parent) != 'active':
+            raise GrantExtensionError('EXTENSION_REPLAY_NOT_CURRENT')
+        _extension_parent_shape(parent)
+        if not set(parent['resources']) < set(full_set):
+            raise GrantExtensionError('INVALID_EXTENSION_REQUEST')
+        digest = _extension_current(root, parent, context, route, combined=full_set)
+        now = datetime.now(timezone.utc)
+        child = {**parent, 'id': secrets.token_hex(8), 'source': source, 'reason': reason.strip(),
+                 'resources': full_set, 'grant_binding_digest': digest,
+                 'created_at': now.isoformat(timespec='microseconds'),
+                 'expires_at': min(_grant_time(parent['expires_at']), now + timedelta(minutes=ttl_minutes)).isoformat(timespec='microseconds'),
+                 'extension': {'schema_version': 1, 'kind': 'exact-protected-path-extension',
+                               'request_id': request_id, 'parent_id': parent_id,
+                               'parent_record_sha256': _grant_digest(parent), 'request_sha256': request_digest}}
+        if any(row.get('id') == child['id'] for row in rows):
+            raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED')
+        tombstone = {'schema_version': 3, 'kind': 'protected-path-grant-supersession-v1', 'status': 'superseded',
+                     'id': parent_id, 'parent_record_sha256': _grant_digest(parent),
+                     'former': {key: parent[key] for key in _FORMER_FIELDS},
+                     'request_id': request_id, 'request_sha256': request_digest,
+                     'successor_id': child['id'], 'successor_record_sha256': _grant_digest(child),
+                     'superseded_at': now.isoformat(timespec='microseconds'), 'expires_at': parent['expires_at']}
+        updated = [tombstone if row is parent else row for row in rows] + [child]
+        if len(updated) > 200:
+            raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED')
+        content = (json.dumps(updated, ensure_ascii=True, indent=2, allow_nan=False) + '\n').encode()
+        if len(content) > 1_048_576:
+            raise GrantExtensionError('EXTENSION_STORE_UNQUALIFIED')
+
+        def check() -> None:
+            current_route, current_context = _extension_context(root)
+            if current_context != context:
+                raise GrantExtensionError('EXTENSION_CAS_CONFLICT')
+            if _extension_current(root, parent, context, current_route, combined=full_set) != digest:
+                raise GrantExtensionError('EXTENSION_CAS_CONFLICT')
+
+        # On failure, observe once. Never roll back, remint, or make a second publication.
+        try:
+            binding.write('.getzilla/runtime/approvals.json', content, 0o600, expected=snapshot, before_publish=check)
+        except (OSError, ValueError):
+            pass
+        try:
+            observed = binding.read('.getzilla/runtime/approvals.json', limit=1_048_576)
+        except (OSError, ValueError):
+            observed = None
+        if observed is not None and observed.content == content:
+            try:
+                current_route, current_context = _extension_context(root)
+                if current_context != context:
+                    raise ValueError('context changed')
+                _extension_current(root, child, context, current_route)
+                if binding.read('.getzilla/runtime/approvals.json') != observed:
+                    raise ValueError('successor revoked')
+            except (OSError, ValueError):
+                return _extension_result('committed_not_current', 'EXTENSION_COMMITTED_NOT_CURRENT')
+            return _extension_result('created', 'EXTENSION_CREATED', child)
+        if observed == snapshot:
+            return _extension_result('refused', 'EXTENSION_NOT_PUBLISHED')
+        return _extension_result('unknown', 'EXTENSION_PUBLICATION_UNVERIFIED')
 
 
 @serialized_task
@@ -865,7 +1228,6 @@ def has_valid_approval(
     resource: str | None = None,
 ) -> bool:
     """Recheck exact task/epoch/owner and all existing source, resource and TTL fences."""
-    from .continuity import has_task_context, legacy_evidence_allowed, task_identity
     route = get_active_route(root)
     if route:
         try:
@@ -881,8 +1243,11 @@ def has_valid_approval(
         # Production human gates decide per action; the grant itself binds the exact target.
         if gate_block_reason(root, scope, action, resource if scope == 'external-write' else None):
             return False
-    approvals = load_json(approvals_path(root), [])
-    if not isinstance(approvals, list):
+    from .component_state import BoundRoot
+    try:
+        with BoundRoot(root) as binding:
+            _snapshot, approvals = _read_approvals(root, binding)
+    except (OSError, ValueError):
         return False
     try:
         repository = _grant_repository_identity(root, scope)
@@ -904,74 +1269,83 @@ def has_valid_approval(
         'change_id': change_id,
         'git_head': head,
     }
-    current_binding_digest = tree_fingerprint(root)
     now = datetime.now(timezone.utc)
-    kept: list[dict[str, Any]] = []
-    matched = False
     normalized_resource = resource.replace('\\', '/') if resource else None
     for approval in approvals:
+        if approval_record_kind(approval) != 'active':
+            continue
+        query = {**bindings, '_query': (scope, action, normalized_resource)}
+        if _approval_matches(root, approval, route, query, head, now, strict='extension' in approval):
+            return True
+    return False
+
+
+def _approval_matches(root: Path, approval: dict, route: dict, bindings: dict, head: str,
+                      now: datetime, *, strict: bool = False) -> bool:
+    from .continuity import has_task_context, legacy_evidence_allowed, task_identity
+    scope, action, normalized_resource = bindings['_query']
+    if (bindings.get('repository', '').startswith('local-git-v1:')
+            and approval.get('session_id') != current_session()):
+        return False
+    try:
+        expires = datetime.fromisoformat(str(approval['expires_at']))
+    except (KeyError, TypeError, ValueError):
+        return False
+    if expires < now:
+        return False
+    if approval.get('schema_version') != 2:
+        return False
+    if approval.get('authorization') != 'delegated-local-grant':
+        return False
+    if approval.get('scope') != scope:
+        return False
+    branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
+    continuity_fields = {'logical_task_id', 'authority_epoch', 'owner_session_id'}
+    if continuity_fields.intersection(approval):
+        if (not continuity_fields.issubset(approval) or type(approval.get('authority_epoch')) is not int or
+                approval['logical_task_id'] != task_identity(route) or
+                approval['authority_epoch'] != route.get('authority_epoch', 0) or
+                approval['owner_session_id'] != route.get('session_id')):
+            return False
+    elif has_task_context(route) and (
+            not legacy_evidence_allowed(route) or route.get('origin_session_id') != route.get('session_id')):
+        return False
+    if any(approval.get(key) != value for key, value in bindings.items() if key != '_query'
+           if not (branch_bound and key == 'git_head')):
+        return False
+    grant_binding_digest = approval.get('grant_binding_digest')
+    legacy_tree_fingerprint = approval.get('tree_fingerprint')
+    if grant_binding_digest is not None and legacy_tree_fingerprint is not None:
+        return False
+    binding = approval.get('binding')
+    if binding is None:
+        expected_digest = tree_fingerprint(root)
+    elif branch_bound:
+        anchor = approval.get('anchor_commit')
+        branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
+        if (not branch or branch != approval.get('git_branch')
+                or not isinstance(anchor, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', anchor)
+                or anchor != approval.get('git_head')
+                or git_output(root, 'merge-base', '--is-ancestor', anchor, head) is None):
+            return False
         try:
-            expires = datetime.fromisoformat(str(approval['expires_at']))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if expires < now:
-            continue
-        kept.append(approval)
-        if approval.get('schema_version') != 2:
-            continue
-        if approval.get('authorization') != 'delegated-local-grant':
-            continue
-        if approval.get('scope') != scope:
-            continue
-        if local_repository and approval.get('session_id') != current_session():
-            continue
-        branch_bound = scope == 'protected-path' and approval.get('binding') == BRANCH_RESOURCES_BINDING
-        continuity_fields = {'logical_task_id', 'authority_epoch', 'owner_session_id'}
-        if continuity_fields.intersection(approval):
-            if (not continuity_fields.issubset(approval) or type(approval.get('authority_epoch')) is not int or
-                    approval['logical_task_id'] != task_identity(route) or
-                    approval['authority_epoch'] != route.get('authority_epoch', 0) or
-                    approval['owner_session_id'] != route.get('session_id')):
-                continue
-        elif has_task_context(route) and (
-                not legacy_evidence_allowed(route) or route.get('origin_session_id') != route.get('session_id')):
-            continue
-        if any(approval.get(key) != value for key, value in bindings.items()
-               if not (branch_bound and key == 'git_head')):
-            continue
-        grant_binding_digest = approval.get('grant_binding_digest')
-        legacy_tree_fingerprint = approval.get('tree_fingerprint')
-        if grant_binding_digest is not None and legacy_tree_fingerprint is not None:
-            continue
-        binding = approval.get('binding')
-        if binding is None:
-            expected_digest = current_binding_digest
-        elif branch_bound:
-            anchor = approval.get('anchor_commit')
-            branch = git_output(root, 'symbolic-ref', '--quiet', 'HEAD')
-            if (not branch or branch != approval.get('git_branch')
-                    or not isinstance(anchor, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', anchor)
-                    or anchor != approval.get('git_head')
-                    or git_output(root, 'merge-base', '--is-ancestor', anchor, head) is None):
-                continue
-            try:
-                expected_digest = tree_fingerprint(root, approval.get('resources') or [], anchor=anchor)
-            except (OSError, ValueError):
-                continue
-        elif binding == GRANTED_RESOURCES_BINDING and approval.get('scope') == 'protected-path':
-            expected_digest = tree_fingerprint(root, approval.get('resources') or [])
-        else:
-            continue
-        if (grant_binding_digest or legacy_tree_fingerprint) != expected_digest:
-            continue
-        if action and action not in set(approval.get('actions') or []):
-            continue
-        # Exact equality only: a stored pattern (legacy or hand-edited) never widens a grant.
-        resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
-        if normalized_resource is not None and normalized_resource not in resources:
-            continue
-        matched = True
-    return matched
+            expected_digest = tree_fingerprint(root, approval.get('resources') or [], anchor=anchor,
+                                               **({'strict': True} if strict else {}))
+        except (OSError, ValueError):
+            return False
+    elif binding == GRANTED_RESOURCES_BINDING and approval.get('scope') == 'protected-path':
+        expected_digest = tree_fingerprint(root, approval.get('resources') or [])
+    else:
+        return False
+    if (grant_binding_digest or legacy_tree_fingerprint) != expected_digest:
+        return False
+    if action and action not in set(approval.get('actions') or []):
+        return False
+    # Exact equality only: a stored pattern (legacy or hand-edited) never widens a grant.
+    resources = {str(item).replace('\\', '/') for item in approval.get('resources') or []}
+    if normalized_resource is not None and normalized_resource not in resources:
+        return False
+    return True
 
 
 def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | None) -> str:
@@ -979,8 +1353,11 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
 
     An agent that recorded a grant and was refused again needs the reason, not a bare repeat.
     """
-    approvals = load_json(approvals_path(root), [])
-    if not isinstance(approvals, list):
+    from .component_state import BoundRoot
+    try:
+        with BoundRoot(root) as binding:
+            _snapshot, approvals = _read_approvals(root, binding)
+    except (OSError, ValueError):
         return ''
     now = datetime.now(timezone.utc)
     head = git_head(root) or ''
@@ -988,7 +1365,7 @@ def approval_mismatch(root: Path, scope: str, *, action: str, resource: str | No
     normalized = resource.replace('\\', '/') if resource else None
     reasons: list[str] = []
     for approval in approvals:
-        if not isinstance(approval, dict) or approval.get('authorization') != 'delegated-local-grant':
+        if approval_record_kind(approval) != 'active' or approval.get('authorization') != 'delegated-local-grant':
             continue
         try:
             if datetime.fromisoformat(str(approval['expires_at'])) < now:

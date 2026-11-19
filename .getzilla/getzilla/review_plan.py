@@ -9,6 +9,7 @@ from typing import Any
 
 from .diff_risk import ORDER, classify_diff, load_rules, parse_rules
 from .project_ingestion import _git
+from .state import serialized_task
 from .util import git_head, tree_fingerprint, unique_ordered
 
 RULE_PATH = '.getzilla/config/diff-risk-rules.json'
@@ -278,6 +279,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                 *([route['write_agent']] if route and route.get('write_agent') else []), *reviewers])}
 
 
+@serialized_task
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
     from .state import get_active_route, update_route, task_transition
