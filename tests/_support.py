@@ -471,8 +471,10 @@ def offline_mirror(base: Path) -> Path:
     """
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
+    import io
     from getzilla import baseline, updater
-    from getzilla.security_osv_snapshot import download_database
+    from getzilla.security_data import osv_coverage, publish_snapshot
+    from datetime import datetime, timezone
 
     mirror = base / 'update-mirror'
     archives = {}
@@ -485,11 +487,14 @@ def offline_mirror(base: Path) -> Path:
                 'versions': ['1.0.0'],
             }]}))
         archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip'] = archive.read_bytes()
-    def fetch_owned_archive(url, body=None):
-        if body is not None or url not in archives:
-            raise AssertionError('offline fixture permits only its own archive bytes')
-        return archives[url]
-    download_database(mirror / 'osv', fetch=fetch_owned_archive)
+    current = datetime.now(timezone.utc)
+    for ecosystem in updater.OSV_ECOSYSTEMS:
+        payload = archives[f'{updater.OSV_BUCKET}/{ecosystem}/all.zip']
+        publish_snapshot(mirror / 'osv', f'osv:{ecosystem}', payload,
+                         acquisition={'last_verified_sync_utc': current.isoformat(),
+                                      'retrieval_kind': 'download',
+                                      'producer': 'synthetic-public-offline-mirror'},
+                         coverage=osv_coverage(payload, ecosystem), now=current)
     opengrep = {}
     for asset, _ in updater.OPENGREP_ASSETS.values():
         data = f'#!/bin/sh\necho "opengrep {updater.OPENGREP_VERSION} fixture ({asset})"\n'.encode()

@@ -20,6 +20,12 @@ class CliError(RuntimeError):
     pass
 
 
+# The live runtime binds the owner uid, private POSIX modes, bubblewrap and process
+# groups, none of which exists on Windows; such a host is refused before any
+# configuration or state is read, instead of failing on a missing os.getuid.
+POSIX_HOST = os.name == "posix"
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     job_id: str
@@ -122,6 +128,8 @@ def main(
         return _emit(output, {"status": "unavailable", "reason": "live_disabled"}, 2)
     if not args.config:
         return _emit(output, {"status": "unavailable", "reason": "live_config_required"}, 2)
+    if not POSIX_HOST:
+        return _emit(output, {"status": "unavailable", "reason": "posix_host_required"}, 2)
     try:
         config = load_runtime_config(Path(args.config))
         runner = phase_runner or _default_phase_runner

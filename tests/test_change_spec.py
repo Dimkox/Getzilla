@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import hashlib
+import inspect
 import json
 import sys
 import tempfile
@@ -88,6 +90,84 @@ def _run_cli(argv, *, root=None):
         for c in reversed(ctxs):
             c.__exit__(None, None, None)
     return code, buf.getvalue()
+
+class RuleYamlProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.assertIn('rules_profile', inspect.signature(SPEC.parse_yaml_subset).parameters,
+                      'rules aliases need an explicit opt-in on the existing reader')
+        self.sample = ('rules:\n  - id: first\n    pattern-sources: &source\n'
+                       '      - pattern: input()\n  - id: second\n    pattern-sources: *source\n')
+
+    def parse(self, text):
+        return SPEC.parse_yaml_subset(text, rules_profile=True)
+
+    def test_default_parser_still_refuses_anchors_without_rules_optin(self):
+        for options in ({}, {'rules_profile': False}):
+            with self.assertRaises(SPEC.SpecError):
+                SPEC.parse_yaml_subset(self.sample, **options)
+        plain = 'a: true\nb: []\nc: {}\n'
+        self.assertEqual(SPEC.parse_yaml_subset(plain), SPEC.parse_yaml_subset(plain, rules_profile=False))
+
+    def test_current_four_files_transport_equals_complete_independent_pinned_compiler_objects(self):
+        from getzilla.security_opengrep import resolved_rules
+        fixtures = ROOT / 'tests/fixtures/opengrep'
+        provenance = json.loads((fixtures / 'provenance.json').read_text())
+        self.assertEqual(len(provenance['files']), 4)
+        for name, record in provenance['files'].items():
+            raw = (ROOT / '.getzilla/sast/rules' / name).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), record['raw_sha256'])
+            expected = json.loads((fixtures / record['fixture']).read_text())
+            with self.subTest(file=name):
+                # Reader preserves YAML scalars. The producer separately applies
+                # only the pinned CLI's documented js/ts transport aliases.
+                parsed = self.parse(raw.decode('utf-8'))
+                self.assertEqual([item['id'] for item in parsed['rules']], record['ids'])
+                self.assertEqual(resolved_rules(raw), expected)
+
+    def test_aliases_resolve_prior_completed_lists_and_do_not_share_mutable_values(self):
+        data = self.parse(self.sample)
+        first, second = [row['pattern-sources'] for row in data['rules']]
+        self.assertEqual(first, second)
+        second[0]['pattern'] = 'changed()'
+        self.assertEqual(first[0]['pattern'], 'input()')
+
+    def test_duplicate_cycle_forward_wrong_role_tags_and_merge_are_refused(self):
+        variants = [self.sample.replace('*source', '*missing'),
+                    self.sample.replace('&source', '&source\n      - pattern-sources: *source'),
+                    self.sample + '  - id: third\n    pattern-sources: &source\n      - pattern: x()\n',
+                    self.sample.replace('pattern-sources: *source', 'message: *source'),
+                    self.sample.replace('pattern-sources: &source', 'pattern-sources: &source []'),
+                    self.sample.replace('id: first', 'id: first\n    id: duplicate'),
+                    self.sample.replace('id: first', 'id: !!str first'),
+                    self.sample.replace('id: first', 'id: first\n    <<: *source'),
+                    'rules: [{id: a, id: b}]\n', 'rules:\n  - id: x\n    metadata: {x: 1, x: 2}\n']
+        for text in variants:
+            with self.subTest(text=text), self.assertRaises(SPEC.SpecError):
+                self.parse(text)
+
+    def test_shared_depth_node_string_reference_and_input_budgets_refuse(self):
+        for constant, limit in [('MAX_DEPTH', 1), ('MAX_NODES', 1),
+                                ('MAX_STRING_LENGTH', 4), ('MAX_RULE_REFERENCES', 1), ('MAX_SPEC_BYTES', 32)]:
+            with self.subTest(constant=constant), patch.object(SPEC, constant, limit), self.assertRaises(SPEC.SpecError):
+                self.parse(self.sample)
+        self.assertEqual(len(self.parse(self.sample)['rules']), 2)
+
+    def test_unknown_scalar_and_dynamic_profiles_never_become_plain_string_fallback(self):
+        for value in ('1.25', '.inf', '2026-11-05', '!custom value', '|', '>', '[&source x]',
+                      'x: y', '- item', '? key', '@reserved', '`reserved', ']unmatched'):
+            with self.subTest(value=value), self.assertRaises(SPEC.SpecError):
+                self.parse('rules:\n  - id: x\n    pattern: ' + value + '\n')
+
+    def test_alias_expansion_refuses_exhausted_budget_before_copy(self):
+        for metrics in ((SPEC.MAX_NODES + 1, 1, 1), (1, SPEC.MAX_SPEC_BYTES + 1, 1),
+                        (1, 1, SPEC.MAX_DEPTH + 1)):
+            context = SPEC._RuleYamlContext()
+            context.anchors['source'] = ([{'pattern': 'inert()'}], metrics)
+            with self.subTest(metrics=metrics), patch.object(SPEC.copy, 'deepcopy') as copy_value:
+                with self.assertRaises(SPEC.SpecError):
+                    context.value([], 0, 0, '*source', 'pattern-sources', 0)
+                copy_value.assert_not_called()
+
 
 class ChangeSpecTests(unittest.TestCase):
     def test_valid_spec_passes(self) -> None:

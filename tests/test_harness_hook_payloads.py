@@ -128,7 +128,7 @@ class HarnessHookPayloadTests(unittest.TestCase):
                 self.assertEqual(data['decision'], 'deny', key)
             data = self._pre_tool(root, 'exec_command', {'cmd': 'x' * 131073})
             self.assertEqual(data['decision'], 'deny')
-            self.assertIn('longer', data['reason'])
+            self.assertIn('longer', data['hookSpecificOutput']['permissionDecisionReason'])
 
     def test_codex_legacy_and_equal_alias_commands_stay_supported(self) -> None:
         with project_copy() as root:

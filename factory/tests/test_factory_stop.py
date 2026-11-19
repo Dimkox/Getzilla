@@ -74,9 +74,13 @@ class FactoryStopEntryTests(unittest.TestCase):
         self.assertEqual(key.call_count, 0)
 
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
+
 @unittest.skipUnless(os.environ.get('FACTORY_TEST_DATABASE_URL'), 'requires bound disposable PostgreSQL')
-class FactoryStopAuthorityTests(unittest.TestCase):
+class FactoryStopAuthorityTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         import psycopg
         from psycopg.conninfo import conninfo_to_dict, make_conninfo
         from factory.tests.run_disposable_exit import _binding_matches

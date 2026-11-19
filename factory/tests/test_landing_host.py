@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from factory.tests.paid_fixture import configure_test_authority
 from getzilla_factory import landing_host
 from getzilla_factory.landing_contracts import LandingContractError
 from getzilla_factory.landing_renderer import (
@@ -209,7 +210,7 @@ class LandingHostCompositionTests(HostFixture):
         with patch.object(landing_host, "load_actors", return_value=self.actors), patch(
             "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("offline credential read")
         ):
-            app = landing_host.build_landing_app(config, qwen_env_file=self.root / "missing")
+            app = landing_host.build_landing_app(config, qwen_env_file=self.root / "missing", configure_paid_authority=configure_test_authority)
         app.state.owned_landing_runtime.close()
         self.assertTrue(self.reopen_store().database_path.is_file())
 
@@ -245,7 +246,7 @@ class LandingHostCompositionTests(HostFixture):
             ):
                 with self.assertRaisesRegex(SettingsError, "canonical Factory stop authority"):
                     compose_server_landing(config.settings, repository_root=config.control_repository,
-                                           qwen_env_file=self.root / "missing")
+                                           qwen_env_file=self.root / "missing", configure_paid_authority=configure_test_authority)
             self.reopen_store().close()
 
     def test_standalone_live_refusal_does_not_disturb_existing_writer(self):

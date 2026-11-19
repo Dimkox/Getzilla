@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import httpx
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
 from getzilla_factory import landing_live_executors as live
 from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_contracts import decode_provider_evidence, landing_digest
@@ -89,8 +91,9 @@ def _request(executor) -> HttpLandingExecutionRequest:
     }))
 
 
-class LandingLiveExecutorTests(unittest.TestCase):
+class LandingLiveExecutorTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         mock_transport_factory_boundary(self)
 
     def test_host_requirements_match_current_python_and_httpx(self) -> None:
@@ -209,8 +212,9 @@ class LandingLiveExecutorTests(unittest.TestCase):
         self.assertEqual("executor_result", str(raised.exception))
 
 
-class GrokReasoningUsageTests(unittest.TestCase):
+class GrokReasoningUsageTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         mock_transport_factory_boundary(self)
 
     # Counts captured from the sanitized grok-4.6 response on 2026-09-15.
@@ -416,8 +420,9 @@ class GrokReasoningUsageTests(unittest.TestCase):
                 self.assertEqual((12, 34), (retained.usage_input_units, retained.usage_output_units))
 
 
-class HttpLandingDraftNormalizationTests(unittest.TestCase):
+class HttpLandingDraftNormalizationTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         mock_transport_factory_boundary(self)
 
     def normalize(self, document, provider="qwen"):
@@ -473,8 +478,9 @@ class HttpLandingDraftNormalizationTests(unittest.TestCase):
                 self.assertRegex(outcome.evidence.provider_evidence_digest, r"^[0-9a-f]{64}$")
 
 
-class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
+class LandingLiveGrokQwenCompositionTests(PaidProtocolTestCase):
     def setUp(self) -> None:
+        super().setUp()
         mock_transport_factory_boundary(self)
         temporary = tempfile.TemporaryDirectory(prefix="landing-live-llm-")
         self.addCleanup(temporary.cleanup)
@@ -750,8 +756,14 @@ class LandingLiveGrokQwenCompositionTests(unittest.TestCase):
             self.assertIsNone(created.job.result_view()["live_url"])
 
 
-class QwenCredentialAndProfileTests(unittest.TestCase):
+class QwenCredentialAndProfileTests(PaidProtocolTestCase):
+    def probe_admission(self):
+        brief = "Create an English landing page for a fictional local gardening club. One hero section. No links, prices, contacts or factual claims."
+        return self.admission('qwen','qwen-plus',hashlib.sha256(brief.encode()).hexdigest())
+
     def setUp(self):
+        super().setUp()
+        mock_transport_factory_boundary(self)
         temporary = tempfile.TemporaryDirectory(prefix="qwen-fixture-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -821,7 +833,7 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
             self.assertFalse(body["enable_thinking"])
             self.assertFalse(body["stream"])
             return _transport("qwen-plus").handle_request(request)
-        result = live.probe_qwen(qwen_env_file=self.path, transport=httpx.MockTransport(handler))
+        result = live.probe_qwen(qwen_env_file=self.path, admission=self.probe_admission(), transport=httpx.MockTransport(handler))
         self.assertEqual("normalized", result["state"])
         self.assertEqual("qwen-intl", result["profile_id"])
         self.assertEqual((12, 34), (result["usage_input_units"], result["usage_output_units"]))
@@ -925,7 +937,7 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
         for payload in ({"object": "chat.completion", "model": "qwen-plus", "choices": []},
                         {"object": "chat.completion", "model": "qwen-plus", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{}"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 4}}):
             with self.subTest(payload=payload), self.assertRaises(LandingProviderError):
-                live.probe_qwen(qwen_env_file=self.path, transport=_transport("qwen-plus", payload=payload))
+                live.probe_qwen(qwen_env_file=self.path, admission=self.probe_admission(), transport=_transport("qwen-plus", payload=payload))
 
     def test_probe_rejects_invalid_draft_after_valid_http_envelope(self):
         mock_transport_factory_boundary(self)
@@ -937,7 +949,7 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
             "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
         }
         with self.assertRaisesRegex(LandingProviderError, "draft_fields"):
-            live.probe_qwen(qwen_env_file=self.path, transport=_transport("qwen-plus", payload=payload))
+            live.probe_qwen(qwen_env_file=self.path, admission=self.probe_admission(), transport=_transport("qwen-plus", payload=payload))
 
     def test_malformed_provider_unicode_is_closed_at_decoder_and_probe_cli(self):
         mock_transport_factory_boundary(self)
@@ -960,7 +972,7 @@ class QwenCredentialAndProfileTests(unittest.TestCase):
         real_probe = live.probe_qwen
         output = io.StringIO()
         with patch("sys.argv", ["probe", "--qwen-env-file", str(self.path)]), patch.object(
-            live, "probe_qwen", side_effect=lambda **kwargs: real_probe(**kwargs, transport=transport)
+            live, "probe_qwen", side_effect=lambda **kwargs: real_probe(**kwargs, admission=self.probe_admission(), transport=transport)
         ), redirect_stdout(output):
             self.assertEqual(1, live.main())
         self.assertEqual({"state": "failed", "reason": "qwen_probe_failed",

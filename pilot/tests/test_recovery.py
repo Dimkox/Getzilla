@@ -7,7 +7,10 @@ import unittest
 from pilot.store import PilotStore, PilotStoreError
 from pilot.tests.support import issue_snapshot, make_control
 
+from pilot.tests.support import issue_snapshot, posix_runtime
 
+
+@posix_runtime
 class PilotRecoveryTests(unittest.TestCase):
     def test_interrupted_invocation_is_terminal_and_cannot_start_again(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

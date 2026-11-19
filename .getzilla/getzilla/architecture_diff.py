@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -16,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from . import fsx
 from .git_binding_guard import GuardUnavailable, LinuxGitGuard, NativeGitGraph
@@ -41,6 +43,9 @@ BLOB_STREAM_CHUNK_BYTES = 64 * 1024
 # Keep a finite aggregate bound; per-blob, stream, path and time limits still apply.
 MAX_DIFF_ARTIFACT_BYTES = 128_000_000
 MAX_LINE_STAT_LINES = 100_000
+# One `git diff --no-index` covers up to this many changed text pairs and bytes.
+MAX_LINE_STAT_BATCH_PATHS = 256
+MAX_LINE_STAT_BATCH_BYTES = 8_000_000
 _EXACT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _ADOPTION_PATH = "architecture/adoption.json"
 _MODEL_PATHS = ("architecture/system.yaml", "architecture/rules.yaml")
@@ -57,6 +62,29 @@ _GIT_BLOB_CACHE: dict[tuple[object, ...], dict[str, bytes | None]] = {}
 _MATERIALIZED_STATE_CACHE: dict[tuple[object, ...], "_ArchitectureState | None"] = {}
 _GIT_BLOB_CACHE_LIMIT = 512
 _MATERIALIZED_STATE_CACHE_LIMIT = 128
+# Probe keys of the bindings `git rev-parse` already confirmed in the open binding scope.
+_PROBED_BINDINGS: contextvars.ContextVar[set[tuple[object, ...]] | None] = contextvars.ContextVar(
+    "getzilla_probed_git_bindings", default=None
+)
+
+
+@contextlib.contextmanager
+def git_binding_scope() -> Iterator[None]:
+    """Cross-check each exact Git binding with Git once for one bounded operation.
+
+    Inside the scope every Git operation still re-derives its binding from the filesystem and
+    verifies it afterwards; only the `git rev-parse` cross-check is reused, and only while the
+    registrations and the Git config files it depends on keep their exact identities. A nested
+    scope joins the outer one; the scope ends with the outermost operation.
+    """
+    if _PROBED_BINDINGS.get() is not None:
+        yield
+        return
+    token = _PROBED_BINDINGS.set(set())
+    try:
+        yield
+    finally:
+        _PROBED_BINDINGS.reset(token)
 
 
 def _binding_key(binding: "_GitBinding", guard: LinuxGitGuard | None = None) -> tuple[object, ...]:
@@ -718,6 +746,21 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
 
 
+def _config_identities(directories: tuple[Path, ...], guard=None) -> tuple[object, ...]:
+    """Identities of the config files that can change what `git rev-parse` reports."""
+    identities: list[object] = []
+    for directory in directories:
+        for name in ("config", "config.worktree"):
+            try:
+                identity = (_stat_identity(guard.stat(directory / name))
+                            if isinstance(guard, NativeGitGraph)
+                            else _git_path_identity(directory / name))
+                identities.append((name, identity))
+            except FileNotFoundError:
+                identities.append((name, None))
+    return tuple(identities)
+
+
 def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
                  _deadline: float | None = None) -> _GitBinding:
     try:
@@ -802,6 +845,11 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
             _qualify_git_configuration(binding, _guard,_deadline=_deadline)
             binding.verify(_guard, strict_directories=True)
             _guard.seal()
+        probed = _PROBED_BINDINGS.get()
+        probe_key = (*_binding_key(binding, _guard), _config_identities((git_directory, common_directory), _guard))
+        if probed is not None and probe_key in probed:
+            binding.verify(_guard, strict_directories=True)
+            return binding
         child = _native_git_child(binding,_guard) if native else None
         returncode, output, _error = _run_capped(
             _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
@@ -818,6 +866,8 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
         expected_root = Path(os.readlink(child['root'])) if native else repository
         if returncode or not _reported_git_paths_match(output,expected_git,expected_root):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
+        if probed is not None:
+            probed.add(probe_key)
         return binding
     except ArchitectureError:
         raise
@@ -1004,6 +1054,28 @@ def _git_blob(root: Path, sha: str, path: str, *, required: bool = False,
     return value
 
 
+def _required_blob(values: dict[str, bytes | None], path: str) -> bytes:
+    value = values[path]
+    if value is None:
+        raise ArchitectureError(f"required Git object path is missing: {path}", code="missing")
+    return value
+
+
+def _git_blobs_each(root: Path, sha: str, paths: tuple[str, ...], *, _scope: _GitOperation | None = None) -> dict[str, bytes | None]:
+    """Read paths that used to be read one at a time in one bounded `cat-file --batch`.
+
+    The values and per-path cache entries are those of one read per path. Only the batch's
+    aggregate caps are new, so a batch they refuse falls back to one read per path, which
+    succeeds or fails exactly as those reads always did.
+    """
+    try:
+        return _git_blobs(root, sha, paths, _scope=_scope)
+    except ArchitectureError as exc:
+        if exc.code != "limit":
+            raise
+    return {path: _git_blob(root, sha, path, _scope=_scope) for path in paths}
+
+
 @dataclass(frozen=True)
 class ArchitectureBaseSelection:
     route_base_sha: str
@@ -1038,6 +1110,7 @@ def _comparison_model_digest(root: Path, commits: tuple[str, ...]) -> str:
     return _digest(values)
 
 
+@git_binding_scope()
 def select_architecture_comparison_base(
     root: Path,
     route: dict[str, Any] | None,
@@ -1077,10 +1150,7 @@ def select_architecture_comparison_base(
             code="missing",
         )
     if model_present == (True, True):
-        marker_value = _git_blob(root, route_base, _ADOPTION_PATH, required=True)
-        parse_adoption_marker(
-            _required_output(marker_value, operation="read route-base adoption marker")
-        )
+        parse_adoption_marker(_required_blob(route_values, _ADOPTION_PATH))
     if model_present == (True, True):
         comparison_base = route_base
         base_kind = "route_model"
@@ -1611,8 +1681,9 @@ def _materialized_state(
     if found:
         _scope.check()
         return cached
-    model_values = tuple(_git_blob(root, sha, path, _scope=_scope) for path in _MODEL_PATHS)
-    marker_value = _git_blob(root, sha, _ADOPTION_PATH, _scope=_scope)
+    model_and_marker = _git_blobs_each(root, sha, (*_MODEL_PATHS, _ADOPTION_PATH), _scope=_scope)
+    model_values = tuple(model_and_marker[path] for path in _MODEL_PATHS)
+    marker_value = model_and_marker[_ADOPTION_PATH]
     if model_values == (None, None):
         if marker_value is not None:
             raise ArchitectureError(
@@ -1627,7 +1698,8 @@ def _materialized_state(
     if marker_value is None:
         raise ArchitectureError("architecture adoption marker is missing", code="missing")
     adoption = parse_adoption_marker(marker_value)
-    schema_values = tuple(_git_blob(root, sha, path, required=True, _scope=_scope) for path in _SCHEMA_PATHS)
+    schema_blobs = _git_blobs_each(root, sha, _SCHEMA_PATHS, _scope=_scope)
+    schema_values = tuple(_required_blob(schema_blobs, path) for path in _SCHEMA_PATHS)
     with tempfile.TemporaryDirectory(prefix="adaptive-architecture-object-") as directory:
         materialized = Path(directory)
         for path, value in zip((*_MODEL_PATHS, *_SCHEMA_PATHS), (*model_values, *schema_values)):
@@ -1635,8 +1707,10 @@ def _materialized_state(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {path}"))
         snapshot = load_architecture(materialized)
-        for contract in snapshot.system["contracts"]:
-            value = _git_blob(root, sha, contract["path"], required=True, _scope=_scope)
+        contracts = snapshot.system["contracts"]
+        contract_blobs = _git_blobs_each(root, sha, tuple(contract["path"] for contract in contracts), _scope=_scope)
+        for contract in contracts:
+            value = _required_blob(contract_blobs, contract["path"])
             target = materialized / contract["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(_required_output(value, operation=f"materialize {contract['path']}"))
@@ -1810,20 +1884,32 @@ def _changed_paths(root: Path, base: str, head: str | None, *, worktree: bool) -
     return unique
 
 
-def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+def _line_stat_text(old: bytes | None, new: bytes | None) -> tuple[bytes, bytes] | None:
+    """The bounded text pair an exact line stat compares, or None when the pair has none."""
     before = old or b""
     after = new or b""
     if len(before) > MAX_ANALYZED_FILE_BYTES or len(after) > MAX_ANALYZED_FILE_BYTES:
         raise ArchitectureError("line-stat byte limit exceeded", code="limit")
     if b"\0" in before or b"\0" in after:
-        return None, None
+        return None
     try:
         before_lines = before.decode("utf-8").splitlines()
         after_lines = after.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return None, None
+        return None
     if len(before_lines) > MAX_LINE_STAT_LINES or len(after_lines) > MAX_LINE_STAT_LINES:
         raise ArchitectureError("line-stat line limit exceeded", code="limit")
+    return before, after
+
+
+def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int | None]:
+    text = _line_stat_text(old, new)
+    if text is None:
+        return None, None
+    return _numstat_pair(*text)
+
+
+def _numstat_pair(before: bytes, after: bytes) -> tuple[int, int]:
     with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
         root = Path(directory)
         (root / "before").write_bytes(before)
@@ -1865,6 +1951,109 @@ def _line_stats(old: bytes | None, new: bytes | None) -> tuple[int | None, int |
         return int(fields[0]), int(fields[1])
     except ValueError as exc:
         raise ArchitectureError("invalid exact line-stat counts", code="git") from exc
+
+
+def _numstat_batch(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for several text pairs from one `git diff --no-index` over two directories.
+
+    The whole batch gets the deadline and per-pair output cap of a single pair, so it can only
+    succeed where every pair alone would have.
+    """
+    names = [f"{index:05d}".encode("ascii") for index in range(len(pairs))]
+    with tempfile.TemporaryDirectory(prefix="adaptive-line-stat-") as directory:
+        root = Path(directory)
+        for side in ("before", "after"):
+            (root / side).mkdir()
+        for name, (before, after) in zip(names, pairs):
+            (root / "before" / name.decode("ascii")).write_bytes(before)
+            (root / "after" / name.decode("ascii")).write_bytes(after)
+        returncode, output, error = _run_capped(
+            _git_command(
+                [
+                    "diff",
+                    "--no-index",
+                    "--numstat",
+                    "-z",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--",
+                    "before",
+                    "after",
+                ]
+            ),
+            cwd=root,
+            env=_git_environment(),
+            stdout_limit=4_096 * len(pairs),
+            stderr_limit=65_536,
+            timeout=_LINE_STAT_TIMEOUT_SECONDS,
+        )
+    if returncode not in {0, 1}:
+        message = error.decode("utf-8", "replace").strip()
+        raise ArchitectureError(f"exact line-stat operation failed: {message}", code="git")
+    counts = [(0, 0)] * len(pairs)
+    if returncode == 0:
+        if output:
+            raise ArchitectureError("unchanged line-stat operation emitted output", code="git")
+        return counts
+    # Each changed pair is `added<TAB>deleted<TAB><NUL>before/NAME<NUL>after/NAME<NUL>`.
+    tokens = output.split(b"\0")
+    if not output.endswith(b"\0") or (len(tokens) - 1) % 3:
+        raise ArchitectureError("unexpected exact line-stat output", code="git")
+    position = {name: index for index, name in enumerate(names)}
+    seen: set[bytes] = set()
+    for cursor in range(0, len(tokens) - 1, 3):
+        record, before_path, after_path = tokens[cursor:cursor + 3]
+        fields = record.split(b"\t")
+        name = before_path.removeprefix(b"before/")
+        if (
+            len(fields) != 3
+            or fields[2]
+            or before_path != b"before/" + name
+            or after_path != b"after/" + name
+            or name not in position
+            or name in seen
+        ):
+            raise ArchitectureError("unexpected exact line-stat output", code="git")
+        if fields[0] == b"-" or fields[1] == b"-":
+            raise ArchitectureError("exact text line-stat output is unavailable", code="git")
+        if not fields[0].isdigit() or not fields[1].isdigit():
+            raise ArchitectureError("invalid exact line-stat counts", code="git")
+        seen.add(name)
+        counts[position[name]] = int(fields[0]), int(fields[1])
+    return counts
+
+
+def _line_stat_chunks(pairs: list[tuple[bytes, bytes]]) -> Iterator[list[tuple[bytes, bytes]]]:
+    chunk: list[tuple[bytes, bytes]] = []
+    size = 0
+    for pair in pairs:
+        pair_size = len(pair[0]) + len(pair[1])
+        if chunk and (
+            len(chunk) >= MAX_LINE_STAT_BATCH_PATHS or size + pair_size > MAX_LINE_STAT_BATCH_BYTES
+        ):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(pair)
+        size += pair_size
+    if chunk:
+        yield chunk
+
+
+def _line_stats_many(pairs: list[tuple[bytes, bytes]]) -> list[tuple[int, int]]:
+    """Exact line stats for checked text pairs with the outcome of one `_line_stats` per pair."""
+    counts: list[tuple[int, int]] = []
+    for chunk in _line_stat_chunks(pairs):
+        if len(chunk) > 1:
+            try:
+                counts.extend(_numstat_batch(chunk))
+                continue
+            except ArchitectureError:
+                # The batch only saves processes. Re-run each pair alone, with its own
+                # deadline, so the first pair that fails alone fails exactly as before.
+                pass
+        counts.extend(_numstat_pair(*pair) for pair in chunk)
+    return counts
 
 
 def read_diff_file(root: Path, diff: ArchitectureDiff, path: str, side: str = "head") -> bytes | None:
@@ -2046,6 +2235,7 @@ def _tree_inventory_digest(
     return _digest(os.fsdecode(raw))
 
 
+@git_binding_scope()
 def diff_architecture(
     root: Path | str,
     *,
@@ -2108,6 +2298,8 @@ def diff_architecture(
         None if worktree else _batch_git_profiles(repository, _required_head(head), paths)
     )
     artifacts: list[ChangedArtifact] = []
+    # Text pairs are checked in path order; their exact line stats are counted in batches after.
+    line_stat_inputs: list[tuple[int, tuple[bytes, bytes]]] = []
     artifact_bytes = 0
     head_side = None if worktree else _required_head(head)
     for path in paths:
@@ -2139,25 +2331,28 @@ def diff_architecture(
         )
         if oversized_text:
             raise ArchitectureError(f"text file exceeds analysis limit: {path}", code="limit")
-        if any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
-            added, deleted = None, None
-        else:
-            added, deleted = _line_stats(
+        if not any(profile.binary for profile in (base_profile, head_profile) if profile is not None):
+            text = _line_stat_text(
                 base_profile.content if base_profile else None,
                 head_profile.content if head_profile else None,
             )
+            if text is not None:
+                line_stat_inputs.append((len(artifacts), text))
         artifacts.append(
             ChangedArtifact(
                 path=path,
                 status=status,
-                added_lines=added,
-                deleted_lines=deleted,
+                added_lines=None,
+                deleted_lines=None,
                 base_size=base_profile.size if base_profile else 0,
                 head_size=head_profile.size if head_profile else 0,
                 base_digest=base_profile.digest if base_profile else None,
                 head_digest=head_profile.digest if head_profile else None,
             )
         )
+    line_stats = _line_stats_many([text for _index, text in line_stat_inputs])
+    for (index, _text), (added, deleted) in zip(line_stat_inputs, line_stats, strict=True):
+        artifacts[index] = replace(artifacts[index], added_lines=added, deleted_lines=deleted)
     changes = _change_records(base_state, head_state)
     base_digest = None if base_state is None else architecture_digests(base_state.snapshot)[
         "architecture_digest"

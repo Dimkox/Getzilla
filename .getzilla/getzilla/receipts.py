@@ -29,7 +29,7 @@ from .architecture import (
     load_architecture,
     parse_adoption_marker,
 )
-from .architecture_diff import _exact_commit, _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _exact_commit, _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .governance import (
     DEBT_PATH,
     EXAMPLES_PATH,
@@ -653,6 +653,7 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     return ArchitectureBaseSelection(**witness)
 
 
+@git_binding_scope()
 def _active_architecture_binding(
     root: Path,
     route: dict[str, Any],

@@ -38,17 +38,20 @@ from .architecture import (
     preflight_architecture, validate_repository_drift,
 )
 from .architecture_diagrams import artifact_digests, compare_generated, render_diagrams
-from .architecture_diff import _git, _git_blob, select_architecture_comparison_base
+from .architecture_diff import _git, _git_blob, git_binding_scope, select_architecture_comparison_base
 from .architecture_fitness import diff_architecture, evaluate_fitness
 from .quality_gates import evaluate_quality_gate, required_check_refused
 from .expanded_security import known_vulnerability_check, run_checks as expanded_security_checks
+from .cpu_budget import cpu_budget
+from .language_quality.core import run_registry as run_language_quality, project_checks as language_quality_checks
 from .receipts import (
     active_architecture_binding,
     active_governance_binding,
     validate_evidence,
     write_receipt,
 )
-from .spec import _parse_canonical_json, canonical_spec_digest, criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec
+from .spec import (_parse_canonical_json, canonical_spec_digest,
+                   criterion_coverage, load_spec, parse_yaml_subset, spec_fingerprint, validate_spec)
 from .package_status import read_package_file
 from . import stack_runners  # noqa: F401  registers the Rust, .NET and PowerShell runners
 from .stack_toolchains import Blocker, Toolchain, ensure_toolchain, resolve_version
@@ -291,6 +294,7 @@ def _architecture_preflight_check(root: Path) -> CheckResult:
 
 
 @diagnostics.observed('architecture-check')
+@git_binding_scope()
 def _architecture_check(
     root: Path,
     route: dict[str, object] | None,
@@ -1479,41 +1483,11 @@ def _git_diff_check(
 
 @diagnostics.observed('secret-scan')
 def _secret_scan(root: Path, files: list[str]) -> CheckResult:
-    findings: list[dict[str, object]] = []
-    try:
-        policy = reviewed_dispositions.Dispositions(root)
-    except (reviewed_dispositions.DispositionError, OSError):
-        policy = None
-        findings.append(reviewed_dispositions.invalid_finding())
-    for rel in files:
-        path = root / rel
-        if not path.is_file() or path.stat().st_size > 2_000_000:
-            continue
-        text = read_text_limited(path)
-        with path.open('rb') as stream:
-            raw = stream.read(reviewed_dispositions.MAX_FILE_BYTES + 1)
-        file_hash = hashlib.sha256(raw).hexdigest()
-        for label, pattern in reviewed_dispositions.SECRET_PATTERNS.items():
-            for match in pattern.finditer(text):
-                line, column = reviewed_dispositions.location(text, match.start())
-                finding = {'severity': 'error', 'effective_severity': 'error', 'observation': True,
-                           'code': label, 'path': rel, 'line': line, 'column': column,
-                           'file_sha256': file_hash, 'message': 'Potential committed secret.'}
-                if policy:
-                    entry = policy.secret(rel, file_hash, text, match) if label == 'generic-secret' else None
-                    policy.apply(finding, entry)
-                findings.append(finding)
-    if policy:
-        try:
-            policy.assert_current()
-        except (reviewed_dispositions.DispositionError, OSError):
-            findings.append(reviewed_dispositions.invalid_finding())
-    disposition_summary = reviewed_dispositions.summary(policy, findings)
-    findings.append(disposition_summary)
-    return CheckResult('secret-scan', 'fail' if disposition_summary['unresolved'] else 'pass',
-                       f'{disposition_summary["observed"]} potential secrets; '
-                       f'{disposition_summary["disposed"]} disposed; {disposition_summary["unresolved"]} unresolved',
-                       details=findings)
+    from .security_tools import native_secret_observations
+
+    observed = native_secret_observations(root, files)
+    return CheckResult('secret-scan', 'pass' if observed['outcome'] == 'pass' else 'fail',
+                       observed['summary'], details=observed['details'])
 
 
 @diagnostics.observed('php-lint')
@@ -1961,7 +1935,9 @@ def _unpinned_opengrep(executable: Path) -> str | None:
 
 @diagnostics.observed('opengrep')
 def _opengrep(root: Path) -> CheckResult:
-    """Taint analysis with Getzilla's own OpenGrep rules (run where OpenGrep is installed, e.g. Trust CI)."""
+    """Require source/rule coverage and compatible parsing before a clean result."""
+    from .security_opengrep import scan_source
+
     rules = root / OPENGREP_RULES
     if not rules.is_dir():
         return CheckResult('opengrep', 'skip', 'no OpenGrep rules installed')
@@ -1971,47 +1947,15 @@ def _opengrep(root: Path) -> CheckResult:
     refusal = _unpinned_opengrep(Path(executable))
     if refusal:
         return CheckResult('opengrep', 'fail', refusal)
-    command = [executable, 'scan', '--config', OPENGREP_RULES, '--taint-intrafile', '--json', '--quiet', '--strict',
-               '--disable-version-check', '--timeout', '30']
-    for pattern in OPENGREP_EXCLUDES:
-        command.extend(('--exclude', pattern))
-    command.append('.')
-    result = run(command, cwd=root, timeout=900, encoding='utf-8', errors='replace')
-    try:
-        report = json.loads(result.stdout or '{}')
-    except ValueError:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode} without a JSON report',
-                           command=command, stderr=result.stderr[-4000:])
-    if result.returncode not in {0, 1}:
-        return CheckResult('opengrep', 'fail', f'opengrep exited {result.returncode}', command=command,
-                           stderr=result.stderr[-4000:])
-    if not isinstance(report, dict):
-        return CheckResult('opengrep', 'fail', 'opengrep returned a malformed report object', command=command)
-    findings = report.get('results')
-    errors = report.get('errors')
-    if not isinstance(findings, list) or not isinstance(errors, list):
-        return CheckResult('opengrep', 'fail', 'opengrep returned incomplete result/error collections', command=command)
-    # Warning-level partial parsing and unknown diagnostics cannot prove a clean scan.
-    if errors:
-        return CheckResult('opengrep', 'fail', f'opengrep reported {len(errors)} incomplete analysis diagnostics',
-                           command=command)
-    if any(not isinstance(item, dict) or not isinstance(item.get('start', {}), dict)
-           or not isinstance(item.get('extra', {}), dict) for item in findings):
-        return CheckResult('opengrep', 'fail', 'opengrep returned malformed finding records', command=command)
-    details = [
-        {
-            'rule': str(item.get('check_id', '')),
-            'path': str(item.get('path', '')),
-            'line': str((item.get('start') or {}).get('line', '')),
-            'severity': str((item.get('extra') or {}).get('severity', '')),
-            'message': str((item.get('extra') or {}).get('message', ''))[:300],
-        }
-        for item in findings[:200]
-    ]
-    if findings:
-        return CheckResult('opengrep', 'fail', f'{len(findings)} taint findings from Getzilla OpenGrep rules',
-                           command=command, details=details)
-    return CheckResult('opengrep', 'pass', 'no taint findings from Getzilla OpenGrep rules', command=command)
+    observed = scan_source(root, rules_root=rules, executable=Path(executable), profile='native')
+    command = observed.get('command')
+    if observed['outcome'] == 'finding':
+        return CheckResult('opengrep', 'fail',
+                           f"{observed['finding_count']} taint findings from Getzilla OpenGrep rules",
+                           command=command, details=observed['findings'])
+    if observed['outcome'] in {'pass', 'not_applicable'}:
+        return CheckResult('opengrep', 'pass', observed['summary'], command=command)
+    return CheckResult('opengrep', 'fail', observed['summary'], command=command)
 
 
 def _trivy_config_present(root: Path) -> bool:
@@ -2947,6 +2891,10 @@ def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
     state.report['required_plan'] = plan
     state.results.append(CheckResult('required-plan', 'pass', 'current source-bound obligations captured before dispatch'))
     return plan
+def _language_quality_report(root: Path, base: str | None, cancellation):
+    results = run_language_quality(root, base, cancellation=cancellation)
+    return ({'schema_version': 1, 'status': 'observed', 'results': results},
+            [CheckResult(**check) for check in language_quality_checks(results)])
 
 
 def _verification_run(root: Path, mode: str, profiles: list[str] | None, record: bool,
@@ -3183,6 +3131,19 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     for name, callback in planned_tool_checks(root, mode, make=CheckResult):
         cancellation.check()
         dispatch.run(name, callback)
+    state.stage = 'language-quality'
+    cancellation.check()
+    if dispatch.blocked_by:
+        language_report = {'schema_version': 1, 'status': 'not_run', 'results': [],
+                           'reason': 'required verification refused: ' + dispatch.blocked_by}
+    else:
+        bases = {item.comparison_base_sha for item in git_ranges.bases}
+        language_base = next(iter(bases)) if len(bases) == 1 and not git_ranges.findings else None
+        language_report, language_checks = _language_quality_report(root, language_base, cancellation)
+        for check in language_checks:
+            dispatch.add(check)
+    report.setdefault('advisory', {})['lqg'] = language_report
+    cancellation.check()
     state.stage = 'python'
     cancellation.check()
     if preflight_failed and mode not in {'pr', 'release'}:

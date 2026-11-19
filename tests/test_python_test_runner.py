@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import inspect
 from importlib import metadata
 import json
 import os
@@ -21,6 +22,57 @@ from getzilla import fsx, python_test_runner, verification, queue_refusal
 from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
+
+
+class PublicDescriptorExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.assertIn('inherited_fds', inspect.signature(execute).parameters,
+                      'the bounded explicit descriptor transport must be implemented')
+
+    def test_invalid_or_duplicated_descriptors_refuse_before_spawn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (root / 'public').open('w+b') as handle:
+                for value in ([handle.fileno()], (True,), (-1,), (handle.fileno(),) * 2, (999999,)):
+                    with self.subTest(value=value), patch.object(fsx, 'owned_popen') as spawn:
+                        with self.assertRaises(RunnerError):
+                            execute([sys.executable, '--version'], root, {}, inherited_fds=value)
+                        spawn.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'descriptor transport unavailable on this platform')
+    def test_only_explicit_held_public_fixture_descriptor_reaches_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / 'read_fd.py'
+            child.write_text('import os,sys\nsys.stdout.buffer.write(os.read(int(sys.argv[1]),100))\n')
+            public = root / 'public'
+            public.write_bytes(b'public fixture descriptor')
+            with public.open('rb') as handle:
+                result = execute([sys.executable, str(child), str(handle.fileno())], root,
+                                 {'PATH': '/usr/bin:/bin'}, inherited_fds=(handle.fileno(),))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'public fixture descriptor')
+                self.assertEqual(result.cleanup_error, '')
+
+    @unittest.skipUnless(os.name == 'posix', 'descriptor transport unavailable on this platform')
+    def test_explicit_public_stdin_reaches_child_without_default_api_change(self):
+        self.assertIn('stdin_fd', inspect.signature(execute).parameters)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / 'stdin.py'
+            child.write_text('import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n')
+            source = root / 'public'
+            source.write_bytes(b'exact public stdin')
+            with source.open('rb') as handle:
+                result = execute([sys.executable, str(child)], root, {}, stdin_fd=handle.fileno())
+                self.assertEqual((result.returncode, result.stdout), (0, 'exact public stdin'))
+
+    def test_invalid_stdin_descriptor_refuses_before_child_effect(self):
+        self.assertIn('stdin_fd', inspect.signature(execute).parameters)
+        for value in (True, -1, 0, '3', 999999):
+            with self.subTest(value=value), patch.object(fsx, 'owned_popen') as spawn, self.assertRaises(RunnerError):
+                execute([sys.executable, '--version'], Path.cwd(), {}, stdin_fd=value)
+            spawn.assert_not_called()
 
 
 @contextlib.contextmanager
@@ -56,7 +108,7 @@ def fixture(*, workers: object = 2):
 
 
 @contextlib.contextmanager
-def capacity_files(root: Path, files: dict[str, object], *, cpus: int = 22):
+def capacity_files(root: Path, files: dict[str, object], *, cpus: int = 22, host_logical: int = 28):
     """Supply complete proc/cgroup inputs without consulting this test host."""
     reads: list[str] = []
     real_open = Path.open
@@ -74,6 +126,7 @@ def capacity_files(root: Path, files: dict[str, object], *, cpus: int = 22):
 
     with patch.object(Path, 'open', open_input), \
          patch.object(sys, 'platform', 'linux'), \
+         patch.object(os, 'cpu_count', return_value=host_logical), \
          patch.object(os, 'sched_getaffinity', return_value=set(range(cpus)), create=True):
         yield reads
 
@@ -550,6 +603,17 @@ class NamedSmokeTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'posix', 'cgroup capacity fixtures name POSIX paths; Windows auto is tested below')
 class PythonTestCapacityTests(unittest.TestCase):
+    def test_explicit_workers_and_direct_engine_calls_cannot_remove_host_reserve(self):
+        files = v2_capacity(membership='/')
+        for workers, quota, expected in ((64, 'max 100000', 26), (28, 'max 100000', 26),
+                                         (8, 'max 100000', 8), (28, '400000 100000', 4)):
+            files['/sys/fs/cgroup/cpu.max'] = quota
+            with self.subTest(workers=workers, quota=quota), fixture(workers=workers) as root, \
+                 capacity_files(root, files, cpus=28), \
+                 patch.object(python_test_runner, 'parallel_engine_ready', return_value=True):
+                self.assertEqual(selected_workers(root), expected)
+                self.assertEqual(python_test_runner.select_engine(workers, measured=False)[0], expected)
+
     def test_auto_applies_nested_v2_quota_and_tighter_visible_ancestors(self) -> None:
         for leaf, parent, expected in (
             ('200000 100000', 'max 100000', 2),
@@ -569,7 +633,7 @@ class PythonTestCapacityTests(unittest.TestCase):
                 self.assertEqual(set(reads), set(files) | {'/sys/fs/cgroup/cpu.max'})
 
     def test_auto_intersects_affinity_quota_and_existing_ceiling(self) -> None:
-        for cpus, quota, expected in ((2, '800000 100000', 2), (96, 'max 100000', 28),
+        for cpus, quota, expected in ((2, '800000 100000', 2), (96, 'max 100000', 26),
                                      (96, '250000 100000', 2)):
             files = v2_capacity(membership='/')
             files['/sys/fs/cgroup/cpu.max'] = quota
@@ -715,7 +779,7 @@ class PythonTestCapacityTests(unittest.TestCase):
 
     def test_explicit_default_child_and_other_platform_paths_avoid_capacity_reads(self) -> None:
         for configured, override, child, expected in (
-            (0, None, False, 0), (64, None, False, 64), (2, '64', False, 64),
+            (0, None, False, 0),
             ('auto', '0', False, 0), ('auto', None, True, 0),
         ):
             with self.subTest(configured=configured, override=override, child=child), \
@@ -746,7 +810,7 @@ class PythonTestCapacityTests(unittest.TestCase):
         with fixture(workers=64) as root, capacity_files(root, files), \
              patch.dict(os.environ, {'GETZILLA_TEST_WORKERS': 'auto'}):
             self.assertEqual(selected_workers(root), 2)
-        for cpus, expected in ((4, 4), (None, 1)):
+        for cpus, expected in ((4, 1), (None, 1)):
             with self.subTest(cpus=cpus), fixture(workers='auto') as root, \
                  capacity_files(root, v2_capacity(membership='/')), \
                  patch.object(os, 'sched_getaffinity', side_effect=OSError('unavailable')), \
@@ -1206,7 +1270,7 @@ class CoverageLayout(unittest.TestCase):
             with capacity_files(root, v2_capacity(membership='/'), cpus=22):
                 self.assertEqual(selected_workers(root), 22)
             with capacity_files(root, v2_capacity(membership='/'), cpus=96):
-                self.assertEqual(selected_workers(root), 28)
+                self.assertEqual(selected_workers(root), 26)
 
     def test_unimportable_parallel_engine_degrades_to_one_serial_pass(self) -> None:
         # Retake of defect 33: an interpreter that cannot import the xdist engine
@@ -1719,6 +1783,7 @@ class CoverageLayout(unittest.TestCase):
              patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
              patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
              patch('getzilla.verification._factory_unit', return_value=[]), \
+             patch('getzilla.verification.cpu_budget', return_value=type('Budget', (), {'effective': 26})()), \
              patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \
              patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
              patch.object(python_test_runner, 'linux_quota_capacity', return_value=26), \

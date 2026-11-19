@@ -13,6 +13,7 @@ flowchart LR
   node_956eadd47cc94452["NODE-FACTORY-LANDING-LIVE-EXECUTORS | local_component | local factory operators"]
   node_6716118911fde778["NODE-FACTORY-LANDING-MODEL-PROVIDER | external_system | injected live landing model providers"]
   node_93915052ae8a2e67["NODE-FACTORY-LOCAL-API | service | local factory operators"]
+  node_4ceddb2cec544a16["NODE-FACTORY-PAID-ADMISSION | local_component | explicit owning server authority"]
   node_a77de286f8308fd4["NODE-FACTORY-POSTGRES | datastore | local factory operators"]
   node_21b552fdfa11f1c2["NODE-FACTORY-PROPOSAL-BROKER | local_component | local factory operators"]
   node_fae11f6a95d982dc["NODE-FACTORY-PROVIDER-ADAPTERS | local_component | local factory operators"]
@@ -124,6 +125,7 @@ flowchart LR
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-API | dependency | https"| node_8acae282d21dd9c2
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-OSV-BUCKET | dependency | https"| node_7b13ed12e8efab1c
   node_e7341f770368182e -->|"EDGE-OPTIONAL-SECURITY-PYPI | dependency | https"| node_ed77fd8e957c8e8c
+  node_956eadd47cc94452 -->|"EDGE-PAID-EXECUTOR-ADMISSION | dependency | python_import"| node_4ceddb2cec544a16
   node_22df40caedcff532 -->|"EDGE-PILOT-CODEX | control | https"| node_69f0245ef987c48b
   node_fd325b0205e2e68b -->|"EDGE-PILOT-CODEX-SUPERVISOR | dependency | python_import"| node_22df40caedcff532
   node_c439f662476a4d4b -->|"EDGE-PILOT-GITHUB | publication | https"| node_8b8a8cd21b180532

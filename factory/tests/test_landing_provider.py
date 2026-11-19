@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
 from getzilla_factory.landing_contracts import LandingInputV1
 from getzilla_factory.landing_provider import (
     FixedCommandLandingProvider,
@@ -106,7 +108,7 @@ def clock():
     return lambda: next(values)
 
 
-class LandingProviderTests(unittest.TestCase):
+class LandingProviderTests(PaidProtocolTestCase):
     def test_owned_fixture_uses_current_interpreter_and_exact_canonical_body(self):
         configured = profile()
         executable = Path(configured.executable)

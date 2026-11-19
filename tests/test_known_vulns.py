@@ -61,12 +61,51 @@ def _repo(files: dict[str, str]) -> tuple[tempfile.TemporaryDirectory, Path]:
     return tmp, root
 
 
-def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+def _legacy_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
     target = root / ecosystem / 'all.zip'
     target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, 'w') as bundle:
         for record in records:
             bundle.writestr(f"{record['id']}.json", json.dumps(record))
+
+
+def _mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """A labelled public synthetic acquired source, through production contracts."""
+    from datetime import datetime, timezone
+    from getzilla.security_acquisition import FetchResult, _body
+    from getzilla.security_data import SOURCE_URLS, osv_coverage, publish_snapshot
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    source_id = f'osv:{ecosystem}'
+    url = SOURCE_URLS[source_id]
+    payload = _body(FetchResult(content.getvalue(), url, url, 200), url)
+    current = datetime.now(timezone.utc)
+    publish_snapshot(root, source_id, payload,
+        acquisition={'last_verified_sync_utc': current.isoformat(), 'retrieval_kind': 'download',
+                     'producer': 'synthetic-public-known-vulns'},
+        coverage=osv_coverage(payload, ecosystem), now=current)
+
+
+def _tampered_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
+    """Intentionally forge public fixture bytes/metadata to test reader refusal."""
+    import hashlib
+    seed = {'id': 'PUBLIC-SEED', 'affected': [{'package': {'ecosystem': ecosystem, 'name': 'public-seed'}, 'versions': ['1.0.0']}]}
+    _mirror(root, ecosystem, [seed])
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as bundle:
+        for item in records:
+            bundle.writestr(item['id'] + '.json', json.dumps(item))
+    payload = content.getvalue()
+    digest = hashlib.sha256(payload).hexdigest()
+    (root / '.snapshots/sha256' / digest).write_bytes(payload)
+    (root / '.snapshots/sha256' / digest).chmod(0o644)
+    pointer = root / ecosystem / 'snapshot.json'
+    document = json.loads(pointer.read_text(encoding='utf-8'))
+    document.update(content_sha256=digest, payload_size=len(payload))
+    document['coverage']['record_count'] = len(records)
+    pointer.write_text(json.dumps(document), encoding='utf-8')
 
 
 MANIFESTS = {
@@ -78,6 +117,7 @@ MANIFESTS = {
         'node_modules/linked': {'link': True},
     }}),
     'svc/go.mod': 'module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgolang.org/x/net v0.17.0 // indirect\n)\nrequire github.com/a/b v1.2.3\n',
+    'rs/Cargo.toml': '[package]\nname="local"\nversion="0.1.0"\n[dependencies]\nsmallvec="1"\n',
     'rs/Cargo.lock': '[[package]]\nname = "local"\nversion = "0.1.0"\n\n[[package]]\nname = "smallvec"\nversion = "1.6.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
     'php/composer.lock': json.dumps({'packages': [{'name': 'guzzlehttp/guzzle', 'version': 'v7.4.0'}],
                                      'packages-dev': [{'name': 'x/y', 'version': 'dev-main'}]}),
@@ -230,7 +270,7 @@ class OfflineTests(unittest.TestCase):
         for version, expected in (('0.9', False), ('1.0', True), ('1.4.9', True), ('1.5', False),
                                   ('2.0', True), ('2.3', True), ('2.3.1', False), ('10.0', False)):
             with self.subTest(version=version):
-                self.assertEqual(KV._in_ranges(version, affected), expected)
+                self.assertEqual(KV._in_ranges(version, affected, ecosystem='PyPI'), expected)
         open_ended = {'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '3.0.0'}]}]}
         self.assertTrue(KV._in_ranges('9.9.9', open_ended))
         self.assertFalse(KV._in_ranges('2.9.9', open_ended))
@@ -280,9 +320,10 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\nsafe-lib==1.0\n'})
         with tmp:
-            report = KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
-        self.assertEqual(report['status'], 'fail')
-        self.assertEqual(sorted(item['id'] for item in report['findings']), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
+            dependencies, _ = KV.collect_dependencies(root)
+            findings = KV.query_online(dependencies, fetch=fetch)
+        # An observation helper retains pagination; it is not a qualified scan.
+        self.assertEqual(sorted(item.vuln_id for item in findings), ['GHSA-h5c8-rqwp-cp95', 'PYSEC-2021-66'])
         first = calls[0][1]['queries']
         self.assertEqual({item['package']['ecosystem'] for item in first}, {'PyPI'})
         self.assertEqual(calls[1][1]['queries'], [{'package': {'name': 'Jinja2', 'ecosystem': 'PyPI'},
@@ -294,7 +335,8 @@ class OnlineTests(unittest.TestCase):
 
         tmp, root = _repo({'requirements.txt': 'Jinja2==2.11.0\n'})
         with tmp, self.assertRaisesRegex(KV.VulnerabilityError, 'OSV query failed'):
-            KV.scan(root, environ={'GETZILLA_OSV_ONLINE': '1'}, fetch=fetch)
+            dependencies, _ = KV.collect_dependencies(root)
+            KV.query_online(dependencies, fetch=fetch)
 
 
 class PolicyTests(unittest.TestCase):
@@ -443,13 +485,17 @@ class DownloadTests(unittest.TestCase):
             bundle.writestr('A.json', json.dumps(JINJA))
         urls: list[str] = []
 
-        def fetch(url: str, body: bytes | None) -> bytes:
+        def fetch(url: str, body: bytes | None):
+            from getzilla.security_acquisition import FetchResult
             urls.append(url)
-            return buffer.getvalue()
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, 'w') as bundle:
+                bundle.writestr('public.json', json.dumps(JINJA if '/PyPI/' in url else LODASH))
+            return FetchResult(content.getvalue(), url, url, 200)
 
         with tempfile.TemporaryDirectory() as db:
             written = KV.download_database(Path(db), ['PyPI', 'npm'], fetch=fetch)
-            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/all.zip', 'npm/all.zip'])
+            self.assertEqual([Path(item).relative_to(db).as_posix() for item in written], ['PyPI/snapshot.json', 'npm/snapshot.json'])
             self.assertFalse(list(Path(db).rglob('*.partial')))
         self.assertEqual(urls, [f'{KV.OSV_BUCKET}/PyPI/all.zip', f'{KV.OSV_BUCKET}/npm/all.zip'])
         with tempfile.TemporaryDirectory() as db, self.assertRaises(KV.VulnerabilityError):
@@ -518,7 +564,7 @@ class NativeAliasTests(unittest.TestCase):
     def test_offline_alias_admission_precedes_every_record_filter(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
-                _mirror(Path(database), 'PyPI', [self.record(case)])
+                _tampered_mirror(Path(database), 'PyPI', [self.record(case)])
                 with self.assertRaises(KV.VulnerabilityError):
                     KV.query_offline([self.dependency], Path(database))
 
@@ -567,10 +613,13 @@ class NativeAliasTests(unittest.TestCase):
     def test_nullable_archive_publication_roundtrips_through_actual_reader(self):
         with tempfile.TemporaryDirectory() as database:
             data = self.archive([self.record(aliases=None)])
-            target = Path(database)/'PyPI/all.zip'
-            written = KV.download_database(Path(database), ['PyPI'], fetch=lambda _url, _body: data)
+            from getzilla.security_acquisition import FetchResult
+            from getzilla.security_data import read_snapshot
+            target = Path(database)/'PyPI/snapshot.json'
+            written = KV.download_database(Path(database), ['PyPI'],
+                fetch=lambda url, _body: FetchResult(data, url, url, 200))
             self.assertEqual(written, [str(target)])
-            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(read_snapshot(Path(database), 'osv:PyPI')[0], data)
             [finding] = KV.query_offline([self.dependency], Path(database))
             self.assertEqual(finding.aliases, [])
 
@@ -616,6 +665,7 @@ class CliTests(unittest.TestCase):
         ]}
         output = io.StringIO()
         with mock.patch.object(KV, 'scan', return_value=report), \
+                mock.patch.object(KV, 'recheck_report', return_value=None), \
                 mock.patch('getzilla.util.find_root', return_value=ROOT), \
                 mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
                 mock.patch.object(sys, 'argv', ['getzilla_vulns.py']), \

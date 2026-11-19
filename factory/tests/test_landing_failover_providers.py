@@ -11,6 +11,8 @@ import tempfile
 
 import httpx
 
+from factory.tests.paid_fixture import PaidProtocolTestCase
+
 from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_contracts import LandingContractError
 from getzilla_factory.landing_http import HttpLandingNormalizer, HttpLandingProfile, HttpLandingExecutionRequest, HttpLandingExecutionResult, HTTP_NORMALIZER_PROMPT, HTTP_PROTOCOL_VERSION
@@ -20,8 +22,9 @@ from getzilla_factory.landing_provider import LandingNormalizationRequest, Landi
 from factory.tests.test_landing_normalizer import draft, source
 
 
-class ProviderObservationTests(unittest.TestCase):
+class ProviderObservationTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
         mock_transport_factory_boundary(self)
 
@@ -222,8 +225,9 @@ class ProviderObservationTests(unittest.TestCase):
         self.assertEqual("policy", observation.category)
 
 
-class AdditionalProviderTests(unittest.TestCase):
+class AdditionalProviderTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
         mock_transport_factory_boundary(self)
 

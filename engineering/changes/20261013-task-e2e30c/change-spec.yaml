@@ -1,0 +1,301 @@
+{
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Issue #78 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Issue #76 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-003",
+      "statement": "Issue #75 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Issue #73 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Issue #72 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-006",
+      "statement": "Issue #71 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Issue #63 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-008",
+      "statement": "Issue #60 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-009",
+      "statement": "Issue #42 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-010",
+      "statement": "Issue #38 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-011",
+      "statement": "Issue #37 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "AC-012",
+      "statement": "Issue #36 exact criteria are repaired and verified; no unsupported closure claim.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "test_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
+  ],
+  "approvals": {
+    "required_scopes": []
+  },
+  "change_id": "20261013-task-e2e30c",
+  "contracts": {
+    "events": [],
+    "json_schema": [
+      "factory/contracts/jsonschema/paid-execution-authority.v1.schema.json"
+    ],
+    "openapi": []
+  },
+  "forbidden_outcomes": [
+    "Close a live acceptance criterion using source tests alone.",
+    "Run the full qualifying gate before combined source repairs and independent reviews.",
+    "Write production, revoke credentials, change deployed policy or execute paid calls without exact separate authority.",
+    "Reuse historical PASS as fresh combined-candidate verification."
+  ],
+  "invariants": [
+    "Missing mandatory execution controls deny before side effects; partial allow output cannot survive failed hook execution.",
+    "Paid authority is distinct from generic external-write consent; account/task worst-case reservations survive uncertain outcomes and journal upgrades.",
+    "Unknown consumer ownership preserves bytes; a quarantine plan is not cleanup or deletion authority.",
+    "Trust CI installation consumes the complete frozen dependency graph and artifact hashes.",
+    "Local tests and reviews cannot replace exact-head external checks or human security approval."
+  ],
+  "objective": {
+    "id": "OBJ-001",
+    "statement": "Repair every open Getzilla issue and deliver one final verified source candidate.",
+    "success_metric": "Each issue criterion has exact evidence or an explicit real-human live authority boundary; all source repairs and required gates are complete.",
+    "target": "All 12 open issue clauses"
+  },
+  "observability": [],
+  "risk": {
+    "domains": [
+      "ai",
+      "api",
+      "event",
+      "security"
+    ],
+    "tier": "red"
+  },
+  "rollback": {
+    "maximum_steps": 1,
+    "strategy": "forward_fix"
+  },
+  "schema_version": 2
+}

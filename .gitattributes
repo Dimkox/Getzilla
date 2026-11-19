@@ -11,3 +11,5 @@ engineering/changes/20260924-factory-unified-upgrade/FACTORY_UNIFIED_UPGRADE_TZ.
 engineering/changes/20261002-assemble-2-1-1-factory-source-with-heartbeat-and-ffb3d8/approved-recovery-design.md whitespace=-trailing-space
 scripts/install.sh text eol=lf
 scripts/install.ps1 text eol=lf
+# Frozen issue162 publication: keep upstream CSV/Markdown bytes and recorded hashes.
+engineering/benchmarks/issue162/** -text whitespace=-trailing-space

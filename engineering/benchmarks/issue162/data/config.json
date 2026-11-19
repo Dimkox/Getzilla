@@ -1,0 +1,59 @@
+{
+  "schema": "issue162-v1",
+  "arms": [
+    "exact_symbol",
+    "bm25",
+    "semantic",
+    "rrf"
+  ],
+  "bm25": {
+    "k1": 1.2,
+    "b": 0.75,
+    "tokenizer": "ASCII identifiers and numbers; camel and underscore split; lowercase; retain full identifier too"
+  },
+  "symbol": "exact identifier/FQN token intersection only; no paraphrase expansion",
+  "rrf": {
+    "k": 60,
+    "weights": [
+      1,
+      1,
+      1
+    ]
+  },
+  "top_n": 100,
+  "tie_break": "stable chunk id",
+  "chunks": {
+    "unit": "AST function implementation including decorators and docstrings",
+    "overloads": "exclude stubs in every arm",
+    "window_max_encoder_tokens": 254,
+    "overlap_lines": 2,
+    "long_single_line": "retain source bytes; record encoder truncation",
+    "dedup": "function-level first hit for metrics; source-line dedup for context"
+  },
+  "model": {
+    "name": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "sha256": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452",
+    "max_tokens": 256,
+    "pool": "attention-mask mean then L2",
+    "dimensions": 384,
+    "ort_threads": 1
+  },
+  "metrics": {
+    "k": [
+      1,
+      5,
+      10,
+      20
+    ],
+    "mrr_k": 10,
+    "context_budgets": [
+      2048,
+      8192
+    ],
+    "codec": "tiktoken==0.12.0 o200k_base",
+    "cold_processes": 3,
+    "warm_passes": 10
+  },
+  "limits": "Curated registered qrels, not universal recall. No parameter/label changes after ranking."
+}

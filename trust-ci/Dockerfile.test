@@ -6,11 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md requirements-test.txt requirements-build.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
 COPY tests ./tests
 COPY sql ./sql
-RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements-test.txt -r requirements-build.txt \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation ".[test]"
+RUN python lock_profiles.py --check \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-test.txt \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 CMD ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_postgres_integration.py", "-v"]

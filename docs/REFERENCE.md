@@ -211,7 +211,7 @@ Without opt-in, fast verification and the Trust runner keep their existing behav
 
 To select the existing automatic policy, create `.getzilla-test-runner.json` containing `{"schema_version":1,"workers":"auto"}`; `GETZILLA_TEST_WORKERS` overrides the requested value after the configuration file is validated. Accepted requests are `auto` or an integer from 0 through 64. Explicit integers are not quota-clamped, and `GETZILLA_TEST_WORKERS=0` selects sequential execution. An explicit allocation takes precedence over the PR/release default, so a coordinator can share its measured CPU budget across concurrent tasks.
 
-On Linux, `auto` uses the minimum of 28, process affinity or CPU-count fallback, and finite CPU quotas visible through actual cgroup membership and mounts. Finite quotas use `max(1, quota // period)`; malformed, unreadable or ambiguous capacity conservatively selects one worker. This does not establish hidden ancestor limits, reserved CPU time or available PID/memory capacity.
+The common budget reserves two from total host logical CPUs, then caps by actual process affinity (which includes online/cpuset constraints) and finite visible ancestor quotas. Host28 with affinity22 gives22; a verified26-CPU child gives26. Explicit28 also caps at26. Unknown affinity uses one worker. Finite quotas use `max(1, quota // period)`; unknown quota also caps at one. The helper does not widen affinity or establish hidden limits, reserved CPU time, PID or memory capacity. All concurrent heavy workers share this budget.
 
 On Windows, `auto` uses the minimum of 28 and the logical CPU count; Windows has no cgroup quotas or `sched_getaffinity`. Each owned child starts suspended, joins its own Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway right, and only then runs. Cancellation, timeout, the output limit, normal child exit and controller exit therefore end the whole process tree, including descendants whose parent already exited. This is the counterpart of the POSIX session that the runner stops with `SIGTERM`, then `SIGKILL`.
 
@@ -424,7 +424,7 @@ For a fresh clone, bootstrap state comes from `START_HERE.md` / `PROJECT_STATE.j
 - [governance CLI](../scripts/getzilla_governance.py)
 - [`scripts/getzilla_verify.py`](../scripts/getzilla_verify.py)
 - [`scripts/getzilla_review.py`](../scripts/getzilla_review.py)
-- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only
+- [`scripts/getzilla_approve.py`](../scripts/getzilla_approve.py) — exact action/resource delegated local grant only. Before editing a new protected file, explicitly extend one current grant with `protected-path --extend <grant-id> --request-id <32-lowercase-hex> --action protected-path-write --resource <old-file> --resource <new-file> --reason <delegation>`. Repeat `--resource` for the complete literal strict superset. This requires existing delegation for every new path. It retains the original branch/task/owner/epoch/anchor and caps expiry at the earlier parent deadline or requested TTL. It replaces the parent with supported non-authority history in the same store. An exact current replay returns the same grant; stale, revoked or pruned requests never remint or follow a larger successor. Uncertain publication returns no grant and requires inspection. Other grants do not contribute resources or TTL. Production, external-write, release and human-signed approval boundaries retain their existing rules.
 - [`scripts/getzilla_deploy.py`](../scripts/getzilla_deploy.py) — [local deployment preflight](deploy-preflight.md) and release preparation
 - [`scripts/getzilla_doctor.py`](../scripts/getzilla_doctor.py)
 - [`scripts/getzilla_demo.py`](../scripts/getzilla_demo.py)
@@ -829,3 +829,5 @@ Explicit owner overrides of local workflow rules must record the exact rule, sco
 New workflow state stays under ignored runtime and can move to `ready` without changing source. Reports bind exact reviewed HEAD/tree and content hashes. No report-only or workflow freeze commit is needed. Historical tracked evidence remains unchanged.
 
 Saved report-only deltas use exactly `code-review.md`, `test-review.md`, `bitrix-review.md`, `security-review.md`, `data-review.md` or `release-review.md` directly under the active change evidence directory. Analysis, README/index, checkpoint and arbitrary custom Markdown files are source changes, not saved review reports.
+
+For signature or holdout digest failures, preserve evidence and use the [security recovery handoff](../engineering/runbooks/security-handoff.md).

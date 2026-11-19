@@ -1,0 +1,14 @@
+{
+  "schema": "getzilla-codex-synthetic-image-v1",
+  "base_reference": "python@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487",
+  "base_image_id": "sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487",
+  "platform": "linux/amd64",
+  "python_version": "3.12.16",
+  "codex_version": "0.165.0",
+  "codex_sha256": "c06a67fd8ac76508dc78bd99ce20c9f317b8d568beda59485f3f4134df9962d5",
+  "codex_official_archive": "https://github.com/openai/codex/releases/download/rust-v0.165.0/codex-x86_64-unknown-linux-musl.tar.gz",
+  "codex_official_archive_sha256": "be635d3486a5bd060d0fff582ae6d30160280c31344dd85719707fa920e187f0",
+  "fixture_sha256": "5fba526ae5fc2f899db04961029b0c632ebc928630a959ca9568b1e135c38080",
+  "dockerfile_sha256": "6e7ebadc405627525e5fc8a3d30b5e3e680e22761e7cd3457bef5d3f7e5f5b38",
+  "assurance": "local-native-synthetic-protocol-only"
+}

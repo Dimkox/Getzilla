@@ -10,6 +10,8 @@ from pilot.coordinator import PilotCoordinator
 from pilot.github import GitHubPublication
 from pilot.store import PilotStore
 from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
+
+from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, grant, profile
 from pilot.workspace import PreparedWorkspace
 
@@ -93,6 +95,7 @@ class FakeValidator:
         return self.validation
 
 
+@posix_runtime
 class PilotCoordinatorTests(unittest.TestCase):
     def test_restart_reopens_workspace_at_each_recoverable_local_state(self) -> None:
         for restart_state in ("workspace_ready", "candidate_sealed", "gate_passed"):
