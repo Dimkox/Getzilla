@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field as _dataclass_field, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -252,6 +252,168 @@ class _UnsupportedQueueCallbackError(ArchitectureError):
     """Unsupported callback semantics, distinct from acquisition or analysis faults."""
 
 
+_QUEUE_DEPTH_SEAL = object()
+_QUEUE_DEPTH_PREFIX = 'queue depth context v1: '
+_QUEUE_DEPTH_CONTEXT_LIMIT = 64
+
+
+@dataclass(frozen=True)
+class _QueueDepthContext:
+    boundary: str
+    side: str
+    attempted_module: str
+    active_count: int | None
+    active_modules: tuple[str, ...]
+    attempted_depth: int | None
+    limit: int
+    cached_height: int | None = None
+    cached_count: int | None = None
+    cached_modules: tuple[str, ...] = ()
+    redacted: bool = False
+    truncated: bool = False
+    unavailable: bool = False
+    _seal: object = _dataclass_field(default=None, repr=False, compare=False)
+
+
+def _queue_depth_token(value: object) -> tuple[str, bool]:
+    if (type(value) is str and 0 < len(value) <= 96
+            and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*', value)):
+        return value, False
+    return '<unavailable>', True
+
+
+def _queue_depth_modules(value: object, maximum: int) -> tuple[int | None, tuple[str, ...], bool, bool]:
+    if type(value) not in {set, frozenset}:
+        return None, (), True, False
+    count = len(value)
+    if count > maximum:
+        return count, (), False, True
+    tokens = [_queue_depth_token(item) for item in value]
+    return count, tuple(sorted({token for token, _invalid in tokens})), any(bad for _token, bad in tokens), False
+
+
+def _queue_depth_error(boundary: str, module: str, side: str, active: set[str], *,
+                       cached_height: int | None = None, cached_modules: frozenset[str] | None = None) -> ArchitectureError:
+    error = ArchitectureError('queue adapter depth limit exceeded', code='limit')
+    try:
+        if (type(boundary) is not str or boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
+                or type(side) is not str or side not in {'base', 'head'}):
+            return error
+        token, redacted = _queue_depth_token(module)
+        count, names, bad, truncated = _queue_depth_modules(active, MAX_QUEUE_ADAPTER_DEPTH)
+        height = None
+        cached_count, cached_names, cached_bad, cached_truncated = None, (), False, False
+        unavailable = count is None
+        if boundary == 'cached-height':
+            if type(cached_height) is int and 0 <= cached_height <= MAX_QUEUE_ADAPTER_MODULES:
+                height = cached_height
+            else:
+                unavailable = True
+            cached_count, cached_names, cached_bad, cached_truncated = _queue_depth_modules(
+                cached_modules, MAX_QUEUE_ADAPTER_MODULES)
+            unavailable = unavailable or cached_count is None
+        depth = count + (height if boundary == 'cached-height' else 1) if count is not None and (
+            boundary != 'cached-height' or height is not None) else None
+        error._queue_depth_context = _QueueDepthContext(boundary, side, token, count, names,
+            depth, MAX_QUEUE_ADAPTER_DEPTH, height, cached_count, cached_names,
+            redacted or bad or cached_bad, truncated or cached_truncated, unavailable, _QUEUE_DEPTH_SEAL)
+    except Exception:
+        # Optional diagnostic failure must preserve the original refusal; interrupts propagate.
+        return error
+    return error
+
+
+def _queue_depth_context_valid(context: object, side: object) -> bool:
+    if type(context) is not _QueueDepthContext or context._seal is not _QUEUE_DEPTH_SEAL:
+        return False
+    if (type(side) is not str or side not in {'base', 'head'} or type(context.side) is not str
+            or context.side != side or type(context.boundary) is not str
+            or context.boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
+            or type(context.limit) is not int or context.limit != MAX_QUEUE_ADAPTER_DEPTH
+            or any(type(value) is not bool for value in (context.redacted, context.truncated, context.unavailable))):
+        return False
+    if type(context.attempted_module) is not str or (
+            context.attempted_module != '<unavailable>' and _queue_depth_token(context.attempted_module)[1]):
+        return False
+    if context.attempted_module == '<unavailable>' and not context.redacted:
+        return False
+    for names, count, maximum in ((context.active_modules, context.active_count, 8),
+                                  (context.cached_modules, context.cached_count, 64)):
+        if (type(names) is not tuple or len(names) > maximum or
+                any(type(name) is not str or (name != '<unavailable>' and _queue_depth_token(name)[1]) for name in names)
+                or names != tuple(sorted(set(names)))):
+            return False
+        if count is None:
+            if names or ((maximum == 8 or context.boundary == 'cached-height') and not context.unavailable):
+                return False
+        elif type(count) is not int or not 0 <= count <= sys.maxsize:
+            return False
+        elif count > maximum:
+            if names or not context.truncated:
+                return False
+        elif len(names) != count and not ('<unavailable>' in names and context.redacted and len(names) < count):
+            return False
+        if '<unavailable>' in names and not context.redacted:
+            return False
+    if context.cached_height is not None and (type(context.cached_height) is not int or
+            not 0 <= context.cached_height <= MAX_QUEUE_ADAPTER_MODULES):
+        return False
+    if context.attempted_depth is not None and (type(context.attempted_depth) is not int or
+            not 0 <= context.attempted_depth <= sys.maxsize + MAX_QUEUE_ADAPTER_MODULES):
+        return False
+    if context.boundary != 'cached-height' and (
+            context.cached_height is not None or context.cached_count is not None or context.cached_modules):
+        return False
+    increment = context.cached_height if context.boundary == 'cached-height' else 1
+    if context.active_count is not None and increment is not None:
+        if (context.attempted_depth != context.active_count + increment or
+                context.attempted_depth <= context.limit):
+            return False
+    elif context.attempted_depth is not None or not context.unavailable:
+        return False
+    return True
+
+
+def _queue_exception_depth_context(error: ArchitectureError, side: str) -> _QueueDepthContext | None:
+    try:
+        context = getattr(error, '_queue_depth_context', None) if type(error) is ArchitectureError else None
+        return context if _queue_depth_context_valid(context, side) else None
+    except Exception:
+        return None
+
+
+def _queue_depth_findings(provenance: _QueueProvenanceResult) -> tuple[str, ...]:
+    records: list[str] = []
+    try:
+        contexts = provenance.depth_contexts
+        if type(contexts) is not tuple or len(contexts) > _QUEUE_DEPTH_CONTEXT_LIMIT:
+            return ('queue depth contexts v1: {"unavailable":true}',)
+        for record in contexts:
+            if type(record) is not tuple or len(record) != 3:
+                continue
+            path, side, context = record
+            if not _queue_depth_context_valid(context, side):
+                continue
+            valid_path = (type(path) is str and 0 < len(path) <= 256 and not path.startswith('/')
+                and re.fullmatch(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*', path)
+                and not any(part in {'.', '..'} for part in path.split('/')))
+            value = {key: getattr(context, key) for key in _QueueDepthContext.__dataclass_fields__ if key != '_seal'}
+            value.update(version=1, importer=path if valid_path else '<unavailable>')
+            value['unavailable'] = value['unavailable'] or not valid_path
+            encoded = _QUEUE_DEPTH_PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            if len(encoded.encode('ascii')) > 8192:
+                value.update(active_modules=(), cached_modules=(), truncated=True)
+                encoded = _QUEUE_DEPTH_PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            if len(encoded.encode('ascii')) <= 8192:
+                records.append(encoded)
+        omitted = provenance.depth_contexts_omitted
+        if type(omitted) is int and 0 < omitted <= MAX_ANALYZED_PYTHON_FILES:
+            records.append('queue depth contexts omitted v1: ' + str(omitted))
+        return tuple(sorted(set(records)))
+    except Exception:
+        return ('queue depth contexts v1: {"unavailable":true}',)
+
+
 class _QueueProvenanceResult(NamedTuple):
     state: str
     reason: str
@@ -260,6 +422,8 @@ class _QueueProvenanceResult(NamedTuple):
     limits: tuple[tuple[str, str, str], ...] = ()
     causes: tuple[tuple[str, str, str, str, str], ...] = ()
     complete_empty: bool = False
+    depth_contexts: tuple[tuple[str, str, _QueueDepthContext], ...] = ()
+    depth_contexts_omitted: int = 0
 
 
 def _queue_diagnostic_code(code: object) -> str:
@@ -271,7 +435,7 @@ def _queue_diagnostic_findings(provenance: _QueueProvenanceResult) -> tuple[str,
     return tuple(
         f"queue analysis diagnostic ({side}/{stage}/{outcome}/{code}): {path}"
         for path, side, stage, outcome, code in provenance.causes
-    )
+    ) + _queue_depth_findings(provenance)
 
 
 class _QueueSourceFootprint(NamedTuple):
@@ -3644,6 +3808,21 @@ def _source_span(path, side, stage):
                             location=_diagnostic_location(path))
 
 
+def _queue_check_depth(budget, depth, *, site, module, side, active, cached=(), cached_height=None, cached_modules=()):
+    """Keep measured refusal authority and attach bounded advisory depth context."""
+    try:
+        budget.check_depth(depth, site=site, cached=cached)
+    except ArchitectureError as error:
+        if error.code == 'limit':
+            boundary = {'active': 'live-depth', 'declaration': 'declaration-depth', 'cached': 'cached-height'}[site]
+            advisory = _queue_depth_error(boundary, module, side, active,
+                cached_height=cached_height, cached_modules=cached_modules)
+            context = getattr(advisory, '_queue_depth_context', None)
+            if context is not None:
+                error._queue_depth_context = context
+        raise
+
+
 def _local_queue_resolution(
     root: Path,
     diff: ArchitectureDiff,
@@ -3687,7 +3866,7 @@ def _local_queue_resolution(
                 # independent of whether this request has a parent.
                 if len(visited | {module}) > MAX_QUEUE_ADAPTER_MODULES:
                     raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-                budget.check_depth(len(resolving) + 1, site='declaration')
+                _queue_check_depth(budget, len(resolving) + 1, site='declaration', module=module, side=side, active=resolving)
                 visited.add(module)
                 result = result._replace(modules=frozenset({module}), height=1, witness=(module,))
         except BaseException as error:
@@ -3754,12 +3933,13 @@ def _local_queue_resolution_impl(
         return prefetched
     if module in resolving:
         return _QueueAdapterResolution("unsupported", "cyclic_local_queue_adapter")
-    budget.check_depth(len(resolving) + 1, site='active')
+    _queue_check_depth(budget, len(resolving) + 1, site='active', module=module, side=side, active=resolving)
     cached = cache.demands.get(demand_key)
     if cached is not None and not (cached.modules & resolving):
         if len(visited | cached.modules) > MAX_QUEUE_ADAPTER_MODULES:
             raise ArchitectureError('queue adapter module limit exceeded', code='limit')
-        budget.check_depth(len(resolving) + cached.height, site='cached', cached=cached.witness)
+        _queue_check_depth(budget, len(resolving) + cached.height, site='cached', module=module, side=side, active=resolving,
+                           cached=cached.witness, cached_height=cached.height, cached_modules=cached.modules)
         visited.update(cached.modules)
         return cached
     resolving.add(module)
@@ -4174,6 +4354,8 @@ def _new_queue_sources(
     changed_signals: set[str] = set()
     limits: list[tuple[str, str, str]] = []
     causes: list[tuple[str, str, str, str, str]] = []
+    depth_contexts: list[tuple[str, str, _QueueDepthContext]] = []
+    depth_contexts_omitted = 0
     with diagnostics.span('arch-queue-inventory-head', stage='action'):
         head_cache = _queue_module_inventory(root, diff, "head", source_roots)
     with diagnostics.span('arch-queue-inventory-base', stage='action'):
@@ -4244,6 +4426,12 @@ def _new_queue_sources(
         except ArchitectureError as exc:
             if exc.code == "limit":
                 limits.append((path, side, _queue_limit_text(exc)))
+                context = _queue_exception_depth_context(exc, side)
+                if context is not None:
+                    if len(depth_contexts) < _QUEUE_DEPTH_CONTEXT_LIMIT:
+                        depth_contexts.append((path, side, context))
+                    else:
+                        depth_contexts_omitted += 1
             else:
                 unsupported.append(path)
                 code = _queue_diagnostic_code(exc.code)
@@ -4266,6 +4454,7 @@ def _new_queue_sources(
             tuple(sorted(set((*applicable, *unsupported)))),
             tuple(sorted(limits)),
             tuple(sorted(causes)),
+            depth_contexts=tuple(depth_contexts), depth_contexts_omitted=depth_contexts_omitted,
         )
     if applicable:
         return _QueueProvenanceResult(
