@@ -169,3 +169,12 @@ separate A/C observed-fingerprint port or change the sixteen-MiB group cap. No a
 been issued by this source slice. `reviewed_public_dataset(A)` returns the four
 current parsed public data documents and factual hashes after consuming A;
 these data objects confer no source, model, execution or output permission.
+
+`reviewed_public_source_cut(A,batch=...)` resolves the exact registered public
+source directory inside the owner. It consumes A fully before the fresh native
+source lease. The fixed host then checks the same current receipt, owner,
+context, source, policy and every held data/report identity at its native
+boundaries. It does not reread oversized originals as report-group input or
+renew the two-second source deadline. Keep both cuts for the fixed 148 files
+current before each later stage; never use only the last batch as index proof.
+Encoder, operation, live-resource and output gates remain separate.

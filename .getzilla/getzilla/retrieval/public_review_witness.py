@@ -3,6 +3,7 @@
 This is operator-witnessed-public-only, never authenticated native delivery,
 human security approval, private access or model/execution authority.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
@@ -620,3 +621,62 @@ def _reviewed_dataset(reference, composition):
 def reviewed_public_dataset(reference):
     """Return current fixed public data facts; this grants no encoder or execution access."""
     return _reviewed_dataset(reference, _PRODUCTION)
+
+
+class _WitnessSourceFence:
+    """Fixed current review custody at source boundaries, never a model permit."""
+    __slots__ = ('_issuer', '_reference', '_capture', '_closed')
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError('owned reviewed source composition required')
+
+    def __setattr__(self, name, value):
+        raise AttributeError('review source fence is immutable')
+
+    def __reduce__(self):
+        raise TypeError('review source fence cannot be serialized')
+
+    def check_current(self, deadline):
+        _require(self._issuer is _ISSUER and not self._closed and time.monotonic() < deadline,
+                 'public_witness_stale')
+        receipt = get_receipt(self._capture.root, self._capture.route['route_id'], KIND)
+        _require(receipt is not None and digest(receipt) == self._reference._receipt_digest,
+                 'public_witness_stale')
+        # Full body hashes were consumed before the fresh source lease. Immutable
+        # owner-held identities/ctime are checked here without renewing that lease.
+        self._capture.recheck()
+        _require(time.monotonic() < deadline, 'public_witness_stale')
+
+
+@contextmanager
+def _reviewed_source_cut(reference, *, batch, composition):
+    facts = _consume(reference, composition)
+    capture = _Capture(reference._root)
+    receipt = get_receipt(capture.root, capture.route['route_id'], KIND)
+    _require(receipt is not None and digest(receipt) == reference._receipt_digest, 'public_witness_stale')
+    raw = capture.read(receipt['details']['registration_path'])
+    _require(sha(raw) == facts['registration_sha256'], 'public_witness_changed')
+    registration = _json(raw)
+    capture.dependencies = {snapshot['path']: snapshot for snapshot in receipt['details']['dependencies']}
+    capture.recheck()
+    fence = object.__new__(_WitnessSourceFence)
+    for key, value in (('_issuer', _ISSUER), ('_reference', reference), ('_capture', capture), ('_closed', False)):
+        object.__setattr__(fence, key, value)
+    from .research import _public_source_cut
+    try:
+        with _public_source_cut(capture.root, capture.root / checked_relative(registration['public_sources']),
+                batch=batch, review_fence=fence, catalogs=composition.catalogs) as result:
+            yield result
+    finally:
+        object.__setattr__(fence, '_closed', True)
+
+
+@contextmanager
+def reviewed_public_source_cut(reference, *, batch):
+    """Join current public review facts to one fresh fixed two-second source cut.
+
+    Every held cut must remain current before encoder/output stages. This port
+    neither authorizes those stages nor extends the native source deadline.
+    """
+    with _reviewed_source_cut(reference, batch=batch, composition=_PRODUCTION) as result:
+        yield result
