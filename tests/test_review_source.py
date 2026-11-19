@@ -44,6 +44,17 @@ class ReviewSourceTests(unittest.TestCase):
         return write_receipt(self.root, 'code_review', 'pass', report or self.report,
                              reviewed_commit=source or self.source)
 
+    def test_read_only_binding_consumes_framed_active_change_without_new_authority(self):
+        from getzilla.native_state_snapshot import extend
+        from getzilla.review_source import review_source_binding
+        pointer = self.root/'.getzilla/runtime/active-change.json'
+        original = pointer.read_bytes()
+        expected = review_source_binding(self.root,self.source,self.report)
+        pointer.write_bytes(extend(original,original,limit=4096))
+        before = pointer.read_bytes()
+        self.assertEqual(review_source_binding(self.root,self.source,self.report),expected)
+        self.assertEqual(pointer.read_bytes(),before)
+
     def test_micro_route_without_package_admits_global_reports_and_consumption(self):
         (self.root / '.getzilla/runtime/active-change.json').unlink()
         self.route.update(complexity='micro', risk='low')

@@ -109,4 +109,7 @@ except (RunCancelled, OSError, TypeError, ValueError) as exc:
         print(json.dumps(report, ensure_ascii=True, indent=2), file=sys.stderr)
     except (OSError, TypeError, ValueError):
         pass
+if not args.no_record and report.get('route_id'):
+    from getzilla.sprint_lifecycle import flush_after_scope
+    flush_after_scope(root, report['route_id'])
 raise SystemExit(signal_exit if signal_exit is not None else (0 if report['status'] == 'pass' else 1))

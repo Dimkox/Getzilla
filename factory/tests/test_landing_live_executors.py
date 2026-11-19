@@ -55,6 +55,7 @@ from getzilla_factory.models import Actor
 from factory.tests.test_landing_normalizer import draft, source
 from factory.tests.test_landing_contracts import provider_facts
 from factory.tests.test_landing_renderer import sealed_target
+from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
 
 FIXED_TIME = datetime(2026, 9, 6, 19, 0, tzinfo=timezone.utc)
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +92,10 @@ def _request(executor) -> HttpLandingExecutionRequest:
 
 
 class LandingLiveExecutorTests(PaidProtocolTestCase):
+    def setUp(self):
+        super().setUp()
+        mock_transport_factory_boundary(self)
+
     def test_host_requirements_match_current_python_and_httpx(self) -> None:
         requirements = CURRENT_LANDING_HOST_REQUIREMENTS
         self.assertEqual("/usr/bin/python3.12", requirements.python_executable)
@@ -208,6 +213,10 @@ class LandingLiveExecutorTests(PaidProtocolTestCase):
 
 
 class GrokReasoningUsageTests(PaidProtocolTestCase):
+    def setUp(self):
+        super().setUp()
+        mock_transport_factory_boundary(self)
+
     # Counts captured from the sanitized grok-4.6 response on 2026-09-15.
     CAPTURED_USAGE = {
         "prompt_tokens": 1336, "completion_tokens": 93, "total_tokens": 2598,
@@ -412,6 +421,10 @@ class GrokReasoningUsageTests(PaidProtocolTestCase):
 
 
 class HttpLandingDraftNormalizationTests(PaidProtocolTestCase):
+    def setUp(self):
+        super().setUp()
+        mock_transport_factory_boundary(self)
+
     def normalize(self, document, provider="qwen"):
         profile = HttpLandingProfile.for_provider(provider, available=True)
         response = {
@@ -468,6 +481,7 @@ class HttpLandingDraftNormalizationTests(PaidProtocolTestCase):
 class LandingLiveGrokQwenCompositionTests(PaidProtocolTestCase):
     def setUp(self) -> None:
         super().setUp()
+        mock_transport_factory_boundary(self)
         temporary = tempfile.TemporaryDirectory(prefix="landing-live-llm-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -749,6 +763,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
 
     def setUp(self):
         super().setUp()
+        mock_transport_factory_boundary(self)
         temporary = tempfile.TemporaryDirectory(prefix="qwen-fixture-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -809,6 +824,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
             replace(profile, base_url="https://example.com/v1")
 
     def test_probe_uses_real_executor_decoder_and_reports_only_safe_facts(self):
+        mock_transport_factory_boundary(self)
         self.write(f"DASHSCOPE_API_KEY={self.value}")
         requests = []
         def handler(request):
@@ -903,6 +919,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
                             HttpLandingProfile.for_provider("qwen-omni", available=True).profile_digest)
 
     def test_environment_composition_accepts_both_omni_profiles(self):
+        mock_transport_factory_boundary(self)
         # A selected profile must survive the provider gate and fail later, on the paths the
         # test does not supply; only an unknown name may be refused as a provider.
         for name in ("qwen-omni", "qwen-omni-intl"):
@@ -915,6 +932,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
                 "FACTORY_LANDING_PROVIDER": "qwen-never", "DASHSCOPE_API_KEY": self.value})
         self.assertEqual("landing_provider", str(refused.exception))
     def test_probe_rejects_malformed_draft_and_usage(self):
+        mock_transport_factory_boundary(self)
         self.write(f"DASHSCOPE_API_KEY={self.value}")
         for payload in ({"object": "chat.completion", "model": "qwen-plus", "choices": []},
                         {"object": "chat.completion", "model": "qwen-plus", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{}"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 4}}):
@@ -922,6 +940,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
                 live.probe_qwen(qwen_env_file=self.path, admission=self.probe_admission(), transport=_transport("qwen-plus", payload=payload))
 
     def test_probe_rejects_invalid_draft_after_valid_http_envelope(self):
+        mock_transport_factory_boundary(self)
         self.write(f"DASHSCOPE_API_KEY={self.value}")
         payload = {
             "object": "chat.completion", "model": "qwen-plus",
@@ -933,6 +952,7 @@ class QwenCredentialAndProfileTests(PaidProtocolTestCase):
             live.probe_qwen(qwen_env_file=self.path, admission=self.probe_admission(), transport=_transport("qwen-plus", payload=payload))
 
     def test_malformed_provider_unicode_is_closed_at_decoder_and_probe_cli(self):
+        mock_transport_factory_boundary(self)
         self.write(f"DASHSCOPE_API_KEY={self.value}")
         payload = {
             "object": "chat.completion", "model": "qwen-plus",

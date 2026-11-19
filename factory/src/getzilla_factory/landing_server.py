@@ -27,9 +27,16 @@ class OwnedLandingRuntime:
 def compose_server_landing(
     settings: FactorySettings, *, repository_root: Path, qwen_env_file: Path | None = None,
     provider_env_file: Path | None = None,
+    factory_service=None,
     configure_paid_authority=None,
 ) -> OwnedLandingRuntime | None:
     settings.validate_landing()
+    if settings.landing_live_enabled:
+        from .factory_stop import FactoryStopError, require_factory_service
+        try:
+            require_factory_service(factory_service)
+        except FactoryStopError:
+            raise SettingsError('live landing requires canonical Factory stop authority') from None
     if provider_env_file is not None and qwen_env_file is not None:
         raise SettingsError("select one provider credential file")
     if settings.landing_quarantine_path is None:
@@ -100,11 +107,14 @@ def compose_server_landing(
             from .paid_admission import PaidExecutionAdmission
             if type(admission) is not PaidExecutionAdmission or admission.store is not owned_store:
                 raise SettingsError("shared durable paid authority required")
-            service = compose(
-                admission=admission,
-                api_key=(provider_api_key(profile.provider_id, env_file=provider_env_file)
+            def credential_loader():
+                return (provider_api_key(profile.provider_id, env_file=provider_env_file)
                          if provider_env_file is not None
-                         else qwen_api_key(env_file=qwen_env_file)),
+                         else qwen_api_key(env_file=qwen_env_file))
+            service = compose(
+                credential_loader=credential_loader,
+                admission=admission,
+                factory_service=factory_service,
                 binding=implemented_live_binding(enabled=True),
                 profile=profile,
                 source_repository=settings.landing_source_path,

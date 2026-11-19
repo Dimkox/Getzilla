@@ -25,6 +25,8 @@ SCRATCH.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 class PaidAdmissionTests(unittest.TestCase):
     def setUp(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
         from getzilla_factory.paid_admission import PaidAccountV1, PaidTaskV1, PaidPriceV1, PaidExecutionAdmission
 
         self.tmp = tempfile.TemporaryDirectory(dir=SCRATCH)
@@ -198,6 +200,52 @@ class PaidAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(LandingProviderError, "paid_authority_required"):
             asyncio.run(executor._exchange(b"{}", {}, 1))
         self.assertEqual(calls, [])
+
+    def test_stop_revoked_by_lazy_credential_load_prevents_paid_dispatch(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        from getzilla_factory.factory_stop import FactoryStopError
+        revoked = []
+        def key():
+            revoked.append(True)
+            return 'synthetic'
+        async def check():
+            if revoked:
+                raise FactoryStopError('factory_stop_changed')
+        capability = Mock(check=Mock(return_value=None), check_async=AsyncMock(side_effect=check))
+        calls = []
+        executor = qwen_landing_executor(credential_loader=key, admission=self.admission,
+            transport=httpx.MockTransport(lambda request: calls.append(request)))
+        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability):
+            with self.assertRaisesRegex(LandingProviderError, 'factory_stop_changed') as error:
+                executor.run(_request(executor))
+        self.assertFalse(error.exception.dispatched)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.store.paid_audit('account')[0]['state'], 'reserved')
+
+    def test_stop_after_post_keeps_paid_exposure_unknown(self):
+        import asyncio
+        from unittest.mock import AsyncMock, Mock, patch
+        from getzilla_factory.factory_stop import FactoryStopError
+        admitted = []
+        async def check():
+            if admitted:
+                raise FactoryStopError('factory_stop_changed')
+        capability = Mock(check=Mock(return_value=None), check_async=AsyncMock(side_effect=check))
+        class WaitingBody(httpx.AsyncByteStream):
+            async def __aiter__(inner):
+                await asyncio.sleep(2)
+                yield b'{}'
+        def post(request):
+            admitted.append(request)
+            return httpx.Response(200, headers={'Content-Type': 'application/json'}, stream=WaitingBody())
+        executor = qwen_landing_executor(api_key='synthetic', admission=self.admission,
+            transport=httpx.MockTransport(post))
+        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability):
+            with self.assertRaisesRegex(LandingProviderError, 'factory_stop_changed') as error:
+                executor.run(_request(executor))
+        self.assertTrue(error.exception.dispatched)
+        self.assertEqual(len(admitted), 1)
+        self.assertEqual(self.store.paid_audit('account')[0]['state'], 'unknown')
 
     def test_invalid_usage_blocks_account_and_retains_full_ceiling(self):
         r = self.admission.reserve("qwen", "qwen-plus", "paid-inference", "d" * 64, 50, 20)

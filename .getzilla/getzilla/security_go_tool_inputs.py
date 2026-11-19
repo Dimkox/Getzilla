@@ -767,7 +767,7 @@ def module_requirements(observations, source_locks=None):
 def component_from_terms(identity, terms, *, expression=None, requires=None):
     """Qualify complete actual term bytes, independently of project policy approval."""
     from .security_licenses import _license_evidence, _select_expression
-    from .security_license_texts import recognized_license
+    from .security_license_texts import recognized_license, recognized_license_bundle
 
     if not isinstance(terms, dict) or not terms:
         fail("license-obligation-missing", "Go component has no retained source license/notice bytes")
@@ -793,13 +793,20 @@ def component_from_terms(identity, terms, *, expression=None, requires=None):
                 fail("license-text-review", "Go legal text is not UTF-8")
             if recognized:
                 identifiers.add(recognized)
+            else:
+                identifiers.update(recognized_license_bundle(body.decode("utf-8")) or ())
     if not licenses:
         fail("license-obligation-missing", "Go component has no complete license term file")
     if expression is None:
         if not identifiers:
             fail("license-text-review", "Go source license terms require exact text/expression review")
         expression = " AND ".join(sorted(identifiers))
-    chosen, mentioned = _select_expression(expression, sorted(identifiers), require_all=True)
+    # This stage proves source text, not project permission. The report-only
+    # require_all API deliberately admits only six global policy IDs; do not
+    # widen that untrusted-report gate to qualify copyleft source evidence.
+    chosen, mentioned = _select_expression(expression, sorted(identifiers))
+    if set(chosen) != identifiers:
+        fail("license-text-review", "source expression does not select every retained complete grant")
     _license_evidence(files, {"expression": expression, "license_paths": licenses}, mentioned, chosen)
     component = {
         "id": identity,
@@ -869,6 +876,9 @@ def qualified_tool_bindings(checker, artifacts, license_result, *, now=None):
                 "single-tool, foreign or package license output cannot qualify either checker ID",
             )
     return bindings
+
+
+_VERIFIED_FAMILIES = {}
 
 
 def verify_family(root, record, payload=None, *, checker=None, now=None):
@@ -1040,6 +1050,9 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
     for c in components:
         if c["id"].startswith("go-main:"):
             c["requires"] = sorted(ids - {c["id"]})
+    # Retain only the live cache location after complete source/native checks.
+    # Finding replay rereads all bytes; JSON cannot supply or restore this root.
+    _VERIFIED_FAMILIES[identity] = (root, checker)
     return {
         "artifact_id": identity,
         "members": observed["members"],
@@ -1059,3 +1072,35 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
         },
         "bound_bytes": len(payload) + sum(item["bytes"] for item in evidence),
     }
+
+
+
+def finding_consistent(finding, allowed, select_expression):
+    """Replay a checker finding from the independently verified live source root."""
+    from .security_artifacts import ArtifactError, family_identity, read_file
+    from .security_license_family_conditions import allowed_for
+    from .security_licenses import _license_evidence
+    try:
+        record = finding['family_record']
+        root, checker = _VERIFIED_FAMILIES[family_identity(record)]
+        evidence = verify_family(root, record, checker=checker)
+        selected, licenses, notices = [], [], []
+        for component in evidence['components']:
+            component_allowed = allowed_for(record, component, allowed, selected_internal=True,
+                source_modules=evidence['binding'].get('go_module_sources', []))
+            chosen, identifiers = select_expression(component['expression'], component_allowed)
+            owned = {item['path'] for item in component['files']}
+            files = {path: body for path, body in evidence['files'].items() if path in owned}
+            terms, attribution = _license_evidence(files, component, identifiers, chosen)
+            selected.extend(chosen)
+            licenses.extend(terms)
+            notices.extend(attribution)
+        expected = dict(kind='tool', reference=record['subject']['reference'], status='pass',
+            selected_expression=' AND '.join(sorted(set(selected))), distribution='internal',
+            **evidence['binding'], family_record=record,
+            component_inventory_json=read_file(root, record['components']['path'], MAX_INDEX_BYTES).decode('utf-8'),
+            license_files=licenses, notice_files=notices,
+            obligations='internal use; exact source/component/license evidence retained')
+        return finding == expected
+    except (ArtifactError, ValueError, TypeError, KeyError, OSError):
+        return False

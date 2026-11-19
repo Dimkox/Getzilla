@@ -112,7 +112,7 @@ def _validate_ack(route: dict[str, Any], ack: Any) -> None:
             raise ValueError('invalid rejected scope resolution action')
 
 
-def validate_route(root: Path, route: dict[str, Any]) -> None:
+def validate_route(root: Path, route: dict[str, Any], *, anchor=None) -> None:
     if not isinstance(route, dict):
         raise ValueError('invalid task envelope')
     if 'intent_state' in route:
@@ -124,21 +124,32 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
         return
     if not isinstance(route.get('task'), str):
         raise ValueError('invalid original task text')
+    if 'execution_store_required' in route:
+        binding = route['execution_store_required']
+        if (not isinstance(binding, dict) or set(binding) != {'version', 'generation'}
+                or type(binding['version']) is not int or binding['version'] != 1
+                or not isinstance(binding['generation'], str)
+                or not re.fullmatch(r'[0-9a-f]{32}', binding['generation'])):
+            raise ValueError('invalid canonical execution store binding')
     if type(route.get('task_context_version')) is not int or route['task_context_version'] != 1:
         raise ValueError('unsupported task context version; explicit recovery required')
     origin = route.get('origin_session_id')
     if (not _identifier(route.get('logical_task_id')) or not isinstance(origin, str) or
             not 1 <= len(origin) <= 128 or not re.fullmatch(r'[\w.:/-]+', origin) or
             not _identifier(route.get('session_id')) or route['session_id'] == 'manual' or
-            route.get('workspace') != str(root.resolve()) or
+            route.get('workspace') != (anchor.workspace if anchor is not None else str(root.resolve())) or
             not _integer(route.get('authority_epoch')) or not _integer(route.get('state_revision'))):
         raise ValueError('invalid task identity, workspace or authority epoch')
     context = route.get('context')
-    if (not isinstance(context, dict) or set(context) != set(new_context()) or
-            type(context['version']) is not int or context['version'] != 1 or
+    intake_v2 = isinstance(context, dict) and type(context.get('version')) is int and context['version'] == 2
+    if (not isinstance(context, dict) or set(context) != set(new_context()) | ({'intake'} if intake_v2 else set()) or
+            type(context['version']) is not int or context['version'] not in {1, 2} or
             not _integer(context['revision']) or type(context['legacy_compatible']) is not bool or
             not isinstance(context['pending'], list) or len(context['pending']) > MAX_PENDING):
         raise ValueError('invalid task context')
+    if intake_v2:
+        from .intake_publication import validate_protocol_metadata
+        validate_protocol_metadata(context['intake'])
     total, ids, events = 0, set(), set()
     for item in context['pending']:
         if (not isinstance(item, dict) or set(item) != {'id', 'event_id', 'text', 'digest', 'bytes', 'at'} or
@@ -180,19 +191,19 @@ def validate_route(root: Path, route: dict[str, Any]) -> None:
             raise ValueError('invalid handoff transaction')
 
 
-def _active_workers(root: Path) -> dict[str, Any]:
+def _active_workers(root: Path, *, anchor=None) -> dict[str, Any]:
     path = state.agent_state_path(root)
-    if not path.exists() and not path.is_symlink():
+    if not state._present(root, path, anchor):
         return {}
     try:
-        ledger = state._route_document(root, path)
+        ledger = state._route_document(root, path, anchor=anchor)
         active = ledger['active']
         if not isinstance(active, dict) or not isinstance(ledger.get('history'), list):
             raise ValueError('malformed worker ledger')
         for identifier, record in active.items():
             if (not _identifier(identifier) or not isinstance(record, dict) or
                     any(not _identifier(record.get(key)) for key in ('route_id', 'task_id', 'generation', 'agent_type')) or
-                    record.get('workspace') != str(root.resolve()) or
+                    record.get('workspace') != (anchor.workspace if anchor is not None else str(root.resolve())) or
                     record.get('lifecycle') not in {'running', 'interrupt-requested', 'interrupted'}):
                 raise ValueError('malformed worker identity')
         return active
@@ -253,8 +264,8 @@ def _passive(text: str) -> bool:
     return not value or is_system_notice(value) or should_reuse_active_route(value)
 
 
-def _ensure_idle(root: Path) -> None:
-    if _active_workers(root):
+def _ensure_idle(root: Path, *, anchor=None) -> None:
+    if _active_workers(root, anchor=anchor):
         raise ValueError('active or interrupted worker prevents task handoff; finish the original instance first')
 
 
@@ -435,6 +446,11 @@ def _sync_gate_projection(root: Path, route: dict[str, Any]) -> dict[str, Any]:
     if (context['pending'] or context['rejected']) and (
             value['status'] in {'verifying', 'reviewing', 'ready'} or
             value['status'] == 'implementing' and route.get('status') in {'verifying', 'reviewing', 'ready'}):
+        if context.get('version') == 2:
+            # The old stage is historical while scope is pending. Do not enter
+            # implementing to invalidate evidence: the actual intake admission
+            # consumers already refuse old cuts and preserve the queued input.
+            return route
         transition(root, route['change_id'], 'implementing', 'scope synchronization required')
         return state.canonical_route(root, route['route_id'])
     return route
@@ -477,12 +493,12 @@ def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_
 
 
 def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False,
-                       gate: bool = True) -> dict[str, Any] | None:
+                       gate: bool = True, anchor=None, draft: bool = False) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
     from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
     from .workflow_storage import valid_package_path
-    active = state.get_active_change(root)
+    active = state.get_active_change(root, anchor=anchor)
     change_id = route.get('change_id')
     if change_id is None:
         if active is not None:
@@ -492,14 +508,20 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
             active['change_id'] != change_id or not valid_package_path(active['path'], change_id)):
         raise ValueError('selected package does not match canonical task')
     path = root / active['path']
-    package_state = state._route_document(root, path / 'state.json')
+    package_state = state._route_document(root, path / 'state.json', anchor=anchor)
     validate_package_state(package_state, route, change_id)
-    raw_spec = read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable)
+    raw_spec = (anchor.read(active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES) if anchor is not None
+                else read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable))
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
-    _validate_document(spec, gate=gate, root=root)
+    # Enabled intake can consistently observe an incomplete typed draft. Its
+    # actual pre-code consumers require current semantic readiness separately.
+    # The explicit draft observation is also used only to bootstrap that ingress.
+    intake = (route.get('context') or {}).get('version') == 2
+    _validate_document(spec, gate=gate and not (draft or intake), root=root, anchor=anchor)
     if spec.get('change_id') != change_id:
         raise ValueError('typed spec change identity mismatch')
-    requirements = read_package_file(root, active['path'] + '/requirements.md', sync=durable)
+    requirements = (anchor.read(active['path'] + '/requirements.md', 1_048_576) if anchor is not None
+                    else read_package_file(root, active['path'] + '/requirements.md', sync=durable))
     requirements.decode('utf-8', 'strict')
     if not requirements.strip():
         raise ValueError('requirements are unavailable')
@@ -508,35 +530,35 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
             'requirements_digest': hashlib.sha256(requirements).hexdigest()}
 
 
-def context_binding(root: Path, route: dict[str, Any] | None = None, *, discovery: bool = False) -> dict[str, Any]:
+def context_binding(root: Path, route: dict[str, Any] | None = None, *, discovery: bool = False, anchor=None) -> dict[str, Any]:
     """Capture a bounded, revalidated observation; this is not a filesystem snapshot.
 
     No diagnostic read creates a lock or state file. Two equal document reads
     bracketed by canonical-route checks refuse observed concurrent changes.
     Publication still compares the captured binding under task_transition.
     """
-    route = state.get_active_route(root) if route is None else route
+    route = state.get_active_route(root, anchor=anchor) if route is None else route
     if not route:
         raise ValueError('task context unavailable')
     if has_task_context(route):
-        canonical = state.canonical_route(root, route['route_id'])
+        canonical = state.canonical_route(root, route['route_id'], anchor=anchor)
         if canonical != route:
             raise ValueError('task context changed')
-        validate_route(root, route)
+        validate_route(root, route, anchor=anchor)
         if not discovery:
-            state.require_route_owner(root, route)
-    documents = package_documents(root, route)
+            state.require_route_owner(root, route, anchor=anchor)
+    documents = package_documents(root, route, anchor=anchor)
     if documents is None and not (route.get('risk') == 'low' and (
             route.get('delivery_lane') == 'light' or route.get('complexity') == 'micro')):
         raise ValueError('full task requires an attached typed package')
-    if has_task_context(route) and state.canonical_route(root, route['route_id']) != route:
+    if has_task_context(route) and state.canonical_route(root, route['route_id'], anchor=anchor) != route:
         raise ValueError('task context changed during capture')
-    if package_documents(root, route) != documents:
+    if package_documents(root, route, anchor=anchor) != documents:
         raise ValueError('task context documents changed during capture')
     if has_task_context(route):
-        if state.canonical_route(root, route['route_id']) != route:
+        if state.canonical_route(root, route['route_id'], anchor=anchor) != route:
             raise ValueError('task context changed during capture')
-        if not discovery and state.get_active_route(root) != route:
+        if not discovery and state.get_active_route(root, anchor=anchor) != route:
             raise ValueError('selected task context changed during capture')
     value = {'version': 1, 'route_id': route['route_id'], 'logical_task_id': task_identity(route),
              'authority_epoch': route.get('authority_epoch', 0),
@@ -547,6 +569,10 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'requirements_digest': documents['requirements_digest'] if documents else None}
     if 'intent_state' in route:
         value.update(version=2, intent_digest=digest(route['intent_state']))
+    if 'execution_store_required' in route:
+        value['execution_store_required'] = route['execution_store_required']
+    if (route.get('context') or {}).get('version') == 2:
+        value.update(version=2, intake_protocol={'version': 1, 'required': True})
     return {**value, 'digest': digest(value)}
 
 
@@ -580,24 +606,24 @@ def legacy_evidence_allowed(route: dict[str, Any] | None) -> bool:
             context.get('rejected') is None and context.get('last_ack') is None)
 
 
-def scope_gaps(root: Path, route: dict[str, Any] | None = None) -> list[str]:
-    route = state.get_active_route(root) if route is None else route
+def scope_gaps(root: Path, route: dict[str, Any] | None = None, *, anchor=None) -> list[str]:
+    route = state.get_active_route(root, anchor=anchor) if route is None else route
     if not route:
-        return ['task authority unavailable'] if state.route_authority_present(root) else []
+        return ['task authority unavailable'] if state.route_authority_present(root, anchor=anchor) else []
     if legacy_evidence_allowed(route):
         return []
     try:
-        validate_route(root, route)
-        state.require_route_owner(root, route)
+        validate_route(root, route, anchor=anchor)
+        state.require_route_owner(root, route, anchor=anchor)
         context = route['context']
         gaps = []
         if context['pending']:
             gaps.append('scope_sync_required: pending amendments need explicit typed synchronization')
         if context['rejected'] is not None:
             gaps.append('scope_sync_required: NOT-admitted input needs exact explicit resolution')
-        binding = context_binding(root, route)
+        binding = context_binding(root, route, anchor=anchor)
         if binding['variant'] == 'package':
-            documents = package_documents(root, route)
+            documents = package_documents(root, route, anchor=anchor)
             ack = context['last_ack']
             if (not ack or ack['revision'] != context['revision'] or
                     ack.get('authority_epoch') != route['authority_epoch'] or
@@ -742,12 +768,12 @@ def update_intent(root: Path, request: dict[str, Any]) -> dict[str, Any]:
     return transition_intent(root, request)
 
 
-def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str, Any]) -> bool:
+def receipt_context_current(root: Path, route: dict[str, Any], receipt: dict[str, Any], *, anchor=None) -> bool:
     observed = receipt.get('continuity')
     if observed is None:
         return legacy_evidence_allowed(route)
     try:
-        return not scope_gaps(root, route) and observed == context_binding(root, route)
+        return not scope_gaps(root, route, anchor=anchor) and observed == context_binding(root, route, anchor=anchor)
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

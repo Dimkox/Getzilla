@@ -75,6 +75,14 @@ def regular(root, relative, *, create=False):
 
 
 def validate(item):
+    if isinstance(item, dict) and item.get('schema_version') == 4:
+        from .trace_contracts import validate_v4
+        validate_v4(item)
+        return
+    if isinstance(item, dict) and item.get('schema_version') == 3:
+        from .trace_contracts import validate_v3
+        validate_v3(item)
+        return
     if not isinstance(item, dict) or item.get('event') not in EVENTS or not isinstance(item.get('at'), str):
         raise ValueError('malformed observation')
     when(item)
@@ -180,7 +188,9 @@ def load(root, since=None, *, reader=None):
                 rows.append(item)
         except (UnicodeError, ValueError, TypeError, KeyError):
             gaps.append(f'malformed observation row {number + 1}')
-    return deduplicate(rows, gaps)
+    result = deduplicate(rows, gaps)
+    result.input_digest = hashlib.sha256(raw).hexdigest()
+    return result
 
 
 def import_observations(root, relative):

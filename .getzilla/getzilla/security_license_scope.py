@@ -210,6 +210,32 @@ class Scope:
             self.passed[key]=digest(output)
             self.details.extend(row for row in output.get('details',[]) if row not in self.details)
 
+    def checker_inputs(self, artifacts, policy, *, now=None):
+        """Re-evaluate the two actual checker families before granting either credit."""
+        self.validate(self.inventory, self.binding)
+        required = {key for key, row in self.required.items() if row['kind'] == 'checker-tool'}
+        self.state.pop('license_checker_tools', None)
+        if not required:
+            return None
+        from .security_tools import TRUSTED_ROOT
+        from .security_go_tool_inputs import checker_inventory, qualified_tool_bindings
+        from .security_licenses import evaluate_artifacts
+        root = Path(artifacts) / 'checker-tools'
+        output = evaluate_artifacts(checker_inventory(TRUSTED_ROOT), root, policy, now=now)
+        if output.get('status') == 'pass' and not output.get('gaps'):
+            bindings = qualified_tool_bindings(TRUSTED_ROOT, root, output, now=now)
+            if set(bindings) != required:
+                _refuse()
+            self.state['license_checker_tools'] = bindings
+            try:
+                self._checker_output(output)
+            except Exception:
+                self.state.pop('license_checker_tools', None)
+                raise
+        for key in sorted(required):
+            self.auxiliary(key, output)
+        return output
+
     def build_inputs(self,binding,output):
         """Credit only each exact backend in its sealed actual CI installation."""
         self.validate(self.inventory,self.binding)

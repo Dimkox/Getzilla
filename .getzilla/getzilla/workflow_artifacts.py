@@ -607,7 +607,8 @@ def load_runtime_authority(root: Path, kind: str) -> dict[str, Any]:
             if has_task_context(data):
                 raise WorkflowArtifactError('canonical owned route is unavailable', code='route')
     else:
-        data = _strict_json(_read_regular(root, relative, limit=MAX_MANIFEST_BYTES), limit=MAX_MANIFEST_BYTES)
+        from .native_state_snapshot import decode
+        data = _strict_json(decode(_read_regular(root, relative, limit=4096),limit=4096), limit=MAX_MANIFEST_BYTES)
     if not isinstance(data, dict):
         raise WorkflowArtifactError(f"active {kind} must be an object", code=kind)
     if kind == "route":
@@ -1033,6 +1034,8 @@ def compile_task_graph(root: Path, change_id: str, bundle: SourceBundle, route: 
         if missing:
             raise WorkflowArtifactError(f"task has missing dependencies: {sorted(missing)}", code="dependency")
         task["depends_on"] = sorted(id_by_key[key] for key in raw_tasks_by_key(interim, task["key"], raw_tasks))
+        if task["task_id"] in task["depends_on"]:
+            raise WorkflowArtifactError("task depends on itself", code="self-dependency")
         dependencies[task["task_id"]] = set(task["depends_on"])
     pending = {task_id: len(values) for task_id, values in dependencies.items()}
     dependents: dict[str, set[str]] = {task_id: set() for task_id in dependencies}
@@ -1735,6 +1738,11 @@ def _acquire_cas_lock_once(root: Path, change_id: str, relative_target: str) -> 
 
 
 def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, expected_digest: str) -> str:
+    return _cas_write(root, change_id, relative_target, data, expected_digest)
+
+
+def _cas_write(root: Path, change_id: str, relative_target: str, data: bytes, expected_digest: str,
+               *, package_target: bool = False) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
         raise WorkflowArtifactError("expected digest must be lowercase SHA-256", code="cas")
     if len(data) > MAX_SOURCE_BYTES:
@@ -1752,9 +1760,13 @@ def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, exp
         raise WorkflowArtifactError("invalid workflow write target", code="path")
     direct = relative_target in {"task-graph.json", "convergence-report.json"}
     projected = len(target_parts) >= 2 and target_parts[0] in {"projections", "exports"}
-    if not direct and not projected:
+    if package_target:
+        from .workflow_storage import intake_package_target
+        if not intake_package_target(relative_target):
+            raise WorkflowArtifactError('native package target is not allowlisted', code='path')
+    elif not direct and not projected:
         raise WorkflowArtifactError("workflow write target is not allowlisted", code="path")
-    if direct:
+    if direct and not package_target:
         derived = _strict_json(data, limit=MAX_SOURCE_BYTES)
         if relative_target == "task-graph.json":
             validate_task_graph(derived)
@@ -1764,7 +1776,8 @@ def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, exp
             raise WorkflowArtifactError("derived workflow artifact is not canonical JSON", code="cas")
 
     package = change_directory(root, change_id, writable=True)
-    lock_fd, recovery_dir_fd = _acquire_cas_lock(root, change_id, relative_target)
+    lock_key = relative_target.removeprefix('workflow/') if package_target and relative_target.startswith('workflow/') else ('package/' + relative_target if package_target else relative_target)
+    lock_fd, recovery_dir_fd = _acquire_cas_lock(root, change_id, lock_key)
     _, root_fd = _open_root(root)
     directory_fd: fsx.DirHandle | None = root_fd
     parent_fd: fsx.DirHandle | None = None
@@ -1829,7 +1842,8 @@ def cas_write(root: Path, change_id: str, relative_target: str, data: bytes, exp
         return artifact
 
     try:
-        for component in (*package.relative_to(root).parts, "workflow"):
+        base_parts = package.relative_to(root).parts if package_target else (*package.relative_to(root).parts, 'workflow')
+        for component in base_parts:
             next_fd = fsx.open_dir_at(directory_fd, component, flags=fsx.O_CLOEXEC)
             fsx.close_dir(directory_fd)
             directory_fd = next_fd

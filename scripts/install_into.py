@@ -53,6 +53,10 @@ MANAGED_DIRS = (
     "factory/tests",
 )
 MANAGED_FILES = (
+    "scripts/getzilla_execution.py",
+    "docs/supervised-execution.md",
+    "scripts/getzilla_reverse.py",
+    "docs/reverse-engineering.md",
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
     "docs/isolated-ci-acceptance.md",
@@ -97,6 +101,7 @@ MANAGED_FILES = (
     "scripts/getzilla_agent.py",
     "scripts/getzilla_deploy.py",
     "docs/deploy-preflight.md",
+    "docs/deploy-recovery.md",
     "scripts/getzilla_evidence.py",
     "scripts/getzilla_ci_evidence.py",
     "scripts/getzilla_platform_install.py",
@@ -123,6 +128,7 @@ MANAGED_FILES = (
     "schemas/change-spec.schema.json",
     "schemas/change-spec-v1.schema.json",
     "schemas/deploy-preflight-manifest-v1.schema.json",
+    "schemas/deploy-recovery-report-v1.schema.json",
     "schemas/architecture-system.schema.json",
     "schemas/architecture-rules.schema.json",
     "schemas/governance-rule.schema.json",
@@ -137,6 +143,8 @@ MANAGED_FILES = (
     "engineering/verification-dispositions.json",
     "engineering/vendor-custody/bmad-whitespace.json",
     "engineering/vendor-custody/bmad-whitespace.md",
+    "schemas/requirement-intake-v1.schema.json",
+    "schemas/intake-readiness-v1.schema.json",
 )
 ROOT_HOOK_SHIMS = frozenset(
     {

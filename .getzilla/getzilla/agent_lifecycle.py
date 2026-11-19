@@ -134,6 +134,13 @@ def start_agent(root: Path, agent_id: str, agent_type: str, *, now: datetime | N
         raise ValueError('invalid implementation requirement scope')
     current = _now(now)
     route = _owned_route(root)
+    roles = write_roles(root) | {route.get('write_agent')}
+    if agent_type in roles and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            require_intake_ready(root,route,operation_class='writer-start-or-reuse')
+        except Exception as error:
+            raise ValueError('semantic intake does not admit this writer') from error
     from .continuity import task_identity, _active_workers
     _active_workers(root)
     with _locked(root):

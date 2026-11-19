@@ -6,18 +6,18 @@ import argparse
 import json
 from pathlib import Path
 import sys
-sys.dont_write_bytecode = True
 
+sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
-from getzilla.agent_evals import EvalError, _parts, accept_baseline, attach_comparison, render_text, replay  # noqa: E402
+from getzilla.agent_evals import EvalError, _parts, accept_baseline, attach_comparison, render_text, replay, review_quality  # noqa: E402
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=ROOT)
     commands = parser.add_subparsers(dest='operation', required=True)
-    for name in ('run', 'accept'):
+    for name in ('run', 'accept', 'quality'):
         command = commands.add_parser(name)
         command.add_argument('--manifest', required=True)
         command.add_argument('--outputs', required=True)
@@ -27,9 +27,25 @@ def main(argv=None):
         if name == 'accept':
             command.add_argument('--reason', required=True)
             command.add_argument('--scope', required=True)
+        if name == 'quality':
+            command.add_argument('--study', required=True)
+            command.add_argument('--reviewer-id')
+            command.add_argument('--reviewer-generation')
+            command.add_argument('--report')
+            command.add_argument('--reviewed-context')
     args = parser.parse_args(argv)
     try:
         root = args.root.resolve(strict=True)
+        if args.operation == 'quality':
+            values = (args.reviewer_id, args.reviewer_generation, args.report, args.reviewed_context)
+            if any(values) and not all(values):
+                raise EvalError('incomplete_review_observation')
+            observation = dict(zip(('agent_id', 'generation', 'report', 'reviewed_context'), values)) if all(values) else None
+            report = review_quality(root, args.manifest, args.outputs, args.study, observation=observation,
+                                    timeout_seconds=args.timeout)
+            print(json.dumps(report, sort_keys=True, ensure_ascii=True, separators=(',', ':')) if args.json
+                  else 'QUALITY ' + report['quality']['status'] + ' (algorithm evidence; human acceptance not observed)')
+            return 0 if report['quality']['status'] == 'observed' and not report['quality']['unresolved'] else 1
         baseline = None
         if args.baseline:
             _parts(args.baseline)

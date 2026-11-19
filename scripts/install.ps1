@@ -154,6 +154,8 @@ function Install-Getzilla {
         throw "Getzilla installation is incomplete: health=$DoctorExit, agent/provider=$AgentExit. Follow the errors and next steps above."
     }
     Write-Host ''
+    # Optional telemetry has its own process deadline and cannot fail setup.
+    try { Invoke-Python $Python @((Join-Path $GetzillaHome 'scripts/getzilla_install_analytics.py'), '--ready') } catch { }
     Write-Host 'Next:'
     Write-Host '  0. Every Getzilla tool is one command: getzilla help   (open a new PowerShell window first)'
     Write-Host "  1. New project:      cd `"$GetzillaHome`"; $PythonText scripts/install_into.py --materialize-new C:\path\to\new\project"

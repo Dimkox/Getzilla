@@ -1717,6 +1717,16 @@ def _change_specs(root: Path, files: list[str], route: dict[str, object] | None,
             findings.append({'severity': 'error', 'code': 'change-spec-invalid', 'path': rel, 'message': error})
         records.append(record)
     metadata: dict[str, object] = {'exempt': exempt, 'specs': records, 'historical_migrations': migrations}
+    if route and (route.get('context') or {}).get('version') == 2:
+        try:
+            from .intake_publication import require_intake_ready
+            metadata['intake'] = require_intake_ready(root,route,operation_class='verification-backstop')
+        except Exception:
+            findings.append({'severity':'error','code':'intake-not-ready','path':active_rel or '',
+                             'message':'Current native intake does not admit implementation.'})
+            metadata['intake'] = {'status':'unavailable'}
+    else:
+        metadata['intake'] = {'status':'not_run','reason':'semantic_intake_undeclared'}
     if active_rel:
         metadata['active_path'] = active_rel
     return CheckResult('change-spec', 'fail' if findings else ('skip' if exempt and not selected else 'pass'), f'{len(records)} specs checked; exempt={exempt}', details=findings), metadata

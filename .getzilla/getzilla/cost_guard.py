@@ -123,8 +123,137 @@ def _string_parts(node: ast.AST) -> str:
     return ''
 
 
+def _data_assertions(tree: ast.AST) -> frozenset[int]:
+    """Prove only inherited stdlib assertion calls; arguments are still visited.
+
+    A provider URL compared as data is not a request. Unknown assertion methods,
+    mixed bases, changed receivers and overridden attribute lookup stay opaque.
+    """
+    nodes = tuple(ast.walk(tree))
+    if any(isinstance(node, ast.ImportFrom) and any(item.name == '*' for item in node.names) for node in nodes):
+        return frozenset()
+    if any(isinstance(node, ast.ImportFrom) and node.module == 'sys'
+           and any(item.name == 'modules' for item in node.names) for node in nodes):
+        return frozenset()
+    # Reflection and namespace writes invalidate this closed source proof.
+    # They remain ordinary conservative inputs to the paid-host detector.
+    if any(isinstance(node, ast.Attribute) and node.attr in {
+            '__dict__', '__class__', '__bases__', '__mro__', '__globals__',
+            '__closure__', '__code__', '__func__', '__import__', 'import_module', 'modules'}
+           or isinstance(node, ast.Attribute) and node.attr == 'TestCase'
+           and isinstance(node.ctx, (ast.Store, ast.Del))
+           or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+           and node.id in {'globals', 'locals', 'vars', 'exec', 'eval', '__builtins__', '__import__', 'setattr', 'delattr'}
+           or isinstance(node, ast.ImportFrom) and any(
+               item.name in {'__import__', 'import_module'} for item in node.names)
+           for node in nodes):
+        return frozenset()
+    aliases = set()
+    imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(item.asname or item.name.split('.')[0] for item in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.extend(item.asname or item.name for item in node.names)
+    for node in getattr(tree, 'body', ()):
+        if isinstance(node, ast.Import):
+            aliases.update((item.asname or item.name) + '.TestCase'
+                           for item in node.names if item.name == 'unittest')
+        elif isinstance(node, ast.ImportFrom) and node.module == 'unittest' and not node.level:
+            aliases.update(item.asname or item.name for item in node.names if item.name == 'TestCase')
+    rebound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+               and isinstance(node.ctx, (ast.Store, ast.Del))}
+    rebound.update(node.name for node in ast.walk(tree)
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    rebound.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
+    rebound.update(name for name in imports if imports.count(name) != 1)
+    aliases = {name for name in aliases if name.split('.')[0] not in rebound}
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    for name in tuple(aliases):
+        root = name.split('.')[0]
+        if '.' in name and any(
+                isinstance(node, ast.Name) and node.id == root and isinstance(node.ctx, ast.Load)
+                and not (isinstance(parents.get(node), ast.Attribute)
+                         and (_chain(parents[node]) == name or (
+                             parents[node].attr in {'main', 'skip', 'skipIf', 'skipUnless'}
+                             and isinstance(parents.get(parents[node]), ast.Call)
+                             and parents[parents[node]].func is parents[node]
+                             and (parents[node].attr != 'main'
+                                  or not parents[parents[node]].args and not parents[parents[node]].keywords))))
+                for node in nodes):
+            aliases.remove(name)
+            continue
+        if any(_chain(node) == name and not (
+                isinstance(parents.get(node), ast.ClassDef) and node in parents[node].bases)
+               for node in ast.walk(tree) if isinstance(node, (ast.Name, ast.Attribute))):
+            aliases.remove(name)
+        elif any(isinstance(node, ast.Name) and node.id == root and isinstance(node.ctx, ast.Load)
+                 and not (isinstance(parents.get(node), ast.Attribute) and parents[node].value is node)
+                 and not (isinstance(parents.get(node), ast.ClassDef) and node in parents[node].bases)
+                 for node in ast.walk(tree)):
+            aliases.remove(name)
+    methods = {'assertEqual', 'assertNotEqual', 'assertIs', 'assertIsNot', 'assertIn', 'assertNotIn',
+               'assertTrue', 'assertFalse', 'assertIsNone', 'assertIsNotNone', 'assertRegex', 'assertNotRegex'}
+    proven = set()
+    for declaration in ast.walk(tree):
+        if (not isinstance(declaration, ast.ClassDef) or len(declaration.bases) != 1
+                or declaration.decorator_list or declaration.keywords
+                or _chain(declaration.bases[0]) not in aliases):
+            continue
+        if any(isinstance(node, ast.Name) and node.id == declaration.name
+               and isinstance(node.ctx, ast.Load) for node in nodes):
+            continue  # exported classes and uncurried methods have unknown receivers
+        overridden = {node.name for node in declaration.body
+                      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        overridden.update(node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                          and isinstance(node.ctx, (ast.Store, ast.Del)))
+        overridden.update(target.id for node in declaration.body if isinstance(node, ast.Assign)
+                          for target in node.targets if isinstance(target, ast.Name))
+        overridden.update(node.id for node in ast.walk(declaration) if isinstance(node, ast.Name)
+                          and isinstance(node.ctx, (ast.Store, ast.Del)))
+        overridden.update(item.asname or item.name for node in declaration.body
+                          if isinstance(node, (ast.Import, ast.ImportFrom)) for item in node.names)
+        if overridden & {'__getattribute__', '__getattr__'}:
+            continue
+        allowed = methods - overridden
+        for method in declaration.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or method.decorator_list:
+                continue
+            arguments = method.args.posonlyargs + method.args.args
+            if not arguments:
+                continue
+            receiver = arguments[0].arg
+            if any(isinstance(node, ast.Name) and node.id == receiver and isinstance(node.ctx, ast.Load)
+                   and not (isinstance(parents.get(node), ast.Attribute) and parents[node].value is node)
+                   for node in ast.walk(method)):
+                continue
+            if any(isinstance(node, ast.Name) and node.id == receiver
+                   and isinstance(node.ctx, (ast.Store, ast.Del)) for node in ast.walk(method)):
+                continue
+            if any(isinstance(node, ast.Attribute) and node.attr == '__dict__' for node in ast.walk(declaration)):
+                continue
+            if any(isinstance(node, ast.Call) and (
+                    isinstance(node.func, ast.Name) and node.func.id in {'setattr', 'delattr'}
+                    or isinstance(node.func, ast.Attribute) and node.func.attr in {'__setattr__', '__delattr__'})
+                   for node in ast.walk(declaration)):
+                continue
+            def direct_scope(node):
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                        continue
+                    yield child
+                    yield from direct_scope(child)
+            for node in direct_scope(method):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == receiver
+                        and node.func.attr in allowed):
+                    proven.add(id(node))
+    return frozenset(proven)
+
+
 class _PythonCost(ast.NodeVisitor):
-    def __init__(self, path: str, providers: Mapping[str, Any], paid_functions: frozenset[str] = frozenset()) -> None:
+    def __init__(self, path: str, providers: Mapping[str, Any], paid_functions: frozenset[str] = frozenset(),
+                 data_assertions: frozenset[int] = frozenset()) -> None:
         self.path = path
         self.paid_functions = paid_functions  # local functions that make a paid call (second pass)
         self.paid_function_names: set[str] = set()
@@ -136,6 +265,7 @@ class _PythonCost(ast.NodeVisitor):
         self.loops: list[tuple[ast.AST, bool]] = []
         self.functions: list[ast.AST] = []
         self.findings: list[CostFinding] = []
+        self.data_assertions = data_assertions
 
     def _is_paid_module(self, name: str) -> bool:
         return any(name == module or name.startswith(module + '.') for module in self.modules)
@@ -219,7 +349,8 @@ class _PythonCost(ast.NodeVisitor):
         hosts = [host for arg in [*node.args, *[kw.value for kw in node.keywords]] for host in _hosts_in(_string_parts(arg), self.hosts)]
         uses_host_var = any(isinstance(arg, ast.Name) and arg.id in self.host_vars for arg in node.args)
         constructor = root_name in self.aliases and len(chain.split('.')) == 1
-        direct = ((root_name in self.aliases or root_name in self.clients) and not constructor) or bool(hosts) or uses_host_var
+        direct = (id(node) not in self.data_assertions and
+                  (((root_name in self.aliases or root_name in self.clients) and not constructor) or bool(hosts) or uses_host_var))
         via_function = bool(chain) and chain.split('.')[-1] in self.paid_functions and \
             (len(chain.split('.')) == 1 or root_name in {'self', 'cls'})
         if direct or via_function:
@@ -243,12 +374,13 @@ def python_findings(path: str, content: bytes, providers: Mapping[str, Any] | No
     except (SyntaxError, ValueError):
         hosts = _hosts_in(content.decode('utf-8', 'replace'), providers['hosts'])
         return [CostFinding('UNANALYSED_PAID_CALL', path, 0, f'unparsable Python mentions {hosts[0]}')] if hosts else []
-    first = _PythonCost(path, providers)
+    assertions = _data_assertions(tree)
+    first = _PythonCost(path, providers, data_assertions=assertions)
     first.visit(tree)
     paid_functions = frozenset(name for name in first.paid_function_names if name)
     findings = first.findings
     if paid_functions:
-        second = _PythonCost(path, providers, paid_functions)  # calls to paid helpers inside loops count too
+        second = _PythonCost(path, providers, paid_functions, assertions)  # calls to paid helpers inside loops count too
         second.visit(tree)
         findings = second.findings
     return findings + _scheduled_findings(path, tree, findings, providers)

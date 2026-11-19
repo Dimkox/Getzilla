@@ -10,6 +10,8 @@ import stat
 import uvicorn
 
 from .api import TEXT_ID, Authenticator, create_app
+from .access_authority import AccessAuthority
+from .access_release import AccessReleaseService
 from .landing_server import compose_server_landing
 from .migrations import discover_migrations
 from .models import Actor
@@ -50,16 +52,31 @@ def _runtime_readiness(store: PostgresFactoryStore) -> dict[str, object]:
 
 def _read_private_file(path: Path, maximum: int) -> bytes:
     try:
-        return read_private_file(path, maximum)
+        return read_private_file(path, maximum, single_link=True)
     except SettingsError as exc:
         raise ServerError("configuration file cannot be opened safely") from exc
 
 
-def load_actors(path: Path) -> dict[str, Actor]:
+def load_actors(path: Path) -> dict[str, Actor] | AccessAuthority:
     try:
-        payload = json.loads(_read_private_file(path, 65_536))
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ServerError('actor configuration custody is unavailable')
+    except OSError:
+        raise ServerError('actor configuration custody is unavailable') from None
+    try:
+        raw = _read_private_file(path, 1_048_576)
+        payload = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ServerError("actor configuration must be valid JSON") from exc
+    if isinstance(payload, dict) and payload.get('schema_version') == 2:
+        from .access_authority import AccessAuthority, AccessError
+        try:
+            return AccessAuthority.load(path)
+        except AccessError:
+            raise ServerError('actor authority configuration is unavailable') from None
+    if len(raw) > 65_536:
+        raise ServerError('actor configuration is too large')
     if not isinstance(payload, dict) or set(payload) != {"actors"} or not isinstance(payload["actors"], list):
         raise ServerError("closed actor configuration required")
     tokens: dict[str, Actor] = {}
@@ -129,6 +146,10 @@ def build_app(
     artifact_broker=None,
     snapshot_broker=None,
     landing_service=None,
+    workflow_root=None,
+    workflow_repository=None,
+    access_sources=None,
+    access_destinations=None,
 ):
     settings.validate_landing()
     if settings.execution_enabled and (
@@ -142,7 +163,10 @@ def build_app(
         raise ServerError("trusted execution dependencies are unavailable")
 
     try:
-        store = PostgresFactoryStore(settings.database_url)
+        store = PostgresFactoryStore(settings.database_url, **(
+            {"workflow_root": workflow_root, "workflow_repository": workflow_repository}
+            if workflow_root is not None else {}
+        ))
         runtime_readiness = _runtime_readiness(store)
     except Exception as exc:
         raise ServerError("database capabilities are not ready") from exc
@@ -180,44 +204,61 @@ def build_app(
         ):
             raise ServerError("database capabilities are not ready")
 
+    factory_service = FactoryService(
+        store,
+        execution_registry=execution_registry if settings.execution_enabled else None,
+        artifact_broker=artifact_broker if settings.execution_enabled else None,
+        artifact_attestation_store=attestation_store,
+        snapshot_broker=snapshot_broker if settings.execution_enabled else None,
+        semantic_store=semantic_store,
+        semantic_validator_store=semantic_validator_store,
+        semantic_adjudicator_store=semantic_adjudicator_store,
+    )
     owned_landing = None
+    owned_access = None
     try:
         if landing_service is None:
             owned_landing = compose_server_landing(
-                settings, repository_root=Path(__file__).resolve().parents[3]
+                settings, repository_root=Path(__file__).resolve().parents[3],
+                factory_service=factory_service,
             )
             if owned_landing is not None:
                 landing_service = owned_landing.service
+        authenticator = Authenticator(load_actors(settings.actors_file))
+        if access_sources is not None or access_destinations is not None:
+            # Trusted parent composition only; requests cannot register a source or sink.
+            owned_access = AccessReleaseService(store, authenticator.access_authority,
+                                               access_sources, access_destinations)
         app = create_app(
-            FactoryService(
-                store,
-                execution_registry=execution_registry if settings.execution_enabled else None,
-                artifact_broker=artifact_broker if settings.execution_enabled else None,
-                artifact_attestation_store=attestation_store,
-                snapshot_broker=snapshot_broker if settings.execution_enabled else None,
-                semantic_store=semantic_store,
-                semantic_validator_store=semantic_validator_store,
-                semantic_adjudicator_store=semantic_adjudicator_store,
-            ),
-            Authenticator(load_actors(settings.actors_file)),
+            factory_service,
+            authenticator,
             execution_enabled=settings.execution_enabled,
             landing_service=landing_service,
+            access_service=owned_access,
         )
-        if owned_landing is not None:
+        if owned_landing is not None or owned_access is not None:
             previous_lifespan = app.router.lifespan_context
 
             @asynccontextmanager
             async def lifespan(application):
                 try:
+                    if owned_access is not None:
+                        owned_access.start()
                     async with previous_lifespan(application) as state:
                         yield state
                 finally:
-                    owned_landing.close()
+                    if owned_access is not None:
+                        owned_access.close()
+                    if owned_landing is not None:
+                        owned_landing.close()
 
             app.router.lifespan_context = lifespan
             app.state.owned_landing_runtime = owned_landing
+            app.state.owned_access_runtime = owned_access
         return app
     except BaseException:
+        if owned_access is not None:
+            owned_access.close()
         if owned_landing is not None:
             owned_landing.close()
         raise
@@ -229,6 +270,8 @@ def main(
     artifact_broker=None,
     snapshot_broker=None,
     landing_service=None,
+    access_sources=None,
+    access_destinations=None,
 ) -> int:
     settings = FactorySettings.from_environment()
     app = build_app(
@@ -237,6 +280,8 @@ def main(
         artifact_broker=artifact_broker,
         snapshot_broker=snapshot_broker,
         landing_service=landing_service,
+        **({'access_sources': access_sources, 'access_destinations': access_destinations}
+           if access_sources is not None or access_destinations is not None else {}),
     )
     listener = None
     try:
@@ -253,6 +298,9 @@ def main(
                 # unguarded app.state lookup here raised AttributeError inside `finally` and replaced the
                 # real startup outcome with a teardown error.
                 owned_landing = getattr(getattr(app, "state", None), "owned_landing_runtime", None)
+                owned_access = getattr(getattr(app, "state", None), "owned_access_runtime", None)
+                if owned_access is not None:
+                    owned_access.close()
                 if owned_landing is not None:
                     owned_landing.close()
             finally:

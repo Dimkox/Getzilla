@@ -49,7 +49,7 @@ def acquire_sources(expected, artifacts, *, fetch=None, now=None, state=None, by
     """Fetch or revalidate exact lock sources; return all retained response costs."""
     from . import manifest
     from .security_license_acquisition import _write
-    from .security_action_supplements import PROFILES, profile_for, source_receipts
+    from .security_action_supplements import PROFILES, profile_for, profile_urls, source_receipts
     root = Path(artifacts)
     now = now or datetime.now(timezone.utc)
     state = state if state is not None else fetch_state()
@@ -72,7 +72,7 @@ def acquire_sources(expected, artifacts, *, fetch=None, now=None, state=None, by
     budget = COMPRESSED_LIMIT if byte_budget is None else min(COMPRESSED_LIMIT, byte_budget)
 
     def receive(url, *, supplement=False):
-        fixed_origins = {profile[key] for profile in PROFILES.values() for key in ('registry_url', 'source_url')}
+        fixed_origins = {url for profile in PROFILES.values() for url in profile_urls(profile)}
         if (supplement and url not in fixed_origins) or (not supplement and not registry_url(url)):
             raise ArtifactError('artifact-npm-origin', 'only exact official registry sources are admitted')
         with state['condition']:
@@ -80,7 +80,7 @@ def acquire_sources(expected, artifacts, *, fetch=None, now=None, state=None, by
                 raise ArtifactError('artifact-npm-transport', state['failures'][url])
             while True:
                 if (time.monotonic() >= state['deadline']
-                        or (state['supplement_requests'] >= 2 * len(PROFILES) if supplement else state['requests'] >= REQUEST_LIMIT)):
+                        or (state['supplement_requests'] >= len(fixed_origins) if supplement else state['requests'] >= REQUEST_LIMIT)):
                     raise ArtifactError('artifact-npm-budget', 'finite npm request/deadline budget exhausted')
                 maximum = min(MAX_NPM_BYTES, max(0, COMPRESSED_LIMIT - state['bytes'] - state['reserved']),
                               max(0, budget - local['bytes'] - local['reserved']))
@@ -129,6 +129,9 @@ def acquire_sources(expected, artifacts, *, fetch=None, now=None, state=None, by
             registry, _ = receive(profile['registry_url'], supplement=True)
         upstream, _ = receive(profile['source_url'], supplement=True)
         source['term_supplement'] = {'profile': profile['id'], 'registry': registry, 'archive': upstream}
+        if 'copyright_url' in profile:
+            copyright_response, _ = receive(profile['copyright_url'], supplement=True)
+            source['term_supplement']['copyright'] = copyright_response
         return source
 
     def one(item):
@@ -177,7 +180,7 @@ def acquire_sources(expected, artifacts, *, fetch=None, now=None, state=None, by
                 metadata_urls = {'https://registry.npmjs.org/' + quote(row['name'], safe='@') + '/' + quote(row['version'], safe='')
                                  for row in rows if str(row.get('integrity')).startswith('sha1-')}
                 if profile is not None:
-                    metadata_urls.update((profile['registry_url'], profile['source_url']))
+                    metadata_urls.update(profile_urls(profile))
                 state['failed_responses'][url] = [row for row in result['responses'] if row['url'] == url or row['url'] in metadata_urls]
                 result['gaps'].append({'url': url, 'code': getattr(exc, 'code', 'artifact-npm-transport'), 'message': str(exc)})
             return url, None

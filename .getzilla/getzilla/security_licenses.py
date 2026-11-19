@@ -30,7 +30,7 @@ _CANONICAL = {name.lower(): name for name in ALLOWED}
 _NONALLOW = ('GPL-2.0-only', 'GPL-2.0-or-later', 'GPL-3.0-only', 'GPL-3.0-or-later',
              'LGPL-2.1-only', 'LGPL-2.1-or-later', 'LGPL-3.0-only', 'LGPL-3.0-or-later',
              'AGPL-3.0-only', 'AGPL-3.0-or-later', 'MPL-2.0', 'EPL-2.0', 'BSD-4-Clause',
-             'CC0-1.0', 'Unlicense')
+             'CC0-1.0', 'Unlicense', 'X11', 'BlueOak-1.0.0')
 _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 
@@ -598,6 +598,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     run_context.auxiliary('ci-install:'+consumer['build_sha256'],output)
                     if output['status'] == 'pass':
                         run_context.build_inputs(auxiliary['binding'],output)
+        if run_context is not None and any(row['kind'] == 'checker-tool' for row in run_context.required.values()):
+            result['checker_tools'] = run_context.checker_inputs(artifacts, policy, now=now)
         for subject, kind in [*((item, 'action' if item.get('kind') == 'github-action' else 'tool') for item in tools),
                               *((item, 'image') for item in images)]:
             selected_required=run_context is not None and run_context.family_required(subject,kind)
@@ -615,7 +617,13 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                     raise ArtifactError('license-obligation-missing', 'family needs explicit internal use or a qualified final-output adapter')
                 selected, licenses, notices = [], [], []
                 for component in evidence['components']:
-                    chosen, identifiers = _select_expression(component['expression'], policy['auto_allow'])
+                    from .security_license_family_conditions import allowed_for
+                    component_allowed = allowed_for(record, component, policy['auto_allow'],
+                        selected_internal=distribution == 'internal' and (selected_required or
+                            record['origin'].get('kind') == 'go-checker-release/v1' and
+                            'go_module_sources' in evidence['binding']),
+                        source_modules=evidence['binding'].get('go_module_sources', []))
+                    chosen, identifiers = _select_expression(component['expression'], component_allowed)
                     owned = {item['path'] for item in component['files']}
                     shared = set(component['license_paths'] + component['notice_paths']) if evidence.get('held_image') else set()
                     files = {name: body for name, body in evidence['files'].items() if name in owned | shared}
@@ -634,6 +642,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if raw_distribution=='internal':
                     result['details'].append(detail)
                 if selected_required:
+                    if kind == 'action' and distribution == 'internal':
+                        from .security_action_inputs import mark_selected_internal_family
+                        mark_selected_internal_family(record)
                     run_context.family_passed(subject,kind,detail)
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
                 code = getattr(exc, 'code', 'artifact-invalid')

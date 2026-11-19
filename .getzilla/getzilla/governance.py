@@ -317,6 +317,7 @@ class _RepositoryHandle:
     # False for a directory that only holds one input file: other entries may
     # come and go there, so only its device and inode are pinned.
     pin_entries: bool = True
+    native_anchor: Any = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +336,7 @@ class _PinnedAuthorityFile:
     parent_descriptor: fsx.DirHandle
     name: str
     identity: tuple[int, int, int, int, int]
+    native_anchor: Any = None
 
 
 @dataclass(frozen=True)
@@ -386,7 +388,7 @@ class _ConsumedInputRecorder:
         if existing is not None:
             return existing
         content = _read_regular_bytes(
-            repository.descriptor, normalized, label=label
+            repository.descriptor, normalized, label=label, anchor=repository.native_anchor
         )
         return self.observe(normalized, content)
 
@@ -398,7 +400,7 @@ class _ConsumedInputRecorder:
 
     def verify(self, repository: _RepositoryHandle) -> None:
         for path, content in self._contents.items():
-            current = _read_regular_bytes(repository.descriptor, path, label=path)
+            current = _read_regular_bytes(repository.descriptor, path, label=path,anchor=repository.native_anchor)
             if current != content:
                 raise GovernanceError(f"governance input changed during evaluation: {path}", code="io")
         _verify_repository(repository)
@@ -456,8 +458,8 @@ class ProjectionSnapshot:
 
 
 def open_projection_snapshot(root: Path | str, *,
-                             _recorder: _ConsumedInputRecorder | None = None) -> ProjectionSnapshot:
-    repository = _open_repository(root)
+                             _recorder: _ConsumedInputRecorder | None = None, anchor=None) -> ProjectionSnapshot:
+    repository = _open_repository(root,anchor=anchor)
     files: list[_PinnedAuthorityFile] = []
     recorder = _recorder if _recorder is not None else _ConsumedInputRecorder()
     try:
@@ -471,7 +473,7 @@ def open_projection_snapshot(root: Path | str, *,
             except BaseException:
                 os.close(descriptor)
                 raise
-            files.append(_PinnedAuthorityFile(Path(name), descriptor, repository.descriptor, name, _file_identity(info)))
+            files.append(_PinnedAuthorityFile(Path(name), descriptor, repository.descriptor, name, _file_identity(info),anchor))
         contents = {item.name: recorder.observe(item.name, _read_pinned_authority_bytes(item)) for item in files}
         snapshot = ProjectionSnapshot(repository, tuple(files), contents)
         snapshot.verify()
@@ -600,8 +602,17 @@ def _root_matches(
 
 
 def _open_repository(
-    root: Path | str, *, pin_entries: bool = True
+    root: Path | str, *, pin_entries: bool = True, anchor=None,
 ) -> _RepositoryHandle:
+    if anchor is not None:
+        try:
+            anchor.check_root(root)
+            opened = anchor.root_info()
+            identity = (opened.st_dev,opened.st_ino,opened.st_mtime_ns,opened.st_ctime_ns)
+            descriptor = anchor.duplicate_root_fd()
+            return _RepositoryHandle(Path(anchor.workspace),descriptor,identity,pin_entries,anchor)
+        except (OSError,ValueError) as exc:
+            raise GovernanceError('native repository unavailable',code='io') from exc
     label = "repository root"
     no_follow, directory_flag, nonblock = _secure_open_flags(label=label)
     repository = Path(os.path.abspath(Path(root)))
@@ -635,6 +646,17 @@ def _open_repository(
 
 
 def _verify_repository(handle: _RepositoryHandle) -> None:
+    if handle.native_anchor is not None:
+        try:
+            handle.native_anchor.check_root(handle.path)
+            opened = fsx.fstat_dir(handle.descriptor)
+            actual = handle.native_anchor.root_info()
+            if (not _root_matches(opened,handle.identity,pin_entries=handle.pin_entries)
+                    or not _root_matches(actual,handle.identity,pin_entries=handle.pin_entries)):
+                raise GovernanceError('native repository changed while loading',code='io')
+            return
+        except (OSError,ValueError) as exc:
+            raise GovernanceError('native repository unavailable',code='io') from exc
     try:
         opened = fsx.fstat_dir(handle.descriptor)
         named = os.lstat(handle.path)
@@ -755,7 +777,13 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
                 parent.descriptor,
                 path.name,
                 _file_identity(info),
+                repository.native_anchor,
             )
+            if repository.native_anchor is not None:
+                repository.native_anchor._regular(info,source=True,public_source=True,limit=MAX_DOCUMENT_BYTES)
+                named = repository.native_anchor.stat(path,private=False,source=True)
+                if _file_identity(named) != _file_identity(info):
+                    raise GovernanceError('native governance input changed',code='io')
         return _AuthorityTopology(tuple(directories), files)
     except GovernanceError:
         for item in files.values():
@@ -763,7 +791,7 @@ def _open_authority_topology(repository: _RepositoryHandle) -> _AuthorityTopolog
         for item in reversed(directories):
             fsx.close_dir(item.descriptor)
         raise
-    except OSError as exc:
+    except (OSError,ValueError) as exc:
         for item in files.values():
             os.close(item.descriptor)
         for item in reversed(directories):
@@ -853,6 +881,19 @@ def _read_pinned_authority_bytes(item: _PinnedAuthorityFile) -> bytes:
         raise GovernanceError(
             f"{item.path.as_posix()}: document byte limit exceeded", code="limit"
         )
+    if item.native_anchor is not None:
+        try:
+            anchor = item.native_anchor
+            anchor._regular(before,source=True,public_source=True,limit=MAX_DOCUMENT_BYTES)
+            if _file_identity(anchor.stat(item.path,private=False,source=True)) != item.identity:
+                raise GovernanceError('native governance input changed',code='io')
+            content = anchor.read(item.path,MAX_DOCUMENT_BYTES,public_source=True)
+            if (_file_identity(os.fstat(item.descriptor)) != item.identity
+                    or _file_identity(anchor.stat(item.path,private=False,source=True)) != item.identity):
+                raise GovernanceError('native governance input changed',code='io')
+            return content
+        except (OSError,ValueError) as exc:
+            raise GovernanceError('native governance input unavailable',code='io') from exc
     os.lseek(item.descriptor, 0, os.SEEK_SET)
     chunks: list[bytes] = []
     total = 0
@@ -876,7 +917,14 @@ def _read_pinned_authority_bytes(item: _PinnedAuthorityFile) -> bytes:
     return b"".join(chunks)
 
 
-def _read_regular_bytes(root_descriptor: fsx.DirHandle, relative: str, *, label: str) -> bytes:
+def _read_regular_bytes(root_descriptor: fsx.DirHandle, relative: str, *, label: str,anchor=None) -> bytes:
+    if anchor is not None:
+        try:
+            if (os.fstat(root_descriptor).st_dev,os.fstat(root_descriptor).st_ino) != anchor.identity:
+                raise GovernanceError('native repository mismatch',code='io')
+            return anchor.read(relative,MAX_DOCUMENT_BYTES,public_source=True)
+        except (OSError,ValueError) as exc:
+            raise GovernanceError('native governance input unavailable',code='io') from exc
     return _read_regular_file(root_descriptor, relative, label=label)[0]
 
 
@@ -1255,13 +1303,14 @@ def _normalize_root(
 
 def _load_governance_snapshot(
     root: Path | str,
+    *,anchor=None,
 ) -> tuple[
     GovernanceSnapshot,
     Path,
     tuple[int, int, int, int],
     tuple[tuple[str, str], ...],
 ]:
-    repository = _open_repository(root)
+    repository = _open_repository(root,anchor=anchor)
     topology: _AuthorityTopology | None = None
     try:
         topology = _open_authority_topology(repository)
@@ -1495,7 +1544,7 @@ def _evidence_contents(
                 recorder.read(repository, path, label=f"{owner} evidence")
                 if recorder is not None
                 else _read_regular_bytes(
-                    repository.descriptor, path, label=f"{owner} evidence"
+                    repository.descriptor, path, label=f"{owner} evidence",anchor=repository.native_anchor
                 )
             )
         except GovernanceError:
@@ -1520,10 +1569,10 @@ def _example_content_digest(files: list[tuple[str, bytes]]) -> str:
     return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
 
 
-def _m2_contract_ids(root: Path) -> frozenset[str]:
+def _m2_contract_ids(root: Path, *,anchor=None) -> frozenset[str]:
     try:
-        architecture = load_architecture(root)
-        return frozenset(record.id for record in contract_inventory(root, architecture))
+        architecture = load_architecture(root,anchor=anchor)
+        return frozenset(record.id for record in contract_inventory(root, architecture,anchor=anchor))
     except (ArchitectureError, OSError, ValueError):
         return frozenset()
 
@@ -1536,7 +1585,7 @@ def _example_findings(
     findings: list[GovernanceFinding] = []
     all_documents = [record.to_dict() for record in examples]
     contract_ids = (
-        _m2_contract_ids(repository.path)
+        _m2_contract_ids(repository.path,anchor=repository.native_anchor)
         if any(document.get("status") == "active" for document in all_documents)
         else frozenset()
     )
@@ -1584,6 +1633,7 @@ def _example_findings(
                         repository.descriptor,
                         relative,
                         label=f"example {example_id} path",
+                        anchor=repository.native_anchor,
                     )
                 )
                 files.append((relative, content))
@@ -1793,6 +1843,7 @@ def _debt_findings(
                         repository.descriptor,
                         relative,
                         label=f"debt {debt_id} test",
+                        anchor=repository.native_anchor,
                     )
                 )
             except GovernanceError:
@@ -1956,6 +2007,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         repository_path: Path
         repository_identity: tuple[int, int, int, int]
         rule_digest: str
+        native_anchor: Any = None
 
     bindings: weakref.WeakKeyDictionary[RuleRecord, Binding]
     bindings = weakref.WeakKeyDictionary()
@@ -1970,6 +2022,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             Path,
             tuple[int, int, int, int],
             tuple[tuple[str, str], ...],
+            Any,
         ],
     ] = {}
 
@@ -1978,6 +2031,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         repository_path: Path,
         repository_identity: tuple[int, int, int, int],
         authority_source_digests: tuple[tuple[str, str], ...],
+        anchor=None,
     ) -> None:
         key = id(snapshot)
 
@@ -1991,6 +2045,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             repository_path,
             repository_identity,
             authority_source_digests,
+            anchor,
         )
 
     def snapshot_repository(snapshot: GovernanceSnapshot) -> Path | None:
@@ -1999,7 +2054,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             return None
         repository_path, repository_identity = binding[1], binding[2]
         try:
-            repository = _open_repository(repository_path)
+            repository = _open_repository(repository_path,anchor=binding[4])
         except GovernanceError:
             return None
         try:
@@ -2020,15 +2075,25 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             return None
         return binding[3]
 
+    def snapshot_native_anchor(snapshot: GovernanceSnapshot):
+        binding = snapshot_bindings.get(id(snapshot))
+        if binding is None or binding[0]() is not snapshot:
+            return None
+        # Return even an expired resource, so it fails closed instead of
+        # reviving provenance through a fallback root-hint path.
+        return binding[4]
+
     def bind(
         record: RuleRecord,
         repository_path: Path,
         repository_identity: tuple[int, int, int, int],
+        anchor=None,
     ) -> None:
         bindings[record] = Binding(
             repository_path=repository_path,
             repository_identity=repository_identity,
             rule_digest=hashlib.sha256(record._canonical_document).hexdigest(),
+            native_anchor=anchor,
         )
 
     def bind_other(
@@ -2036,11 +2101,13 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         record: ExampleRecord | DebtRecord,
         repository_path: Path,
         repository_identity: tuple[int, int, int, int],
+        anchor=None,
     ) -> None:
         mapping[record] = Binding(
             repository_path=repository_path,
             repository_identity=repository_identity,
             rule_digest=hashlib.sha256(record._canonical_document).hexdigest(),
+            native_anchor=anchor,
         )
 
     def has_live_evidence(
@@ -2056,7 +2123,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         ):
             return False
         try:
-            repository = _open_repository(binding.repository_path)
+            repository = _open_repository(binding.repository_path,anchor=binding.native_anchor)
         except GovernanceError:
             return False
         try:
@@ -2071,6 +2138,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
                         repository.descriptor,
                         evidence.path,
                         label=label,
+                        anchor=repository.native_anchor,
                     )
                 )
                 if hashlib.sha256(content).hexdigest() != evidence.sha256:
@@ -2082,24 +2150,25 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         finally:
             fsx.close_dir(repository.descriptor)
 
-    def load(root: Path | str) -> GovernanceSnapshot:
+    def load(root: Path | str, *,anchor=None) -> GovernanceSnapshot:
         (
             snapshot,
             repository_path,
             repository_identity,
             authority_source_digests,
-        ) = _load_governance_snapshot(root)
+        ) = _load_governance_snapshot(root,anchor=anchor)
         for record in snapshot.rule_records:
-            bind(record, repository_path, repository_identity)
+            bind(record, repository_path, repository_identity,anchor)
         for record in snapshot.example_records:
-            bind_other(example_bindings, record, repository_path, repository_identity)
+            bind_other(example_bindings, record, repository_path, repository_identity,anchor)
         for record in snapshot.debt_records:
-            bind_other(debt_bindings, record, repository_path, repository_identity)
+            bind_other(debt_bindings, record, repository_path, repository_identity,anchor)
         bind_snapshot(
             snapshot,
             repository_path,
             repository_identity,
             authority_source_digests,
+            anchor,
         )
         return snapshot
 
@@ -2169,7 +2238,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             ):
                 return ()
         try:
-            repository = _open_repository(first_binding.repository_path)
+            repository = _open_repository(first_binding.repository_path,anchor=first_binding.native_anchor)
         except GovernanceError:
             return ()
         try:
@@ -2207,7 +2276,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
             ):
                 return ()
         try:
-            repository = _open_repository(first_binding.repository_path)
+            repository = _open_repository(first_binding.repository_path,anchor=first_binding.native_anchor)
         except GovernanceError:
             return ()
         try:
@@ -2240,13 +2309,13 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         binding = example_bindings.get(applicable[0])
         if valid and binding is not None:
             try:
-                repository = _open_repository(binding.repository_path)
+                repository = _open_repository(binding.repository_path,anchor=binding.native_anchor)
                 try:
                     if repository.identity != binding.repository_identity:
                         valid = False
                     for relative in evidence:
                         _safe_relative_path(repository.descriptor, relative, label="example deviation evidence")
-                        _read_regular_bytes(repository.descriptor, relative, label="example deviation evidence")
+                        _read_regular_bytes(repository.descriptor, relative, label="example deviation evidence",anchor=repository.native_anchor)
                     _verify_repository(repository)
                 finally:
                     fsx.close_dir(repository.descriptor)
@@ -2269,6 +2338,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
         validate_deviation,
         snapshot_repository,
         snapshot_authority_source_digests,
+        snapshot_native_anchor,
     )
 
 
@@ -2281,6 +2351,7 @@ def _build_rule_lifecycle_api() -> tuple[Callable[..., Any], ...]:
     validate_example_deviation,
     _snapshot_repository,
     _snapshot_authority_source_digests,
+    _snapshot_native_anchor,
 ) = _build_rule_lifecycle_api()
 
 
@@ -2390,7 +2461,7 @@ def validate_governance(
     _recorder: _ConsumedInputRecorder | None = None,
 ) -> tuple[GovernanceFinding, ...]:
     validated_at = _require_aware(now, label="now")
-    repository = _open_repository(root)
+    repository = _open_repository(root,anchor=_snapshot_native_anchor(snapshot))
     try:
         _validate_structural_semantics(snapshot, repository.descriptor)
         rules = tuple(
@@ -2436,6 +2507,7 @@ def validate_governance(
                                 repository.descriptor,
                                 evidence.path,
                                 label=label,
+                                anchor=repository.native_anchor,
                             )
                         )
                     except GovernanceError:
@@ -2863,7 +2935,7 @@ def _governance_evaluation(
         raise GovernanceError(
             "governance snapshot lacks loader provenance", code="provenance"
         )
-    current = load_governance(root)
+    current = load_governance(root,anchor=_snapshot_native_anchor(snapshot))
     supplied_digests = governance_digests(snapshot)
     current_digests = governance_digests(current)
     if supplied_digests != current_digests:

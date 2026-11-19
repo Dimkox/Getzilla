@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import json
-import math
 import unicodedata
 from typing import Any
 
+from . import _payload_engine as _engine
 from .brokers import BrokerError, _redact
 from .contracts import ContractError, canonical_digest, canonical_json
 from .result_contracts import (
-    RESULT_CHANNELS, ResultEnvelopeV1, ResultEnvelopeV2, strict_json, sensitive_key,
+    RESULT_CHANNELS, ResultEnvelopeV1, ResultEnvelopeV2, strict_json,
 )
 from .v15_contracts import safe_text
 
@@ -173,54 +173,16 @@ class ResultBroker:
         return safe_channel, safe_content_type, None
 
     def _check_shape(self, value: Any) -> None:
-        records = 0
-
-        def visit(item: Any, depth: int) -> None:
-            nonlocal records
-            if depth > self.max_depth:
-                raise _ShapeError("depth_limit")
-            if isinstance(item, dict):
-                records += len(item)
-                for key, child in item.items():
-                    if not isinstance(key, str):
-                        raise _ShapeError("malformed_payload")
-                    visit(child, depth + 1)
-            elif isinstance(item, list):
-                records += len(item)
-                for child in item:
-                    visit(child, depth + 1)
-            elif item is not None and not isinstance(item, (str, int, float, bool)):
-                raise _ShapeError("malformed_payload")
-            elif isinstance(item, float) and not math.isfinite(item):
-                raise _ShapeError("malformed_payload")
-            if records > self.max_records:
-                raise _ShapeError("record_limit")
-
-        visit(value, 1)
+        try:
+            _engine.check_shape(value, max_depth=self.max_depth, max_records=self.max_records)
+        except _engine.PayloadError as exc:
+            raise _ShapeError(exc.code) from None
 
     def _sanitize_tree(self, value: Any) -> tuple[Any, bool]:
-        if isinstance(value, str):
-            cleaned = _redact(value, self.max_bytes)
-            return cleaned, cleaned != value
-        if isinstance(value, list):
-            pairs = [self._sanitize_tree(item) for item in value]
-            return [item for item, _ in pairs], any(changed for _, changed in pairs)
-        if isinstance(value, dict):
-            sanitized = {}
-            changed = False
-            for key, item in value.items():
-                safe_key = _redact(key, self.max_bytes)
-                if sensitive_key(key):
-                    safe_key = "[REDACTED]"
-                    item = "[REDACTED]"
-                    changed = True
-                if safe_key in sanitized:
-                    raise BrokerError("redacted_key_collision")
-                safe_item, item_changed = self._sanitize_tree(item)
-                sanitized[safe_key] = safe_item
-                changed = changed or safe_key != key or item_changed
-            return sanitized, changed
-        return value, False
+        try:
+            return _engine.sanitize_tree(value, max_bytes=self.max_bytes)
+        except _engine.PayloadError as exc:
+            raise BrokerError(exc.code) from None
 
 
 class _ShapeError(ValueError):

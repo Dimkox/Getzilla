@@ -52,6 +52,8 @@ COPILOT_EVENTS = {
     'SessionEnd': 'sessionEnd',
 }
 COPILOT_HOOKS = '.github/hooks/getzilla.json'
+PAYLOAD_ENGINE = '.getzilla/getzilla/_payload_engine.py'
+FACTORY_PAYLOAD_ENGINE = 'factory/src/getzilla_factory/_payload_engine.py'
 QWEN_READ_ONLY_BLOCK = ('write_file', 'edit')
 COPILOT_READ_ONLY_TOOLS = ('read', 'search', 'shell')
 CLAUDE_READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch')
@@ -396,8 +398,13 @@ def _render(binding: BoundRoot | ComponentTransaction, selected: tuple[str, ...]
     # platform by changing tracked files. Consumer payloads use their host OS.
     source_checkout = all(binding.read(path) is not None for path in
                           ('scripts/install_into.py', 'factory/pyproject.toml'))
+    rendered = {path: content for path, content in out.items() if agent_of(path) in selected}
+    # Fixed full-source output only. A selected consumer install must never
+    # acquire Factory files merely by regenerating its native client hooks.
+    if all(binding.read(path) is not None for path in ('scripts/install_into.py', 'factory/pyproject.toml')):
+        rendered[FACTORY_PAYLOAD_ENGINE] = _source(binding, PAYLOAD_ENGINE)
     return {path: platform_hook_payload(path, content, windows=os.name == 'nt', source_launcher=source_checkout)
-            for path, content in out.items() if agent_of(path) in selected}
+            for path, content in rendered.items()}
 
 
 _GENERATED_PATH = re.compile(
@@ -437,6 +444,16 @@ def _generation_plan(binding: BoundRoot | ComponentTransaction, state: ManifestS
     }
     kept, kept_digests = read_keep_contract(binding)
     kept, kept_digests = match_kept_local(kept, kept_digests, generated)
+    if FACTORY_PAYLOAD_ENGINE in expected and FACTORY_PAYLOAD_ENGINE in kept:
+        # A keep declaration cannot select a different executable engine for
+        # the standalone Factory layout while reporting successful generation.
+        try:
+            current = binding.read(FACTORY_PAYLOAD_ENGINE)
+            if (current is None or current.content != expected[FACTORY_PAYLOAD_ENGINE]
+                    or not mode_matches(current.mode, 0o644)):
+                problems.append('conflict kept Factory payload engine')
+        except (OSError, ValueError):
+            problems.append('conflict kept Factory payload engine')
     codex_pair = {'.codex/hooks.json', '.codex/config.toml'}
     if 'codex' in selected and codex_pair & kept:
         # A keep declaration never activates or rebuilds the other half of the

@@ -111,3 +111,29 @@ class PossibleClosureTests(unittest.TestCase):
             changed['components']['sha256'] = owned.sha(raw)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 actions.verify_family(self.root, changed, now=owned.NOW)
+
+    def test_possible_finding_replays_original_sources_and_preserves_assurance(self):
+        from unittest.mock import patch
+        from getzilla.security_license_families import finding_consistent
+        from getzilla.security_licenses import ALLOWED, _select_expression, evaluate_artifacts
+        source, locked = self.sources()
+        _, inventory, _, _, fetch, _ = self.world(npm_lock=locked)
+        inventory.update(schema_version=1,complete=True,gaps=[],dependencies=[],images=[])
+        report=actions.prepare_actions(inventory,self.root,fetch=fetch,now=owned.NOW,
+            npm_sources={source['url']:source})
+        (self.root/'manifest.json').write_bytes(owned.encoded(dict(schema_version=1,
+            inventory_digest=inventory['digest'],last_verified_sync_utc=owned.NOW.isoformat(),
+            records=report['records'],gaps=[])))
+        policy=dict(schema_version=1,project_repository='github.com/owned/project',
+            auto_allow=list(ALLOWED),usage_distribution={'build-ci':'internal'})
+        output=evaluate_artifacts(inventory,self.root,policy,now=owned.NOW)
+        self.assertEqual(output['status'],'pass',output)
+        finding=output['details'][0]
+        with patch('getzilla.security_data._clock',return_value=owned.NOW):
+            self.assertTrue(finding_consistent(finding,list(ALLOWED),_select_expression))
+            changed=copy.deepcopy(finding);changed['exact_runtime_membership_proved']=True
+            self.assertFalse(finding_consistent(changed,list(ALLOWED),_select_expression))
+            with patch.dict(actions._VERIFIED_ACTION_FAMILIES,{},clear=True):
+                self.assertFalse(finding_consistent(finding,list(ALLOWED),_select_expression))
+            (self.root/source['path']).write_bytes(b'changed original package')
+            self.assertFalse(finding_consistent(finding,list(ALLOWED),_select_expression))

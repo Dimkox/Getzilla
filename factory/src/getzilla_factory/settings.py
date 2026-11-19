@@ -18,7 +18,7 @@ LANDING_PROVIDERS = frozenset(
 )
 
 
-def read_private_file(path: Path, maximum: int) -> bytes:
+def read_private_file(path: Path, maximum: int, *, single_link: bool = False) -> bytes:
     if not path.is_absolute() or ".." in path.parts:
         raise SettingsError("private file path must be absolute and normalized")
     nofollow = getattr(os, "O_NOFOLLOW", None)
@@ -54,6 +54,7 @@ def read_private_file(path: Path, maximum: int) -> bytes:
             not stat.S_ISREG(metadata.st_mode)
             or stat.S_IMODE(metadata.st_mode) != 0o600
             or metadata.st_uid != effective_uid
+            or (single_link and metadata.st_nlink != 1)
         ):
             raise SettingsError("private file must be an owned regular mode-0600 file")
         raw = os.read(descriptor, maximum + 1)
