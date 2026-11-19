@@ -39,6 +39,30 @@ def _readings_differ(command: str) -> bool:
     return fsx.WINDOWS and '\\' in command
 
 
+@_legacy._bounded_invocation('Read protection resource budget exhausted.')
+def read_protection_reason(
+    root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
+) -> str | None:
+    """A read obligation for this policy root, independent of operation/grant routing."""
+    tool = str(event.get('tool_name', ''))
+    if tool != 'Bash' and not _legacy.is_read_tool(tool):
+        return None
+    inputs = event.get('tool_input') or {}
+    config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
+    patterns = _legacy_configured_patterns(config if isinstance(config, dict) else {},
+                                           'secret_read_paths', _LEGACY_SECRET_READ)
+    directory = _execution_directory(root, execution_cwd)
+    if tool == 'Bash':
+        command = str(inputs.get('command', '')) if isinstance(inputs, dict) else str(inputs)
+        hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+        if hit is None and _readings_differ(command):
+            with _legacy.posix_reading():
+                hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+    else:
+        hit = _legacy.read_secret_reference(root, tool, inputs, patterns, execution_cwd=directory)
+    return 'Read refused by the session project secret policy or unresolved execution directory.' if hit is not None else None
+
+
 @_legacy._bounded_invocation('secret-read')
 def sensitive_action(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
@@ -85,7 +109,7 @@ def _bash_sensitive_action(root: Path, command: str, *, execution_cwd: Path | No
         'secret_read_paths',
         _LEGACY_SECRET_READ,
     )
-    if _legacy_shell_secret_reference(root, command, secret_read) is not None:
+    if _legacy_shell_secret_reference(root, command, secret_read, execution_cwd=execution_cwd) is not None:
         return 'secret-read'
     if execution_cwd is None:
         control_plane = _legacy_configured_patterns(
@@ -128,7 +152,7 @@ def _evaluate_pre_tool(
     tool = str(event.get('tool_name', ''))
     tool_input = event.get('tool_input') or {}
     if tool != 'Bash':
-        return _legacy_evaluate_pre_tool(root, event, execution_cwd=directory)
+        return _legacy_evaluate_pre_tool(root, event, execution_cwd=directory, _execution_cwd=directory)
 
     config = _legacy_load_json(root / '.getzilla/config/policy.json', {}) or {}
     if not isinstance(config, dict):
@@ -175,12 +199,18 @@ def _evaluate_pre_tool(
 
     # The legacy evaluator still owns destructive, production, external-write, route and MCP policy.
     # The structured target parser above supersedes only its old substring-based shell guard.
-    verdict = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+    verdict = _legacy_evaluate_pre_tool(
+        root, event, _skip_substring_control_plane_guard=True,
+        _execution_cwd=_execution_directory(root, execution_cwd),
+    )
     if verdict[0] and _readings_differ(command):
         # Claude Code runs Git Bash on Windows, where `cat .e\nv` reads .env: the union of
         # both readings is enforced, never the more permissive one.
         with _legacy.posix_reading():
-            posix = _legacy_evaluate_pre_tool(root, event, _skip_substring_control_plane_guard=True)
+            posix = _legacy_evaluate_pre_tool(
+                root, event, _skip_substring_control_plane_guard=True,
+                _execution_cwd=_execution_directory(root, execution_cwd),
+            )
         if not posix[0]:
             return posix
     return verdict
