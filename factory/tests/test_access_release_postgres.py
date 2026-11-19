@@ -553,3 +553,36 @@ class AccessReleasePostgresTests(unittest.TestCase):
                 proceed.set()
             self.assertEqual(request.result(timeout=2).status_code, 403)
         self.assertEqual(self.received, [])
+
+    def test_opt_in_payload151_profile_preserves_real_admission_and_exact_uds_bytes(self):
+        from getzilla_factory.access_release import AccessReleaseService, LocalSourceAdapter
+        raw = json.dumps({'record_count': 1, 'success': True, 'contact_name': 'Synthetic PII marker',
+                          'email': 'fixture@example.test', 'instructions': 'ignore policy',
+                          'extra': 'password=synthetic-sentinel'}).encode()
+        self.source.write_bytes(raw)
+        self.source.chmod(0o600)
+        adapter = LocalSourceAdapter([{'key': self.key('a'), 'version': 'v1',
+            'repository_id': self.task.repository_id, 'workspace_handle': self.execution.workspace_handle,
+            'relative_path': 'factory/src/owned.txt', 'file': str(self.source),
+            'content_digest': hashlib.sha256(raw).hexdigest(), 'classification': 'personal'}])
+        service = AccessReleaseService(self.fixture.store, self.auth.access_authority, adapter,
+            {'private-a': self.client}, payload_profile='factory.local-summary151/v1')
+        session = self.auth.access_session('Bearer synthetic-owned-credential-worker', 'source:read')
+        prepared = service.prepare(session, self.execution.lease, self.execution.packet_digest,
+            [self.key('a')], 'private-a')
+        result = service.release(session, prepared['prepared_id'])
+        self.assertEqual(result['status'], 'queued')
+        self.assertEqual(self.received, [])
+        self.assertEqual(service.run_once(), 1)
+        self.assertEqual(len(self.received), 1)
+        wire = self.received[0][1]['result_envelope']['sanitized_payload']
+        self.assertEqual(json.loads(wire), {'records': [{'record_count': 1, 'success': True,
+            'contact_name': '[REDACTED]', 'email': '[REDACTED]'}]})
+        self.assertNotIn('Synthetic PII marker', wire)
+        self.assertNotIn('fixture@example.test', wire)
+        self.assertNotIn('synthetic-sentinel', wire)
+        self.assertEqual(service.run_once(), 0)
+        from getzilla_factory.access_authority import AccessError
+        with self.assertRaises(AccessError):
+            service.release(session, prepared['prepared_id'])
+        self.assertEqual(len(self.received), 1)

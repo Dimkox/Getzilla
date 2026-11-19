@@ -1,7 +1,9 @@
 # Payload transformation boundary
 
-This is an offline, standard-library transform foundation. It does not enable a
-protected native client, authorize a source, send data, or qualify isolation.
+The pure helper is an offline, standard-library transform foundation. Its DTOs
+do not authorize a source or send data. The optional Factory profiles below add
+a concrete retained-byte transform to the existing authenticated local UDS path;
+they do not qualify other native clients or transports.
 `getzilla.payload_transform.inspect_native` returns `native_access_unavailable`
 without iterating its input. Factory `ResultBroker.inspect` retains its existing
 `runtime_wiring_missing` behavior. Existing path-read guards remain separate.
@@ -94,11 +96,56 @@ No disk, DB, network, model or arbitrary callback runs under the source mutex.
 Revocation uses the actual durable-current publication cut. Previously admitted
 effects can finish late; issued model bytes cannot be recalled or erased.
 
-The early150 interface is an unaccepted reference under repair. This module does
-not pin or copy an active bridge. Missing/unqualified host, current lineage,
-transform or actual registered pre-sink channel means unavailable before source
-acquisition. Core remains optional and needs no DB. Ordinary local observations
+Missing/unqualified host, current lineage, transform or actual registered
+pre-sink channel means unavailable before source acquisition. The fixed Factory
+profiles below reuse the existing150 bridge; they do not add a permission issuer. Core remains optional and needs no DB. Ordinary local observations
 keep their disclosed local grade and gain no protected fields or authority.
+
+## Opt-in Factory local UDS profiles
+
+Trusted parent code can select `AccessReleaseService(..., payload_profile=NAME)`
+or `build_app(..., access_payload_profile=NAME)`. This is not a request field.
+Default `None` preserves existing150 behavior and does not claim151 filtering.
+Unknown profile names refuse. Ordinary standalone Factory startup imports no Core;
+these optional profiles explicitly require Core's canonical transform engine.
+
+The actual `LocalSourceAdapter` registration adds `classification`: `public`,
+`internal`, `personal`, `secret` or `unknown`. Missing class means unknown. Class
+is bound to the owner's full source key, version and pinned raw hash. It is not
+accepted from a query, response, model label or public `SourceFact` as authority.
+Unknown/secret or profile-incompatible classes refuse before any source read.
+Current source authority, actual private-file custody and audience checks remain
+mandatory. No class or omitted field declassifies its complete original lineage.
+
+| Fixed profile | Allowed source classes | Retained output |
+| --- | --- | --- |
+| `factory.local-summary151/v1` | public, internal, personal | Canonical `records` array. Each source needs integer `record_count` in0..1000 and boolean `success`. Optional `contact_name` and `email` become `[REDACTED]`; instructions and all unrequested fields are dropped. No arbitrary personal text is retained. |
+| `factory.local-public-context151/v1` | public only | Canonical `documents` array of `{content, untrusted_data:true}`. Known secrets, bounded email patterns and North American phone patterns are masked. This is not universal PII detection; internal/personal sources cannot use this profile. |
+
+Both use the fixed `registered_tool_response` purpose. Text in public context
+stays untrusted data; its wrapper alone is not OS or model injection isolation.
+Source bytes cannot select tools, audience, profile, purpose or dispatch code.
+The summary profile deletes instruction fields. Other clients, attachments,
+provider requests and unrestricted context assembly remain unqualified.
+
+The existing `FactoryNativeAccessHost` retains the original captured cut. The
+service retains immutable transformed bytes, complete original SourceFacts,
+class and exact policy identity behind its private prepared response. The same
+`ResultBroker(access-local-text/v1)` and registered `UdsResultHandoffClient`
+remain in use. Its existing binding stores a class/policy/lineage stamp; no ACL,
+queue, grant hierarchy, attempt journal or arbitrary sink callback is added.
+Preparation, release, claim and final dispatch verify original source/current
+purpose/policy, registered destination identity, envelope scope/hash and exact
+retained UTF-8 bytes. Transform work runs outside SQL and SOURCE locks and uses
+the original task/deadline/output budget. Unknown outcomes never repost.
+
+The supported sink is the existing authenticated local UDS result channel.
+A provider adapter must implement its own real admission at that registered
+sink. A DTO, transform result, digest, envelope label or passing fixture cannot
+enable `openai_model_request` or authorize an external model call. The default
+`inspect_native` and unknown provider transports remain unavailable. No paid
+model call or ZDR claim is introduced. The existing bounded prepared cache and
+Python buffer behavior are not a memory-erasure guarantee.
 
 ## Native acceptance still required
 
@@ -117,7 +164,7 @@ environment, network, child and response channels; a delimiter or Python type
 does not enforce OS isolation.162 owns source/citation facts,159 owns custody and
 observations,150 owns authority/outbox, and156 owns launch/stop/recovery.
 
-All original151/inherited148 scope remains open: safe input and output filtering,
+Broader151/inherited148 acceptance remains separate: safe input and output filtering,
 source-to-audience permission and derived lineage, PII/secrets, current revocation,
 injection isolation, safe logs/errors/retention, native OS/client qualification,
 adversarial regressions and measured false positives/latency/tokens. No Zero Data

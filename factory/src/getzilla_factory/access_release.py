@@ -6,13 +6,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
+import json
 import math
 from pathlib import Path
 import secrets
 import threading
 import time
 
-from .access_authority import AccessAuthority, AccessError, _closed, _identity, _private, source_key
+from .access_authority import AccessAuthority, AccessError, _identity, _private, source_key
 from .brokers import _allowed_path
 from .contracts import canonical_digest, canonical_json
 from .result_broker import ResultBroker
@@ -43,6 +44,7 @@ class _Source:
     relative_path: str
     path: Path
     digest: str
+    classification: str = 'unknown'
 
 
 class LocalSourceAdapter:
@@ -53,8 +55,13 @@ class LocalSourceAdapter:
             raise AccessError('invalid_source_registration')
         self._sources = {}
         for value in bindings:
-            _closed(value, {'key', 'version', 'repository_id', 'workspace_handle',
-                            'relative_path', 'file', 'content_digest'})
+            required = {'key', 'version', 'repository_id', 'workspace_handle',
+                        'relative_path', 'file', 'content_digest'}
+            if type(value) is not dict or set(value) not in (required, required | {'classification'}):
+                raise AccessError('invalid_source_registration')
+            classification = value.get('classification', 'unknown')
+            if type(classification) is not str or classification not in {'public', 'internal', 'personal', 'secret', 'unknown'}:
+                raise AccessError('invalid_source_registration')
             key = source_key(value['key'])
             digest = value['content_digest']
             if (key[2] != 'local' or key in self._sources or type(digest) is not str or len(digest) != 64
@@ -65,7 +72,7 @@ class LocalSourceAdapter:
             if not path.is_absolute() or '..' in path.parts:
                 raise AccessError('invalid_source_registration')
             self._sources[key] = _Source(key, _identity(value['version']), _identity(value['repository_id']),
-                _identity(value['workspace_handle']), value['relative_path'], path, digest)
+                _identity(value['workspace_handle']), value['relative_path'], path, digest, classification)
 
     def _read(self, key, context, authority, session, remaining):
         source = self._sources.get(key)
@@ -101,6 +108,8 @@ class _Prepared:
     deadline: float
     native_capture: _CapturedSources | None = None
     consumed: bool = False
+    native_payload: object | None = None
+    native_destination: object | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -114,6 +123,7 @@ class _CapturedSources:
     lineage: tuple
     deadline: float
     profile: tuple
+    classifications: tuple = ()
 
 
 @dataclass(repr=False)
@@ -176,13 +186,20 @@ class _NativeQueue:
 class AccessReleaseService:
     """Trusted co-composition. Its queue has no public restoration or sink callback API."""
 
-    def __init__(self, store, authority, sources, destinations):
+    def __init__(self, store, authority, sources, destinations, *, payload_profile=None):
         if (type(store) is not PostgresFactoryStore or type(authority) is not AccessAuthority
                 or type(sources) is not LocalSourceAdapter or type(destinations) is not dict
                 or not 1 <= len(destinations) <= 256
                 or any(type(client) is not UdsResultHandoffClient or client._transport is not None
                        or client._timeout > 2 for client in destinations.values())):
             raise AccessError('access_profile_unavailable')
+        if payload_profile is not None:
+            try:
+                from .payload_access import PayloadProfile
+                payload_profile = PayloadProfile(payload_profile)
+            except (ImportError, ValueError, TypeError):
+                raise AccessError('access_profile_unavailable') from None
+        self._payload_profile = payload_profile
         self._store, self._authority, self._sources = store, authority, sources
         self._destinations = {_identity(key): client for key, client in destinations.items()}
         self._queue, self._prepared, self._lock = _NativeQueue(), {}, threading.Lock()
@@ -206,7 +223,12 @@ class AccessReleaseService:
 
     def _native_profile(self):
         # Fixed producer code, not a caller-selected sanitizer or plugin.
-        return ('factory.source-text/v1', 'identity/v1', 'access-local-text/v1')
+        original = ('factory.source-text/v1', 'identity/v1', 'access-local-text/v1')
+        if self._payload_profile is None:
+            return original
+        return (*original, self._payload_profile.name, self._payload_profile.policy.identity,
+            canonical_digest([[list(key), item.version, item.digest, item.classification]
+                              for key, item in sorted(self._sources._sources.items())]))
 
     def _capture_native_sources(self, session, grant, packet, sources, deadline):
         """The same actual producer, retained for the optional trusted-parent bridge."""
@@ -222,6 +244,13 @@ class AccessReleaseService:
             context, attempt = self._context(cursor, grant, packet)
         if '*' not in actor.repositories and context.repository_id not in actor.repositories:
             raise AccessError('access_denied')
+        classifications = ()
+        if self._payload_profile is not None:
+            # Class comes from this actual registered source owner, never query DTOs.
+            classifications = tuple(self._sources._sources[key].classification
+                                    if key in self._sources._sources else 'unknown' for key in keys)
+            for classification in classifications:
+                self._payload_profile.classification(classification)
         chunks, lineage, size = [], [], 0
         for key in keys:
             _remaining_bounds(deadline)
@@ -232,12 +261,19 @@ class AccessReleaseService:
             size += len(raw)
         _remaining_bounds(deadline)
         return _CapturedSources(session, grant, packet, context, attempt,
-                                tuple(chunks), tuple(lineage), deadline, self._native_profile())
+                                tuple(chunks), tuple(lineage), deadline, self._native_profile(), classifications)
 
     def _revalidate_native_sources(self, captured, context, attempt, deadline):
         if (type(captured) is not _CapturedSources or context != captured.context
                 or attempt != captured.attempt or self._native_profile() != captured.profile):
             raise AccessError('access_denied')
+        if self._payload_profile is not None:
+            current_classes = tuple(self._sources._sources[item[0]].classification
+                                    if item[0] in self._sources._sources else 'unknown' for item in captured.lineage)
+            if current_classes != captured.classifications:
+                raise AccessError('source_unavailable')
+            for classification in current_classes:
+                self._payload_profile.classification(classification)
         size = 0
         for raw, dependency in zip(captured.chunks, captured.lineage, strict=True):
             _remaining_bounds(min(deadline, captured.deadline))
@@ -265,10 +301,15 @@ class AccessReleaseService:
         identifier = (canonical_digest({'contract': 'factory-native-source-stage/v1',
             'task': grant.task_id, 'run': grant.run_id, 'fence': grant.fence,
             'packet': packet, 'attempt': attempt, 'stage': 'factory.source-text/v1'})
-            if native_revalidate else secrets.token_hex(32))
+            if native_revalidate or self._payload_profile is not None else secrets.token_hex(32))
         identity = dict(repository_id=context.repository_id, task_id=grant.task_id, run_id=grant.run_id,
             fence=grant.fence, packet_digest=grant.packet_digest, attempt_id=attempt,
             source_operation='access:' + identifier, source_digest=source_digest)
+        native_payload = None
+        if self._payload_profile is not None:
+            native_payload = self._payload_profile.prepare(chunks, lineage, captured.classifications,
+                min(262144, context.max_output_bytes), deadline)
+            chunks = (native_payload.payload,)
         # The actual trusted adapter above owns every input and dependency. Reuse the
         # existing sanitizer policy, without changing the default unqualified inspect().
         envelope = ResultBroker(policy_version='access-local-text/v1', max_bytes=min(262144, context.max_output_bytes)).sanitize_candidate(
@@ -279,10 +320,14 @@ class AccessReleaseService:
             'authority_revision': authority[0], 'permission_digest': authority[1], 'destination_id': destination,
             'destination_revision': authority[2], 'principal_id': authority[3],
             'lineage': [[list(key), version, digest] for key, version, digest in lineage],
-            'transform': 'access-local-text/v1', 'payload_digest': envelope.sanitized_payload_digest}
+            'transform': 'access-local-text/v1' + (':' + native_payload.binding_stamp if native_payload else ''),
+            'payload_digest': envelope.sanitized_payload_digest}
         prepared = _Prepared(identifier, session, grant, packet, context.workspace_handle, attempt,
             destination, lineage, envelope, authority, canonical_json(binding).decode(),
-            canonical_digest(binding), deadline, captured if native_revalidate else None)
+            canonical_digest(binding), deadline, captured if native_revalidate or native_payload is not None else None,
+            native_payload=native_payload,
+            native_destination=self._destinations[destination] if native_payload is not None else None)
+        self._verify_native_payload(prepared)
         with self._lock:
             now = time.monotonic()
             # Native entries retain this service's original bounded stage intent,
@@ -306,6 +351,46 @@ class AccessReleaseService:
             self._prepared[identifier] = prepared
         return {'prepared_id': identifier}
 
+    def _verify_native_payload(self, prepared):
+        if self._payload_profile is None:
+            if prepared.native_payload is not None:
+                raise AccessError('access_denied')
+            return
+        from .payload_access import PreparedPayload
+        proof = prepared.native_payload
+        capture = prepared.native_capture
+        if type(proof) is not PreparedPayload or type(capture) is not _CapturedSources:
+            raise AccessError('access_denied')
+        if capture.profile != self._native_profile():
+            raise AccessError('access_denied')
+        if self._destinations.get(prepared.destination) is not prepared.native_destination:
+            raise AccessError('access_denied')
+        grant, context = capture.grant, capture.context
+        expected_scope = dict(repository_id=context.repository_id, task_id=grant.task_id,
+            run_id=grant.run_id, fence=grant.fence, packet_digest=grant.packet_digest,
+            attempt_id=capture.attempt, source_operation='access:' + prepared.identifier,
+            source_digest=canonical_digest([[list(key), version, digest] for key, version, digest in capture.lineage]),
+            channel='native_tool_result', content_type='text/plain', policy_version='access-local-text/v1')
+        if any(getattr(prepared.envelope, key) != value for key, value in expected_scope.items()):
+            raise AccessError('access_denied')
+        current = self._payload_profile.prepare(capture.chunks, capture.lineage, capture.classifications,
+            min(262144, capture.context.max_output_bytes), min(prepared.deadline, capture.deadline))
+        binding = json.loads(prepared.binding_wire)
+        expected_binding = {'contract': 'factory-owned-access-release/v1',
+            'execution_packet_digest': prepared.execution_packet,
+            'authority_revision': prepared.authority[0], 'permission_digest': prepared.authority[1],
+            'destination_id': prepared.destination, 'destination_revision': prepared.authority[2],
+            'principal_id': prepared.authority[3],
+            'lineage': [[list(key), version, digest] for key, version, digest in capture.lineage],
+            'transform': 'access-local-text/v1:' + proof.binding_stamp,
+            'payload_digest': prepared.envelope.sanitized_payload_digest}
+        if (binding != expected_binding or canonical_digest(binding) != prepared.binding_digest
+                or canonical_json(binding).decode() != prepared.binding_wire
+                or current != proof or prepared.envelope.sanitized_payload.encode('utf-8') != proof.payload
+                or prepared.envelope.sanitized_payload_digest != canonical_digest(proof.payload.decode('utf-8'))
+                or json.loads(prepared.binding_wire)['transform'] != 'access-local-text/v1:' + proof.binding_stamp):
+            raise AccessError('access_denied')
+
     def _refresh_native_prepared(self, prepared):
         if prepared.native_capture is None:
             return
@@ -315,6 +400,7 @@ class AccessReleaseService:
         # The later transaction still rechecks current task and source authority
         # at its actual native queue cut; this is not an atomic filesystem fence.
         self._revalidate_native_sources(prepared.native_capture, context, attempt, prepared.deadline)
+        self._verify_native_payload(prepared)
 
     def release(self, session, identifier, *, absolute_deadline=None):
         if type(identifier) is not str or len(identifier) != 64:
@@ -388,6 +474,11 @@ class AccessReleaseService:
                     record.attempt_id, token, 'factory-protected-dispatcher', 'claimed', record.to_dict())
                 if prepared.native_capture is not None:
                     _remaining_bounds(prepared.deadline)
+                if self._stop.is_set():
+                    raise AccessError('access_denied')
+                # Exact retained bytes/policy are checked outside SOURCE/SQL locks,
+                # immediately before this fixed registered transport consumes them.
+                self._verify_native_payload(prepared)
                 outcome = self._destinations[prepared.destination].dispatch(claim)
                 with self._store._transaction(**_BOUNDS) as cursor:
                     cursor.execute('SELECT factory.observe_access_release_v1(%s,%s,%s,%s)',
