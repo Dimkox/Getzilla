@@ -9,6 +9,10 @@ from .security_artifacts import ArtifactError, artifact_context
 from .security_python_target import digest, _subject, _context_key, _descriptor, validate_source_pins
 
 
+_EVALUATION_ENTRY = object()
+_RESULT_SEAL = object()
+
+
 def _refuse():
     raise ArtifactError(
         "artifact-target-use-unobserved", "current CI installation target or source custody is unavailable"
@@ -48,8 +52,17 @@ def scope(parent, index):
             recipe=consumer["recipe_sha256"],
             build=consumer["build_sha256"],
             requirements=consumer["requirements_sha256"],
+            install_requirements=consumer["install_requirements"],
         )
     )
+    installed = consumer["install_requirements"]
+    if (type(installed) is not dict or not 1 <= len(installed) <= 3
+            or consumer["requirements"] not in installed
+            or installed[consumer["requirements"]] != consumer["requirements_sha256"]
+            or any(type(path) is not str or path not in {'trust-ci/requirements.txt',
+                'trust-ci/requirements-test.txt', 'trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt'}
+                or type(sha) is not str or not re.fullmatch('[a-f0-9]{64}', sha) for path, sha in installed.items())):
+        _refuse()
     dependencies, pins = [], {}
     for original in consumer["dependencies"]:
         key = digest(_subject(original))
@@ -58,17 +71,22 @@ def scope(parent, index):
             _refuse()
         if not pin["marker_active"]:
             continue
-        if original["manifest"] != consumer["requirements"]:
+        if original["manifest"] in installed:
+            if pin["manifest_sha256"] != installed[original["manifest"]] or not pin["hashes"]:
+                _refuse()
+        else:
             matches = [
                 dep
                 for dep in consumer["dependencies"]
-                if dep["manifest"] == consumer["requirements"]
+                if dep["manifest"] in installed
                 and dep["name"] == original["name"]
                 and dep["version"] == original["version"]
             ]
             if len(matches) != 1:
                 _refuse()
             required = original_pins[digest(_subject(matches[0]))]
+            if required["manifest_sha256"] != installed[matches[0]["manifest"]]:
+                _refuse()
             hashes = set(required["hashes"])
             if pin["hashes"]:
                 hashes &= set(pin["hashes"])
@@ -113,6 +131,35 @@ def validate_binding(value):
     if value != expected:
         _refuse()
     return value
+
+
+def seal_evaluation(binding, output, *, _entry=None):
+    """Only the evaluator's completed live CI result can discharge build inputs."""
+    from .security_image_producer import _LIVE
+    if _entry is not _EVALUATION_ENTRY:
+        _refuse()
+    validate_binding(binding)
+    inventory, _ = scope(binding, binding['ci_consumer'])
+    if (type(output) is not dict or output.get('status') != 'pass' or output.get('gaps') != []
+            or output.get('inventory_digest') != inventory['digest']
+            or type(output.get('policy_digest')) is not str
+            or not re.fullmatch('[a-f0-9]{64}', output['policy_digest'])
+            or type(output.get('details')) is not list):
+        _refuse()
+    records = _LIVE.setdefault('ci_license_evaluations', {})
+    if len(records) >= 8:
+        records.clear()
+    records[id(output)] = (_RESULT_SEAL, output, digest(binding), digest(output))
+
+
+def validated_evaluation(binding, output):
+    from .security_image_producer import _LIVE
+    validate_binding(binding)
+    row = _LIVE.get('ci_license_evaluations', {}).get(id(output))
+    if (type(row) is not tuple or len(row) != 4 or row[0] is not _RESULT_SEAL or row[1] is not output
+            or row[2] != digest(binding) or row[3] != digest(output)):
+        _refuse()
+    return binding['ci_uses']['consumers'][binding['ci_consumer']]
 
 
 def target_facts(value):

@@ -148,9 +148,49 @@ def validate_closure_graphs(value):
     return json.loads(json.dumps(value))
 
 
+CI_INSTALL_RECIPES = {
+    'trust-ci/Dockerfile.api': ('trust-ci/requirements.txt', '.'),
+    'trust-ci/Dockerfile.worker': ('trust-ci/requirements.txt', '.'),
+    'trust-ci/Dockerfile.test': ('trust-ci/requirements-test.txt', '".[test]"'),
+    'trust-ci/runner.Dockerfile': ('trust-ci/requirements-test.txt', '".[test]"'),
+}
+
+
+def ci_install_context(root, recipe):
+    """Only the current trusted four real wheel-install/backend joins."""
+    from .security_tools import TRUSTED_ROOT
+    from .security_build_inputs import _instructions
+    config = CI_INSTALL_RECIPES.get(recipe)
+    if config is None:
+        return None
+    primary, install = config
+    paths = [primary, 'trust-ci/requirements-build.txt']
+    if recipe == 'trust-ci/runner.Dockerfile':
+        paths.append('trust-ci/requirements-runner.txt')
+    try:
+        raw = read_file(root, recipe, 4 * 1024 * 1024)
+        if raw != read_file(TRUSTED_ROOT, recipe, 4 * 1024 * 1024):
+            return None
+        statements = [' '.join(value.split()) for _, value in _instructions(raw.decode())]
+        copied = 'COPY pyproject.toml README.md ' + ' '.join(Path(path).name for path in paths) + ' ./'
+        first = 'python -m pip install --no-cache-dir --only-binary=:all: --require-hashes ' + ' '.join(
+            '-r ' + Path(path).name for path in paths)
+        second = 'python -m pip install --no-cache-dir --no-deps --no-build-isolation ' + install
+        matches = [row for row in statements if row.startswith('RUN ') and first + ' && ' + second in row]
+        if (len(matches) != 1 or matches[0].count('python -m pip install ') != 2
+                or copied not in statements or 'COPY src ./src' not in statements
+                or statements.index(copied) >= statements.index(matches[0])
+                or statements.index('COPY src ./src') >= statements.index(matches[0])):
+            return None
+        files = {path: hashlib.sha256(read_file(root, path, 4 * 1024 * 1024)).hexdigest() for path in paths}
+        return dict(requirements=primary, install_requirements=files, graph=paths,
+                    recipe_sha256=hashlib.sha256(raw).hexdigest())
+    except (OSError, ValueError, UnicodeError):
+        return None
+
+
 def closure_graphs(root,inventory):
     """Observe only proved install joins; distinct consumers stay separate graphs."""
-    from .security_tools import TRUSTED_ROOT
     graphs,evidence={},{}
     paths={row['path'] for row in inventory['manifests']}
     def observed(path):
@@ -172,27 +212,22 @@ def closure_graphs(root,inventory):
     if 'trust-ci/pyproject.toml' in paths:
         observed('trust-ci/pyproject.toml')
         consumers=[]
-        for recipe,requirements,install in [('trust-ci/Dockerfile.api','requirements.txt','.'),
-                ('trust-ci/Dockerfile.worker','requirements.txt','.'),('trust-ci/Dockerfile.test','requirements-test.txt','".[test]"')]:
-            try:
-                raw=observed(recipe)
-                trusted=read_file(TRUSTED_ROOT,recipe,4*1024*1024)
-                text=raw.decode()
-            except (OSError,ValueError):
+        for recipe in CI_INSTALL_RECIPES:
+            context = ci_install_context(root, recipe)
+            if context is None or not set(context['graph']) <= paths:
                 continue
-            # This exact trusted recipe supplies an install-context fact, never image execution credit.
-            command=('RUN python -m pip install --no-cache-dir --require-hashes -r '+requirements+' \\\n'
-                '    && python -m pip install --no-cache-dir --no-deps '+install)
-            if raw==trusted and ('\n'+command+'\n' in '\n'+text) and 'trust-ci/'+requirements in paths:
-                observed('trust-ci/'+requirements)
-                graph=['trust-ci/'+requirements]
-                if graph not in consumers:
-                    consumers.append(graph)
+            observed(recipe)
+            for path in context['graph']:
+                observed(path)
+            graph = context['graph']
+            if graph not in consumers:
+                consumers.append(graph)
         if consumers:
-            graphs['trust-ci/pyproject.toml#runtime']=consumers
-        tests=[graph for graph in consumers if graph==['trust-ci/requirements-test.txt']]
+            graphs['trust-ci/pyproject.toml#runtime'] = consumers
+            graphs['trust-ci/pyproject.toml#build'] = [['trust-ci/requirements-build.txt']]
+        tests = [graph for graph in consumers if 'trust-ci/requirements-test.txt' in graph]
         if tests:
-            graphs['trust-ci/pyproject.toml#optional']=tests
+            graphs['trust-ci/pyproject.toml#optional'] = tests
     return validate_closure_graphs(dict(schema_version=1,inventory_sha256=inventory['digest'],graphs=graphs,evidence=evidence))
 
 

@@ -63,20 +63,22 @@ def ci_use_observations(root,inventory,source,run,graphs):
     consumers=[]
     for row in sorted(inventory.get('builds',[]),key=lambda item:(item['dockerfile'],item['build_sha256'])):
         recipe=row['dockerfile']
-        requirements={'trust-ci/Dockerfile.api':'trust-ci/requirements.txt',
-            'trust-ci/Dockerfile.worker':'trust-ci/requirements.txt',
-            'trust-ci/Dockerfile.test':'trust-ci/requirements-test.txt'}.get(recipe)
-        if requirements is None:
+        from .security_python_target import ci_install_context
+        context = ci_install_context(root, recipe)
+        if context is None:
             continue
+        requirements = context['requirements']
+        installed = context['install_requirements']
         proof=graphs.get('evidence',{})
         expected=graphs.get('graphs',{}).get('trust-ci/pyproject.toml#runtime',[])
-        if [requirements] not in expected or recipe not in proof or requirements not in proof:
+        if (context['graph'] not in expected or recipe not in proof
+                or any(proof.get(path) != sha for path, sha in installed.items())):
             continue
         if hashlib.sha256(read_file(root,recipe,4*1024*1024)).hexdigest()!=proof[recipe]:
             raise BackendUnavailable('current CI consumer source changed')
         consumer = dict(recipe=recipe,recipe_sha256=row['recipe_sha256'],build_sha256=row['build_sha256'],
             image=_LIVE['builds'][row['build_sha256']],requirements=requirements,
-            requirements_sha256=proof[requirements],distribution='internal',purpose='isolated-public-ci',
+            requirements_sha256=proof[requirements],install_requirements=installed,distribution='internal',purpose='isolated-public-ci',
             image_target_observed=False)
         observed = _LIVE.get('base_targets',{}).get(row['recipe_sha256'])
         if observed is not None:
@@ -87,8 +89,8 @@ def ci_use_observations(root,inventory,source,run,graphs):
                                   if key in observed},
                 source_pins=source_pins(root,inventory,observed['target']),
                 dependencies=[dict(dep) for dep in inventory['dependencies'] if dep.get('ecosystem')=='PyPI'
-                    and (dep.get('manifest')==requirements or dep.get('manifest')=='trust-ci/pyproject.toml'
-                         and (dep.get('usage')=='runtime' or dep.get('usage')=='optional'
+                    and (dep.get('manifest') in installed or dep.get('manifest')=='trust-ci/pyproject.toml'
+                         and (dep.get('usage') in {'runtime','build'} or dep.get('usage')=='optional'
                               and requirements=='trust-ci/requirements-test.txt'))])
         consumers.append(consumer)
     subjects={}
@@ -98,7 +100,7 @@ def ci_use_observations(root,inventory,source,run,graphs):
         indexes=[]
         for index,consumer in enumerate(consumers):
             manifest=dep['manifest']
-            direct=manifest==consumer['requirements']
+            direct=manifest in consumer['install_requirements']
             project=manifest=='trust-ci/pyproject.toml' and (
                 dep['usage'] in {'runtime','build'} or dep['usage']=='optional'
                 and consumer['requirements']=='trust-ci/requirements-test.txt')
@@ -358,7 +360,7 @@ def produce(root, source, run, volume, builder):
                 from .security_tools import TRUSTED_ROOT
                 from .security_ci_inputs import observe_base
                 base=recipe['arguments'].get('PYTHON_BASE_IMAGE')
-                if (recipe['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test'}
+                if (recipe['dockerfile'] in {'trust-ci/Dockerfile.api','trust-ci/Dockerfile.worker','trust-ci/Dockerfile.test','trust-ci/runner.Dockerfile'}
                         and base==resolved[ci['python']['reference']][0]
                         and read_file(root,recipe['dockerfile'],4*1024*1024)==read_file(TRUSTED_ROOT,recipe['dockerfile'],4*1024*1024)):
                     if base not in observed_bases:

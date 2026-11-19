@@ -275,6 +275,50 @@ class SelectedRunLicenseTests(unittest.TestCase):
 
         return security_license_scope
 
+    def test_exact_backend_credit_needs_sealed_live_installed_terms_and_preserves_other_gaps(self):
+        from tests.test_ci_image_license_inputs import CIImageTargetBindingTests
+        from getzilla import security_ci_inputs as ci
+        fixture = CIImageTargetBindingTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        project, (installed, binding) = fixture.backend_context()
+        consumer = fixture.uses['consumers'][0]
+        build = dict(dockerfile=consumer['recipe'], build_sha256=consumer['build_sha256'])
+        inv = inventory(*consumer['dependencies'], builds=[build])
+        inv['digest'] = fixture.parent['inventory_sha256']
+        parent = dict(fixture.parent, source_pins=consumer['source_pins'])
+        context = self.live(inv, fixture.source, fixture.run, parent)
+        context.state['ci_uses'] = fixture.uses
+        wheel = 'setuptools-84.1.0.dist-info/WHEEL'
+        license_path = 'setuptools-84.1.0.dist-info/licenses/LICENSE'
+        detail = dict(ecosystem='PyPI', package='setuptools', version='84.1.0',
+            manifest='trust-ci/pyproject.toml', context=dict(usage='build'), status='pass', distribution='internal',
+            artifact_sha256='9' * 64, license_files=[dict(path=license_path)], notice_files=[],
+            delivery=dict(image=consumer['image'], members={'site/'+wheel:'1'*64, 'site/'+license_path:'2'*64}))
+        output = dict(status='pass', gaps=[], inventory_digest=installed['digest'], policy_digest='b'*64, details=[detail])
+        key = 'build-input:'+consumer['build_sha256']+':'+target.digest(target._subject(project))
+        self.assertIn(key, context.required)
+        with self.assertRaises(ValueError):
+            context.build_inputs(binding, output)
+        ci.seal_evaluation(binding, output, _entry=ci._EVALUATION_ENTRY)
+        context.build_inputs(binding, output)
+        self.assertEqual(set(context.passed), {key})
+        self.assertIn('ci-install:'+consumer['build_sha256'], set(context.required)-context.passed.keys())
+        for failure in ('restored-json', 'wrong-wheel', 'wrong-image', 'missing-term-custody'):
+            context.passed.clear()
+            changed = copy.deepcopy(output)
+            if failure == 'wrong-wheel':
+                changed['details'][0]['artifact_sha256'] = 'f'*64
+            elif failure == 'wrong-image':
+                changed['details'][0]['delivery']['image'] = 'other@sha256:'+'f'*64
+            elif failure == 'missing-term-custody':
+                changed['details'][0]['delivery']['members'].pop('site/'+license_path)
+            if failure != 'restored-json':
+                ci.seal_evaluation(binding, changed, _entry=ci._EVALUATION_ENTRY)
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                context.build_inputs(binding, changed)
+            self.assertEqual(context.passed, {})
+
     def fixture(self):
         host = dependency(manifest=".getzilla/config/python-quality-requirements.txt", usage="build-ci")
         future = dependency(name="future", manifest="future/requirements.txt", usage="runtime")

@@ -12,6 +12,14 @@ The checked-in `config/policy.example.json` is configuration shape documentation
 
 The suffix is a policy epoch. A green check produced under an older policy or holdout digest cannot satisfy the current protected-branch requirement.
 
+## Pinned Python image inputs
+
+The API, worker, test and runner recipes first install only wheels with `--require-hashes`. `requirements-build.txt` pins setuptools84.1.0, which matches the project's declared build backend. The runner also uses `requirements-runner.txt` for its complete tool dependency closure; its seven existing direct versions remain unchanged. `coverage[toml]` makes pytest-cov's existing extra requirement explicit.
+
+The next command installs the local project with `--no-deps --no-build-isolation`. Pip therefore uses the already pinned backend and does not download a separate unobserved build environment. The runner keeps one heavy install RUN and the existing OpenGrep version/digest and final user/entrypoint.
+
+The security producer observes the Python base before candidate backend execution. It binds all four exact trusted recipe joins and every primary/build/runner requirements file hash to the actual owned image. Backend credit also requires the evaluator's private live result and exact installed wheel/license custody; saved JSON is not evidence of execution. These checks retain the original raw uses and do not qualify production images or other Python targets.
+
 ## Paid access
 
 Trust CI runs on owned hardware and is offered as a paid service for private repositories; public repositories use the free GitHub Actions gate that `scripts/getzilla_ci.py --write` renders. Access is granted per GitHub account, by hand after an invoice is paid: `python -m adaptive_trust_ci.customers add|remove|list` plans the owner profile change against the deployed policy without touching it (see `engineering/runbooks/getzilla-trust-ci-onboarding.md`, step 7). Accounts without a profile are rejected before enqueue, so nothing of theirs runs on the CI host.
