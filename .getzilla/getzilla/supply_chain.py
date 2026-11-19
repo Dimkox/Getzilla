@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import stat
 from contextlib import ExitStack
+from dataclasses import dataclass
+import re
 
 MCP_IDENTITY_UNVERIFIED = (
     'mcp_identity_unverified: external MCP identity is unsupported. '
@@ -129,17 +131,37 @@ def read_public_source(root: Path, relative: str, limit: int) -> bytes:
         raise PublicSourceError() from None
 
 
-def check_tool_trust(root: Path, event: dict) -> tuple[bool, str | None]:
-    """No current host adapter proves an external MCP server's identity.
+@dataclass(frozen=True)
+class ManagedToolIdentity:
+    source_digest: str
+    executable_digest: str
+    version: str
+    dependency_digest: str
+    credential_scope_digest: str
+    profile: str = 'managed-stdio-v1'
 
-    Do not inspect arguments, read credentials, probe endpoints or infer trust
-    from the read/write classifier. Supported local tools keep their own policy.
+
+def check_tool_trust(root: Path, event: dict, *, managed_adapter=None) -> tuple[bool, str | None]:
+    """Only an actual trusted native call port can qualify managed stdio identity.
+
+    Hook payloads cannot supply the port. Native bypass, disabled modules and
+    unsupported remote profiles remain unqualified; credentials are not read.
     """
-    del root
     name = event.get('tool_name')
-    if isinstance(name, str) and name.startswith('mcp__'):
+    if not isinstance(name, str) or not name.startswith('mcp__'):
+        return True, None
+    try:
+        if managed_adapter is None:
+            return False, MCP_IDENTITY_UNVERIFIED
+        proof = managed_adapter.attest_tool(root, event)
+        if (type(proof) is not ManagedToolIdentity or proof.profile != 'managed-stdio-v1'
+                or not isinstance(proof.version, str) or not 1 <= len(proof.version) <= 128
+                or any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value) for value in
+                       (proof.source_digest, proof.executable_digest, proof.dependency_digest, proof.credential_scope_digest))):
+            return False, MCP_IDENTITY_UNVERIFIED
+        return True, None
+    except (ValueError, OSError, AttributeError, TypeError):
         return False, MCP_IDENTITY_UNVERIFIED
-    return True, None
 
 
 def audit(root: Path) -> dict:

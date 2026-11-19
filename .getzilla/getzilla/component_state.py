@@ -130,7 +130,10 @@ def _module_state(value: object, name: str) -> None:
         items = value[field]
         if type(items) is not list or len(items) > 32 or any(not scope(item) for item in items) or len(set(items)) != len(items):
             raise ComponentStateError(f'invalid module scopes: {name}')
-    if (set(value['grants']) != set(value['permissions']) if value['enabled'] else bool(value['grants'])):
+    selected = set(value['grants'])
+    declared = set(value['permissions'])
+    invalid_grants = (not selected or not selected <= declared) if value['schema_version'] == 2 else selected != declared
+    if (invalid_grants if value['enabled'] else bool(value['grants'])):
         raise ComponentStateError(f'invalid module activation: {name}')
     if value['schema_version'] == 2:
         runtime = value['runtime']

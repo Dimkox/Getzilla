@@ -102,6 +102,15 @@
           "sha256": "0873a2cc87d05172ed5c25aeabf9478ff7e80faefdaeebce0e0fcc78552acb01"
         }
       }
+    },
+    "mcp-jira": {
+      "publisher": "getzilla",
+      "versions": {
+        "0.1.0": {
+          "manifest": ".getzilla/optional-modules/mcp-jira/0.1.0/module.json",
+          "sha256": "5fd9c61e58e8a4e71347b8037fa60027033bb7930174a26a24606889e4919961"
+        }
+      }
     }
   }
 }

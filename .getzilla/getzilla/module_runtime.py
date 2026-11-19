@@ -13,7 +13,7 @@ import uuid
 
 from .component_state import MANIFEST, BoundRoot, component_transaction, encode_manifest, matches_owned, read_state
 
-FEATURES = frozenset({'owned-runtime-v1', 'trusted-transport-v1', 'owned-native-fragment-v1'})
+FEATURES = frozenset({'owned-runtime-v1', 'trusted-transport-v1', 'owned-native-fragment-v1', 'resource-budget-v1'})
 STATES = frozenset({'installed-disabled', 'enabling', 'enabled', 'quiescing', 'disabled-conflict', 'recovery-required'})
 
 
@@ -175,7 +175,7 @@ def _activation(binding, root, name, request, entitlement=None):
     _need(metadata['version'] == request.version and metadata['manifest_sha256'] == request.manifest_sha256, 'activation_artifact_changed')
     _need(not metadata['enabled'] and metadata['runtime']['state'] == 'installed-disabled', 'runtime_quiescence_required')
     _need(request.native_profile in descriptor['native_profiles'], 'native_profile_unsupported')
-    _need(set(request.operations) == set(metadata['permissions']), 'explicit_scoped_grants_required')
+    _need(set(request.operations) <= set(metadata['permissions']), 'explicit_scoped_grants_required')
     for dependency, version in metadata['dependencies'].items():
         from .optional_modules import admit_module
         admitted = admit_module(root, dependency, entitlement=entitlement)

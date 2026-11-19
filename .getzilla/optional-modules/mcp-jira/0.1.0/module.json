@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "mcp-jira",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {},
+  "permissions": [
+    "jira.read",
+    "jira.write"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "README.md",
+      "sha256": "4f78d7a4ffa58cd50ce5a1b0d1a5677f4cfcd6e76d32b4078cec5991f134de68",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "__init__.py",
+      "sha256": "2864ceaf3864845e03046ad7a7d62749ca049bdaa96826568702e0cf7416bc59",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "admission.py",
+      "sha256": "3fa07f549d172b5dd6751f22b819a76fea7ce857d4f262a7bb2a18578caf9452",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "effects.py",
+      "sha256": "95cd36292bfd5d545f907f576279a2b14d38bbce70292750a12b5b70aec04f2e",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "jira.py",
+      "sha256": "fba96f69116343a5acdf0ad29375c6b5062c3df41bbf8a94acef5790ab164627",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "runtime.py",
+      "sha256": "ac5c1c7a47afd357c8347a3b9b7057612b6dab5bdd077fdbbeb9aed2ae480aaa",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "runtime.v1.json",
+      "sha256": "212229f678d87515022d6f22f7dc441ec3efc8405106500424fee6955e04b04d",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "transport.py",
+      "sha256": "8cbc1fcba2f3c9e3d8940994dace84b4533dcc899fc645ef45115589b661fd71",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "worker.py",
+      "sha256": "c9d7ca4d0cedb4545a2c7acd7f2060dcd62c09df9a8f6989fad0620976736532",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}
