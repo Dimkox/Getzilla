@@ -3446,9 +3446,7 @@ def evaluate_pre_tool(
             parsed_paid_target = urlsplit(http_resource)
             paid_hosts = {'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai',
                           'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'}
-            if ((parsed_paid_target.hostname or '').lower().rstrip('.') in paid_hosts
-                    or parsed_paid_target.path.rstrip('/').endswith((
-                        '/chat/completions', '/images/generations', '/videos/generations', '/responses'))):
+            if (parsed_paid_target.hostname or '').lower().rstrip('.') in paid_hosts:
                 return False, 'Direct paid provider dispatch requires durable paid-operation admission; generic external-write grants do not apply.'
             from .human_gates import gate_block_reason
 
@@ -3533,7 +3531,7 @@ def evaluate_pre_tool(
                 if active:
                     return False, f'Another write agent is already active: {active}'
 
-    if tool.startswith('mcp__') and re.search(r'(?:generate|imagegen|completion|inference|video|create_image|create_video)', tool, re.IGNORECASE):
+    if tool.startswith('mcp__') and re.search(r'__(?:openai|anthropic|xai|suno|image_gen|imagegen)__', tool, re.IGNORECASE) and re.search(r'(?:generate|imagegen|completion|inference|create_image|create_video)', tool, re.IGNORECASE):
         return False, 'Paid inference, image and video tools require separate durable paid-operation authority; generic external-write grants do not apply.'
 
     if mcp_side_effect(tool, root):

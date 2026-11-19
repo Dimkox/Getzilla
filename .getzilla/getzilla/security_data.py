@@ -869,6 +869,8 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
                    'preparation remains UNVERIFIED and may refuse incomplete inputs; '
                    f'OSV-only alternative: python3 scripts/getzilla_vulns.py --download-db DIR --ecosystem {source_id.removeprefix("osv:")}') if source_id.startswith('osv:') else (
                        f'refresh {source_id} through its configured updater, then copy manifest and content objects')
+        if source_id in {'kev', 'epss'}:
+            refresh = f'refresh with {command} --refresh --json-out REPORT on a network-enabled host, then copy the complete snapshot directory'
         if source_id == OSV_QUERY_SOURCE:
             refresh = 'refresh with python3 scripts/getzilla_vulns.py --online --db DIR on the selected ROOT; retain the complete inventory-bound query snapshot'
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc

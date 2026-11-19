@@ -9,7 +9,7 @@ import re
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import fsx
 from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
@@ -785,3 +785,18 @@ def synchronize_accounting(root: Path, route: dict[str, Any], required: list[str
     if (get_active_route(root) != route or get_active_change(root) != active
             or read_package_file(root, relative, MAX_FILE_BYTES) != encoded):
         raise ValueError('package or route changed during accounting publication')
+
+
+def synchronize_review_accounting(root: Path, route: dict[str, Any], required: list[str]) -> Callable[[], None]:
+    """Use the canonical bounded accounting writer; recheck its exact publication."""
+    from .state import get_active_change, _route_document
+    require_route_owner(root, route)
+    synchronize_accounting(root, route, required)
+    active = get_active_change(root)
+    expected = _route_document(root, root / active['path'] / 'state.json') if active else None
+    def assert_current() -> None:
+        require_route_owner(root, route)
+        if get_active_change(root) != active or (active and _route_document(root, root / active['path'] / 'state.json') != expected):
+            raise ValueError('selected package changed during reconciliation')
+    return assert_current
+

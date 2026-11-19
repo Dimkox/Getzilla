@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import copy
 import os
 import secrets
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .package_status import (collect_worktree, read_package_file,
-                             synchronize_accounting as synchronize_accounting)
+                             synchronize_accounting as synchronize_accounting,
+                             synchronize_review_accounting as _sync_receipt_obligations)
 from .state import (get_active_route, set_active_change, update_route, serialized_task,
                     require_route_owner, durable_json, durable_bytes, _safe_parents)
 from .spec import dump_canonical_spec, generate_spec
@@ -140,20 +140,6 @@ def _complete_package(root: Path, path: Path, route: dict[str, Any], change_id: 
         read_package_file(root, (path / name).relative_to(root).as_posix()).decode('utf-8', 'strict')
     return value
 
-
-def _sync_receipt_obligations(root: Path, route: dict[str, Any], required: list[str]) -> Callable[[], None]:
-    """Use the canonical bounded accounting writer; recheck its exact publication."""
-    from .state import get_active_change, _route_document
-    from .package_status import synchronize_accounting
-    require_route_owner(root, route)
-    synchronize_accounting(root, route, required)
-    active = get_active_change(root)
-    expected = _route_document(root, root / active['path'] / 'state.json') if active else None
-    def assert_current() -> None:
-        require_route_owner(root, route)
-        if get_active_change(root) != active or (active and _route_document(root, root / active['path'] / 'state.json') != expected):
-            raise ValueError('selected package changed during reconciliation')
-    return assert_current
 
 
 def _create_package(root: Path, path: Path, route: dict[str, Any], change_id: str, title: str) -> dict[str, Any]:
