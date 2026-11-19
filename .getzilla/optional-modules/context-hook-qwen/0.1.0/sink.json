@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "harness": "qwen",
+  "sink": "native-hook-qwen",
+  "disclosure": "Sanitized verified source enters this installed client and its configured model. Backend, provider, privacy confinement and price are unverified. Strict free/local/closed-egress profiles still require actual native backend proof."
+}

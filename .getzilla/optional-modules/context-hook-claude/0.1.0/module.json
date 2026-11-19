@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "context-hook-claude",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {
+    "context-retrieval": "0.1.0"
+  },
+  "permissions": [
+    "context.hook.claude"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "sink.json",
+      "sha256": "14b7a92f6728bba1cbaf0e9fb39a13717b3a0c7fa3962b1310160c82f798d650",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}
