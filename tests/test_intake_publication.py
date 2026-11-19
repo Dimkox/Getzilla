@@ -387,7 +387,7 @@ class PublicationTests(unittest.TestCase):
     def test_reducer_replay_collision_and_untrusted_context(self):
         from getzilla.requirements_intake import reduce_intake, NativeIntakeContext
         trusted=NativeIntakeContext(identity={'logical_task_id':'fixture','authority_epoch':0},
-                                   request_digest='a'*64,publication_id='b'*64,at='2026-11-05T00:00:00Z')
+                                   request_digest='a'*64,publication_id='b'*64,at='2026-11-05T00:00:00Z',max_rounds=3)
         event={'id':'question-one','kind':'question_round'}
         first=reduce_intake(None,event,trusted)
         self.assertEqual(first['rounds'],1)

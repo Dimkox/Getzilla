@@ -45,12 +45,16 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument("--write", action="store_true")
     export.add_argument("--expected-digest")
     intake = sub.add_parser('intake')
-    intake.add_argument('action', choices=('inspect','assess','apply','recover','trace'))
+    intake.add_argument('action', choices=('inspect','assess','apply','recover','trace','decide'))
     intake.add_argument('--request', help='Bounded repository-relative native request JSON')
     intake.add_argument('--expected-cut', help='Exact cut digest; none only for initial publication')
     intake.add_argument('--expected-state', help='Exact raw state digest; zero SHA for initial publication')
     intake.add_argument('--publication-id')
     intake.add_argument('--criterion-id')
+    intake.add_argument('--decision',choices=('accept','reject'),help='Explicit delegated native owner choice; never human/security approval')
+    intake.add_argument('--event-id',help='Stable exact owner action identity')
+    intake.add_argument('--draft-digest',help='Exact current substantive draft digest')
+    intake.add_argument('--source-digest',help='Exact current requirements source digest')
     return parser
 
 
@@ -69,12 +73,18 @@ def main() -> int:
     try:
         root = find_root(ROOT)
         if args.command == 'intake':
-            from getzilla.intake_publication import prepare_intake, recover_intake, read_intake_cut, trace_requirement, _request
+            from getzilla.intake_publication import prepare_intake, recover_intake, read_intake_cut, trace_requirement, decide_intake, _request
             from getzilla.requirements_intake import IntakeError, project_requirements
             from getzilla.intake_readiness import assess_readiness
             from getzilla.package_status import read_package_file
             from getzilla.workflow_artifacts import _strict_json
-            if args.action == 'inspect':
+            if args.action == 'decide':
+                if args.request is not None or any(value is None for value in (args.decision,args.event_id,args.draft_digest,args.source_digest,args.expected_cut,args.expected_state)):
+                    raise IntakeError('explicit_decision_bindings_required')
+                result = decide_intake(root,decision=args.decision,event_id=args.event_id,
+                    expected_cut_digest=args.expected_cut,expected_state_digest=args.expected_state,
+                    expected_draft_digest=args.draft_digest,expected_source_digest=args.source_digest)
+            elif args.action == 'inspect':
                 result = read_intake_cut(root)
             elif args.action == 'trace':
                 result = trace_requirement(root,args.criterion_id)

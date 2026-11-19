@@ -11,8 +11,8 @@ import re
 
 from . import state
 from .requirements_intake import (IntakeError, digest, normalized, project_requirements, validate_intake,
-                                 reduce_intake, NativeIntakeContext)
-from .intake_readiness import assess_readiness
+                                 reduce_intake, NativeIntakeContext, earlier_task_epoch)
+from .intake_readiness import assess_readiness, question_limits
 from .workflow_artifacts import canonical_json, _strict_json, _read_regular, WorkflowArtifactError
 from .workflow_storage import cas_package_write, change_directory
 from .util import now_utc
@@ -41,12 +41,16 @@ def _cut(value):
 
 
 def validate_protocol_metadata(value):
-    if (not isinstance(value, dict) or set(value) != {'version','required','generation','committed','pending'} or
+    if (not isinstance(value, dict) or set(value) not in ({'version','required','generation','committed','pending'},
+            {'version','required','generation','committed','pending','native_decision'}) or
             type(value['version']) is not int or value['version'] != 1 or value['required'] is not True or
             type(value['generation']) is not int or not 0 <= value['generation'] <= MAX_EVENTS or
             value['committed'] is not None and (not _cut(value['committed']) or value['committed']['generation'] != value['generation']) or
             value['committed'] is None and value['generation'] != 0):
         raise IntakeError('invalid_intake_metadata')
+    if 'native_decision' in value:
+        from .intake_decisions import validate_stamp
+        validate_stamp(value['native_decision'])
     pending = value['pending']
     if pending is not None and (
             not isinstance(pending, dict) or set(pending) != {'publication_id','intent_digest','old_cut','target_D','target_M','target_state_ref','phase'} or
@@ -66,7 +70,17 @@ def native_identity(root, route):
 def native_policy(root):
     # This is a source binding to current native policy, not a replacement policy engine.
     raw = _read_regular(root, '.getzilla/config/policy.json', limit=262144)
-    return {'version':'native-local-v1','digest':_hash(raw),'decision_required':False}
+    decoded = _strict_json(raw,limit=262144)
+    if type(decoded) is not dict:
+        raise IntakeError('invalid_intake_policy')
+    configured = decoded.get('intake')
+    values = ({key:configured.get(key) for key in ('max_questions_per_round','max_question_rounds')}
+              if type(configured) is dict else None)
+    decision = configured.get('decision_required',False) if type(configured) is dict else False
+    if type(decision) is not bool:
+        raise IntakeError('invalid_intake_policy')
+    return {'version':'native-local-v1','digest':_hash(raw),'decision_required':decision,
+            'question_limits':copy.deepcopy(values) if question_limits({'question_limits':values}) else None}
 
 
 def cut_digest(cut):
@@ -124,17 +138,22 @@ def _cursor(root, route, protocol):
 
 def _owned(root):
     from .continuity import normalize_route
-    return state.require_route_owner(root, normalize_route(root))
+    try:
+        return state.require_route_owner(root, normalize_route(root))
+    except ValueError as error:
+        raise IntakeError('intake_owner_required') from error
 
 
-def _request(value):
+def _request(value, *, native_stamp=None):
     if not isinstance(value, dict) or set(value) != {'snapshot','requirements','event'}:
         raise IntakeError('invalid_publication_request')
     data = validate_intake(value['snapshot'])
     if not isinstance(value['requirements'], str) or not value['requirements'].strip():
         raise IntakeError('invalid_requirements')
     event = value['event']
-    if (not isinstance(event, dict) or set(event) != {'id','kind'} or
+    from .intake_decisions import valid_event
+    native = (native_stamp is not None and valid_event(event) and event == native_stamp['event'])
+    if not native and (not isinstance(event, dict) or set(event) != {'id','kind'} or
             not isinstance(event['id'], str) or not re.fullmatch('[A-Za-z0-9_.:/-]{1,128}', event['id']) or
             event['kind'] not in {'record','question_round','withdraw'}):
         raise IntakeError('unsupported_decision_ingress')
@@ -145,8 +164,10 @@ def _inputs(root, route, data, requirements):
     if data['identity'] != native_identity(root,route):
         raise IntakeError('intake_task_epoch_mismatch')
     policy = native_policy(root)
-    if any(data['policy'][key] != policy[key] for key in ('version','digest')):
+    if any(data['policy'][key] != policy[key] for key in ('version','digest')) or data['policy'].get('question_limits') != policy['question_limits']:
         raise IntakeError('stale_policy')
+    if policy['decision_required'] and not data['policy']['decision_required']:
+        raise IntakeError('required_decision_cannot_be_disabled')
     package = _package(root,route)
     relative = (package/'requirements.md').relative_to(root).as_posix()
     for source in data['sources']:
@@ -215,6 +236,12 @@ def _make_intent(root, route, request, expected_cut, expected_state):
     if (_hash(old_raw) if old_raw is not None else ZERO) != expected_state:
         raise IntakeError('stale_expected_state')
     old_state = _strict_json(old_raw,limit=MAX_RETAINED_BYTES) if old_raw is not None else None
+    if request['event']['kind'] == 'question_round':
+        limits = question_limits(native_policy(root))
+        if limits is None:
+            raise IntakeError('question_limits_unconfigured')
+        if (old_state or {}).get('rounds',0) >= limits['max_question_rounds']:
+            raise IntakeError('question_budget_exhausted')
     if old_cut is not None and old_cut['M'] != expected_state:
         raise IntakeError('stale_expected_state')
     documents = package_documents(root,route,draft=True)
@@ -240,6 +267,11 @@ def _make_intent(root, route, request, expected_cut, expected_state):
             'D':projection['draft_digest'],'S':canonical_spec_digest(spec),'R':_hash(requirements),
             'request_digest':digest(request,'intake-request-v1'),'event_digest':digest(request['event'],'intake-event-v1'),
             'ack_template':ack_template,'scope_revision':route['context']['revision']}
+    if request['event']['kind'] == 'native_decision':
+        stamp = protocol.get('native_decision')
+        if stamp is None or stamp['event'] != request['event']:
+            raise IntakeError('native_decision_not_admitted')
+        core['native_decision_digest'] = digest(stamp,'native-intake-decision-v1')
     transaction = digest(core,'publication-v1')
     ack = {**ack_template,'operation_id':'intake-ack:'+transaction} if ack_template is not None else None
     return {'version':1,'core':core,'publication_id':transaction,'old_files':old_files,
@@ -267,6 +299,14 @@ def _result(target):
             **target['bindings'],'M':_hash(canonical_json(target))}}
 
 
+def _epoch_rebind(route, previous):
+    current = {'repository':previous.get('repository'),
+        'logical_task_id':route['logical_task_id'],'authority_epoch':route['authority_epoch']}
+    handoff = route.get('handoff') or {}
+    return (earlier_task_epoch(previous,current) and handoff.get('to_session') == route['session_id']
+            and handoff.get('from_epoch') == route['authority_epoch']-1)
+
+
 def _validate_intent(root, route, package, transaction, saved):
     if (not isinstance(saved,dict) or set(saved) != {'version','core','publication_id','old_files','spec','requirements','event','at','old_state','ack_request'} or
             saved['version'] != 1 or saved['publication_id'] != transaction or digest(saved['core'],'publication-v1') != transaction or
@@ -283,7 +323,7 @@ def _validate_intent(root, route, package, transaction, saved):
     elif (not isinstance(old,dict) or not _hex(expected) or _hash(canonical_json(old)) != expected or
           not _cut(core['old_cut']) or core['old_cut']['M'] != expected or
           core['old_cut']['generation'] != core['old_generation'] or
-          old.get('identity') != core['identity'] or _result(old)['cut'] != core['old_cut']):
+          (old.get('identity') != core['identity'] and not (earlier_task_epoch(old.get('identity'),core['identity']) and _epoch_rebind(route,old['identity']))) or _result(old)['cut'] != core['old_cut']):
         raise IntakeError('invalid_previous_state')
     if saved['old_files'].get(ACTIVE) != expected:
         raise IntakeError('invalid_previous_state')
@@ -291,7 +331,13 @@ def _validate_intent(root, route, package, transaction, saved):
     projection = project_requirements(data)
     from .spec import _parse_canonical_json, canonical_spec_digest
     spec = _parse_canonical_json(saved['spec'].encode(),package/'change-spec.yaml')
-    request = _request({'snapshot':data,'requirements':saved['requirements'],'event':saved['event']})
+    stamp = (_protocol(route) or {}).get('native_decision')
+    request = _request({'snapshot':data,'requirements':saved['requirements'],'event':saved['event']},native_stamp=stamp)
+    if saved['event']['kind'] == 'native_decision':
+        if (stamp is None or stamp['principal'] != route['session_id']
+                or stamp['identity'] != native_identity(root,route)
+                or saved['core'].get('native_decision_digest') != digest(stamp,'native-intake-decision-v1')):
+            raise IntakeError('native_decision_not_admitted')
     template = saved['core']['ack_template']
     if (projection['draft_digest'] != saved['core']['D'] or canonical_spec_digest(spec) != saved['core']['S'] or
             normalized({k:v for k,v in spec.items() if k != 'intake'}) != data['spec'] or
@@ -306,11 +352,12 @@ def _validate_intent(root, route, package, transaction, saved):
 
 
 @state.serialized_task
-def prepare_intake(root, intent, expected_cut_digest, expected_state_digest):
+def _prepare_intake(root, intent, expected_cut_digest, expected_state_digest, *, native=False):
     """Supported native owner ingress. Staged data and native ACK never approve a draft."""
     try:
-        request = _request(intent)
         route = _owned(root)
+        stamp = (_protocol(route) or {}).get('native_decision') if native else None
+        request = _request(intent,native_stamp=stamp)
         package = _package(root,route)
         _inputs(root,route,request['snapshot'],request['requirements'].encode())
         protocol = _protocol(route)
@@ -409,9 +456,15 @@ def recover_intake(root, publication_id):
         previous = {key:old[key] for key in ('identity','events','rounds','withdrawn')} if old else None
         reduced = reduce_intake(previous,saved['event'],NativeIntakeContext(
             identity=native_identity(root,route), request_digest=saved['core']['request_digest'],
-            publication_id=publication_id, at=saved['at']))
+            publication_id=publication_id, at=saved['at'],
+            max_rounds=(projection['input']['policy'].get('question_limits') or {}).get('max_question_rounds'),
+            native_event_digest=(saved['core']['event_digest'] if saved['event']['kind']=='native_decision' else None),
+            rebind_epoch=bool(old and _epoch_rebind(route,old['identity']))))
         rounds, withdrawn = reduced['rounds'], reduced['withdrawn']
         assessment = assess_readiness(documents['spec'],projection,{**projection['input']['policy'],'rounds':rounds})
+        from .intake_decisions import current_choice, apply_choice
+        choice = current_choice(route,projection,reduced['events'],bindings['C'])
+        assessment = apply_choice(assessment,choice if choice is None or choice['R']==bindings['R'] else None)
         target = {'version':1,'publication_id':publication_id,'generation':protocol['generation']+1,
                   'identity':native_identity(root,route),'bindings':bindings,'projection':projection,
                   'assessment':assessment,'rounds':rounds,'withdrawn':withdrawn,
@@ -475,13 +528,19 @@ def read_intake_cut(root):
         policy = native_policy(root)
         policy['decision_required'] = data['policy']['decision_required']
         assessment = assess_readiness(documents['spec'],projection,{**policy,'rounds':stored['rounds']})
+        from .intake_decisions import current_choice, apply_choice
+        choice = current_choice(route,projection,stored['events'],binding['digest'])
+        if choice is not None and choice['R'] != observed['R']:
+            choice = None
+        assessment = apply_choice(assessment,choice)
         if stored['withdrawn']:
             raise IntakeError('intake_withdrawn')
         if (state.canonical_route(root,route['route_id']) != route or
                 _raw(root,package,ACTIVE) != raw or package_documents(root,route) != documents or
                 context_binding(root,route) != binding):
             raise IntakeError('intake_changed_during_read')
-        return {'status':'observed','cut':copy.deepcopy(cut),'assessment':assessment}
+        return {'status':'observed','cut':copy.deepcopy(cut),'cut_digest':cut_digest(cut),'assessment':assessment,
+                'native_decision':({**copy.deepcopy(choice),'human_attestation':False} if choice is not None else None)}
     except IntakeError:
         raise
     except (ValueError,OSError,KeyError,TypeError) as error:
@@ -541,3 +600,66 @@ def trace_requirement(root, criterion_id, delivery=None):
             'source_refs':[copy.deepcopy(row) for row in data['sources'] if row['id'] in refs],
             'task_ids':sorted(tasks),'task_graph_status':graph_status,'delivery_status':delivery_status,
             'receipt_status':'not_run','accepted':False,'authority':False,'receipt_eligible':False}
+
+
+def prepare_intake(root, intent, expected_cut_digest, expected_state_digest):
+    """Imported records cannot select the explicit native decision ingress."""
+    return _prepare_intake(root,intent,expected_cut_digest,expected_state_digest)
+
+
+@state.serialized_task
+def decide_intake(root, *, decision, event_id, expected_cut_digest, expected_state_digest,
+                  expected_draft_digest, expected_source_digest):
+    """Explicit current native owner action, never an imported yes/human attestation.
+
+    A caller must have actual owner delegation for this substantive choice. No
+    prompt, document, scope ACK or saved principal field invokes this operation.
+    """
+    from .intake_decisions import valid_event, validate_stamp
+    route = _owned(root)
+    if route.get('status') in ('completed','cancelled'):
+        raise IntakeError('native_decision_owner_required')
+    event = {'id':event_id,'kind':'native_decision','decision':decision}
+    if not valid_event(event) or any(not _hex(value) for value in
+            (expected_cut_digest,expected_state_digest,expected_draft_digest,expected_source_digest)):
+        raise IntakeError('invalid_native_decision')
+    protocol = copy.deepcopy(_protocol(route))
+    if not protocol or not protocol['committed']:
+        raise IntakeError('native_decision_draft_required')
+    package = _package(root,route)
+    prior = protocol.get('native_decision')
+    if prior is not None and prior['event']['id'] == event_id:
+        validate_stamp(prior)
+        if (prior['event'] != event or prior['D'] != expected_draft_digest or prior['R'] != expected_source_digest
+                or prior['cut'] != expected_cut_digest or prior['state'] != expected_state_digest):
+            raise IntakeError('decision_event_collision')
+        if prior['principal'] != route['session_id'] or prior['identity'] != native_identity(root,route):
+            raise IntakeError('native_decision_owner_required')
+    else:
+        if protocol['pending'] is not None:
+            raise IntakeError('another_publication_pending')
+        observed = read_intake_cut(root)
+        cut = observed['cut']
+        if (cut_digest(cut) != expected_cut_digest or cut['M'] != expected_state_digest
+                or cut['D'] != expected_draft_digest or cut['R'] != expected_source_digest):
+            raise IntakeError('stale_native_decision')
+        active = _json(root,package,ACTIVE)
+        if any(row['id']==event_id for row in active['events']):
+            raise IntakeError('decision_event_collision')
+        prior = {'version':1,'principal':route['session_id'],'identity':native_identity(root,route),
+                 'D':cut['D'],'R':cut['R'],'P':native_policy(root)['digest'],'C':cut['C'],
+                 'cut':expected_cut_digest,'state':expected_state_digest,'event':event,'at':now_utc()}
+        validate_stamp(prior)
+        protocol['native_decision'] = prior
+        _cursor(root,route,protocol)
+        _boundary('decision_admitted')
+    from .continuity import context_binding, scope_gaps
+    current_route = _owned(root)
+    if scope_gaps(root,current_route) or context_binding(root,current_route)['digest'] != prior['C']:
+        raise IntakeError('stale_native_decision')
+    data = _json(root,package,BASE+'versions/'+prior['D']+'.json')
+    requirements = _raw(root,package,'requirements.md').decode()
+    if _hash(requirements.encode()) != prior['R'] or native_policy(root)['digest'] != prior['P']:
+        raise IntakeError('stale_native_decision')
+    return _prepare_intake(root,{'snapshot':data,'requirements':requirements,'event':event},
+                           expected_cut_digest,expected_state_digest,native=True)

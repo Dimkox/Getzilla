@@ -151,5 +151,9 @@
     "A delegated local grant cannot create adaptive-trust-ci/verified, sign a human approval or modify deployed Trust CI authority.",
     "The authoritative exact-SHA gate is adaptive-trust-ci/verified from the self-hosted GitHub App publisher.",
     "The CI gate follows repository visibility: public repositories use the pinned GitHub Actions workflow from scripts/getzilla_ci.py, private repositories use Trust CI. Workflow dispatch is forbidden."
-  ]
+  ],
+  "intake": {
+    "max_questions_per_round": 5,
+    "max_question_rounds": 3
+  }
 }

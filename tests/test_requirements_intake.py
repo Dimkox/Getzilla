@@ -10,7 +10,7 @@ from getzilla.requirements_intake import IntakeError, project_requirements, vali
 
 def snapshot():
     return {'version': 1, 'identity': {'repository': 'fixture/repo', 'logical_task_id': 'task:one', 'authority_epoch': 0},
-            'policy': {'version': 'local-v1', 'digest': 'a' * 64, 'decision_required': False},
+            'policy': {'version': 'local-v1', 'digest': 'a' * 64, 'decision_required': False,'question_limits':{'max_questions_per_round':5,'max_question_rounds':3}},
             'spec': {'schema_version': 2, 'change_id': '20261105-fixture',
                      'objective': {'id': 'OBJ-001', 'statement': 'Retain records.', 'success_metric': 'retention days', 'target': '7'},
                      'risk': {'tier': 'green', 'domains': []},

@@ -7,6 +7,14 @@ from .requirements_intake import digest, normalized, project_requirements
 from .workflow_artifacts import PLACEHOLDER
 
 
+def question_limits(policy):
+    value = policy.get('question_limits')
+    if (type(value) is not dict or set(value) != {'max_questions_per_round','max_question_rounds'}
+            or any(type(n) is not int or not 1 <= n <= 32 for n in value.values())):
+        return None
+    return value
+
+
 def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
     # Recompute typed conflicts and D; a stored label cannot turn into readiness.
     current = project_requirements(provenance['input'],provenance)
@@ -43,14 +51,18 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
     assumptions = [{'requirement': row['id'], 'values': row['assumptions']} for row in data['requirements'] if row['assumptions']]
     require(not assumptions, 'assumptions', 'assumptions_unresolved')
     rounds = policy.get('rounds', 0)
-    if type(rounds) is not int or not 0 <= rounds <= 3:
+    if type(rounds) is not int or not 0 <= rounds <= 4096:
         raise ValueError('invalid_question_round')
     rows = missing + [{'field': 'requirements', 'reason': row['reason']} for row in current['conflicts']]
     rows = sorted({(row['field'], row['reason']): row for row in rows}.values(), key=lambda row: (row['field'], row['reason']))
-    questions = [] if rounds == 3 else [
+    limits = question_limits(policy)
+    if rows and limits is None:
+        require(False,'policy.question_limits','question_limits_unconfigured')
+    exhausted = bool(rows) and limits is not None and rounds >= limits['max_question_rounds']
+    questions = [] if limits is None or exhausted else [
         {'id': digest([current['draft_digest'], row], 'intake-question-v1'),
          'field': row['field'], 'reason': row['reason']}
-        for row in rows[:5]]
+        for row in rows[:limits['max_questions_per_round']]]
     required = 'unsupported_decision_ingress' if data['policy']['decision_required'] else False
     status = ('stale' if stale else 'conflicted' if current['conflicts'] else 'missing' if missing else
               'needs_decision' if required else 'ready')
@@ -59,5 +71,5 @@ def assess_readiness(spec: dict, provenance: dict, policy: dict) -> dict:
             'missing': missing, 'conflicts': copy.deepcopy(current['conflicts']),
             'questions': questions, 'assumptions': assumptions, 'required_decision': required,
             'coverage': {'required': len(spec['acceptance_criteria']), 'mapped': len(mapped)},
-            'question_budget_exhausted': bool(rows) and rounds == 3,
+            'question_budget_exhausted': exhausted,
             'authority': False, 'receipt_eligible': False}
