@@ -712,10 +712,43 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
         raise SecurityDataError(f'{source_id} snapshot unavailable or malformed{legacy}: {exc}; {refresh}') from exc
 
 
+def _custody_identity(identity: tuple) -> list:
+    """Serialize held stat/NTFS facts only; never alter their comparison identity."""
+    if type(identity) is tuple and len(identity) in {5, 9} and all(type(v) is int for v in identity):
+        return list(identity)  # Preserve the established POSIX JSON bytes.
+    def integer(value, minimum, maximum):
+        return type(value) is int and minimum <= value <= maximum
+    def sid(value):
+        return type(value) is str and 0 < len(value) <= 184
+    valid = type(identity) is tuple and len(identity) in {4, 8}
+    if valid:
+        file_id, attributes, directory, security = identity[:4]
+        valid = (type(file_id) is tuple and len(file_id) == 2
+                 and integer(file_id[0], 0, 2**64 - 1) and type(file_id[1]) is bytes
+                 and len(file_id[1]) == 16 and any(file_id[1])
+                 and integer(attributes, 0, 2**32 - 1) and type(directory) is bool
+                 and len(identity) == (4 if directory else 8)
+                 and type(security) is tuple and len(security) in {2, 3})
+    if valid:
+        owner, aces = security[:2]
+        valid = (sid(owner) and type(aces) is tuple and len(aces) <= 4096
+                 and (len(security) == 2 or type(security[2]) is bool)
+                 and all(type(ace) is tuple and len(ace) == 4
+                         and integer(ace[0], 0, 1) and integer(ace[1], 0, 255)
+                         and integer(ace[2], 0, 2**32 - 1) and sid(ace[3]) for ace in aces))
+        if not directory:
+            valid = valid and (identity[4] == 1 and type(identity[4]) is int
+                               and integer(identity[5], 0, 2**63 - 1)
+                               and all(integer(v, -(2**63), 2**63 - 1) for v in identity[6:]))
+    if not valid:
+        raise SecurityDataError('snapshot custody identity has an unsupported native shape')
+    return [['ntfs-file-id/v1', file_id[0], file_id[1].hex()], *identity[1:]]
+
+
 def _custody_digest(store: _SnapshotStore) -> str:
     directory_ids = {getattr(node, 'descriptor', getattr(node, 'handle', None)): node.identity for node in store.directories}
-    custody = {'directories': [list(node.identity) for node in store.directories],
-               'files': sorted((file.name, list(directory_ids[file.parent]), list(file.identity))
+    custody = {'directories': [_custody_identity(node.identity) for node in store.directories],
+               'files': sorted((file.name, _custody_identity(directory_ids[file.parent]), _custody_identity(file.identity))
                                for file in store.files.values())}
     return hashlib.sha256(json.dumps(custody, sort_keys=True).encode('utf-8')).hexdigest()
 

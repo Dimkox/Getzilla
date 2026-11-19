@@ -49,8 +49,9 @@ class WindowsStoreJoinTests(unittest.TestCase):
             payload = archive(rows)
             data.publish_snapshot(database, 'osv:PyPI', payload, acquisition=acquisition,
                                   coverage=data.osv_coverage(payload, 'PyPI'), now=NOW)
-            found, _ = data.read_snapshot(database, 'osv:PyPI', now=NOW)
+            found, proof = data.read_snapshot(database, 'osv:PyPI', now=NOW)
             self.assertEqual(found, payload)
+            self.assertRegex(proof['custody_sha256'], r'^[a-f0-9]{64}$')
         with mock.patch.object(data, 'os', SimpleNamespace(name='nt')), \
                 mock.patch.object(data, '_SnapshotStore', side_effect=AssertionError('unexpected POSIX fallback')), \
                 mock.patch.object(windows, 'SnapshotStore', side_effect=lambda path, create=False:
