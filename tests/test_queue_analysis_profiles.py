@@ -200,7 +200,7 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             before = policy_binding(root)
-            for name in ('architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
+            for name in ('cpu_budget', 'architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
                          'security_license_source_conditions', 'security_license_go_term_variants'):
                 with self.subTest(owner=name):
                     module = importlib.import_module('getzilla.' + name)
