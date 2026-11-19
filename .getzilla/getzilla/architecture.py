@@ -317,18 +317,24 @@ def _read_regular_bytes(
     root: Path, relative: str, *, label: str,
     identities: dict[tuple[int, int], str] | None = None,
     anchor=None,
+    limit: int = MAX_DOCUMENT_BYTES,
+    single_link: bool = False,
 ) -> bytes:
+    if type(limit) is not int or not 0 < limit <= MAX_DOCUMENT_BYTES:
+        raise ArchitectureError("invalid document byte bound", code="limit")
     if anchor is not None:
         try:
             anchor.check_root(root)
-            with anchor.file(relative, public_source=True, limit=MAX_DOCUMENT_BYTES) as (descriptor,_parent):
+            with anchor.file(relative, public_source=True, limit=limit) as (descriptor,_parent):
                 before = os.fstat(descriptor)
+                if single_link and before.st_nlink != 1:
+                    raise ArchitectureError(f"{label}: linked fixture input", code="io")
                 if identities is not None:
                     identity = before.st_dev,before.st_ino
                     if identity in identities and identities[identity] != relative:
                         raise ArchitectureError(f'{label}: filesystem alias of {identities[identity]}',code='path')
                     identities[identity] = relative
-                return anchor.read(relative,MAX_DOCUMENT_BYTES,public_source=True)
+                return anchor.read(relative,limit,public_source=True)
         except ArchitectureError:
             raise
         except (OSError,ValueError) as exc:
@@ -348,21 +354,23 @@ def _read_regular_bytes(
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise ArchitectureError(f"{label}: must be a regular non-symlink file", code="io")
+        if single_link and before.st_nlink != 1:
+            raise ArchitectureError(f"{label}: linked fixture input", code="io")
         if identities is not None:
             identity = before.st_dev, before.st_ino
             if identity in identities and identities[identity] != relative:
                 raise ArchitectureError(f"{label}: filesystem alias of {identities[identity]}", code="path")
             identities[identity] = relative
-        if before.st_size > MAX_DOCUMENT_BYTES:
+        if before.st_size > limit:
             raise ArchitectureError(f"{label}: document byte limit exceeded", code="limit")
         chunks: list[bytes] = []
         total = 0
         while True:
-            chunk = os.read(descriptor, min(65_536, MAX_DOCUMENT_BYTES + 1 - total))
+            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
             if not chunk:
                 break
             total += len(chunk)
-            if total > MAX_DOCUMENT_BYTES:
+            if total > limit:
                 raise ArchitectureError(f"{label}: document byte limit exceeded", code="limit")
             chunks.append(chunk)
         after = os.fstat(descriptor)
@@ -380,7 +388,7 @@ def _read_regular_bytes(
             after.st_mtime_ns,
             after.st_ctime_ns,
         )
-        if total != before.st_size or identity_after != identity_before:
+        if total != before.st_size or identity_after != identity_before or (single_link and after.st_nlink != 1):
             raise ArchitectureError(f"{label}: file changed while reading", code="io")
         return b"".join(chunks)
     except ArchitectureError as exc:
@@ -565,6 +573,39 @@ def _require_references(values: list[str], known: set[str], *, label: str) -> No
         raise ArchitectureError(f"{label}: unresolved references: {missing}", code="reference")
 
 
+# This closed profile admits one reviewed test input, not the C language.
+# The consumer pin covers its owned compile-only command, bounded timeout and
+# tests which forbid target execution. Changing either body needs profile review.
+_SOURCE_FIXTURE_PROFILES = {
+    "c-public-elf-probe-v1": {
+        "profile": "c-public-elf-probe-v1",
+        "path": "tests/fixtures/reverse263/public-probe.c",
+        "sha256": "6126fe8336235c0b2f6adc34cdfa35ab79331306143e4a6cac282f3bd1cd4b5a",
+        "consumer_path": "tests/test_reverse_engineering.py",
+        "consumer_sha256": "9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583",
+        "owner_node": "NODE-LOCAL-VERIFIER",
+        "purpose": "compile_inspect_only",
+    }
+}
+
+
+def _validate_source_fixture_declarations(system):
+    seen = set()
+    nodes = {node["id"]: node for node in system["nodes"]}
+    for row in system.get("source_fixtures", []):
+        profile = _SOURCE_FIXTURE_PROFILES.get(row["profile"])
+        if row != profile or row["path"] in seen:
+            raise ArchitectureError("source fixture differs from its closed profile", code="source_fixture")
+        owner = nodes.get(row["owner_node"])
+        if (owner is None or owner["type"] != "local_component"
+                or owner["runtime"]["kind"] != "python_process"
+                or owner["runtime"]["lifecycle"] != "on_demand" or owner["secrets"]
+                or any(not _is_declared(row[key], owner["repository_paths"])
+                       for key in ("path", "consumer_path"))):
+            raise ArchitectureError("source fixture lacks its test owner", code="source_fixture")
+        seen.add(row["path"])
+
+
 def _validate_system_semantics(system: dict[str, Any]) -> None:
     _stable_ids(system, SYSTEM_COLLECTIONS, label="system")
     trust_domains = {item["id"] for item in system["trust_domains"]}
@@ -606,6 +647,7 @@ def _validate_system_semantics(system: dict[str, Any]) -> None:
                     code="ownership",
                 )
             repository_owners[normalized] = node["id"]
+    _validate_source_fixture_declarations(system)
     capability_keys: set[str] = set()
     for edge in system["edges"]:
         if "secret_classes" in edge:
@@ -892,6 +934,16 @@ def validate_architecture(
         if result:
             code = "missing_contract" if result == "missing" else "unsafe_contract_path"
             findings.append(ArchitectureFinding(code, f"contract path is {result}: {path}", path))
+    for row in snapshot.system.get("source_fixtures", []):
+        for path_key, hash_key, limit in (("path", "sha256", 4096),
+                                          ("consumer_path", "consumer_sha256", 131072)):
+            path = row[path_key]
+            try:
+                body = _read_regular_bytes(repository, path, label="source fixture", limit=limit, single_link=True)
+                if hashlib.sha256(body).hexdigest() != row[hash_key]:
+                    raise ArchitectureError("source fixture input changed", code="source_fixture")
+            except ArchitectureError:
+                findings.append(ArchitectureFinding("invalid_source_fixture", "source fixture input unavailable or changed", path))
     return tuple(sorted(findings, key=lambda item: (item.code, item.path, item.message)))
 
 
@@ -1335,6 +1387,8 @@ def validate_repository_drift(
         path for node in snapshot.system["nodes"] for path in node["repository_paths"]
     }
     declared_contracts = {contract["path"] for contract in snapshot.system["contracts"]}
+    fixtures = {row["path"] for row in snapshot.system.get("source_fixtures", [])}
+    invalid_fixtures = {item.path for item in findings if item.code == "invalid_source_fixture"}
     for artifact in _bounded_repository_inventory(repository):
         path = artifact.path
         pure = PurePosixPath(path)
@@ -1365,7 +1419,7 @@ def validate_repository_drift(
         suffix = pure.suffix.lower()
         if suffix not in _SOURCE_LIKE_SUFFIXES:
             continue
-        if suffix not in _SUPPORTED_SOURCE_SUFFIXES:
+        if suffix not in _SUPPORTED_SOURCE_SUFFIXES and not (path in fixtures and path not in invalid_fixtures):
             findings.append(
                 ArchitectureFinding(
                     "unsupported_source_artifact",
