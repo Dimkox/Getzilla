@@ -126,7 +126,17 @@ def _policy(root: Path):
     loaded = load_policy(root)
     if loaded.policy is None or not loaded.policy.enabled:
         raise JournalError('policy_revoked')
-    return loaded.policy, _digest(asdict(loaded.policy))
+    policy_data = asdict(loaded.policy)
+    if loaded.policy.admission is None:
+        # Preserve existing policy identities and durable paid-work accounting.
+        policy_data.pop('admission')
+    return loaded.policy, _digest(policy_data)
+
+
+def _admit_free_charge(root: Path, usage: dict) -> None:
+    policy, _ = _policy(root)
+    if policy.admission is not None and usage['cost_micros'] != 0:
+        raise JournalError('free_charge_denied')
 
 
 def _regular(info):
@@ -492,6 +502,7 @@ def _create_chain(root: Path, binding: Binding, original: Usage, budget: TaskBud
         if len(chains) >= MAX_CHAINS:
             raise JournalError('capacity_exhausted')
         policy, digest = _policy(root)
+        _admit_free_charge(root, usage)
         if model_contract is not None:
             if (policy.candidates[0].provider != 'openai' or policy.candidates[0].model != model_contract.model
                     or policy.candidates[0].account_ref != model_contract.account_ref
@@ -726,6 +737,7 @@ def reserve_controlled_next(root: Path, binding: Binding, expected_revision: int
         problem = _current(root, chain)
         if problem:
             return {'state': 'denied', 'reason': problem, 'dispatch_permitted': False}
+        _admit_free_charge(root, reservation)
         if chain['revision'] != expected_revision:
             return {'state': 'denied', 'reason': 'stale_revision', 'dispatch_permitted': False}
         if fence is not None:
@@ -1015,6 +1027,7 @@ def reserve_next(root: Path, binding: Binding, expected_revision: int, event_id:
         problem = _current(root, chain)
         if problem:
             return _result(chain, reason=problem)
+        _admit_free_charge(root, reservation)
         duplicate = _event(chain, event_id, content)
         if duplicate:
             return duplicate

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "observed_date": "2026-11-19",
+  "host": "claw",
+  "generation_requests": 0,
+  "profiles": [
+    {
+      "profile": "openrouter-free",
+      "client": "qwen",
+      "installed_package_version": "0.24.7",
+      "client_execution_verified": false,
+      "provider": "openrouter",
+      "model": null,
+      "quota": null,
+      "status": "NOT_TESTED",
+      "reason": "no_live_qualified_adapter_or_model_request"
+    },
+    {
+      "profile": "ollama-local-qwen",
+      "client": "qwen",
+      "installed_package_version": "0.24.7",
+      "client_execution_verified": false,
+      "server": "ollama",
+      "server_version": null,
+      "server_executable_found": false,
+      "loopback_model_listing": "unavailable",
+      "model": null,
+      "model_digest": null,
+      "tokenizer": null,
+      "format": null,
+      "quantization": null,
+      "context_tokens": null,
+      "tools_verified": false,
+      "network_isolation_verified": false,
+      "resource_measurement": null,
+      "stage_a": "NOT_TESTED",
+      "stage_b": "NOT_TESTED",
+      "status": "NOT_TESTED",
+      "reason": "installed_local_server_model_and_monitored_resource_profile_required"
+    }
+  ],
+  "real_task_accepted": false,
+  "external_ci_verified": false,
+  "merge_verified": false,
+  "dev_delivery_verified": false
+}
