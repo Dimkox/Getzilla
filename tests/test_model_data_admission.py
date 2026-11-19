@@ -408,7 +408,6 @@ class ModelDataAdmissionTest(unittest.TestCase):
         self.assertEqual(before['attempts'][0]['cost_micros'], 3000)
 
 
-class OriginalModelDataAdmissionTest(unittest.TestCase):
     def test_preview_matches_exact_request_but_never_authorizes_dispatch(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(admission.time, 'time', return_value=1000):
             root = Path(directory)

@@ -1141,6 +1141,34 @@ class ContinuityTests(unittest.TestCase):
                         state.add_approval(root, scope, 'exact fixture action', 5, actions=[action], resources=[resource])
                 self.assertEqual(state.approvals_path(root).read_bytes(), before)
 
+    def test_verifier_captures_before_work_and_refuses_scope_mutation(self):
+        from getzilla import verification
+        with project_copy(git=True, minimal_runtime=True) as root:
+            self.light_route(root)
+            def mutate(*args, **kwargs):
+                self.submit(root, 'New acceptance condition while verifier is working.')
+                return []
+            with patch.object(verification, '_python', side_effect=mutate):
+                report = verification.verify(root, mode='fast', record=False)
+            context_checks = [item for item in report['checks'] if item['name'] == 'task-context']
+            self.assertEqual(len(context_checks), 1)
+            self.assertEqual(context_checks[0]['status'], 'fail')
+            self.assertNotEqual(report['status'], 'pass')
+
+
+    def test_verifier_refuses_unavailable_authority_without_recording(self):
+        from getzilla import verification
+        with project_copy(git=True, minimal_runtime=True) as root:
+            route = self.light_route(root)
+            canonical = root / '.getzilla/runtime/routes' / (route['route_id'] + '.json')
+            canonical.write_text('{broken')
+            with patch.object(verification, '_python', return_value=[]):
+                report = verification.verify(root, mode='fast', record=False)
+            self.assertEqual(report['status'], 'fail')
+            self.assertTrue(any(item['name'] == 'task-context' and item['status'] == 'fail' for item in report['checks']))
+
+
+
 
 if __name__ == '__main__':
     unittest.main()

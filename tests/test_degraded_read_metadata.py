@@ -114,7 +114,7 @@ class DegradedReadMetadataTests(unittest.TestCase):
                         payload = {'cwd': str(root), 'tool_name': 'Read', 'tool_input': {'file_path': 'README.md'}}
                         try:
                             result = subprocess.run(
-                                [sys.executable, str(root / '.grok/hooks/pre_tool_use.py')], cwd=root,
+                                [sys.executable, str(root / '.getzilla/hooks/pre_tool_use.py')], cwd=root,
                                 env={**os.environ, 'PYTHONPATH': str(root / '.getzilla')},
                                 input=json.dumps(payload).encode(), capture_output=True, timeout=2, check=False,
                             )
@@ -169,7 +169,7 @@ class DegradedReadMetadataTests(unittest.TestCase):
         # this does not qualify Windows or a native client.
         with project_copy() as root:
             self.fixture(root, '.getzilla/getzilla/fsx.py')
-            hook = root / '.grok/hooks/pre_tool_use.py'
+            hook = root / '.getzilla/hooks/pre_tool_use.py'
             hook.write_text(hook.read_text(encoding='utf-8').replace(
                 'import sys\n', "import sys\nsys.platform = 'win32'\n", 1,
             ), encoding='utf-8')

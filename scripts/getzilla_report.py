@@ -151,15 +151,23 @@ def main(argv: list[str] | None = None) -> int:
     since = _since(args.since)
     summary = None
     if source['access'] == 'local_owner':
-        observations = load(root, since)
-        if observations.available and observations.input_digest == source['input_digest']:
-            # The legacy view has no authority to reinterpret native v3 events.
-            legacy = [row for row in observations if row.get('schema_version') != 3]
-            from getzilla.metrics_journal import Observations
-            summary = summarize(Observations(legacy, gaps=observations.gaps), Path('.'))
-            summary['counters'] = counters(root)
-            summary['evidence_grade'] = 'unqualified_legacy_observations'
-            summary['source_scope'] = 'canonical_root_only'
+        try:
+            with LocalRead(root) as reader:
+                observations = load(root, since, reader=reader)
+                if observations.available and observations.input_digest == source['input_digest']:
+                    # Native stage data has its own source-bound projections.
+                    legacy = [row for row in observations if row.get('schema_version') not in {3, 4}]
+                    summary = summarize(Observations(legacy, gaps=observations.gaps), root, reader=reader)
+                    if summary['routes'] is not None:
+                        summary['counters'] = counters(root, reader=reader)
+                        missing = [name for name in COUNTERS if name not in summary['counters']]
+                        summary['counter_observations'] = {'complete': not missing,
+                            'gaps': ['counter observation unavailable: ' + name for name in missing]}
+                    summary['evidence_grade'] = 'unqualified_legacy_observations'
+                    summary['source_scope'] = 'canonical_root_only'
+                reader.check()
+        except (OSError, ValueError):
+            summary = None
     if not revalidate_local(root, source):
         source = _disclosure_refusal()
         summary = None

@@ -336,7 +336,7 @@ def _hydrate_verification_report(directory_fd: fsx.DirHandle | None, route_id: s
     try:
         if anchor is not None:
             content = anchor.read(reference['path'], MAX_VERIFICATION_REPORT_BYTES)
-            artifact = _decode_receipt_bytes(content, 'verification report', _observation=_observation)
+            artifact = _decode_receipt_bytes(content, 'verification report')
         else:
             reports_fd = fsx.open_dir_at(directory_fd, 'reports', flags=fsx.O_CLOEXEC)
             artifact, content = _read_bounded_json(reports_fd, f'{digest}.json', MAX_VERIFICATION_REPORT_BYTES, 'verification report', _observation=_observation)

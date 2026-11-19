@@ -117,7 +117,7 @@ class AdmissionTests(unittest.TestCase):
         with project_copy() as root:
             _,intent=self.fixture(root)
             self.publish(root,intent)
-            (root/'.grok/hooks/_lib.py').unlink()
+            (root/'.getzilla/hooks/_lib.py').unlink()
             code,result,error=run_hook(root,'pre_tool_use.py',{'cwd':str(root),'session_id':'fixture-owner','tool_name':'Write','tool_input':{'file_path':'src/retention.py','content':'inert'}})
             self.assertEqual(code,0,error)
             self.assertEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny',result)

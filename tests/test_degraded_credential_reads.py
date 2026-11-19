@@ -113,7 +113,7 @@ class DegradedCredentialReadTests(unittest.TestCase):
                 b'[' * 2000 + b']' * 2000,
             ):
                 result = subprocess.run(
-                    [sys.executable, str(root / '.grok/hooks/pre_tool_use.py')], cwd=root,
+                    [sys.executable, str(root / '.getzilla/hooks/pre_tool_use.py')], cwd=root,
                     env={**os.environ, 'PYTHONPATH': str(root / '.getzilla')},
                     input=payload, capture_output=True, timeout=10, check=False,
                 )

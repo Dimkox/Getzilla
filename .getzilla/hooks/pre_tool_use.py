@@ -245,9 +245,19 @@ def _degraded_shell_read(command: Any, directory: Path, patterns: tuple[str, ...
     )
 
 
-def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ...) -> str | None:
-    if _degraded_intake_required() and (tool in _DEGRADED_WRITE_TOOLS or tool in _DEGRADED_SHELL_TOOLS or tool.startswith('mcp__')):
-        return 'Semantic intake cannot be loaded; this product mutation is refused.'
+def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ..., *, root: Path | None = None) -> str | None:
+    if _degraded_intake_required(root):
+        affected = tool in _DEGRADED_WRITE_TOOLS or tool in _DEGRADED_SHELL_TOOLS or tool.startswith('mcp__')
+        if tool in _DEGRADED_SHELL_TOOLS and isinstance(inputs, dict):
+            command = inputs.get('command', inputs.get('cmd', ''))
+            try:
+                argv = shlex.split(command) if isinstance(command, str) else []
+            except ValueError:
+                argv = []
+            if argv and argv[0] in {'pwd', 'cat', 'head', 'tail', 'wc'} and not any(char in str(command) for char in '><;&|`$()'):
+                affected = False
+        if affected:
+            return 'Semantic intake cannot be loaded; this product mutation is refused.'
     """Keep protected actions denied without trusting imports that just failed."""
     if not tool or not isinstance(inputs, dict):
         return _DEGRADED_REASON
@@ -875,7 +885,7 @@ def main() -> None:
             degraded_tool, degraded_input, degraded_cwd = _degraded_request(payload)
             denial = _DEGRADED_REASON
             if context.execution_cwd is not None and degraded_cwd == context.execution_cwd:
-                denial = _degraded_denial(degraded_tool, degraded_input, degraded_cwd)
+                denial = _degraded_denial(degraded_tool, degraded_input, degraded_cwd, root=context.effective_root or context.session_root)
             emit(permission_output(denial is None, denial))
             return
 
