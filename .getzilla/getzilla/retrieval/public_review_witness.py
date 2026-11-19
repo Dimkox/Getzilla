@@ -32,6 +32,7 @@ _PRODUCERS = {
     ('2eb8d3850f59d816cbeac4bce46c9292254df274640a580540f4973f0b93aac8', 8591594),
 }
 MAX_GROUPS, MAX_SHARDS = 16, 4
+DELIVERY_ASSURANCES = frozenset({'coordinator-observation-not-transcript', 'captured-tool-message'})
 MAX_WITNESS_BYTES, WITNESS_SECONDS = 128 * 1048576, 30
 _HASH_ONLY_B = ('5971c88d285172e345a07418dd269ae63760c4e147efe01f3a3c7cd13846981c', 6967743)
 _PRODUCER_SEMANTIC = {
@@ -368,7 +369,9 @@ def _groups(capture, groups):
     waves, publications, sources = {'initial': [], 'second': [], 'query': []}, [], []
     for group in groups:
         required = {'role', 'original', 'annotations', 'reports', 'delivery', 'delivery_identity', 'supplement'}
-        _require(type(group) is dict and required <= set(group) <= required | {'query_equivalence'} and group['role'] in waves)
+        _require(type(group) is dict and required <= set(group) <= required | {'query_equivalence', 'delivery_assurance'} and group['role'] in waves)
+        _require(group.get('delivery_assurance') is None or group['delivery_assurance'] in DELIVERY_ASSURANCES,
+                 'public_witness_delivery_assurance_invalid')
         annotations = group['annotations']
         _require(type(annotations) is list and 1 <= len(annotations) <= MAX_SHARDS)
         group_start = capture.used
@@ -457,7 +460,9 @@ def _query_lineage(capture, registration, composition, final, predecessor, old_h
         aliases = {group['original']['sha256']: semantic}
         aliases.update({reference['sha256']: report for reference, report in zip(group['annotations'], parsed)})
         for entry in supplements:
-            _require(type(entry) is dict and set(entry) == {'annotation', 'delivery'})
+            _require(type(entry) is dict and {'annotation', 'delivery'} <= set(entry) <=
+                     {'annotation', 'delivery', 'delivery_assurance'})
+            _require(entry.get('delivery_assurance') is None or entry['delivery_assurance'] in DELIVERY_ASSURANCES)
             report = capture.json(entry['annotation'])
             capture.read(entry['delivery']['path'], limit=1048576, expected=entry['delivery'], keep=False)
             original_sha = report['original_annotation_sha256']
@@ -479,7 +484,9 @@ def _adjudications(capture, publications, final, predecessor, old_hashes, source
     for publication in publications:
         budget.check()
         capture.group_start = capture.used
-        _require(type(publication) is dict and set(publication) == {'annotation', 'reports', 'delivery'})
+        _require(type(publication) is dict and {'annotation', 'reports', 'delivery'} <= set(publication) <=
+                 {'annotation', 'reports', 'delivery', 'delivery_assurance'})
+        _require(publication.get('delivery_assurance') is None or publication['delivery_assurance'] in DELIVERY_ASSURANCES)
         report = capture.json(publication['annotation'])
         capture.read(publication['delivery']['path'], limit=1048576, expected=publication['delivery'], keep=False)
         _require(1 <= len(publication['reports']) <= 4)
@@ -524,6 +531,11 @@ def _witness(root, registration_path, composition):
     _require(sha(config) == composition.config_sha256, 'public_witness_config')
     source = _sources(capture, registration['public_sources'], composition)
     audit_draft_inputs(*predecessor, source, profile=composition.audit_profile)
+    if composition is _PRODUCTION:
+        delivery_items = list(registration['groups']) + list(registration.get('adjudications', []))
+        delivery_items.extend(entry for group in registration['groups'] for entry in group.get('query_equivalence', []))
+        _require(all(row.get('delivery_assurance') in DELIVERY_ASSURANCES for row in delivery_items),
+                 'public_witness_delivery_assurance_missing')
     waves, publications, source_groups = _groups(capture, registration['groups'])
     budget = ScientificBudget(capture.deadline)
     query_hashes = dict(old_hashes)
@@ -625,7 +637,7 @@ def reviewed_public_dataset(reference):
 
 class _WitnessSourceFence:
     """Fixed current review custody at source boundaries, never a model permit."""
-    __slots__ = ('_issuer', '_reference', '_capture', '_closed')
+    __slots__ = ('_issuer', '_reference', '_capture', '_closed', '_source_path')
 
     def __new__(cls, *args, **kwargs):
         raise TypeError('owned reviewed source composition required')
@@ -660,7 +672,8 @@ def _reviewed_source_cut(reference, *, batch, composition):
     capture.dependencies = {snapshot['path']: snapshot for snapshot in receipt['details']['dependencies']}
     capture.recheck()
     fence = object.__new__(_WitnessSourceFence)
-    for key, value in (('_issuer', _ISSUER), ('_reference', reference), ('_capture', capture), ('_closed', False)):
+    for key, value in (('_issuer', _ISSUER), ('_reference', reference), ('_capture', capture), ('_closed', False),
+                       ('_source_path', capture.root / checked_relative(registration['public_sources']))):
         object.__setattr__(fence, key, value)
     from .research import _public_source_cut
     try:
@@ -680,3 +693,56 @@ def reviewed_public_source_cut(reference, *, batch):
     """
     with _reviewed_source_cut(reference, batch=batch, composition=_PRODUCTION) as result:
         yield result
+
+
+def _check_reviewed_source_batch(reference, broker, handle, composition):
+    from .. import native_access as access
+    from .research import _PublicHost, _catalog, BATCH_FILES
+    _require(type(reference) is OperatorWitnessedPublicReviewedInputs
+             and getattr(reference, '_issuer', None) is _ISSUER and reference._profile == composition.profile,
+             'public_witness_unavailable')
+    _require(type(broker) is access.NativeAccessBroker and type(broker._host) is _PublicHost,
+             'public_witness_source_unavailable')
+    host = broker._host
+    fence = host.review_fence
+    _require(type(fence) is _WitnessSourceFence and fence._issuer is _ISSUER
+             and fence._reference._receipt_digest == reference._receipt_digest
+             and fence._reference._root == reference._root and host.sources.path == fence._source_path,
+             'public_witness_source_unavailable')
+    rows, identities = _catalog(host.anchor, composition.catalogs)
+    _require(host.rows == rows and host.identities == identities, 'public_witness_source_unavailable')
+    with broker._operation(handle) as request:
+        broker._unchanged(request)
+        _require(request.captured is not None and request.captured.native_ref is host
+                 and request.cut is not None and request.query == host.query.identity,
+                 'public_witness_source_unavailable')
+        selected = rows[host.batch * BATCH_FILES:(host.batch + 1) * BATCH_FILES]
+        _require(len(request.captured.documents) == len(selected), 'public_witness_source_unavailable')
+        broker._unchanged(request)
+    return {'batch': host.batch, 'documents': len(selected), 'dataset_digest': host.dataset,
+            'batches': (len(rows) + BATCH_FILES - 1) // BATCH_FILES, 'deadline': request.deadline}
+
+
+def check_reviewed_public_source_batch(reference, broker, handle):
+    """Check an actual current selected batch, without creating another permit."""
+    return _check_reviewed_source_batch(reference, broker, handle, _PRODUCTION)
+
+
+def _check_reviewed_source_dataset(reference, source_cuts, composition):
+    _require(type(source_cuts) is tuple and 1 <= len(source_cuts) <= 2,
+             'public_witness_source_unavailable')
+    observed = []
+    for pair in source_cuts:
+        _require(type(pair) is tuple and len(pair) == 2, 'public_witness_source_unavailable')
+        observed.append(_check_reviewed_source_batch(reference, *pair, composition))
+    expected = observed[0]['batches']
+    _require(len(observed) == expected and {row['batch'] for row in observed} == set(range(expected))
+             and len({row['dataset_digest'] for row in observed}) == 1,
+             'public_witness_source_unavailable')
+    return {'documents': sum(row['documents'] for row in observed),
+            'dataset_digest': observed[0]['dataset_digest']}
+
+
+def check_reviewed_public_source_dataset(reference, source_cuts):
+    """Check every fixed public batch; never grants an encoder or release."""
+    return _check_reviewed_source_dataset(reference, source_cuts, _PRODUCTION)

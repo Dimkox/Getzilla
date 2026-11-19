@@ -51,9 +51,9 @@ v3 predecessor hashes and experiment-config hash. JSON cannot select a profile,
 callback, issuer or test composition.
 
 Each publication group has exactly `role`, `original`, `annotations`, `reports`,
-`delivery`, `delivery_identity`, `supplement`. Role is initial/second/query.
+`delivery`, `delivery_identity`, `delivery_assurance`, `supplement`. Role is initial/second/query.
 Second-source groups for the pinned query revision also require
-`query_equivalence`, a list of exact `{annotation, delivery}` references from
+`query_equivalence`, a list of exact `{annotation, delivery, delivery_assurance}` references from
 that original second reviewer, covering every changed variant and its original
 source slice. Unknown or changed meaning/label impact refuses admission.
 `original` is the immutable original annotation reference. `annotations` has
@@ -178,3 +178,24 @@ boundaries. It does not reread oversized originals as report-group input or
 renew the two-second source deadline. Keep both cuts for the fixed 148 files
 current before each later stage; never use only the last batch as index proof.
 Encoder, operation, live-resource and output gates remain separate.
+
+Production delivery provenance is explicit for every source/query/equivalence/
+adjudication publication: `delivery_assurance` is exactly
+`coordinator-observation-not-transcript` or `captured-tool-message`. The first
+means retained honest coordinator observation notes, including any actual same
+original-producer redelivery; it is not a raw transcript, new scientific review,
+authenticated native ACK or security approval. Unknown original generation/time
+remains unknown. The operator remains accountable for truthful observed facts.
+
+`check_reviewed_public_source_batch(A,broker,handle)` verifies only canonical
+held reviewed-source handles and their original deadline. The dataset checker
+requires every distinct fixed batch. Neither accepts dictionary snapshots or
+turns the returned observation into model/resource authority.
+
+`public_study_manifest.validate_inspection_manifest` is a pure factual validator.
+It checks exact original pins, all3884 common windows/2249 declarations, offline
+codec, both rawFP32 model contracts, session/readback bindings and complete
+independent six-scope review coverage. It rejects pooled-output substitution,
+partial or self review, source-only report relabeling and post-rank subset
+selection. A valid dictionary does not issue PhaseB or permit ranks. Actual
+owned inspection output and a separate current-owner publication remain needed.
