@@ -192,4 +192,3 @@ def _canonical_bytes(value: Any) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
-

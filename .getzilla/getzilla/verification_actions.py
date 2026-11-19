@@ -265,5 +265,3 @@ def span(step, *, stage='check', location=None):
     else:
         if writer:
             _emit(writer, stage, 'end', step=step, nodeid=node, **details)
-
-

@@ -346,5 +346,3 @@ def _qualified_architecture_comparison(root: Path, route: dict[str, Any], head: 
     except (OSError, RuntimeError):
         return None
     return ArchitectureBaseSelection(**witness)
-
-

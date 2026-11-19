@@ -236,4 +236,3 @@ def ci_member_evidence(value,source,run,index,paths):
         facts[consumer['image']]=(_MEMBER_SEAL,image,previous)
         _LIVE['member_fact_bytes']=retained
     return {path:previous[path] for path in paths}
-
