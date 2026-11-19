@@ -117,8 +117,7 @@ def _shell_mutation(
     return protected_targets, opaque
 
 
-@_legacy._bounded_invocation((False, f'Policy resource budget exhausted: {_legacy._BUDGET_MARKER}'))
-def evaluate_pre_tool(
+def _evaluate_pre_tool(
     root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD,
 ) -> tuple[bool, str | None]:
     from .task_intent import mutation_block_reason
@@ -185,6 +184,68 @@ def evaluate_pre_tool(
         if not posix[0]:
             return posix
     return verdict
+
+
+def _intake_effect(root: Path, event: dict[str, Any], execution_cwd: object) -> bool:
+    """Classify effects using existing target/command readers; unknown execution needs intake."""
+    tool = str(event.get('tool_name',''))
+    inputs = event.get('tool_input') or {}
+    if tool in {'apply_patch','Edit','Write'} or any(word in tool.lower() for word in ('write_file','edit_file','delete_file')):
+        targets = _legacy._extract_paths(inputs)
+        if tool == 'apply_patch':
+            for key in ('patch','input','command'):
+                targets += _legacy._extract_patch_paths(str(inputs.get(key,'')))
+        normalized = [_legacy.safe_relative_path(root,path) for path in targets]
+        return not normalized or any(path is None or not _legacy.agent_scratch(root,path) for path in normalized)
+    if tool == 'Bash':
+        command = str(inputs.get('command',''))
+        targets,opaque = _shell_mutation(root,command,['*'],execution_cwd=_execution_directory(root,execution_cwd))
+        if targets or opaque:
+            return True
+        commands = _legacy._simple_commands(command)
+        if len(commands)==1 and commands[0]:
+            argv = commands[0]
+            # The closed native repair APIs recheck owner, epoch and expected cut themselves.
+            if (argv[:3] in (['python3','scripts/getzilla_artifacts.py','intake'],['python','scripts/getzilla_artifacts.py','intake']) and
+                    len(argv)>3 and argv[3] in {'inspect','assess','apply','recover'} and
+                    _execution_directory(root,execution_cwd) == root):
+                return False
+            if argv[0] in {'pwd','cat','head','tail','wc'}:
+                return False
+            if argv[0] == 'rg' and not any(arg=='--pre' or arg.startswith('--pre=') for arg in argv[1:]):
+                return False
+            if argv[:2] in (['git','status'],['git','rev-parse']) and not any(arg.startswith('--output') for arg in argv[2:]):
+                return False
+        return True
+    return _legacy_mcp_side_effect(tool,root)
+
+
+@_legacy._bounded_invocation((False, f'Policy resource budget exhausted: {_legacy._BUDGET_MARKER}'))
+def evaluate_pre_tool(root: Path, event: dict[str, Any], *, execution_cwd: object = _UNSPECIFIED_CWD) -> tuple[bool,str|None]:
+    affected = True
+    try:
+        affected = _intake_effect(root,event,execution_cwd)
+        verdict = _evaluate_pre_tool(root,event,execution_cwd=execution_cwd)
+        if not verdict[0] or not affected:
+            return verdict
+        route = _legacy.get_active_route(root)
+        if route is None:
+            from .state import route_authority_present
+            if route_authority_present(root):
+                return False,'Semantic intake authority is unavailable for this mutation.'
+            return verdict
+        if (route.get('context') or {}).get('version') != 2:
+            return verdict
+        from .intake_publication import require_intake_ready
+        first = require_intake_ready(root,route)
+        second = require_intake_ready(root)
+        if first != second:
+            return False,'Semantic intake changed before managed dispatch.'
+        return verdict
+    except Exception:
+        if affected:
+            return False,'Semantic intake does not admit this mutation; inspect or recover its current native cut.'
+        raise
 
 
 def __getattr__(name: str) -> Any:

@@ -887,6 +887,15 @@ def validate_spec(
         if anchor is None:
             raise
         return [f'{path_or_schema}: native spec input unavailable ({type(exc).__name__})']
+    if route and (route.get('context') or {}).get('version') == 2:
+        from .state import get_active_change
+        active = get_active_change(root, anchor=anchor) or {}
+        if path_or_schema == root / str(active.get('path','')) / 'change-spec.yaml':
+            try:
+                from .intake_publication import require_intake_ready
+                require_intake_ready(root,route,operation_class='spec-validation')
+            except Exception:
+                return ['semantic intake is not current and ready']
     return []
 
 

@@ -134,11 +134,15 @@ def validate_route(root: Path, route: dict[str, Any], *, anchor=None) -> None:
             not _integer(route.get('authority_epoch')) or not _integer(route.get('state_revision'))):
         raise ValueError('invalid task identity, workspace or authority epoch')
     context = route.get('context')
-    if (not isinstance(context, dict) or set(context) != set(new_context()) or
-            type(context['version']) is not int or context['version'] != 1 or
+    intake_v2 = isinstance(context, dict) and type(context.get('version')) is int and context['version'] == 2
+    if (not isinstance(context, dict) or set(context) != set(new_context()) | ({'intake'} if intake_v2 else set()) or
+            type(context['version']) is not int or context['version'] not in {1, 2} or
             not _integer(context['revision']) or type(context['legacy_compatible']) is not bool or
             not isinstance(context['pending'], list) or len(context['pending']) > MAX_PENDING):
         raise ValueError('invalid task context')
+    if intake_v2:
+        from .intake_publication import validate_protocol_metadata
+        validate_protocol_metadata(context['intake'])
     total, ids, events = 0, set(), set()
     for item in context['pending']:
         if (not isinstance(item, dict) or set(item) != {'id', 'event_id', 'text', 'digest', 'bytes', 'at'} or
@@ -435,6 +439,11 @@ def _sync_gate_projection(root: Path, route: dict[str, Any]) -> dict[str, Any]:
     if (context['pending'] or context['rejected']) and (
             value['status'] in {'verifying', 'reviewing', 'ready'} or
             value['status'] == 'implementing' and route.get('status') in {'verifying', 'reviewing', 'ready'}):
+        if context.get('version') == 2:
+            # The old stage is historical while scope is pending. Do not enter
+            # implementing to invalidate evidence: the actual intake admission
+            # consumers already refuse old cuts and preserve the queued input.
+            return route
         transition(root, route['change_id'], 'implementing', 'scope synchronization required')
         return state.canonical_route(root, route['route_id'])
     return route
@@ -477,7 +486,7 @@ def validate_package_state(value: dict[str, Any], route: dict[str, Any], change_
 
 
 def package_documents(root: Path, route: dict[str, Any], *, durable: bool = False,
-                       gate: bool = True, anchor=None) -> dict[str, Any] | None:
+                       gate: bool = True, anchor=None, draft: bool = False) -> dict[str, Any] | None:
     """Load the actual selected typed authority, never a caller's claimed digest."""
     from .package_status import read_package_file
     from .spec import MAX_SPEC_BYTES, _parse_canonical_json, _validate_document, canonical_spec_digest
@@ -497,7 +506,11 @@ def package_documents(root: Path, route: dict[str, Any], *, durable: bool = Fals
     raw_spec = (anchor.read(active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES) if anchor is not None
                 else read_package_file(root, active['path'] + '/change-spec.yaml', MAX_SPEC_BYTES, sync=durable))
     spec = _parse_canonical_json(raw_spec, path / 'change-spec.yaml')
-    _validate_document(spec, gate=gate, root=root, anchor=anchor)
+    # Enabled intake can consistently observe an incomplete typed draft. Its
+    # actual pre-code consumers require current semantic readiness separately.
+    # The explicit draft observation is also used only to bootstrap that ingress.
+    intake = (route.get('context') or {}).get('version') == 2
+    _validate_document(spec, gate=gate and not (draft or intake), root=root, anchor=anchor)
     if spec.get('change_id') != change_id:
         raise ValueError('typed spec change identity mismatch')
     requirements = (anchor.read(active['path'] + '/requirements.md', 1_048_576) if anchor is not None
@@ -549,6 +562,8 @@ def context_binding(root: Path, route: dict[str, Any] | None = None, *, discover
              'requirements_digest': documents['requirements_digest'] if documents else None}
     if 'intent_state' in route:
         value.update(version=2, intent_digest=digest(route['intent_state']))
+    if (route.get('context') or {}).get('version') == 2:
+        value.update(version=2, intake_protocol={'version': 1, 'required': True})
     return {**value, 'digest': digest(value)}
 
 

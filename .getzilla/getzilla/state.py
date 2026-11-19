@@ -632,6 +632,10 @@ def _commit_route(root: Path, route: dict[str, Any], *, expected: dict[str, Any]
         actual = canonical_route(root, route['route_id'], anchor=anchor) if exists else None
         if actual != expected:
             raise ValueError('route changed before atomic update')
+        if actual and (actual.get('context') or {}).get('version') == 2 and (
+                (route.get('context') or {}).get('version') != 2 or
+                (route['context'].get('intake') or {}).get('required') is not True):
+            raise ValueError('required intake cannot be downgraded')
         if ('sprint' in route or 'observation_publication' in route) and not observation_only:
             from .sprint_lifecycle import prepare_transition
             try:
