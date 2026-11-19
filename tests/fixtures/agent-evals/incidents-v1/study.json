@@ -1,0 +1,209 @@
+{
+  "cases": [
+    {
+      "family": "305-boundaries",
+      "id": "baseline-parent-faulty",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_acceptance_parent_swap_cannot_write_to_replacement",
+      "pair": "baseline-parent",
+      "variant": "faulty"
+    },
+    {
+      "family": "305-boundaries",
+      "id": "baseline-parent-clean",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_acceptance_parent_swap_cannot_write_to_replacement",
+      "pair": "baseline-parent",
+      "variant": "clean"
+    },
+    {
+      "family": "305-boundaries",
+      "id": "numeric-bound-faulty",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_huge_numeric_telemetry_is_invalid_and_workflow_stays_bounded",
+      "pair": "numeric-bound",
+      "variant": "faulty"
+    },
+    {
+      "family": "305-boundaries",
+      "id": "numeric-bound-clean",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_huge_numeric_telemetry_is_invalid_and_workflow_stays_bounded",
+      "pair": "numeric-bound",
+      "variant": "clean"
+    },
+    {
+      "family": "305-boundaries",
+      "id": "export-bound-faulty",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_whole_comparison_envelope_is_bounded",
+      "pair": "export-bound",
+      "variant": "faulty"
+    },
+    {
+      "family": "305-boundaries",
+      "id": "export-bound-clean",
+      "incident": {
+        "commit": "cceaa451951f018d107a3c9a72965f5fe375e4b8",
+        "path": "engineering/incidents/2026-11-04-agent-eval-baseline-boundaries.md",
+        "sha256": "f0e2924c5f1e70359b3818c0ebf1afa9099ad3492097de416c22f95915f202f4"
+      },
+      "oracle_test": "tests/test_agent_evals.py::AgentEvalTests.test_whole_comparison_envelope_is_bounded",
+      "pair": "export-bound",
+      "variant": "clean"
+    },
+    {
+      "family": "root337",
+      "id": "invented-sha-faulty",
+      "incident": {
+        "commit": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc",
+        "path": "engineering/incidents/2026-08-26-root-337.md",
+        "sha256": "67284cf998e9cbef69ca5743644aa3c09c1033ae15c4042b47b1bb0b0b9397c0"
+      },
+      "oracle_test": "tests/test_agent_eval_quality.py::ReviewQualityTests.test_incident_sha_oracle_resolves_exact_identity_and_rejects_invented_suffix",
+      "pair": "invented-sha",
+      "variant": "faulty"
+    },
+    {
+      "family": "root337",
+      "id": "invented-sha-clean",
+      "incident": {
+        "commit": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc",
+        "path": "engineering/incidents/2026-08-26-root-337.md",
+        "sha256": "67284cf998e9cbef69ca5743644aa3c09c1033ae15c4042b47b1bb0b0b9397c0"
+      },
+      "oracle_test": "tests/test_agent_eval_quality.py::ReviewQualityTests.test_incident_sha_oracle_resolves_exact_identity_and_rejects_invented_suffix",
+      "pair": "invented-sha",
+      "variant": "clean"
+    },
+    {
+      "family": "root574",
+      "id": "body-text-faulty",
+      "incident": {
+        "commit": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc",
+        "path": "engineering/incidents/2026-09-01-root-574.md",
+        "sha256": "dbd9f8a66a7c4cda1d196289ee332d70d1c186ad1375f19d2b155c973b3f6379"
+      },
+      "oracle_test": "tests/test_agent_eval_quality.py::ReviewQualityTests.test_incident_body_text_oracle_keeps_inert_shell_text_literal",
+      "pair": "body-text",
+      "variant": "faulty"
+    },
+    {
+      "family": "root574",
+      "id": "body-text-clean",
+      "incident": {
+        "commit": "537fc28d1ec0360109aa46b0887aa7d6158f8dcc",
+        "path": "engineering/incidents/2026-09-01-root-574.md",
+        "sha256": "dbd9f8a66a7c4cda1d196289ee332d70d1c186ad1375f19d2b155c973b3f6379"
+      },
+      "oracle_test": "tests/test_agent_eval_quality.py::ReviewQualityTests.test_incident_body_text_oracle_keeps_inert_shell_text_literal",
+      "pair": "body-text",
+      "variant": "clean"
+    }
+  ],
+  "judgments": [
+    {
+      "case_id": "baseline-parent-faulty",
+      "case_sha256": "e72b4dd0c2577e69a64c3e4dd908d157b453eec98374bf1d3743f644e684ed94",
+      "evidence_sha256": "229bb49c77371928db1466d875e4d36ec2eacd3f5d63f102480c18532ec8c6b9",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "baseline-parent-clean",
+      "case_sha256": "e9fda2afa99c9adb943b80515a845aa0c88112417519ae8c6e3b89a454ea3d9d",
+      "evidence_sha256": "229bb49c77371928db1466d875e4d36ec2eacd3f5d63f102480c18532ec8c6b9",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "numeric-bound-faulty",
+      "case_sha256": "02034bb8bf49d5da8723eb151dd0afb9e65dac4511bcf23a3e34e8f4dbb068df",
+      "evidence_sha256": "025173e8fc046fb1fb704f90a9efa02f39fd26f263b91a869384243bb9c5a8d3",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "numeric-bound-clean",
+      "case_sha256": "bee99fc67419286626f19fff061256b952713ae59c85b6994af0102ae458632c",
+      "evidence_sha256": "025173e8fc046fb1fb704f90a9efa02f39fd26f263b91a869384243bb9c5a8d3",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "export-bound-faulty",
+      "case_sha256": "0664086ada4c6ae67b3649c57a70131170fe551e1259ed45cbb222b673d44074",
+      "evidence_sha256": "35f4c0f1c740dd726153a9a8ff7b9a6dc2d6dc30e8e15341df4a2bb6b0e0c1ea",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "export-bound-clean",
+      "case_sha256": "b3d5c30ae5a735331ec4a30196b4ad20d27e79f0aa415272c35fe14efbb5a208",
+      "evidence_sha256": "35f4c0f1c740dd726153a9a8ff7b9a6dc2d6dc30e8e15341df4a2bb6b0e0c1ea",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "invented-sha-faulty",
+      "case_sha256": "8feb8958e919179104c4ff91d113219cf3573807c7e311239650ea7ded56ca51",
+      "evidence_sha256": "ace5091b807f5d22f6c2ebf903cd86384f4de7d67966abe9444c3a647a6a6a5d",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "invented-sha-clean",
+      "case_sha256": "c76d90bffe962d49d3f52b51671a581289ad2274ce458de343765f7e69729ef0",
+      "evidence_sha256": "ace5091b807f5d22f6c2ebf903cd86384f4de7d67966abe9444c3a647a6a6a5d",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "body-text-faulty",
+      "case_sha256": "fc46c80c225239df09d1f24dda6a0c77e9e6fd4522fa22a69cbe17eaefacaedb",
+      "evidence_sha256": "517e73b3b874d6eab7169351f4213df6947507dd2f3187246b486b93870166b7",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    },
+    {
+      "case_id": "body-text-clean",
+      "case_sha256": "c81559a63558874755e2cbea8a0a4ffd2075695654c073f44d3bd3e1bbec82e5",
+      "evidence_sha256": "517e73b3b874d6eab7169351f4213df6947507dd2f3187246b486b93870166b7",
+      "oracle_status": "pass",
+      "recording_sha256": "46799941d2227608782f485b663485ba68cc0095081762c4e4981a2261ad0d68",
+      "status": "synthetic"
+    }
+  ],
+  "manifest_sha256": "c78cf987f8d65552426a4d9abfb788fa208ad2565931e27e7e18d6345d7802ee",
+  "measurements": [],
+  "schema_version": 1
+}
