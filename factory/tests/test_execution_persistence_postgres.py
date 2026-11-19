@@ -6152,6 +6152,15 @@ class FreshClusterArtifactAttestorMigrationTests(unittest.TestCase):
     def setUpClass(cls):
         import psycopg
 
+        if os.environ.get('FACTORY_TEST_POSTGRES_JOURNAL'):
+            from factory.tests.postgres_restart_probe import _assert_disposable_target
+            _assert_disposable_target(
+                FRESH_CLUSTER_DATABASE_URL,
+                os.environ['FACTORY_FRESH_POSTGRES_CONTAINER'],
+                os.environ['FACTORY_FRESH_POSTGRES_CONTAINER_ID'],
+                os.environ['FACTORY_TEST_POSTGRES_NONCE'],
+            )
+
         migrations = discover_migrations()
         if (len(migrations) != 27 or
                 [item.version for item in migrations] != list(range(1, 28)) or
