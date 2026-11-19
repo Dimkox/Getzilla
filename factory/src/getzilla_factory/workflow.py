@@ -189,12 +189,11 @@ class NativeWorkflowBoundary(WorkflowBoundary):
             raise WorkflowRejected('identity-limit')
         return value
 
-    def _load_native(self, cursor):
+    def _native_inputs(self):
         import json
         from getzilla import workflow_artifacts as artifacts
         from getzilla.spec import canonical_spec_digest
         from getzilla.util import git_head
-        from .contracts import TaskIntakeV1
 
         try:
             route = artifacts.load_runtime_authority(self.root, 'route')
@@ -226,6 +225,39 @@ class NativeWorkflowBoundary(WorkflowBoundary):
             raise WorkflowRejected('native-source-unavailable') from exc
         if not head or not route.get('session_id') or route.get('status') in {'cancelled', 'complete', 'completed', 'released', 'archived'}:
             raise WorkflowRejected('owner-unavailable')
+        return dict(route=route, change=change, native=native, graph=graph, head=head,
+                    authority=authority, authority_digest=authority_digest, report=report, bundle=bundle)
+
+    @staticmethod
+    def intent_source_digest(graph_digest, authority_digest, node_key):
+        return canonical_digest(dict(contract='adaptive-factory.workflow-intent/v1',
+            graph_digest=graph_digest, authority_digest=authority_digest, node_key=node_key))
+
+    def describe(self):
+        current = self._native_inputs()
+        return dict(workflow_binding_version=1, owner=current['route']['session_id'],
+            graph_digest=current['graph']['graph_digest'], authority_digest=current['authority_digest'],
+            nodes=[dict(node_key=node['key'], repository_id=self.repository_id, source_type='api',
+                source_id=self.source_id(current['change'], node['key']),
+                source_digest=self.intent_source_digest(current['graph']['graph_digest'],
+                    current['authority_digest'], node['key']),
+                route_id=current['route']['route_id'], change_id=current['change'],
+                spec_digest=current['authority']['spec_digest'], exact_head_sha=current['head'],
+                acceptance_ids=sorted(value for value in node['covers'] if value.startswith('AC-')))
+                for node in sorted(current['graph']['tasks'], key=lambda item: item['key'])])
+
+    def validate(self, cursor, candidate, owner, task_id):
+        from getzilla import workflow_artifacts as artifacts
+        if artifacts.load_runtime_authority(self.root, 'route').get('session_id') != owner:
+            raise WorkflowRejected('owner')
+        return super().validate(cursor, candidate, owner, task_id)
+
+    def _load_native(self, cursor):
+        import json
+        from .contracts import TaskIntakeV1
+        current = self._native_inputs()
+        route, change, native, graph, head = (current[key] for key in ('route', 'change', 'native', 'graph', 'head'))
+        authority, authority_digest, report, bundle = (current[key] for key in ('authority', 'authority_digest', 'report', 'bundle'))
         nodes = graph['tasks']
         key_by_id = {node['task_id']: node['key'] for node in nodes}
         nodes = [dict(node, depends_on=[key_by_id[value] for value in node['depends_on']]) for node in nodes]
@@ -259,7 +291,7 @@ class NativeWorkflowBoundary(WorkflowBoundary):
             task_id, task_state, run_id, body = row
             if task_state in {'cancelled', 'superseded', 'dead'}:
                 raise WorkflowRejected('task-cancelled')
-            if (body['source_digest'] != graph['graph_digest'] or body['route_id'] != route['route_id']
+            if (body['source_digest'] != self.intent_source_digest(graph['graph_digest'], authority_digest, node['key']) or body['route_id'] != route['route_id']
                     or body['change_id'] != change or body['spec_digest'] != authority['spec_digest']
                     or body['governance']['exact_head_sha'] != head
                     or sorted(body['acceptance_ids']) != sorted(value for value in node['covers'] if value.startswith('AC-'))):
@@ -300,7 +332,7 @@ class NativeWorkflowBoundary(WorkflowBoundary):
             # A current, fenced completed result plus deterministic semantic pass is
             # acceptance. A terminal proposal or external phase alone cannot pass.
             cursor.execute('SELECT factory.workflow_prerequisite_evidence_v1(%s,%s,%s,%s,%s)',
-                           (task_id, self.repository_id, graph['graph_digest'], authority['spec_digest'], head))
+                           (task_id, self.repository_id, self.intent_source_digest(graph['graph_digest'], authority_digest, node['key']), authority['spec_digest'], head))
             value = cursor.fetchone()[0]
             if isinstance(value, str):
                 value = json.loads(value)

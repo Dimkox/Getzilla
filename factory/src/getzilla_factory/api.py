@@ -906,6 +906,12 @@ def create_app(
         )
         return JSONResponse(_json({"grant": grant}), headers={"X-Correlation-ID": correlation})
 
+    @app.post("/v2/workflow/intake-bindings", tags=["execution"])
+    def workflow_intake_bindings(payload: dict, authorization: str | None = Header(None)):
+        actor = authenticator.authenticate(authorization, "task:execute")
+        _closed(payload, set())
+        return _json(service.workflow_intake_bindings(actor=actor))
+
     @app.post("/v2/workflow/ready", tags=["execution"])
     def workflow_ready(payload: dict, authorization: str | None = Header(None)):
         actor = authenticator.authenticate(authorization, "task:execute")

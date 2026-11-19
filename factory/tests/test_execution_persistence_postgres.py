@@ -672,10 +672,12 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         (fixture.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(fixture.route))
         self.addCleanup(fixture.doCleanups)
         rows = []
+        descriptors = {node['source_id']: node for node in fixture.boundary.describe()['nodes']}
         for index, row in enumerate(fixture.rows):
             body = deepcopy(row[3])
             body.pop('intent_digest'); body.pop('idempotency_key')
             body['request_id'] = f'workflow-native-{index}'
+            body['source_digest'] = descriptors[body['source_id']]['source_digest']
             body['m0_authority'] = valid_intake()['m0_authority']
             body['m0_authority']['observed_at'] = NOW.isoformat()
             task = self.service.intake(body, actor=OPERATOR, now=NOW).task

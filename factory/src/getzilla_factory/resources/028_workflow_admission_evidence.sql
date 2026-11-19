@@ -1,7 +1,7 @@
 -- Read existing immutable result/semantic evidence without broadening table access.
 -- No workflow queue, task ledger, result ledger or eligibility grant is introduced.
 CREATE FUNCTION factory.workflow_prerequisite_evidence_v1(
-  p_task_id uuid, p_repository_id text, p_graph_digest char(64),
+  p_task_id uuid, p_repository_id text, p_source_digest char(64),
   p_spec_digest char(64), p_input_head_sha char(40)
 ) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,factory AS $$
@@ -28,7 +28,7 @@ BEGIN
   JOIN factory.semantic_verdicts v ON v.subject_digest=s.subject_digest
   WHERE t.task_id=p_task_id AND t.repository_id=p_repository_id
     AND i.source_type='api' AND i.source_id LIKE 'workflow:v1:%'
-    AND i.source_digest=p_graph_digest AND i.spec_digest=p_spec_digest
+    AND i.source_digest=p_source_digest AND i.spec_digest=p_spec_digest
     AND t.state NOT IN ('cancelled','superseded','dead')
     AND r.fence=t.current_fence AND r.packet_digest=t.packet_digest
     AND p.legacy_packet_digest=t.packet_digest

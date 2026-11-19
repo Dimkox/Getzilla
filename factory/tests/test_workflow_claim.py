@@ -120,7 +120,8 @@ class NativeBoundaryTests(unittest.TestCase):
         for i, node in enumerate(sorted(self.graph['tasks'], key=lambda node: node['key']), 1):
             body = valid_intake()
             body.update(source_type='api', source_id=NativeWorkflowBoundary.source_id('change', node['key']),
-                        source_digest=self.graph['graph_digest'], route_id='route', change_id='change',
+                        source_digest=NativeWorkflowBoundary.intent_source_digest(self.graph['graph_digest'],
+                            canonical_digest(dict(route=self.route, spec_digest=canonical_spec_digest(native), head_sha='3' * 40)), node['key']), route_id='route', change_id='change',
                         spec_digest=canonical_spec_digest(native), acceptance_ids=sorted(value for value in node['covers'] if value.startswith('AC-')))
             body['m0_authority']['observed_at'] = datetime.now(timezone.utc).isoformat()
             intake = TaskIntakeV1.from_dict(body)
@@ -145,14 +146,32 @@ class NativeBoundaryTests(unittest.TestCase):
     def test_current_source_and_intent_and_owner_are_required(self):
         import json
         candidate = self.boundary.candidate(self.cursor, 'a')
+        original_digest = self.rows[0][3]['source_digest']
         self.rows[0][3]['source_digest'] = '0' * 64
         with self.assertRaisesRegex(WorkflowRejected, 'stale-intent'):
             self.boundary.validate(self.cursor, candidate, 'worker-01', candidate.factory_task_id)
-        self.rows[0][3]['source_digest'] = self.graph['graph_digest']
+        self.rows[0][3]['source_digest'] = original_digest
         self.route['session_id'] = 'new-owner'
         (self.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(self.route))
         with self.assertRaisesRegex(WorkflowRejected, 'owner'):
             self.boundary.validate(self.cursor, candidate, 'worker-01', candidate.factory_task_id)
+
+    def test_intake_descriptor_precedes_tasks_and_handoff_cannot_promote_old_result(self):
+        import json
+        saved = self.cursor.rows
+        self.cursor.rows = []
+        descriptor = self.boundary.describe()
+        self.assertEqual(descriptor['workflow_binding_version'], 1)
+        self.assertEqual(descriptor['nodes'][0]['source_digest'], self.rows[0][3]['source_digest'])
+        self.cursor.rows = saved
+        self.cursor.proofs[self.rows[0][0]] = ('a' * 64, 'b' * 64, 'c' * 64, 'run-a', 7)
+        self.assertIn('b', self.boundary.ready(self.cursor)['ready'])
+        original = descriptor['nodes'][0]['source_digest']
+        self.route['session_id'] = 'new-owner'
+        (self.root / '.getzilla/runtime/active-route.json').write_text(json.dumps(self.route))
+        self.assertNotEqual(self.boundary.describe()['nodes'][0]['source_digest'], original)
+        with self.assertRaisesRegex(WorkflowRejected, 'stale-intent'):
+            self.boundary.ready(self.cursor)
 
     def test_native_missing_cycle_self_and_unavailable_source(self):
         import json
@@ -388,9 +407,12 @@ class WorkflowApiTests(unittest.TestCase):
         service = FakeService()
         candidate = WorkflowCandidate('a', '00000000-0000-0000-0000-000000000001', 'a' * 64)
         service.workflow_ready = lambda **kwargs: candidate
+        service.workflow_intake_bindings = lambda **kwargs: {'workflow_binding_version': 1, 'nodes': []}
         client = TestClient(create_app(service, Authenticator({'fixture-token': WORKER})))
         headers = {'Authorization': 'Bearer fixture-token', 'Idempotency-Key': 'workflow-request',
                    'X-Correlation-ID': 'workflow-request'}
+        self.assertEqual(client.post('/v2/workflow/intake-bindings', json={}, headers=headers).status_code, 200)
+        self.assertEqual(client.post('/v2/workflow/intake-bindings', json={'permission': 'allow'}, headers=headers).status_code, 422)
         response = client.post('/v2/workflow/ready', json={'node_key': 'a'}, headers=headers)
         self.assertEqual(response.json(), candidate.to_dict())
         payload = dict(selection(), role='writer', repositories=['owner/repository'], lease_seconds=60,

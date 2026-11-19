@@ -58,7 +58,7 @@ ACCESS_026_027 = (
 )
 
 WORKFLOW_028 = (
-    (28, "028_workflow_admission_evidence.sql", "4a212a5dbbf17bcad412fe590849ea8af86f7c90100e948fcd1d0535330ad9e3"),
+    (28, "028_workflow_admission_evidence.sql", "fe0e7806b1e72c7ab3bfc172490b54161fd65a822ad2067fd8783400a49ba167"),
 )
 
 

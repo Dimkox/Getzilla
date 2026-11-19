@@ -150,11 +150,15 @@ runtime or source cannot grant a task. No runner or provider becomes eligible
 through this adapter.
 
 Use ordinary Factory intake with `source_type=api`,
-`source_id=workflow:v1:<change_id>:<node_key>`, and `source_digest=<graph_digest>`.
+`source_id=workflow:v1:<change_id>:<node_key>`. Obtain the exact current
+`source_digest` from `POST /v2/workflow/intake-bindings` with `{}` before intake.
+This descriptor works before any Factory task exists. Its version 1 digest binds
+the graph, node and native authority, including principal and authority epoch.
+A handoff cannot relabel an earlier owner's accepted result as current.
 Each node uses the exact current route, canonical native specification digest,
 head and AC IDs. INV/FORBID and the complete specification remain in the bound
 workflow context; the v1 Factory intake still accepts AC IDs only. Repeating an
-intake uses existing idempotency and generation rules. A changed graph requires
+intake uses existing idempotency and generation rules. A changed graph or native authority requires
 fresh intake. A source ID longer than 128 characters requires scope enrichment.
 
 `POST /v2/workflow/ready` with `{}` returns the deterministic ready/blocked set.

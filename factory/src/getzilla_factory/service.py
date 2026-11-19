@@ -489,6 +489,18 @@ class FactoryService:
             **({"workflow_candidate": workflow_candidate} if workflow_candidate is not None else {}),
         )
 
+    def workflow_intake_bindings(self, *, actor: Actor):
+        self._require(actor, "task:execute")
+        self._require(actor, "task:claim")
+        boundary = self.store.workflow_boundary
+        if boundary is None:
+            from .workflow import WorkflowRejected
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        self._require(actor, "task:execute", boundary.repository_id)
+        if actor.kind != "worker":
+            raise AuthorizationError("workflow admission requires worker")
+        return self.store.workflow_intake_bindings(owner=actor.actor_id)
+
     def workflow_ready(self, *, node_key=None, actor: Actor):
         self._require(actor, "task:execute")
         self._require(actor, "task:claim")

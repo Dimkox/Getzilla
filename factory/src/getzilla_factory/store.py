@@ -3046,6 +3046,16 @@ class PostgresFactoryStore:
             )
             return grant
 
+    def workflow_intake_bindings(self, *, owner: str):
+        from .workflow import WorkflowRejected
+        if self.workflow_boundary is None:
+            raise WorkflowRejected("workflow-boundary-unavailable")
+        with self.workflow_boundary.locked():
+            result = self.workflow_boundary.describe()
+            if result['owner'] != owner:
+                raise WorkflowRejected("owner")
+            return result
+
     def workflow_ready(self, *, owner: str, node_key: str | None = None):
         from .workflow import WorkflowRejected
         if self.workflow_boundary is None:
