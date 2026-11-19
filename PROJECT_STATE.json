@@ -2,8 +2,8 @@
   "schema_version": 2,
   "repository": "Dimkox/Getzilla",
   "default_branch": "main",
-  "observed_at": "2026-10-24T15:55:00+00:00",
-  "observed_main_sha": "a45fbdd90e4f98e05c2f45c43afb28a63b3e448c",
+  "observed_at": "2026-11-19T17:35:33+00:00",
+  "observed_main_sha": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
   "product_version": "2.3.1",
   "latest_published_release": "v2.3.0",
   "source_installers": {
@@ -12,10 +12,10 @@
     "version": "2.3.1",
     "installers": {
       "scripts/install.sh": {
-        "sha256": "dea07a3041e8aea15a7c12d937b20be1e4442401e8d09f46d009c386c1e9f2da"
+        "sha256": "e6f3e682fd4f821478ef66562320c4c20d0f2cb99386a46e6641bd02474f787a"
       },
       "scripts/install.ps1": {
-        "sha256": "bf7e31e3b6dcd8806c78a2120b98f7de188e9dce645ac184c678ada34cd35397"
+        "sha256": "f410cf5089ce9138f620e7340f7b2c33a0491e060392b3987a9d1cd13dc3c0db"
       }
     }
   },
@@ -23,13 +23,105 @@
   "engineering_contract": "AGENTS.md",
   "roadmap": "DARK_FACTORY_ROADMAP.md",
   "current_continuation": {
-    "issue": 134,
-    "branch": "ccr-315b4684-r3j424",
+    "record_scope": "Current owner-directed combined delivery; source work in progress, not delivery or qualification evidence.",
+    "issue": null,
+    "issues": [
+      138,
+      140,
+      150,
+      151,
+      152,
+      153,
+      154,
+      156,
+      158,
+      159,
+      160,
+      162,
+      163,
+      164,
+      166,
+      167,
+      169,
+      200,
+      201,
+      207,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      234,
+      235,
+      246,
+      252,
+      263,
+      277,
+      300,
+      308,
+      314,
+      315,
+      320,
+      323,
+      326,
+      336,
+      355,
+      358,
+      365,
+      366,
+      370,
+      372,
+      380,
+      384,
+      385,
+      387,
+      389,
+      404,
+      408,
+      417,
+      418,
+      419,
+      426,
+      427,
+      428,
+      429,
+      430,
+      431,
+      432,
+      433,
+      434
+    ],
+    "issue_inventory_count": 66,
+    "issue_inventory_observed_at": "2026-11-19",
+    "branch": "integration/all-fixes-20261117",
+    "open_pull_requests_to_reconcile": [
+      425,
+      411,
+      393,
+      318
+    ],
     "target_version": "2.3.1",
-    "source_base": "a45fbdd90e4f98e05c2f45c43afb28a63b3e448c",
-    "status": "source_candidate_low_batch_and_release_pending",
-    "delivered_since_published_release": "PRs #114-#179 on main, including issue #168 disk cleanup (#174-#178) and session-bound protected-path grants (#179).",
-    "next_action": "Fix the Low findings collected in issue #134 in small PRs, then prepare the 2.3.1 release. Bind independent review to the exact reviewed commit, save reports outside Git, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.3.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority."
+    "source_base": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
+    "status": "all_issues_integration_in_progress_full_qualification_merge_release_and_claw_acceptance_pending",
+    "owner_scope": "Resolve all 64 originally inventoried open issues and integration regressions #433 and #434, outstanding commits and open PRs through one combined PR, full verification, merge and release; production target is Claw.",
+    "production_target": {
+      "name": "Claw",
+      "authority_basis": "Explicit owner target selection in the current delivery session; exact operation/resource grants and technical prerequisites still apply.",
+      "acceptance_status": "not_verified"
+    },
+    "delivered_since_published_release": "Later merged changes remain recorded in delivered history. Integrated branches and source fixes are candidates until exact-head delivery gates pass; no all-issue closure is inferred.",
+    "next_action": "Finish remaining source and evidence joins for all inventoried issues and outstanding commits; reconcile open PRs #425, #411, #393 and #318 into one combined delivery. Commit the final candidate, reconcile its source-bound route and obtain fresh selected independent reviews. Run one final PR verifier at full scope, then require current public Actions linux/windows from App 15368 on the exact head and all applicable independent security gates, with resolved review threads. Record exact merge/tag/release grants only when their prerequisites hold. Publish 2.3.1 only after release verification and actual artifact checks. Keep v2.3.0 immutable. Native harness executes the local work. Claw is the exact owner target; perform only scoped authorized installation/operations and independently verify the requested result. Finish available preparation before presenting any genuinely missing legal wording, human security approval, credential or production-operation scope; reuse authority already granted.",
+    "checked_head": null,
+    "merge_commit": null,
+    "release_published": false,
+    "operational_acceptance": false,
+    "initial_issue_inventory_count": 64,
+    "discovered_regressions": [
+      433,
+      434
+    ]
   },
   "historical_pr79_continuation": {
     "issue": 72,
@@ -2697,10 +2789,11 @@
     }
   },
   "latest_source_observation": {
-    "observed_at": "2026-09-24T20:06:48Z",
-    "main_sha": "3f41be92161fef451a2dfa7451eb458ce8f022b3",
-    "source_pull_request": 189,
-    "source_role": "actual fetched main at the v2.0.19 release-sync merge through PR #189; the artifact-child candidate remains separate"
+    "observed_at": "2026-11-19T17:35:33+00:00",
+    "main_sha": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
+    "source_role": "Main observed by the coordinator during the current delivery session; separate from the unfinished integration candidate and immutable v2.3.0 publication.",
+    "candidate_branch": "integration/all-fixes-20261117",
+    "candidate_status": "not_frozen_or_qualified"
   },
   "active_operation_delivery": {
     "route_id": "473846f79243",
@@ -2924,9 +3017,12 @@
     ],
     "github_app_id": 15368,
     "workflow": ".github/workflows/getzilla.yml",
-    "observed_at": "2026-10-09",
-    "source": "engineering/changes/20261009-task-37371d/evidence/analysis-integration_architect.md",
-    "current_candidate_verified": false
+    "observed_at": "2026-11-19T17:35:33+00:00",
+    "source": "Required-check publisher settings observed by the coordinator in the current 2026-11-19 delivery session; this record is not a candidate Check Run verdict.",
+    "current_candidate_verified": false,
+    "record_scope": "Current protection/publisher observation only; refresh readback before merge.",
+    "checked_head": null,
+    "security_rollout_status": "Independent security publisher/operator qualification remains a separate applicable obligation; this observation does not claim issue #326 accepted."
   },
   "historical_predecessor_m8_scope": "Source-enabled bounded owner policy with one accepted case, initial L1 local_read/local_test and L2 ceiling. Actual per-clone activation/admission/revocation is consumed by scripts/grok_m8.py from ignored runtime, with finite expiry, complete Git-visible source binding and validated authoritative active-route semantics. Missing/incompatible route denies. Separate CohortEvidenceV2 admits minimum1; legacy V1 minimum30 and exact-V1 M9 boundary remain unchanged. This is not deployed generic worker automation or empirical M7 qualification.",
   "historical_getzilla_v2_2_0_published_release": {
@@ -2989,5 +3085,35 @@
     "conclusion": "SUCCESS",
     "current_verification": false,
     "sidecar_digest_scope": "SHA-256 of sidecar bytes; not the ZIP digest"
+  },
+  "historical_issue134_continuation_20261024": {
+    "issue": 134,
+    "branch": "ccr-315b4684-r3j424",
+    "target_version": "2.3.1",
+    "source_base": "a45fbdd90e4f98e05c2f45c43afb28a63b3e448c",
+    "status": "source_candidate_low_batch_and_release_pending",
+    "delivered_since_published_release": "PRs #114-#179 on main, including issue #168 disk cleanup (#174-#178) and session-bound protected-path grants (#179).",
+    "next_action": "Fix the Low findings collected in issue #134 in small PRs, then prepare the 2.3.1 release. Bind independent review to the exact reviewed commit, save reports outside Git, run one final PR verifier and require public Actions linux/windows on the exact head. Under conditional L5, record exact merge/tag/release grants only after green exact-head checks, resolved threads and passed independent review. Keep v2.3.0 immutable. Native harness executes local tasks; do not start a daemon or enable providers. Production installation/task acceptance still needs an exact owner target and scoped authority.",
+    "record_scope": "Historical 2026-10-24 source continuation; superseded by the all-issues delivery instruction. Values retained as dated provenance, not a current action."
+  },
+  "historical_ci_observation_20261009": {
+    "repository": "Dimkox/Getzilla",
+    "visibility": "public",
+    "required_checks": [
+      "linux",
+      "windows"
+    ],
+    "github_app_id": 15368,
+    "workflow": ".github/workflows/getzilla.yml",
+    "observed_at": "2026-10-09",
+    "source": "engineering/changes/20261009-task-37371d/evidence/analysis-integration_architect.md",
+    "current_candidate_verified": false
+  },
+  "historical_source_observation_20260924": {
+    "observed_at": "2026-09-24T20:06:48Z",
+    "main_sha": "3f41be92161fef451a2dfa7451eb458ce8f022b3",
+    "source_pull_request": 189,
+    "source_role": "actual fetched main at the v2.0.19 release-sync merge through PR #189; the artifact-child candidate remains separate",
+    "record_scope": "Historical source observation preserved unchanged except this scope label."
   }
 }

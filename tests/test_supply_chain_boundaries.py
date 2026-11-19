@@ -20,11 +20,39 @@ from tests._support import project_copy
 SOURCE = '.getzilla/config/toolchain.json'
 
 
+def native_hook(root, raw, harness, style):
+    """Run actual checked-in native entrypoints over an inert fixture request."""
+    env = {key: value for key, value in os.environ.items()
+           if key not in {'CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'GEMINI_PROJECT_DIR'}}
+    env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
+    if style == 'source':
+        script = root / 'scripts/getzilla_hook.py'
+        script.parent.mkdir(exist_ok=True)
+        script.write_bytes((ROOT / 'scripts/getzilla_hook.py').read_bytes())
+        command = [sys.executable, str(script), '--script', '.getzilla/hooks/pre_tool_use.py', '--harness', harness]
+    elif style == 'legacy':
+        script = root / 'pre_tool_use.py'
+        script.write_bytes((ROOT / '.getzilla/templates/hook_root_shim.py').read_bytes())
+        command = [sys.executable, str(script), '--harness', harness]
+    else:
+        from getzilla.harnesses import _command
+        command = ['bash', '-c', _command('pre_tool_use.py', harness)]
+    return subprocess.run(command, cwd=root, input=raw, env=env, capture_output=True, timeout=15)
+
+
+def native_verdict(data, harness):
+    if harness in {'claude', 'qwen', 'codex'}:
+        return data.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
+    if harness == 'copilot':
+        return data.get('permissionDecision', 'allow')
+    return data.get('decision', 'allow')
+
+
 class PayloadBoundaryTests(unittest.TestCase):
-    def raw_hook(self, root, raw):
+    def raw_hook(self, root, raw, *, exit_code=0):
         result = subprocess.run([sys.executable, '-B', str(root / '.getzilla/hooks/pre_tool_use.py')],
                                 cwd=root, input=raw, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, exit_code, result.stderr)
         self.assertNotIn(b'PRIVATE-SENTINEL', result.stdout + result.stderr)
         return json.loads(result.stdout)
 
@@ -53,7 +81,7 @@ class PayloadBoundaryTests(unittest.TestCase):
     def test_bootstrap_decoder_failure_denies_when_library_is_unavailable(self):
         with project_copy() as root:
             (root / '.getzilla/hooks/_lib.py').write_text('raise ImportError("fixture failure")\n')
-            result = self.raw_hook(root, b'{"tool_name":"Read",PRIVATE-SENTINEL')
+            result = self.raw_hook(root, b'{"tool_name":"Read",PRIVATE-SENTINEL', exit_code=2)
             self.assertEqual(result['decision'], 'deny', result)
             self.assertIn('invalid_tool_request', result.get('reason', ''))
 
@@ -66,7 +94,7 @@ class PayloadBoundaryTests(unittest.TestCase):
                                              '--harness', harness], cwd=root,
                                             input=b'{"tool_name":"Read",PRIVATE-SENTINEL',
                                             capture_output=True, timeout=15)
-                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.returncode, 2)
                     data = json.loads(result.stdout)
                     self.assertNotIn(b'PRIVATE-SENTINEL', result.stdout + result.stderr)
                     if harness in {'claude', 'qwen', 'codex'}:
@@ -76,6 +104,43 @@ class PayloadBoundaryTests(unittest.TestCase):
                         self.assertEqual(data.get('permissionDecision'), 'deny')
                     else:
                         self.assertEqual(data['decision'], 'deny')
+
+
+class BootstrapNativeProtocolTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX generated launcher; source and legacy schemas covered separately')
+    def test_missing_and_broken_bootstrap_block_native_hosts_but_preserve_public_reads(self):
+        for breakage in ('missing', 'broken'):
+            with project_copy() as root:
+                (root / 'README.md').write_text('inert public fixture')
+                (root / 'README.md').chmod(0o644)
+                library = root / '.getzilla/hooks/_lib.py'
+                if breakage == 'missing':
+                    library.unlink()
+                    (root / '_lib.py').write_text(
+                        'from pathlib import Path\nPath(__file__).with_name("foreign-bootstrap-loaded").write_text("unexpected")\n')
+                else:
+                    library.write_text('raise ImportError("inert bootstrap fixture")\n')
+                cases = (
+                    (b'{"tool_name":"Read",PRIVATE-SENTINEL', 'deny'),
+                    (json.dumps({'cwd': str(root), 'tool_name': 'functions.exec_command',
+                                 'tool_input': {'cmd': 'terraform destroy'}}).encode(), 'deny'),
+                    (json.dumps({'cwd': str(root), 'tool_name': 'functions.exec',
+                                 'tool_input': {'code': 'text(1)'}}).encode(), 'deny'),
+                    (json.dumps({'cwd': str(root), 'tool_name': 'functions.mcp__unknown__read_file',
+                                 'tool_input': {'path': 'README.md'}}).encode(), 'deny'),
+                    (json.dumps({'cwd': str(root), 'tool_name': 'Read',
+                                 'tool_input': {'file_path': 'README.md'}}).encode(), 'allow'),
+                )
+                for harness in ('grok', 'claude', 'qwen', 'codex', 'gemini', 'copilot'):
+                    for style in ('generated', 'source', 'legacy'):
+                        for raw, expected in cases:
+                            with self.subTest(breakage=breakage, harness=harness, style=style, expected=expected):
+                                result = native_hook(root, raw, harness, style)
+                                self.assertEqual(result.returncode, 2 if expected == 'deny' else 0, result.stderr)
+                                self.assertEqual(native_verdict(json.loads(result.stdout), harness), expected)
+                                self.assertNotIn(b'PRIVATE-SENTINEL', result.stdout + result.stderr)
+                                self.assertLess(len(result.stdout), 2000)
+                                self.assertFalse((root / 'foreign-bootstrap-loaded').exists())
 
 
 @unittest.skipIf(os.name == 'nt', 'POSIX public mode/owner custody; unsupported Windows ACL evidence stays unqualified')

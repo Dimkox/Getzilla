@@ -666,7 +666,7 @@ class HookTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
             self.assertIn('deny', proc.stdout)
 
     def test_user_prompt_submit_creates_route(self) -> None:

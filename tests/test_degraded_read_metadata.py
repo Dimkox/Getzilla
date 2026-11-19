@@ -40,6 +40,7 @@ class DegradedReadMetadataTests(unittest.TestCase):
                             'tool_name': 'Bash', 'tool_input': {'command': command}}), expected)
 
     def fixture(self, root: Path, failure: str | None) -> None:
+        self.bootstrap_unavailable = failure == '.getzilla/getzilla/fsx.py'
         (root / 'README.md').write_text('synthetic public text\n', encoding='utf-8')
         (root / '.env').write_text('synthetic no-secret marker\n', encoding='utf-8')
         (root / 'sub').mkdir()
@@ -49,7 +50,8 @@ class DegradedReadMetadataTests(unittest.TestCase):
 
     def decision(self, root: Path, payload: dict) -> str:
         code, output, error = run_hook(root, 'pre_tool_use.py', {'cwd': str(root), **payload})
-        self.assertEqual(code, 0, error)
+        verdict = output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
+        self.assertEqual(code, 2 if self.bootstrap_unavailable and verdict == 'deny' else 0, error)
         self.assertLess(len(json.dumps(output)), 2000)
         self.assertLess(len(error), 1000)
         return output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
@@ -142,7 +144,7 @@ class DegradedReadMetadataTests(unittest.TestCase):
                             )
                         except subprocess.TimeoutExpired:
                             self.fail('degraded configuration admission blocked before producing a decision')
-                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.returncode, 2 if self.bootstrap_unavailable and expected == 'deny' else 0, result.stderr)
                         self.assertLess(len(result.stdout), 2000)
                         self.assertLess(len(result.stderr), 1000)
                         self.assertEqual(json.loads(result.stdout)['decision'], expected)

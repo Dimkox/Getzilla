@@ -16,6 +16,7 @@ from tests._support import project_copy, run_hook
 
 class DegradedCredentialReadTests(unittest.TestCase):
     def _fixture(self, root: Path, failure: str | None) -> None:
+        self.bootstrap_unavailable = failure == '.getzilla/getzilla/fsx.py'
         (root / 'README.md').write_text('synthetic public text\n', encoding='utf-8')
         (root / '.env').write_text('synthetic marker only\n', encoding='utf-8')
         (root / '.env.example').write_text('synthetic template\n', encoding='utf-8')
@@ -29,7 +30,8 @@ class DegradedCredentialReadTests(unittest.TestCase):
         code, output, error = run_hook(root, 'pre_tool_use.py', {
             'cwd': str(root), 'tool_name': tool, 'tool_input': inputs,
         })
-        self.assertEqual(code, 0, error)
+        verdict = output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
+        self.assertEqual(code, 2 if self.bootstrap_unavailable and verdict == 'deny' else 0, error)
         self.assertLess(len(error), 1000)
         self.assertLess(len(json.dumps(output)), 2000)
         return output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
@@ -117,7 +119,7 @@ class DegradedCredentialReadTests(unittest.TestCase):
                     env={**os.environ, 'PYTHONPATH': str(root / '.getzilla')},
                     input=payload, capture_output=True, timeout=10, check=False,
                 )
-                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertLess(len(result.stdout), 2000)
                 self.assertLess(len(result.stderr), 1000)
                 self.assertEqual(json.loads(result.stdout)['decision'], 'deny')
@@ -151,5 +153,5 @@ class DegradedCredentialReadTests(unittest.TestCase):
                     'cwd': str(root / 'subdir'), 'tool_name': 'Read',
                     'tool_input': {'file_path': 'README.md'},
                 })
-                self.assertEqual(code, 0, error)
+                self.assertEqual(code, 2 if self.bootstrap_unavailable else 0, error)
                 self.assertEqual(output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')

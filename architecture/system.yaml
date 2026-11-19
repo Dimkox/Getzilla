@@ -3544,6 +3544,7 @@
         "factory/src/getzilla_factory/factory_stop.py",
         "factory/src/getzilla_factory/local_writer.py",
         "factory/src/getzilla_factory/native_access.py",
+        "factory/src/getzilla_factory/qwen_native_handoff.py",
         "factory/src/getzilla_factory/payload_access.py",
         "factory/src/getzilla_factory/bb_contracts.py",
         "factory/src/getzilla_factory/context_contracts.py",
@@ -3562,7 +3563,9 @@
         "factory/src/getzilla_factory/store.py",
         "factory/src/getzilla_factory/v15_contracts.py",
         "factory/tests",
-        "tests/test_factory_v15_decisions.py"
+        "tests/test_factory_v15_decisions.py",
+        "factory/src/getzilla_factory/local_network.py",
+        "factory/src/getzilla_factory/workflow.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -3862,7 +3865,8 @@
       "repository_paths": [
         "factory/src/getzilla_factory/brokers.py",
         "factory/src/getzilla_factory/result_broker.py",
-        "factory/src/getzilla_factory/result_contracts.py"
+        "factory/src/getzilla_factory/result_contracts.py",
+        "factory/src/getzilla_factory/_payload_engine.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -5038,7 +5042,8 @@
         "trust-ci/ops/public-worker-cgroup.conf",
         "trust-ci/public-checker-inputs",
         "trust-ci/Dockerfile.worker",
-        ".github/workflows/getzilla-public-producer.yml"
+        ".github/workflows/getzilla-public-producer.yml",
+        "trust-ci/lock_profiles.py"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -5143,7 +5148,8 @@
       "public_contracts": [],
       "repository_paths": [
         "engineering/benchmarks/issue162",
-        "engineering/benchmarks/issue172"
+        "engineering/benchmarks/issue172",
+        "engineering/benchmarks/issue170"
       ],
       "runtime": {
         "evidence": "source_described",
@@ -5319,6 +5325,17 @@
     {
       "description": "Upstream debug event for a failed best-effort public version lookup; the CLI continues without update information and does not expose this as an adapter operation failure. The manifest and GitHub fallback share one 2000 ms budget.",
       "id": "SIG-ENTIRE-VERSION-CHECK-FAILURE"
+    }
+  ],
+  "source_fixtures": [
+    {
+      "consumer_path": "tests/test_reverse_engineering.py",
+      "consumer_sha256": "9ee0499514a7b698103c7ca765b0b5d4b304cf6f2156b0367c6bd1b7e2856583",
+      "owner_node": "NODE-LOCAL-VERIFIER",
+      "path": "tests/fixtures/reverse263/public-probe.c",
+      "profile": "c-public-elf-probe-v1",
+      "purpose": "compile_inspect_only",
+      "sha256": "6126fe8336235c0b2f6adc34cdfa35ab79331306143e4a6cac282f3bd1cd4b5a"
     }
   ],
   "trust_domains": [
