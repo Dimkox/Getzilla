@@ -150,6 +150,7 @@ def build_app(
     workflow_repository=None,
     access_sources=None,
     access_destinations=None,
+    access_payload_profile=None,
 ):
     settings.validate_landing()
     if settings.execution_enabled and (
@@ -225,10 +226,11 @@ def build_app(
             if owned_landing is not None:
                 landing_service = owned_landing.service
         authenticator = Authenticator(load_actors(settings.actors_file))
-        if access_sources is not None or access_destinations is not None:
+        if access_sources is not None or access_destinations is not None or access_payload_profile is not None:
             # Trusted parent composition only; requests cannot register a source or sink.
             owned_access = AccessReleaseService(store, authenticator.access_authority,
-                                               access_sources, access_destinations)
+                                               access_sources, access_destinations,
+                                               payload_profile=access_payload_profile)
         app = create_app(
             factory_service,
             authenticator,
