@@ -62,7 +62,14 @@ class NpmLicenseBundleTests(unittest.TestCase):
     def test_bundles_never_match_general_substrings_filenames_or_new_license_terms(self):
         for text in ['LICENSE', 'SPDX-License-Identifier: MIT AND ISC\n'] + [item['text'] for item in ORIGINAL['review_required'] if item['text'] is not None]:
             with self.subTest(text=text[:55]):
-                self.assertIsNone(self.bundle(text))
+                if hashlib.sha256(text.encode()).hexdigest() in {
+                        '8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004',
+                        '2c7c5d22ed5a8ee968c64757710979afcd77438c48b4a265b94e615babd8a901'}:
+                    self.assertEqual(self.bundle(text),('BlueOak-1.0.0',))
+                    from getzilla.security_licenses import ALLOWED, _select_expression
+                    with self.assertRaises(ValueError):_select_expression('BlueOak-1.0.0',list(ALLOWED))
+                else:
+                    self.assertIsNone(self.bundle(text))
 
 
 if __name__ == '__main__':

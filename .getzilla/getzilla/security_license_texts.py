@@ -263,7 +263,18 @@ _REVIEWED_BUNDLES = {
 # Recognition grants no policy permission. These exact complete files retain
 # their original bytes; only finite selected component profiles permit use.
 from .security_license_family_conditions import TEXTS as _CONDITIONAL_TEXTS
-_REVIEWED_BUNDLES.update(_CONDITIONAL_TEXTS)
+_REVIEWED_BUNDLES.update({sha: ids for sha, ids in _CONDITIONAL_TEXTS.items()
+                          if sha not in _REVIEWED_FILES})
+
+
+from .security_license_go_term_variants import FILES as _GO_FILES, BUNDLES as _GO_BUNDLES, EXPRESSIONS as _GO_EXPRESSIONS
+_REVIEWED_FILES.update(_GO_FILES)
+_REVIEWED_BUNDLES.update(_GO_BUNDLES)
+
+
+def recognized_license_expression(text: str) -> str | None:
+    """Return an exact file's explicit alternative grant; never infer from IDs."""
+    return _GO_EXPRESSIONS.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
 
 
 def recognized_license_bundle(text: str) -> tuple[str, ...] | None:
@@ -272,7 +283,8 @@ def recognized_license_bundle(text: str) -> tuple[str, ...] | None:
     Return every distinct existing license ID present in the complete file.
     The caller must retain all original bytes and separately check its SPDX
     expression and policy. Unknown or altered containers return None.
-    Single-license files use recognized_license; that API remains unchanged.
+    Existing single-file matches stay in recognized_license. Reviewed
+    conditional-term files can return one ID here without granting permission.
     """
     return _REVIEWED_BUNDLES.get(hashlib.sha256(text.encode('utf-8')).hexdigest())
 
