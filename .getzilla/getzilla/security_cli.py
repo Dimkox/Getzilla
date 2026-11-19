@@ -14,6 +14,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
@@ -30,7 +31,7 @@ from .security_artifacts import MAX_INDEX_BYTES, read_file, ArtifactError
 from .security_osv_snapshot import VulnerabilityError, _source_git_root
 from .security_oci import source_bindings, bound_fault, _bound_detail
 from .public_security_context import current_context, bind_context, validate_context
-from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source
+from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source, image_network_selection
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
                    'security-malicious-packages', 'security-licenses', 'security-container-images',
@@ -154,7 +155,7 @@ def validate_selection_authority(source: dict, run: dict, selection=None, *, now
 
 
 def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy: str, *, now=None, image_artifacts=None, image_selection=None,
-                  package_target=None, package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None) -> dict:
+                  package_target=None, package_pins=None, factory_inputs=None, package_graphs=None, package_ci_uses=None, network_selection=None) -> dict:
     """A finite declaration for one source/run; never scan or attestation credit."""
     validate_selection_authority(source, run, image_selection, now=now)
     if isinstance(inventory, dict) and inventory.get('builds'):
@@ -167,7 +168,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
     declared=_profile_declaration(source,inventory,roots,run,policy,now=now,image_artifacts=image_artifacts,
         image_selection=image_selection,package_target=package_target,package_pins=package_pins,
         factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses,
-        public_execution=canonical_digest(public) if public is not None else None)
+        public_execution=canonical_digest(public) if public is not None else None, network_selection=network_selection)
     if image_artifacts is not None:
         from .security_oci import validate_selection
         validate_selection(image_artifacts,inventory,declared['image_profile'])
@@ -176,7 +177,7 @@ def input_profile(source: dict, inventory: dict, roots: dict, run: dict, policy:
 
 def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_artifacts=None,image_selection=None,
                          package_target=None,package_pins=None,factory_inputs=None,package_graphs=None,
-                         package_ci_uses=None,public_execution=None,image_limits=None):
+                         package_ci_uses=None,public_execution=None,image_limits=None,network_selection=None):
     """Pure normalized declaration; never grants native/build observation credit."""
     if (not isinstance(inventory, dict) or inventory.get('complete') is not True or inventory.get('gaps') != []
             or not _digest(inventory.get('digest')) or not _digest(policy)):
@@ -209,6 +210,8 @@ def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_arti
         'security-licenses': ['artifact-license-catalog'] if any(counts.values()) else [],
         'security-container-images': images}
     body['image_profile'] = None
+    if network_selection is not None:
+        body['image_network_selection'] = image_network_selection(inventory, network_selection)
     if counts['images']:
         if any(not isinstance(item.get('reference'), str) or re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', item['reference']) is None for item in inventory['images']):
             raise SecurityDataError('image input requires explicit immutable identities')
@@ -250,6 +253,8 @@ def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_arti
         if not _digest(public_execution):
             raise SecurityDataError('public execution declaration digest is malformed')
         body['public_execution_sha256']=public_execution
+    if network_selection is not None:
+        body['image_network_selection'] = image_network_selection(inventory, network_selection)
     body['profile_sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return json.loads(json.dumps(body))
 
@@ -269,7 +274,7 @@ def validate_input_profile(profile: dict, source: dict, inventory: dict, roots: 
     if 'python_source_pins' in profile and package_pins is None:
         raise SecurityDataError('source artifact pins must be reobserved before profile consumption')
     if not 0 <= age <= MAX_AGE_SECONDS or profile != input_profile(source, inventory, roots, run, policy, now=created, image_artifacts=image_artifacts, image_selection=image_selection,
-                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses):
+                                                               package_target=target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses, network_selection=profile.get('image_network_selection')):
         raise SecurityDataError('input profile is stale or differs from actual source/run/attempt/policy/roots/bounds')
     return profile
 
@@ -331,6 +336,7 @@ def preparation_result(profile: dict, before: dict, after: dict, obligations: li
             'profile': profile, 'profile_sha256': profile.get('profile_sha256'),
             'before': before, 'after': after, 'required_sources': obligations,
             'acquisitions': acquisitions, 'license_inputs': license_result, 'gaps': sorted(set(gaps)),
+            'retained_image_layouts': [item for item in acquisitions if item.get('kind') == 'oci-image-acquisition'],
             'checked_at': _clock(now).isoformat(), 'scan_outcomes': [],
             'assurance': 'local-input-integrity-only-not-external-attestation',
             **({'preparation_scope':'selected-native-security-run','overall_coverage_complete':False,
@@ -375,7 +381,7 @@ def _prepare_families(inventory,artifacts,tools,families,*,now=None,run_context=
 
 def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, profile=None,
                    run=None, write_profile=False, refresh=False, provision=False, families=None, now=None, image_artifacts=None, image_selection=None,
-                   package_target=None) -> dict:
+                   package_target=None, network_selection=None) -> dict:
     """Reuse existing producers for explicit inputs; never run vulnerability/scanner callbacks."""
     if not write_profile and not isinstance(profile, dict):
         raise SecurityDataError('explicit current public input profile required before preparation')
@@ -383,6 +389,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         raise SecurityDataError('profile declaration cannot execute acquisition')
     if os.name != 'posix':
         raise SecurityDataError('public snapshot preparation requires a qualified POSIX reader; platform unavailable')
+    action_deadline = time.monotonic() + 600
     with _preparation_step('setup'):
         root = root.resolve()
         roots = {key: str(path.absolute()) for key, path in
@@ -417,7 +424,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
         if write_profile:
             with _preparation_step('profile-declaration'):
                 declared = input_profile(before, inventory, roots, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
-                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+                                         package_target=package_target,package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses, network_selection=network_selection)
                 if source_bindings(catalog):
                     refresh_images(inventory, tools, now=now, profile=declared['image_profile'], image_artifacts=image_artifacts)
                     if (_json(read_file(image_artifacts.parent, image_artifacts.name, MAX_INDEX_BYTES)) != catalog
@@ -435,7 +442,7 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             from .security_license_scope import current as current_run_scope
             run_context=current_run_scope(root,inventory,python_binding)
             required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
-        if refresh and inventory['images'] and image_artifacts is None:
+        if refresh and inventory['images'] and image_artifacts is None and not profile.get('image_network_selection'):
             raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations are not qualified artifacts')
         if families is not None:
             if (not isinstance(families, dict) or set(families) != {'schema_version', 'inventory_sha256', 'records'}
@@ -474,7 +481,9 @@ def prepare_inputs(root: Path, database: Path, artifacts: Path, tools: Path, *, 
             if inventory['images']:
                 # No daemon pull can silently bypass the image storage ceiling.
                 with _preparation_step('image-artifacts'):
-                    acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts))
+                    acquisitions.extend(refresh_images(inventory, tools, now=now, profile=profile['image_profile'], image_artifacts=image_artifacts,
+                        binding={'source': before, 'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run},
+                        deadline=action_deadline, network_selection=profile.get('image_network_selection')))
                 if image_artifacts is not None:
                     with _preparation_step('image-database'):
                         acquisitions.extend(refresh_image_database(tools, now=now))
@@ -879,6 +888,7 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
              package_target=None) -> dict:
     if (refresh or provision) and not isinstance(profile, dict):
         raise SecurityDataError('acquisition requires an explicit current public input profile')
+    action_deadline = time.monotonic() + 600
     root, artifacts, tools = (path.resolve() for path in (root, artifacts, tools))
     database = database.absolute()  # Keep named links visible to descriptor snapshot I/O.
     env = {'GETZILLA_SECURITY_DB': str(database), 'GETZILLA_SECURITY_ARTIFACTS': str(artifacts),
@@ -929,10 +939,15 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 validate_input_profile(profile, before, inventory, {'database': str(database), 'artifacts': str(artifacts),
                                        'tools': str(tools)}, run, policy, now=now, image_artifacts=catalog, image_selection=selection,
                                        package_pins=package_pins,factory_inputs=factory_inputs,package_graphs=package_graphs,package_ci_uses=package_ci_uses)
+            if profile is not None and profile.get('image_network_selection'):
+                env['GETZILLA_SECURITY_OCI_BINDING'] = json.dumps({'source': before,
+                    'inventory_sha256': inventory['digest'], 'policy_sha256': policy, 'run': run}, sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_PROFILE'] = json.dumps(profile['image_profile'], sort_keys=True)
+                env['GETZILLA_SECURITY_OCI_NETWORK_SELECTION'] = json.dumps(profile['image_network_selection'], sort_keys=True)
             from .security_license_scope import current as current_run_scope
             run_context=current_run_scope(root,inventory,python_binding)
             required_dependencies=run_context.acquisition_dependencies() if run_context is not None else inventory['dependencies']
-            if refresh and inventory['images'] and image_artifacts is None:
+            if refresh and inventory['images'] and image_artifacts is None and not profile.get('image_network_selection'):
                 raise _image_refusal('bounded-image-transport-unavailable', 'bounded immutable image acquisition unavailable; declarations remain unqualified')
             def acquire(label, operation):
                 try:
@@ -965,7 +980,9 @@ def evaluate(root: Path, database: Path, artifacts: Path, tools: Path, *, refres
                 if inventory['images']:
                     def image_inputs():
                         observations = refresh_images(inventory, tools, now=now,
-                            profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts)
+                            profile=profile.get('image_profile') if profile else None, image_artifacts=image_artifacts,
+                            binding=json.loads(env.get('GETZILLA_SECURITY_OCI_BINDING', 'null')), deadline=action_deadline,
+                            network_selection=profile.get('image_network_selection') if profile else None)
                         if image_artifacts is not None:
                             observations.extend(refresh_image_database(tools, now=now))
                         return observations
@@ -1117,6 +1134,8 @@ def main(argv=None) -> int:
     parser.add_argument('--ci-image-corpus', action='store_true', help='request approved CI8GiB/12GiB job; actual kernel and memory admission required')
     parser.add_argument('--backend-tool-pins', type=Path, help='bounded source-pinned BuildKit distribution selector; never resource or build-completion authority')
     parser.add_argument('--input-profile', type=Path, help='exact current source/run/attempt/roots profile')
+    parser.add_argument('--oci-network-selection', type=Path,
+                        help='explicit fixed-host global numeric peer map for profile declaration; automatic DNS unavailable')
     parser.add_argument('--family-records', type=Path, help='selected retained family record descriptors whose proof bytes already exist in --artifacts')
     parser.add_argument('--image-selection', type=Path, help='bounded source/run/currentness declarations; never image execution credit')
     parser.add_argument('--image-artifacts', type=Path, help='explicit local OCI layout catalog bound to complete inventory/profile; no daemon or registry acquisition')
@@ -1157,6 +1176,10 @@ def main(argv=None) -> int:
         parser.error('invalid internal preparation dispatch')
     try:
         profile = _json(read_file(args.input_profile.parent, args.input_profile.name, MAX_INDEX_BYTES)) if args.input_profile else None
+        network_selection = _json(read_file(args.oci_network_selection.parent, args.oci_network_selection.name, 16384)) if args.oci_network_selection else None
+        if args.oci_network_selection is not None and args.write_input_profile is None and (
+                not isinstance(profile, dict) or network_selection != profile.get('image_network_selection')):
+            raise SecurityDataError('OCI numeric selection differs from explicit input profile')
         families = _json(read_file(args.family_records.parent, args.family_records.name, MAX_INDEX_BYTES)) if args.family_records else None
         run = ci_run_context(os.environ)
         if args.prepare_inputs and args.input_worker is None:
@@ -1166,7 +1189,7 @@ def main(argv=None) -> int:
         elif args.prepare_inputs or args.write_input_profile is not None:
             report = prepare_inputs(args.root, args.database, args.artifacts, args.tools,
                 profile=profile, run=run, write_profile=args.write_input_profile is not None,
-                refresh=args.refresh, provision=args.provision_tools, families=families, image_artifacts=args.image_artifacts, image_selection=args.image_selection)
+                refresh=args.refresh, provision=args.provision_tools, families=families, image_artifacts=args.image_artifacts, image_selection=args.image_selection, network_selection=network_selection)
             if args.write_input_profile is not None:
                 _atomic(args.write_input_profile, (json.dumps(report, sort_keys=True) + '\n').encode())
         else:

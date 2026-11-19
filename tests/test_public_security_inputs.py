@@ -101,6 +101,38 @@ def release_fixture(directory):
     return inventory, record, bundle
 
 
+class NewOciPreparationConsumerTests(unittest.TestCase):
+    def test_explicit_numeric_envelope_preserves_profile_caps_and_exact_binding(self):
+        from getzilla import security_cli
+        from tests.test_security_oci_layout import owned_binding, owned_image, owned_network
+        from getzilla.security_data import SecurityDataError
+        binding = owned_binding()
+        _, reference = owned_image()
+        inventory = {'complete': True, 'gaps': [], 'digest': binding['inventory_sha256'],
+                     'dependencies': [], 'tools': [], 'images': [{'reference': reference, 'platform': 'linux/amd64'}]}
+        roots = {'database': '/new-owned/data', 'artifacts': '/new-owned/artifacts', 'tools': '/new-owned/tools'}
+        args = (binding['source'], inventory, roots, binding['run'], binding['policy_sha256'])
+        old = security_cli.input_profile(*args, now=NOW)
+        selected = security_cli.input_profile(*args, now=NOW, network_selection=owned_network())
+        self.assertEqual(old['image_profile'], selected['image_profile'])
+        self.assertEqual(selected['image_network_selection'], owned_network())
+        self.assertNotEqual(old['profile_sha256'], selected['profile_sha256'])
+        self.assertEqual(security_cli.validate_input_profile(selected, *args, now=NOW), selected)
+        changed = json.loads(json.dumps(selected))
+        changed['image_network_selection']['registry-1.docker.io'] = ['1.1.1.1']
+        with self.assertRaises(SecurityDataError):
+            security_cli.validate_input_profile(changed, *args, now=NOW)
+
+    def test_retained_layout_projection_never_claims_scan_or_qualification(self):
+        from getzilla import security_cli
+        selected = {'kind': 'oci-image-acquisition', 'status': 'pass', 'qualification': 'UNVERIFIED',
+                    'manifest_sha256': 'a' * 64, 'records': [{'subject': {'reference': 'owned'}}]}
+        result = security_cli.preparation_result({'observed_counts': {}}, {}, {}, [], [selected], {'status': 'skip'})
+        self.assertEqual(result.get('retained_image_layouts'), [selected])
+        self.assertEqual(result['qualification'], 'UNVERIFIED')
+        self.assertEqual(result['scan_outcomes'], [])
+
+
 class PublicReleaseLicenseTests(unittest.TestCase):
     def test_exact_source_pinned_release_archive_retains_component_licenses(self):
         with tempfile.TemporaryDirectory() as temporary:
