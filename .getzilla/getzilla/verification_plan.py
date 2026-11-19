@@ -33,6 +33,7 @@ _POLICY_PATHS = (
     '.getzilla/getzilla/verification_plan.py', '.getzilla/getzilla/quality_gates.py',
     '.getzilla/getzilla/verification.py', '.getzilla/getzilla/criterion_tests.py',
     '.getzilla/getzilla/expanded_security.py', '.getzilla/getzilla/security_data.py',
+    '.getzilla/getzilla/security_publication.py', '.getzilla/getzilla/security_windows_publication.py',
     '.getzilla/getzilla/stacks.py', '.getzilla/getzilla/stack_runners.py',
     '.getzilla/config/diff-risk-rules.json', '.getzilla/config/routing.json',
     '.getzilla/config/stacks.json',
