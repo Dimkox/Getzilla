@@ -40,7 +40,7 @@ def _module_source(module) -> bytes:
 
 def implementation_source_binding() -> dict:
     implementation = {}
-    for name in ('verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
+    for name in ('verification_policy_source.py', 'grant_authoring.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
