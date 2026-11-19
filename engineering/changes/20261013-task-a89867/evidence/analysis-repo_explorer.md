@@ -1,0 +1,10 @@
+# Leaf repository analysis — install
+
+Source: all four leaves HEAD 6dd06ff5b96692a01812fbac6252fd08f6169f91; parent PR base 540c12f93e798c2f483455a5086ab0018ac3216e. Read-only source analysis; no tests/full gates/CI. Owner defers qualifying gates to final parent. Exact leaf tree shares parent source; prior reports are static observations, not reused PASS receipts.
+
+Route a89867. Owner scripts/install_into.py, consumer templates only when needed, tests/test_installer.py and bounded install tests. Existing ownership safety is real: plan entries have manifest hashes; kept_local/kept_local_sha256 are validated; governance target registries are excluded; no clean-tree requirement in plan_install. Preserve these no-op clauses rather than replace installer design.
+#75 remains: plan return has entries/kept/legacy_migration/dependency_advice but no explicit classification ledger for unrelated requirements/evidence/agent scratch/generated metadata. Add safe bounded metadata-only classification; do not read requirement contents, delete unrelated artifacts or claim installer created them. Existing egg-info must be classified, not silently retired. Check legacy migration with requirements JSON, egg-info, agent scratch and evidence, including user AGENTS/CI conflicts.
+Tests: test_consumer_documentation_is_deterministic_and_manifest_bound; test_previous_release_install_upgrades_with_a_replacement_for_every_retired_file; test_materialize_new_parent_relocation_does_not_touch_outside_bytes; test_materialize_new_rejects_ancestor_swaps_during_parent_binding.
+Intersection: core may change fsx descriptor helpers; install leaf should reuse shared API without competing edits. docs leaf owns public explanatory prose; hand it consumer classification semantics. Lock leaf owns packaging/install dependency commands; do not edit Dockerfiles or uv locks here.
+
+Commands: bounded saved issue JSON inspection; rg/sed of named source/test files; git rev-parse HEAD for each leaf. Source candidates not modified.
