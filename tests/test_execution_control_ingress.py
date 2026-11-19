@@ -25,7 +25,7 @@ class ExecutionControlIngressTests(unittest.TestCase):
         self.addCleanup(state.bind_session, None)
         config = self.root / ".getzilla/config"
         config.mkdir(parents=True)
-        (config / "policy.json").write_text("{}")
+        (config / "policy.json").write_text('{"schema_version": 2}')
         owned_route(self.root, session="stop-ingress-fixture")
         execution.stop(self.root, execution.trusted_caller(self.root))
         self.identity = "a" * 32

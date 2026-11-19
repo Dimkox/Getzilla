@@ -1135,9 +1135,10 @@ def select_architecture_comparison_base(
     ranges = _git_range_selection(root, route, range_mode)
     if ranges.head_sha != head or (_trusted_ranges is not None and _trusted_ranges != ranges):
         raise ArchitectureError('architecture ranges are foreign or stale', code='git')
-    marker_present = _git_blob(root, route_base, _ADOPTION_PATH) is not None
+    route_values = _git_blobs(root, route_base, (*_MODEL_PATHS, _ADOPTION_PATH))
+    marker_present = route_values[_ADOPTION_PATH] is not None
     model_present = tuple(
-        _git_blob(root, route_base, path) is not None for path in _MODEL_PATHS
+        route_values[path] is not None for path in _MODEL_PATHS
     )
     if model_present not in {(False, False), (True, True)}:
         raise ArchitectureError(
