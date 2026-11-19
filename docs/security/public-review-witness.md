@@ -160,8 +160,12 @@ still verify the actual bounded lossless supplements and all scientific facts.
 
 The current actual first large-B publication has 204,102 JSON value/container
 nodes and therefore refuses the unchanged 200,000-node physical-document bound.
-The original producer must publish a genuine bounded lossless supplement before
-that actual group can qualify. No actual public witness or PhaseB reference has
+The original producer published two genuine lossless slices (549–824 and
+824–1098), each within the unchanged physical bounds. The exact original B body
+is hashed without JSON decoding in the same group; original plus both slices,
+manifest and producer checks total13,987,161 bytes before delivery/report work.
+The fixed canonical reconstruction must equal2d24769f…. This does not use the
+separate A/C observed-fingerprint port or change the sixteen-MiB group cap. No actual public witness or PhaseB reference has
 been issued by this source slice. `reviewed_public_dataset(A)` returns the four
 current parsed public data documents and factual hashes after consuming A;
 these data objects confer no source, model, execution or output permission.
