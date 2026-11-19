@@ -196,7 +196,7 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             before = policy_binding(root)
-            for name in ('security_license_texts', 'security_license_family_conditions',
+            for name in ('security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
                          'security_license_source_conditions', 'security_license_go_term_variants'):
                 with self.subTest(owner=name):
                     module = importlib.import_module('getzilla.' + name)
@@ -206,3 +206,35 @@ class QueueAnalysisProfileTests(unittest.TestCase):
                         after = policy_binding(root)
                     self.assertEqual(after['implementation'][name + '.py'], hashlib.sha256(changed).hexdigest())
                     self.assertNotEqual(before['digest'], after['digest'])
+
+    def test_go_wire_fields_preserve_closed_factual_validator_projection(self):
+        from getzilla.python_source_proof import namespace_is_closed
+        source = (ROOT / '.getzilla/getzilla/security_go_tool_inputs.py').read_bytes()
+        tree = ast.parse(source)
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True,
+                                            forbidden_imports=fit._QUEUE_IMPORTS))
+        projection = fit._queue_export_slice(tree, frozenset({'verify_family'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_licenses'
+                             for node in ast.walk(projection)))
+        from getzilla.security_go_contracts import MODULES_KEY
+        self.assertEqual(MODULES_KEY, 'modules')
+
+    def test_go_contract_is_visible_literal_data_and_real_reflection_still_refuses(self):
+        from getzilla.python_source_proof import namespace_is_closed
+        from getzilla import security_go_contracts as contract, security_go_tool_producer as producer
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_go_contracts.py').read_bytes())
+        self.assertTrue(all(isinstance(node, (ast.Assign, ast.Expr)) for node in tree.body))
+        self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.Call, ast.Attribute)) for node in ast.walk(tree)))
+        self.assertTrue(any(isinstance(node, ast.Constant) and node.value == 'modules' for node in ast.walk(tree)))
+        for source in ('import sys\nvalue=sys.modules\n', 'value=getattr(subject, \"__dict__\")\n'):
+            self.assertFalse(namespace_is_closed(ast.parse(source), allow_instrumentation=True,
+                                                 static_import_reads=True, forbidden_imports=fit._QUEUE_IMPORTS))
+        self.assertIsNone(fit._module_member_demands(ast.parse('value=getattr(subject, name)'), 'subject'))
+        old = dict(schema_version=1, kind='go-checker-components/v1', tool_id='owned', release='1',
+                   modules={'owned': 'fact'}, source_locks={}, runtime={}, expressions={})
+        current = {'schema_version': 1, 'kind': 'go-checker-components/v1', 'tool_id': 'owned', 'release': '1',
+                   contract.MODULES_KEY: {'owned': 'fact'}, 'source_locks': {}, 'runtime': {}, 'expressions': {}}
+        self.assertEqual(producer.canonical(old), producer.canonical(current))
+        source = ast.parse((ROOT / '.getzilla/getzilla/security_go_tool_producer.py').read_bytes())
+        self.assertTrue(any(isinstance(node, ast.Dict) and any(isinstance(key, ast.Name)
+                             and key.id == 'MODULES_KEY' for key in node.keys) for node in ast.walk(source)))
