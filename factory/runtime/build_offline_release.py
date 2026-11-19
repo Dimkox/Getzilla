@@ -302,6 +302,51 @@ def _git(repository: Path, *arguments: str) -> str:
     return result.stdout
 
 
+def _project_license(repository: Path, expected_head: str) -> bytes:
+    """Retain the bounded, held-FD root license from the exact committed source."""
+    descriptors = []
+    try:
+        entry = _git(repository, 'ls-tree', expected_head, '--', 'LICENSE').strip()
+        match = re.fullmatch(r'100644 blob ([0-9a-f]{40}|[0-9a-f]{64})\tLICENSE', entry)
+        if match is None:
+            raise InstallerError('PROJECT_LICENSE_MISMATCH')
+        directory = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(directory)
+        descriptor = os.open('LICENSE', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory)
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 < before.st_size <= 262144:
+            raise InstallerError('PROJECT_LICENSE_MISMATCH')
+        parts = []
+        remaining = before.st_size + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                break
+            parts.append(chunk)
+            remaining -= len(chunk)
+        payload = b''.join(parts)
+        after = os.fstat(descriptor)
+        def identity(value):
+            return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                    value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if identity(before) != identity(after) or len(payload) != before.st_size:
+            raise InstallerError('PROJECT_LICENSE_MISMATCH')
+        # SHA-1 here is Git's object identity, not the release integrity algorithm.
+        blob = b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload
+        object_id = (hashlib.sha1(blob, usedforsecurity=False).hexdigest()
+                     if len(match[1]) == 40 else hashlib.sha256(blob).hexdigest())
+        if object_id != match[1]:
+            raise InstallerError('PROJECT_LICENSE_MISMATCH')
+        return payload
+    except (OSError, ValueError) as exc:
+        raise InstallerError('PROJECT_LICENSE_MISMATCH') from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def _read_legal_input(repository: Path, filename: str, expected_sha256: str, *, expected_mode: int | None = None) -> bytes:
     """Read one fixed, bounded, unchanged regular input without following links."""
     descriptors = []
@@ -520,6 +565,7 @@ def build_release(*, repository: Path, expected_head: str, wheelhouse: Path, inv
         if target in files:
             raise InstallerError("LEGAL_FILE_COLLISION")
         files[target] = (payload, 0o644)
+    files["legal/project/LICENSE"] = (_project_license(repository, expected_head), 0o644)
     tracked = _git(repository, "ls-files", "factory/src/getzilla_factory").splitlines()
     if not tracked:
         raise InstallerError("INVALID_SOURCE")
