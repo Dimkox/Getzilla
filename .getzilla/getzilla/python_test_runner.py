@@ -628,8 +628,9 @@ def _application_coverage_config(config: Path, directory: Path, *, root: Path) -
         raise RunnerError('managed unittest path cannot be represented as an exact coverage omission')
     omissions = [harness]  # Retain the existing bootstrap-only exception.
     consumer = root.resolve()
-    from . import queue_refusal
-    for origin in (fsx.__file__, pytest_progress.__file__, diagnostics.__file__, actions.__file__, queue_refusal.__file__):
+    from . import queue_refusal, verification_unittest, verification_journal_contracts
+    for origin in (fsx.__file__, pytest_progress.__file__, diagnostics.__file__, actions.__file__, queue_refusal.__file__,
+                   verification_unittest.__file__, verification_journal_contracts.__file__):
         path = Path(origin).resolve()
         if path.is_relative_to(consumer):
             continue
