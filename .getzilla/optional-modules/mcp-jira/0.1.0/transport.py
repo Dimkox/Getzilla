@@ -92,7 +92,10 @@ class Session:
             raise TransportError('request_oversize')
         offset = 0
         while offset < len(raw):
-            if self.clock() >= self.deadline or self.watch() != 'running':
+            state = self.watch()
+            if self.clock() >= self.deadline or state == 'deadline':
+                raise TransportError('hard_deadline')
+            if state != 'running':
                 raise TransportError('cancelled_before_send')
             try:
                 count = os.write(self.process.stdin.fileno(), raw[offset:offset + 4096])
@@ -229,6 +232,8 @@ class Session:
             return Reply('domain' if result.get('isError') is True else 'success', result,
                          remote_task_id=self.remote_task, remote_confirmed=True, sent=True)
         except TransportError as error:
+            if str(error) == 'hard_deadline':
+                return Reply('deadline', reason='hard_deadline', remote_task_id=self.remote_task, sent=self.sent)
             if str(error) == 'cancelled_before_send':
                 return Reply('cancelled', reason=str(error), sent=self.sent)
             return Reply('infra', reason=str(error), remote_task_id=self.remote_task, sent=self.sent)

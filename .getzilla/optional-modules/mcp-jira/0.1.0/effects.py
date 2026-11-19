@@ -42,6 +42,10 @@ class Effects:
     def intent(self, execution_id, operation_id, *, target, operation, arguments, baseline):
         self._record(execution_id, operation_id)
         self.access.authorize(target, operation)
+        release = getattr(self.access, 'authorize_release', None)
+        if not callable(release):
+            raise ValueError('effect_release_profile_unqualified')
+        release(target, operation, arguments)
         if getattr(self.provider, 'intent_reconciliation_qualified', False) is not True:
             raise ValueError('effect_provider_unqualified')
         identity = dict(execution_id=execution_id, operation_id=operation_id, target=target,
@@ -105,6 +109,7 @@ class Effects:
         if not emit:
             return value  # Includes unknown: never blindly repeat a mutation.
         try:
+            self.access.authorize_release(emit[0]['target'], emit[0]['operation'], arguments)
             receipt = self.provider.emit(emit[0], arguments)
             if not isinstance(receipt, dict) or receipt.get('operation_id') != operation_id or receipt.get('applied') is not True:
                 raise ValueError('effect_unconfirmed')

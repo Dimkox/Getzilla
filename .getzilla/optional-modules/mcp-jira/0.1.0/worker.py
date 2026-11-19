@@ -11,7 +11,7 @@ import time
 # ordinary Core startup. The launch itself is explicit and source admitted.
 HERE=Path(__file__).resolve().parent
 for parent in HERE.parents:
-    if (parent/'getzilla/execution.py').is_file():
+    if (parent/'getzilla/__init__.py').is_file():
         sys.path.insert(0,str(parent));break
 from getzilla import execution,execution_store,state,managed_execution as managed
 from getzilla import supervised_execution as supervisor

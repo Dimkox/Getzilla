@@ -24,7 +24,9 @@ class Jira:
         if (not isinstance(capability, dict) or capability.get('class') not in {'read', 'write'}
                 or any(name in tool.lower() for name in ('unified', 'enriched', 'teamworkgraph'))):
             raise ValueError('jira_capability_unqualified')
-        if not isinstance(arguments, dict) or arguments.get('site') != self.site or arguments.get('project') != self.project:
+        if not isinstance(arguments, dict) or set(arguments) - {'site', 'project', 'resource', 'payload'}:
+            raise ValueError('jira_argument_schema_unqualified')
+        if arguments.get('site') != self.site or arguments.get('project') != self.project:
             raise ValueError('jira_target_scope')
         resource = arguments.get('resource')
         if resource not in self.resources:
