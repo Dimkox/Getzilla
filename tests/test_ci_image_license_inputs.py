@@ -6,6 +6,9 @@ import io
 import json
 import tarfile
 import unittest
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".getzilla"))
 
 from tests import test_offline_oci_import as fixtures
 from tests.test_offline_oci_import import LAYER, CONFIG, MANIFEST
@@ -138,9 +141,12 @@ class CIInstallRecipeTests(unittest.TestCase):
                        'trust-ci/Dockerfile.test', 'trust-ci/runner.Dockerfile'):
             actual = operation(root, recipe)
             self.assertIsNotNone(actual, recipe)
-            self.assertIn('trust-ci/requirements-build.txt', actual['install_requirements'])
-            self.assertEqual('trust-ci/requirements-test.txt' if 'test' in recipe or 'runner' in recipe
-                             else 'trust-ci/requirements.txt', actual['requirements'])
+            profile = 'runner' if 'runner' in recipe else 'test' if 'test' in recipe else 'runtime'
+            primary = 'trust-ci/requirements-' + profile + '.txt'
+            self.assertEqual({primary}, set(actual['install_requirements']))
+            self.assertEqual(primary, actual['requirements'])
+            self.assertIn('trust-ci/uv.lock', actual['source_inputs'])
+            self.assertIn('trust-ci/lock-profiles.json', actual['source_inputs'])
             for path, digest in actual['install_requirements'].items():
                 self.assertEqual(hashlib.sha256((root / path).read_bytes()).hexdigest(), digest)
             self.assertEqual('runner' in recipe, 'trust-ci/requirements-runner.txt' in actual['install_requirements'])
@@ -155,18 +161,18 @@ class CIInstallRecipeTests(unittest.TestCase):
         inventory = collect_inventory(root)
         runner = {row['name']: row['version'] for row in inventory['dependencies']
                   if row['manifest'] == 'trust-ci/requirements-runner.txt'}
-        self.assertEqual(len(runner), 17)
+        self.assertEqual(len(runner), 47)
         for name, version in {'coverage':'7.15.4', 'pytest':'9.1.1', 'pytest-xdist':'3.8.0',
-                              'pytest-cov':'7.1.0', 'ruff':'0.16.2', 'bandit':'1.9.4', 'tomli':'2.4.1'}.items():
+                              'pytest-cov':'7.1.0', 'ruff':'0.16.3', 'bandit':'1.9.4', 'tomli':'2.5.0'}.items():
             self.assertEqual(version, runner[name])
         backend = [row for row in inventory['dependencies'] if row['manifest'] == 'trust-ci/requirements-build.txt']
         self.assertEqual([(row['name'], row['version']) for row in backend], [('setuptools', '84.1.0')])
         for path in ('trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt'):
             for line in _logical_requirements((root / path).read_text()):
-                self.assertRegex(line, r'^[A-Za-z0-9_.-]+(?:\[toml\])?==[^ ]+ --hash=sha256:[a-f0-9]{64}')
+                self.assertRegex(line, r'^[A-Za-z0-9_.-]+(?:\[toml\])?==[^ ;]+(?: ; [^#]+)? --hash=sha256:[a-f0-9]{64}')
         graphs = target.closure_graphs(root, inventory)
-        self.assertEqual([['trust-ci/requirements-build.txt']], graphs['graphs']['trust-ci/pyproject.toml#build'])
-        runner_graph = ['trust-ci/requirements-test.txt', 'trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt']
+        self.assertEqual(graphs['graphs']['trust-ci/pyproject.toml#runtime'], graphs['graphs']['trust-ci/pyproject.toml#build'])
+        runner_graph = ['trust-ci/requirements-runner.txt']
         self.assertIn(runner_graph, graphs['graphs']['trust-ci/pyproject.toml#runtime'])
         self.assertIn(runner_graph, graphs['graphs']['trust-ci/pyproject.toml#optional'])
 
@@ -177,7 +183,8 @@ class CIInstallRecipeTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ('Dockerfile.api', 'requirements.txt', 'requirements-build.txt'):
+            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py',
+                         'lock-profiles.json', 'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt'):
                 path = root / 'trust-ci' / name
                 path.parent.mkdir(exist_ok=True)
                 path.write_bytes((source / 'trust-ci' / name).read_bytes())
@@ -572,59 +579,48 @@ class CIImageTargetBindingTests(unittest.TestCase):
 
     def test_current_source_consumer_joins_live_base_target_and_pins(self):
         import tempfile
-        from pathlib import Path
+        import shutil
         from unittest.mock import patch
         from getzilla import security_image_producer as producer
+        from getzilla.security_inventory import collect_inventory
 
         consumer = self.uses["consumers"][0]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             recipe = "trust-ci/Dockerfile.api"
-            requirements = "trust-ci/requirements.txt"
+            requirements = "trust-ci/requirements-runtime.txt"
             (root / "trust-ci").mkdir()
-            (root / recipe).write_bytes((Path(__file__).resolve().parents[1] / recipe).read_bytes())
-            (root / requirements).write_text("owned==1.0 --hash=sha256:" + "4" * 64 + "\n")
-            backend = 'trust-ci/requirements-build.txt'
-            (root / backend).write_text('setuptools==84.1.0 --hash=sha256:' + '8' * 64 + '\n')
-            backend_dep = dict(self.dep, name='setuptools', version='84.1.0', manifest=backend)
-            hashes = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in (recipe, requirements, backend)}
-            row = dict(
-                dockerfile=recipe,
-                recipe_sha256=consumer["recipe_sha256"],
-                build_sha256=consumer["build_sha256"],
-                manifest="trust-ci/compose.build.yaml",
-                line=1,
-                source_reference="${IMAGE}",
-            )
-            inventory = dict(
-                digest="5" * 64,
-                builds=[row],
-                dependencies=[self.dep, backend_dep],
-                manifests=[dict(path=path, sha256=hashes[path]) for path in (requirements, backend)],
-                images=[
-                    dict(manifest=row["manifest"], line=1, source_reference="${IMAGE}", reference=consumer["image"])
-                ],
-            )
-            graphs = dict(graphs={"trust-ci/pyproject.toml#runtime": [[requirements, backend]]}, evidence=hashes)
-            self.live.update(
-                build_inputs=[row],
-                builds={row["build_sha256"]: consumer["image"]},
-                base_targets={
-                    row["recipe_sha256"]: dict(
-                        base=consumer["base"],
-                        target=consumer["target"],
-                        supported_tags=consumer["supported_tags"],
-                        site_packages=consumer["site_packages"],
-                    )
-                },
-            )
+            source = Path(__file__).resolve().parents[1]
+            for name in ('Dockerfile.api', 'pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py',
+                         'lock-profiles.json', 'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt'):
+                shutil.copyfile(source / 'trust-ci' / name, root / 'trust-ci' / name)
+            inventory = collect_inventory(root)
+            row = dict(dockerfile=recipe, recipe_sha256=hashlib.sha256((root / recipe).read_bytes()).hexdigest(),
+                build_sha256=consumer["build_sha256"], manifest="trust-ci/compose.build.yaml",
+                line=1, source_reference="${IMAGE}")
+            inventory.update(builds=[row], images=[dict(manifest=row["manifest"], line=1,
+                source_reference="${IMAGE}", reference=consumer["image"])])
+            graphs = self.target.closure_graphs(root, inventory)
+            self.live.update(build_inputs=[row], builds={row["build_sha256"]: consumer["image"]},
+                base_targets={row["recipe_sha256"]: {key: consumer[key] for key in
+                    ("base", "target", "supported_tags", "site_packages")}})
             with patch("getzilla.security_cli.validate_selection_authority"):
                 observed = producer.ci_use_observations(root, inventory, self.source, self.run, graphs)
-            self.assertTrue(observed["consumers"][0]["image_target_observed"])
-            self.assertEqual(observed["consumers"][0]["dependencies"], [self.dep, backend_dep])
-            parent = dict(self.parent, ci_uses=observed)
+            actual = observed["consumers"][0]
+            self.assertTrue(actual["image_target_observed"])
+            self.assertEqual(actual["requirements"], requirements)
+            self.assertEqual(set(actual["install_requirements"]), {requirements})
+            expected = [dep for dep in inventory['dependencies'] if dep['manifest']==requirements
+                or dep['manifest']=='trust-ci/pyproject.toml' and dep['usage'] in {'runtime','build'}]
+            self.assertEqual(actual['dependencies'], expected)
+            self.assertTrue(any(dep['name']=='setuptools' and dep['manifest']==requirements
+                for dep in actual['dependencies']))
+            self.assertTrue(any(dep['name']=='setuptools' and dep['usage']=='build'
+                and dep['manifest']=='trust-ci/pyproject.toml' for dep in actual['dependencies']))
+            parent = dict(self.parent, ci_uses=observed, inventory_sha256=inventory['digest'])
             derived, binding = self.inputs().scope(parent, 0)
-            self.assertEqual(derived["dependencies"][0]["name"], "owned")
+            self.assertIn('cryptography', {dep['name'] for dep in derived['dependencies']})
+            self.assertIn('setuptools', {dep['name'] for dep in derived['dependencies']})
             self.target._binding(binding)
 
     def test_project_runtime_uses_keep_actual_consumer_lock_hash_fence(self):

@@ -149,43 +149,78 @@ def validate_closure_graphs(value):
 
 
 CI_INSTALL_RECIPES = {
-    'trust-ci/Dockerfile.api': ('trust-ci/requirements.txt', '.'),
-    'trust-ci/Dockerfile.worker': ('trust-ci/requirements.txt', '.'),
-    'trust-ci/Dockerfile.test': ('trust-ci/requirements-test.txt', '".[test]"'),
-    'trust-ci/runner.Dockerfile': ('trust-ci/requirements-test.txt', '".[test]"'),
+    'trust-ci/Dockerfile.api': 'runtime',
+    'trust-ci/Dockerfile.worker': 'runtime',
+    'trust-ci/Dockerfile.test': 'test',
+    'trust-ci/runner.Dockerfile': 'runner',
 }
 
 
+class _FrozenProfileFile:
+    def __init__(self, name, body):
+        self.name, self.body = name, body
+
+    def read_bytes(self):
+        return self.body
+
+    def read_text(self):
+        return self.body.decode('utf-8')
+
+
+class _FrozenProfileRoot:
+    def __init__(self, files):
+        self.files = files
+
+    def __truediv__(self, name):
+        return _FrozenProfileFile(name, self.files[name])
+
+
 def ci_install_context(root, recipe):
-    """Only the current trusted four real wheel-install/backend joins."""
+    """Join only the exact trusted recipe and complete checked frozen profiles."""
     from .security_tools import TRUSTED_ROOT
     from .security_build_inputs import _instructions
-    config = CI_INSTALL_RECIPES.get(recipe)
-    if config is None:
+    profile = CI_INSTALL_RECIPES.get(recipe)
+    if profile is None:
         return None
-    primary, install = config
-    paths = [primary, 'trust-ci/requirements-build.txt']
-    if recipe == 'trust-ci/runner.Dockerfile':
-        paths.append('trust-ci/requirements-runner.txt')
+    primary = 'trust-ci/requirements-' + profile + '.txt'
+    names = ('pyproject.toml', 'README.md', 'uv.lock', 'lock_profiles.py', 'lock-profiles.json',
+             'requirements-runtime.txt', 'requirements-test.txt', 'requirements-runner.txt')
     try:
         raw = read_file(root, recipe, 4 * 1024 * 1024)
         if raw != read_file(TRUSTED_ROOT, recipe, 4 * 1024 * 1024):
             return None
         statements = [' '.join(value.split()) for _, value in _instructions(raw.decode())]
-        copied = 'COPY pyproject.toml README.md ' + ' '.join(Path(path).name for path in paths) + ' ./'
-        first = 'python -m pip install --no-cache-dir --only-binary=:all: --require-hashes ' + ' '.join(
-            '-r ' + Path(path).name for path in paths)
-        second = 'python -m pip install --no-cache-dir --no-deps --no-build-isolation ' + install
+        copied = 'COPY pyproject.toml README.md uv.lock lock_profiles.py lock-profiles.json requirements-*.txt ./'
+        first = ('python lock_profiles.py --check && python -m pip install --no-cache-dir '
+                 '--only-binary=:all: --require-hashes --no-deps -r requirements-' + profile + '.txt')
+        second = 'python -m pip install --no-cache-dir --no-deps --no-build-isolation .'
         matches = [row for row in statements if row.startswith('RUN ') and first + ' && ' + second in row]
         if (len(matches) != 1 or matches[0].count('python -m pip install ') != 2
-                or copied not in statements or 'COPY src ./src' not in statements
+                or statements.count(copied) != 1 or statements.count('COPY src ./src') != 1
                 or statements.index(copied) >= statements.index(matches[0])
                 or statements.index('COPY src ./src') >= statements.index(matches[0])):
             return None
-        files = {path: hashlib.sha256(read_file(root, path, 4 * 1024 * 1024)).hexdigest() for path in paths}
-        return dict(requirements=primary, install_requirements=files, graph=paths,
-                    recipe_sha256=hashlib.sha256(raw).hexdigest())
-    except (OSError, ValueError, UnicodeError):
+        captured = {name: read_file(root, 'trust-ci/' + name, 4 * 1024 * 1024) for name in names}
+        trusted_check = read_file(TRUSTED_ROOT, 'trust-ci/lock_profiles.py', 4 * 1024 * 1024)
+        if captured['lock_profiles.py'] != trusted_check:
+            return None
+        # Execute only immutable checker-owned validator bytes, never candidate
+        # code. Its stdlib check reads captured data, so source stays read-only
+        # and no second filesystem read can substitute a raced file or symlink.
+        checker = {'__name__': 'getzilla._trusted_ci_lock_profiles',
+                   '__file__': str(TRUSTED_ROOT / 'trust-ci/lock_profiles.py')}
+        exec(compile(trusted_check, checker['__file__'], 'exec'), checker)
+        if checker['check'](_FrozenProfileRoot(captured)):
+            return None
+        project = tomllib.loads(captured['pyproject.toml'].decode())['project']
+        lock = tomllib.loads(captured['uv.lock'].decode())
+        own = [row for row in lock['package'] if row.get('source') == {'editable': '.'}]
+        if (len(own) != 1 or any(own[0].get(key) != project.get(key) for key in ('name', 'version'))):
+            return None
+        files = {'trust-ci/' + name: hashlib.sha256(body).hexdigest() for name, body in captured.items()}
+        return dict(requirements=primary, install_requirements={primary: files[primary]}, graph=[primary],
+                    source_inputs=files, recipe_sha256=hashlib.sha256(raw).hexdigest())
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError):
         return None
 
 
@@ -217,15 +252,15 @@ def closure_graphs(root,inventory):
             if context is None or not set(context['graph']) <= paths:
                 continue
             observed(recipe)
-            for path in context['graph']:
+            for path in context['source_inputs']:
                 observed(path)
             graph = context['graph']
             if graph not in consumers:
                 consumers.append(graph)
         if consumers:
             graphs['trust-ci/pyproject.toml#runtime'] = consumers
-            graphs['trust-ci/pyproject.toml#build'] = [['trust-ci/requirements-build.txt']]
-        tests = [graph for graph in consumers if 'trust-ci/requirements-test.txt' in graph]
+            graphs['trust-ci/pyproject.toml#build'] = consumers
+        tests = [graph for graph in consumers if set(graph) & {'trust-ci/requirements-test.txt', 'trust-ci/requirements-runner.txt'}]
         if tests:
             graphs['trust-ci/pyproject.toml#optional'] = tests
     return validate_closure_graphs(dict(schema_version=1,inventory_sha256=inventory['digest'],graphs=graphs,evidence=evidence))
