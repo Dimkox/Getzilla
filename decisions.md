@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-11-19 — Exercise native decoding in hook observer tests
+
+Feed UTF-8 JSON stdin through the actual hook decoder when injecting advisory observer failures. Keep mandatory policy evaluation and permission output real, and retain sensitive-tool denial, public-read, fixed-warning and broken-diagnostic-sink assertions.
+
 ## 2026-11-19 — Capture retrieval facts in the existing observation path
 
 Publish native retrieval facts through the canonical route publication, delivery proof and journal, with actual read attempts and no paid claim. Bind disclosure of source metadata to the proved current local policy input set, including selected module and continuation bytes. Keep exact-byte restoration semantics explicit; enterprise revocation remains owned by the existing Factory authority and service epoch.
