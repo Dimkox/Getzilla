@@ -151,7 +151,15 @@ class PublicReviewWitnessTests(unittest.TestCase):
             from dataclasses import replace
             with self.assertRaisesRegex(ValueError, 'public_witness_unavailable'):
                 witness._witness(root, path, replace(tiny, profile=witness._PRODUCTION.profile))
-            if mutation == 'producer_unknown':
+            if mutation == 'source_cut':
+                from getzilla.retrieval.public_review_witness import _reviewed_source_cut
+                with _reviewed_source_cut(reference, batch=0, composition=tiny) as (broker, handle, cut):
+                    self.assertEqual(len(cut.documents), 4)
+                    broker.check_current(handle)
+                    (root / groups[0]['reports'][0]['path']).write_bytes(b'Changed actual review custody.')
+                    with self.assertRaises(ValueError):
+                        broker.check_current(handle)
+            elif mutation == 'producer_unknown':
                 request = {'schema_version': 1, 'kind': 'operator-public-producer-reference/v1',
                     'original': groups[0]['original'], 'producer_identity': groups[0]['delivery_identity'],
                     'supplement': groups[0]['reports'][0]}
@@ -193,6 +201,9 @@ class PublicReviewWitnessTests(unittest.TestCase):
 
     def test_conflicting_registration_cannot_overwrite_owned_witness(self):
         self._owned_roundtrip('conflict')
+
+    def test_owned_review_source_cut_checks_report_custody_before_use(self):
+        self._owned_roundtrip('source_cut')
 
     def test_actual_owner_cannot_observe_arbitrary_producer_as_fixed_original(self):
         self._owned_roundtrip('producer_unknown')

@@ -41,7 +41,7 @@ def _module_source(module) -> bytes:
 
 def implementation_source_binding() -> dict:
     implementation = {}
-    for name in ('economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py', 'lock_profile_validation.py', 'continuity_authoring.py', 'agent_eval_authoring.py', 'grant_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
+    for name in ('retrieval/public_review_inputs.py', 'retrieval/public_query_lineage.py', 'retrieval/public_review_witness.py', 'language_quality/core.py', 'language_quality/models.py', 'language_quality/sandbox.py', 'language_quality/cache.py', 'language_quality/adapters/__init__.py', 'language_quality/adapters/eslint.py', 'language_quality/adapters/kotlin.py', 'language_quality/adapters/dart.py', 'language_quality/adapters/swift.py', 'queue_source_resolution.py', 'queue_source_scan.py', 'cpu_budget.py', 'architecture_metadata.py', 'security_go_tool_producer.py', 'security_go_contracts.py', 'security_go_tool_inputs.py', 'security_license_texts.py', 'security_license_family_conditions.py', 'security_license_source_conditions.py', 'security_license_go_term_variants.py', 'queue_analysis_profile.py', 'economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py', 'lock_profile_validation.py', 'continuity_authoring.py', 'agent_eval_authoring.py', 'grant_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'verification_actions.py', 'git_ranges.py', 'verification_plan.py', 'verification.py', 'quality_gates.py', 'criterion_tests.py',
                  'stacks.py', 'stack_runners.py', 'stack_toolchains.py',
                  'python_test_runner.py', 'factory_tests.py', 'agent_evals.py',
                  'verification_scope.py', 'verification_tool_workspace.py',
@@ -60,7 +60,8 @@ def implementation_source_binding() -> dict:
                  'architecture_diagrams.py', 'governance.py', 'governance_records.py', 'receipts.py', 'verification_tool_reports.py', 'verification_tools.py',
                  'router.py', 'review_plan.py', 'historical_data.py', 'light_lane.py', 'queue_provenance.py', 'python_source_proof.py', 'git_binding_guard.py',
                  'verification_journal.py', 'verification_unittest.py', 'verification_journal_contracts.py', 'metrics_journal.py', 'route_metrics.py', 'queue_refusal.py', 'harnesses.py'):
-        module = importlib.import_module('.' + name[:-3], __package__)
+        identity = name[:-3].replace('/', '.').removesuffix('.__init__')
+        module = importlib.import_module('.' + identity, __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from . import STACK_DIR
     for name, label in (('stacks.json', 'stack'), ('toolchain.json', 'toolchain')):

@@ -15,15 +15,26 @@ def ranking_metrics(function_ids, judgments):
             or any(type(key) is not str or not key or type(value) is not int
                    or value not in {0, 1, 2} for key, value in judgments.items())):
         raise ValueError('invalid_study_metrics')
+    # Match the published unique-function projection, retaining its source ranks.
+    # A position outside the frozen universe is not a known duplicate: keep each
+    # such original slot, with no credit, rather than silently filling its place.
+    projected, seen, original_positions = [], set(), []
+    for position, key in enumerate(function_ids, 1):
+        if key in judgments and key in seen:
+            continue
+        seen.add(key)
+        projected.append(key)
+        original_positions.append(position)
     positives = {key for key, value in judgments.items() if value == 1}
-    top5 = set(function_ids[:5]) & positives
-    top10 = function_ids[:10]
+    top5 = set(projected[:5]) & positives
+    top10 = projected[:10]
     unjudged = [rank for rank, key in enumerate(top10, 1)
                 if judgments.get(key, 0) == 0]
     first = next((rank for rank, key in enumerate(top10, 1) if key in positives), None)
     return {'positive_functions': len(positives),
             'recall_at_5': len(top5) / len(positives) if positives else None,
             'mrr_at_10': (1 / first if first else 0.0) if positives else None,
+            'original_positions': original_positions,
             'unjudged_positions_at_10': unjudged,
             'judgment_status': 'partial' if unjudged else 'judged'}
 

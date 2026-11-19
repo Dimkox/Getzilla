@@ -6,6 +6,8 @@ module list does not identify non-Go CGO or generated/static bundled data.
 
 from __future__ import annotations
 
+from .security_go_contracts import MODULES_KEY
+
 import base64
 import hashlib
 import io
@@ -948,11 +950,11 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
     if (
         not isinstance(proof, dict)
         or set(proof)
-        != {"schema_version", "kind", "tool_id", "release", "modules", "source_locks", "runtime", "expressions"}
+        != {"schema_version", "kind", "tool_id", "release", MODULES_KEY, "source_locks", "runtime", "expressions"}
         or proof["schema_version"] != 1
         or proof["kind"] != "go-checker-components/v1"
         or proof["tool_id"] != declaration["id"]
-        or any(not isinstance(proof[key], dict) for key in ("modules", "source_locks", "runtime", "expressions"))
+        or any(not isinstance(proof[key], dict) for key in (MODULES_KEY, "source_locks", "runtime", "expressions"))
     ):
         fail("license-transitive-coverage", "unsupported Go component proof schema")
 
@@ -996,7 +998,7 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
     required, gaps = module_requirements({role: observed}, locks)
     if gaps:
         fail(gaps[0]["code"], gaps[0]["message"] + ": " + gaps[0]["module"])
-    if set(proof["modules"]) != set(required):
+    if set(proof[MODULES_KEY]) != set(required):
         fail("license-transitive-coverage", "Go compact module proofs omit or add a selected ELF dependency")
     components = []
     retained = {}
@@ -1007,7 +1009,7 @@ def verify_family(root, record, payload=None, *, checker=None, now=None):
         retained.update(files)
 
     for key, module in required.items():
-        source = saved(proof["modules"][key])
+        source = saved(proof[MODULES_KEY][key])
         terms = verify_module_proof(source, module["path"], module["version"], module["h1"])
         origin_data = source.get("origin")
 

@@ -32,9 +32,9 @@ def _identity(info):
                  ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode', 'st_uid', 'st_gid', 'st_nlink'))
 
 
-def _catalog(anchor):
+def _catalog(anchor, catalogs=CATALOGS):
     rows, identities = [], []
-    for corpus, commit, expected in CATALOGS:
+    for corpus, commit, expected in catalogs:
         path = 'engineering/benchmarks/issue162/data/' + corpus + '-manifest.json'
         raw = anchor.read(path, limit=1048576, source=True)
         if sha(raw) != expected:
@@ -58,8 +58,13 @@ def _catalog(anchor):
 
 class _PublicHost(access.NativeAccessHost):
     """Created only by the fixed local composition, never selected from JSON."""
-    def __init__(self, root, anchor, sources, rows, identities, batch, resources, staged):
+    def __init__(self, root, anchor, sources, rows, identities, batch, resources, staged, review_fence=None):
         self.root, self.anchor, self.sources = root, anchor, sources
+        if review_fence is not None:
+            from .public_review_witness import _WitnessSourceFence
+            if type(review_fence) is not _WitnessSourceFence:
+                raise access.NativeAccessError('native_access_denied')
+        self.review_fence = review_fence
         self.route = state.require_route_owner(root, anchor=anchor)
         self.policy = anchor.read('.getzilla/config/policy.json', source=True)
         self.manifest = anchor.read('.getzilla/managed-components.json', source=True)
@@ -80,6 +85,8 @@ class _PublicHost(access.NativeAccessHost):
     def check_current(self, binding, deadline):
         if binding is not self.binding or time.monotonic() >= deadline:
             raise access.NativeAccessError('native_access_expired')
+        if self.review_fence is not None:
+            self.review_fence.check_current(deadline)
         self.anchor.check_cwd()
         if (state.require_route_owner(self.root, anchor=self.anchor) != self.route
                 or self.anchor.read('.getzilla/config/policy.json', source=True) != self.policy
@@ -148,7 +155,7 @@ class _PublicHost(access.NativeAccessHost):
 
 
 @contextmanager
-def public_source_cut(root, public_sources, *, batch):
+def _public_source_cut(root, public_sources, *, batch, review_fence=None, catalogs=CATALOGS):
     """Capture one exact batch for trusted local use; never authorizes an encoder.
 
     The caller must keep this context open. A new batch obtains a fresh current
@@ -161,7 +168,7 @@ def public_source_cut(root, public_sources, *, batch):
         state.require_route_owner(root, anchor=anchor)
         if not admit_module(root, 'retrieval-research').get('allowed'):
             raise RetrievalError('context_disabled')
-        rows, identities = _catalog(anchor)
+        rows, identities = _catalog(anchor, catalogs)
         if batch * BATCH_FILES >= len(rows):
             raise RetrievalError('invalid_public_batch')
         sources = resources.enter_context(BoundRoot(Path(public_sources)))
@@ -169,7 +176,7 @@ def public_source_cut(root, public_sources, *, batch):
             prefix='public-research-', dir=Path(root) / '.getzilla/runtime'))
         staged = Path(temporary)
         staged.chmod(0o700)
-        host = _PublicHost(root, anchor, sources, rows, identities, batch, resources, staged)
+        host = _PublicHost(root, anchor, sources, rows, identities, batch, resources, staged, review_fence)
         host.query = access.RegisteredQuery('public-research-source/v1', (host.dataset,), {'batch': batch})
         broker = access.NativeAccessBroker._compose(host)
         handle = broker.bind_native_request(host.request, host.workflow)
@@ -178,3 +185,10 @@ def public_source_cut(root, public_sources, *, batch):
             yield broker, handle, cut
         finally:
             broker.discard(handle)
+
+
+@contextmanager
+def public_source_cut(root, public_sources, *, batch):
+    """Fixed public source facts without a review or execution grant."""
+    with _public_source_cut(root, public_sources, batch=batch) as result:
+        yield result

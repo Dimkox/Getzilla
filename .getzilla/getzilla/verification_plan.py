@@ -30,6 +30,7 @@ SECURITY_IDS = frozenset(SECURITY_FAMILIES)
 _KEYS = {'id', 'check_id', 'requirement_ids', 'applicability', 'reason', 'evidence', 'expected_tests', 'data_sources'}
 _UNREAD_DOCUMENTS = object()
 _POLICY_PATHS = (
+    "architecture/queue-analysis-profile.json",
     '.getzilla/getzilla/verification_plan.py', '.getzilla/getzilla/quality_gates.py',
     '.getzilla/getzilla/verification.py', '.getzilla/getzilla/criterion_tests.py',
     '.getzilla/getzilla/expanded_security.py', '.getzilla/getzilla/security_data.py',

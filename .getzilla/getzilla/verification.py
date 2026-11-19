@@ -43,7 +43,8 @@ from .git_ranges import (  # noqa: F401  compatibility exports retain exact shar
     FOCUSED_STATIC_SEO_LANDING_MODE, GitRangeBase, GitRangeSelection, _RANGE_MODES,
     _existing_ref_candidates, _git_range_selection, _resolve_commit, _select_local_pr_target,
 )
-from .architecture_fitness import diff_architecture, evaluate_fitness
+from .architecture_fitness import evaluate_fitness
+from .architecture_diff import diff_architecture
 from .quality_gates import evaluate_quality_gate, required_check_refused
 from .expanded_security import known_vulnerability_check, run_checks as expanded_security_checks
 from .language_quality.core import run_registry as run_language_quality, project_checks as language_quality_checks

@@ -8,29 +8,20 @@ import io
 import re
 import zipfile
 
-_NAME = re.compile(r'[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?\Z')
-_VERSION = re.compile(r'v?([0-9]+(?:\.[0-9]+){0,3})\Z')
+from .security_artifacts import _PACKAGIST_NAME as _NAME
+from .security_artifacts import _PACKAGIST_VERSION as _VERSION
 _GIT = r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
 _ARCHIVE = re.compile(r'https://api\.github\.com/repos/(' + _GIT + r')/zipball/([0-9a-f]{40})\Z')
 _CODELOAD = re.compile(r'https://codeload\.github\.com/(' + _GIT + r')/legacy\.zip/([0-9a-f]{40})\Z')
 
 
-def error(code, message):
-    from .security_artifacts import ArtifactError
-    return ArtifactError(code, message)
+from .security_artifacts import _packagist_error as error
 
 
-def version(value):
-    if type(value) is not str or len(value) > 128 or not _VERSION.fullmatch(value):
-        raise error('artifact-identity', 'Packagist requires an exact stable numeric version')
-    parts = tuple(int(p) for p in _VERSION.fullmatch(value)[1].split('.'))
-    return parts + (0,) * (4 - len(parts))
+from .security_artifacts import _packagist_version as version
 
 
-def key(name, value):
-    if type(name) is not str or len(name) > 200 or not _NAME.fullmatch(name):
-        raise error('artifact-identity', 'Packagist requires a canonical vendor/package name')
-    return 'Packagist', name, version(value)
+from .security_artifacts import _packagist_key as key
 
 
 def index_url(name, value):
