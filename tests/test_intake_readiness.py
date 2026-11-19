@@ -86,3 +86,31 @@ class ReadinessTests(unittest.TestCase):
         changed['objective']['target'] = '30'
         provenance['status'] = 'ready'
         self.assertEqual(assess_readiness(changed, provenance, data['policy'])['status'], 'stale')
+
+
+class ConfiguredQuestionBudgetTests(unittest.TestCase):
+    def test_current_explicit_limits_control_question_count_and_exhaustion(self):
+        data = snapshot()
+        data["policy"]["question_limits"] = {"max_questions_per_round": 2, "max_question_rounds": 1}
+        data["dependencies"] = [{"id": f"dep-{i}", "status": "unknown"} for i in range(7)]
+        projection = project_requirements(data)
+        first = assess_readiness(data["spec"], projection, {**data["policy"], "rounds": 0})
+        self.assertEqual(len(first["questions"]), 2)
+        final = assess_readiness(data["spec"], projection, {**data["policy"], "rounds": 1})
+        self.assertEqual(final["questions"], [])
+        self.assertTrue(final["question_budget_exhausted"])
+        self.assertEqual(len(final["missing"]), 7)
+
+    def test_unconfigured_or_invalid_limits_cannot_start_a_clarification_loop(self):
+        data = snapshot()
+        data["dependencies"] = [{"id": "unknown", "status": "unknown"}]
+        for limits in (
+            None,
+            {"max_questions_per_round": True, "max_question_rounds": 3},
+            {"max_questions_per_round": 2, "max_question_rounds": 0},
+        ):
+            data["policy"].pop("question_limits", None)
+            projection = project_requirements(data)
+            result = assess_readiness(data["spec"], projection, {**data["policy"], "question_limits": limits})
+            self.assertEqual(result["questions"], [])
+            self.assertIn("question_limits_unconfigured", [x["reason"] for x in result["missing"]])
