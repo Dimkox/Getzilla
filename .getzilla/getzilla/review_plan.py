@@ -1,6 +1,7 @@
 """Exact committed-source review planning; operational authority is never changed."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -10,7 +11,131 @@ from typing import Any
 from .diff_risk import ORDER, classify_diff, load_rules, parse_rules
 from .project_ingestion import _git
 from .state import serialized_task
-from .util import git_head, tree_fingerprint, unique_ordered
+from .util import git_head, tree_fingerprint, unique_ordered, load_json
+
+
+DEFAULT_ANALYSIS_CAP = 10
+
+
+DEFAULT_ROUTING: dict[str, Any] = {
+    'schema_version': 1,
+    'max_parallel_analysis': DEFAULT_ANALYSIS_CAP,
+    'write_roles': [
+        'ai_implementer',
+        'bitrix_implementer',
+        'data_implementer',
+        'frontend_implementer',
+        'general_implementer',
+        'integration_implementer',
+        'php_implementer',
+    ],
+    'analysis_floors': {
+        'always': ['repo_explorer'],
+        'feature_like': ['task_analyst'],
+        'standard': ['architect', 'docs_researcher'],
+    },
+    'analysis_domain_agents': {
+        'bitrix': ['bitrix_architect'],
+        'api': ['integration_architect'],
+        'event': ['integration_architect'],
+        'integration': ['integration_architect'],
+        'data': ['data_architect'],
+        'ai': ['ai_architect'],
+    },
+    'review_floors': {
+        'delivery': ['code_reviewer'],
+        'docs': ['code_reviewer'],
+        'review_intent': ['code_reviewer'],
+        'release': ['release_reviewer'],
+    },
+    'review_domain_agents': {
+        'bitrix': ['bitrix_reviewer'],
+        'data': ['data_reviewer'],
+        'security': ['security_reviewer'],
+        'ai': ['security_reviewer'],
+        'integration': ['security_reviewer'],
+    },
+    'review_risk_agents': {
+        'high': ['security_reviewer', 'release_reviewer'],
+    },
+}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _analysis_cap(config: dict[str, Any]) -> int:
+    raw = config.get('max_parallel_analysis', DEFAULT_ANALYSIS_CAP)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return DEFAULT_ANALYSIS_CAP
+    return raw
+
+
+def load_routing_config(root: Path) -> dict[str, Any]:
+    data = load_json(root / '.getzilla/config/routing.json', None)
+    merged = copy.deepcopy(DEFAULT_ROUTING)
+    if not isinstance(data, dict):
+        return merged
+    cap = data.get('max_parallel_analysis')
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1:
+        merged['max_parallel_analysis'] = cap
+    roles = _string_list(data.get('write_roles'))
+    if roles:
+        merged['write_roles'] = roles
+    for key in (
+        'analysis_floors',
+        'analysis_domain_agents',
+        'review_floors',
+        'review_domain_agents',
+        'review_risk_agents',
+    ):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        base = merged.setdefault(key, {})
+        if not isinstance(base, dict):
+            merged[key] = value
+            continue
+        for sub, items in value.items():
+            if isinstance(items, list):
+                base[str(sub)] = _string_list(items)
+    return merged
+
+
+RISK_ORDER = {'low': 0, 'medium': 1, 'high': 2}
+
+
+REVIEW_EVIDENCE = {
+    'code_reviewer': 'code_review', 'test_reviewer': 'test_review', 'bitrix_reviewer': 'bitrix_review',
+    'security_reviewer': 'security_review', 'data_reviewer': 'data_review', 'release_reviewer': 'release_review',
+}
+
+
+def escalate_route(route: dict[str, object], risk: str, root: Path, *, force_full: bool = False) -> dict[str, object]:
+    """Reviewers and evidence a route needs at `risk`; only ever adds to the route, never removes.
+
+    The prompt decided the route's risk; the exact-head diff may show more. At high risk the route
+    gets the configured high-risk and release reviewers, exactly as if the prompt had said so.
+    """
+    route_risk = str(route.get('risk') or 'low')
+    effective = risk if RISK_ORDER.get(risk, 0) > RISK_ORDER.get(route_risk, 0) else route_risk
+    reviewers = [str(item) for item in route.get('review_agents') or []]
+    evidence = [str(item) for item in route.get('required_evidence') or []]
+    added_reviewers: list[str] = []
+    if route.get('delivery_lane') == 'light' and (force_full or effective != 'low'):
+        cfg = load_routing_config(root)
+        floors = cfg.get('review_floors') or {}
+        added_reviewers.extend(agent for agent in _string_list(floors.get('delivery')) if agent not in reviewers)
+    added_evidence = [REVIEW_EVIDENCE[agent] for agent in added_reviewers
+                      if agent in REVIEW_EVIDENCE and REVIEW_EVIDENCE[agent] not in evidence]
+    return {'route_risk': route_risk, 'effective_risk': effective,
+            'review_agents': unique_ordered([*reviewers, *added_reviewers]),
+            'required_evidence': unique_ordered([*evidence, *added_evidence]),
+            'added_reviewers': added_reviewers, 'added_evidence': added_evidence}
+
 
 RULE_PATH = '.getzilla/config/diff-risk-rules.json'
 DEFAULT_AUDITS = {
@@ -111,7 +236,6 @@ def _audits(rules: dict) -> dict:
 
 
 def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) -> list[str]:
-    from .router import REVIEW_EVIDENCE
     configured = json.loads(raw) if raw is not None else {}
     if not isinstance(configured, dict):
         raise ValueError('invalid routing policy')
@@ -137,7 +261,6 @@ def _policy_review_floor(raw: bytes | None, route: dict | None, profile: str) ->
 
 def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | None = None) -> dict:
     """Classify both baseline and candidate policy; an edited policy cannot lower itself."""
-    from .router import REVIEW_EVIDENCE
     head = git_head(root)
     entries = selection.bases
     # An accepted target can descend from this frozen HEAD. Its empty comparison
@@ -320,7 +443,6 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
                 raise ValueError('route changed during reconciliation')
             assert_finishable(root, route, cancel=True)
             return route
-    from .router import REVIEW_EVIDENCE
     if any(name not in REVIEW_EVIDENCE for name in additional_reviewers):
         raise ValueError('unknown explicit reviewer')
     selected = dict(route)

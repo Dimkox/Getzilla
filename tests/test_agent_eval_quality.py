@@ -342,6 +342,7 @@ class ReviewQualityTests(unittest.TestCase):
         with zipfile.ZipFile(stack / 'getzilla.zip', 'w') as archive:
             archive.writestr('getzilla/agent_evals.pyc', pyc)
             archive.writestr('getzilla/fsx.py', (ROOT / '.getzilla/getzilla/fsx.py').read_bytes())
+            archive.writestr('getzilla/agent_eval_authoring.py', (ROOT / '.getzilla/getzilla/agent_eval_authoring.py').read_bytes())
         child = ('import sys;sys.path.insert(0,sys.argv[1]);from getzilla import agent_evals as e\n'
                  'try:e._runner_digest()\n'
                  'except e.EvalError as x:print(str(x))\n'

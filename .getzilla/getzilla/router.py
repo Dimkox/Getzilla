@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+import copy as copy  # compatibility module export
 import secrets
 import re
 from dataclasses import asdict, dataclass, field
@@ -10,7 +10,11 @@ from typing import Any
 from .cost_guard import GATE as PAID_RUN_GATE, prompt_cost_signals
 from .risk_terms import has_term, load_vocabulary, uncovered_script
 from .repo import RepoProfile, detect_repo
-from .util import git_default_base, load_json, now_utc, tree_fingerprint, unique_ordered
+from .util import git_default_base, load_json as load_json, now_utc, tree_fingerprint, unique_ordered
+
+from .review_plan import (  # noqa: F401 exact shared routing-policy exports
+    DEFAULT_ANALYSIS_CAP, DEFAULT_ROUTING, REVIEW_EVIDENCE, RISK_ORDER, _analysis_cap, _string_list, escalate_route, load_routing_config,
+)
 
 
 INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -73,95 +77,14 @@ FOLLOW_UP_RE = re.compile(
 SYSTEM_ENVELOPE_RE = re.compile(r'<(task-notification|system-reminder)>.*?</\1>', re.DOTALL)
 CLOSED_ROUTE_STATUSES = frozenset({'released', 'completed', 'cancelled', 'archived'})
 FEATURE_LIKE_INTENTS = frozenset({'feature', 'architecture', 'refactor', 'research'})
-DEFAULT_ANALYSIS_CAP = 10
 _ROUTE_STATE_UNSET = object()
 
-DEFAULT_ROUTING: dict[str, Any] = {
-    'schema_version': 1,
-    'max_parallel_analysis': DEFAULT_ANALYSIS_CAP,
-    'write_roles': [
-        'ai_implementer',
-        'bitrix_implementer',
-        'data_implementer',
-        'frontend_implementer',
-        'general_implementer',
-        'integration_implementer',
-        'php_implementer',
-    ],
-    'analysis_floors': {
-        'always': ['repo_explorer'],
-        'feature_like': ['task_analyst'],
-        'standard': ['architect', 'docs_researcher'],
-    },
-    'analysis_domain_agents': {
-        'bitrix': ['bitrix_architect'],
-        'api': ['integration_architect'],
-        'event': ['integration_architect'],
-        'integration': ['integration_architect'],
-        'data': ['data_architect'],
-        'ai': ['ai_architect'],
-    },
-    'review_floors': {
-        'delivery': ['code_reviewer'],
-        'docs': ['code_reviewer'],
-        'review_intent': ['code_reviewer'],
-        'release': ['release_reviewer'],
-    },
-    'review_domain_agents': {
-        'bitrix': ['bitrix_reviewer'],
-        'data': ['data_reviewer'],
-        'security': ['security_reviewer'],
-        'ai': ['security_reviewer'],
-        'integration': ['security_reviewer'],
-    },
-    'review_risk_agents': {
-        'high': ['security_reviewer', 'release_reviewer'],
-    },
-}
 
 
-def _string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if isinstance(item, str) and item.strip()]
 
 
-def _analysis_cap(config: dict[str, Any]) -> int:
-    raw = config.get('max_parallel_analysis', DEFAULT_ANALYSIS_CAP)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
-        return DEFAULT_ANALYSIS_CAP
-    return raw
 
 
-def load_routing_config(root: Path) -> dict[str, Any]:
-    data = load_json(root / '.getzilla/config/routing.json', None)
-    merged = copy.deepcopy(DEFAULT_ROUTING)
-    if not isinstance(data, dict):
-        return merged
-    cap = data.get('max_parallel_analysis')
-    if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1:
-        merged['max_parallel_analysis'] = cap
-    roles = _string_list(data.get('write_roles'))
-    if roles:
-        merged['write_roles'] = roles
-    for key in (
-        'analysis_floors',
-        'analysis_domain_agents',
-        'review_floors',
-        'review_domain_agents',
-        'review_risk_agents',
-    ):
-        value = data.get(key)
-        if not isinstance(value, dict):
-            continue
-        base = merged.setdefault(key, {})
-        if not isinstance(base, dict):
-            merged[key] = value
-            continue
-        for sub, items in value.items():
-            if isinstance(items, list):
-                base[str(sub)] = _string_list(items)
-    return merged
 
 
 @dataclass
@@ -719,34 +642,8 @@ def build_route(
     )
 
 
-RISK_ORDER = {'low': 0, 'medium': 1, 'high': 2}
-REVIEW_EVIDENCE = {
-    'code_reviewer': 'code_review', 'test_reviewer': 'test_review', 'bitrix_reviewer': 'bitrix_review',
-    'security_reviewer': 'security_review', 'data_reviewer': 'data_review', 'release_reviewer': 'release_review',
-}
 
 
-def escalate_route(route: dict[str, object], risk: str, root: Path, *, force_full: bool = False) -> dict[str, object]:
-    """Reviewers and evidence a route needs at `risk`; only ever adds to the route, never removes.
-
-    The prompt decided the route's risk; the exact-head diff may show more. At high risk the route
-    gets the configured high-risk and release reviewers, exactly as if the prompt had said so.
-    """
-    route_risk = str(route.get('risk') or 'low')
-    effective = risk if RISK_ORDER.get(risk, 0) > RISK_ORDER.get(route_risk, 0) else route_risk
-    reviewers = [str(item) for item in route.get('review_agents') or []]
-    evidence = [str(item) for item in route.get('required_evidence') or []]
-    added_reviewers: list[str] = []
-    if route.get('delivery_lane') == 'light' and (force_full or effective != 'low'):
-        cfg = load_routing_config(root)
-        floors = cfg.get('review_floors') or {}
-        added_reviewers.extend(agent for agent in _string_list(floors.get('delivery')) if agent not in reviewers)
-    added_evidence = [REVIEW_EVIDENCE[agent] for agent in added_reviewers
-                      if agent in REVIEW_EVIDENCE and REVIEW_EVIDENCE[agent] not in evidence]
-    return {'route_risk': route_risk, 'effective_risk': effective,
-            'review_agents': unique_ordered([*reviewers, *added_reviewers]),
-            'required_evidence': unique_ordered([*evidence, *added_evidence]),
-            'added_reviewers': added_reviewers, 'added_evidence': added_evidence}
 
 
 def trivial_waiver(route: dict[str, object], effective_risk: str, profile: str, root: Path) -> list[str]:

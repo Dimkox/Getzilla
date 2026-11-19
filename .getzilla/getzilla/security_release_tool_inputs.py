@@ -235,7 +235,7 @@ def component_frontier(members, terms, source):
     condition = retained_conditions(SHA256, identifier, {"source/LICENSE": source.get("license")})
     components = []
     if condition is not None and b'license: "LGPL-2.1-only"' in source.get("opam", b'').splitlines():
-        from .security_licenses import _license_evidence
+        from .security_license_contracts import _license_evidence
         legal, notices = _license_evidence({"source/LICENSE": source["license"]},
             {"expression": "LGPL-2.1-only", "license_paths": ["source/LICENSE"]},
             {"LGPL-2.1-only"}, ["LGPL-2.1-only"])

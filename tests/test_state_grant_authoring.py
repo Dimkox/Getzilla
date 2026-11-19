@@ -9,9 +9,10 @@ import subprocess
 import sys
 import unittest
 
-from getzilla import state
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / '.getzilla'))
+
+from getzilla import state
 
 
 class StateGrantAuthoringTests(unittest.TestCase):
@@ -27,19 +28,19 @@ class StateGrantAuthoringTests(unittest.TestCase):
 
     def test_fresh_read_only_import_does_not_load_authoring(self):
         program = (
-            "import sys;from getzilla import state;"
+            "import sys;sys.path.insert(0,sys.argv[1]);from getzilla import state;"
             "assert callable(state.get_active_route);assert callable(state.get_active_change);"
             "assert callable(state.update_route);assert 'getzilla.grant_authoring' not in sys.modules"
         )
-        result = subprocess.run([sys.executable, "-B", "-c", program], cwd=ROOT, capture_output=True, timeout=10)
+        result = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT / ".getzilla")], cwd=ROOT, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_leaf_first_import_has_no_partial_initialization_cycle(self):
         program = (
-            "from getzilla import grant_authoring;from getzilla import state;"
+            "import sys;sys.path.insert(0,sys.argv[1]);from getzilla import grant_authoring;from getzilla import state;"
             "assert grant_authoring.state is state;assert callable(grant_authoring.add_approval)"
         )
-        result = subprocess.run([sys.executable, "-B", "-c", program], cwd=ROOT, capture_output=True, timeout=10)
+        result = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT / ".getzilla")], cwd=ROOT, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_each_ordinary_reader_projection_excludes_writer_import(self):

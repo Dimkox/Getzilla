@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 
 from .requirements_intake import digest, normalized, project_requirements
-from .workflow_artifacts import PLACEHOLDER
+from .workflow_storage import PLACEHOLDER
 
 
 def question_limits(policy):

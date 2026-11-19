@@ -2204,7 +2204,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     route = get_active_route(root) if route else None
     if route and (route.get('delivery_lane') == 'light' or route.get('light_lane_candidate') or 'light_diff' in route):
         from .light_lane import inspect_light_diff
-        from .router import escalate_route
+        from .review_plan import escalate_route
         light = inspect_light_diff(root, sorted({item.comparison_base_sha for item in git_ranges.bases}),
             risk=str(diff_metadata.get('effective_risk', 'high')),
             complete=diff_metadata.get('status') == 'computed' and not diff_metadata.get('gaps') and not git_ranges.findings)
@@ -2477,7 +2477,7 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
 
 
 def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
-    from .live_acceptance import CELLS
+    from .live_evidence import CELLS
     import uuid
     names = CELLS[cell]
     output = root / '.getzilla/runtime/live' / (cell + '-' + uuid.uuid4().hex)
@@ -2487,7 +2487,7 @@ def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
     try:
         record = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
         checks = record['checks']
-        from .live_acceptance import evidence_name, _held_bytes
+        from .live_evidence import evidence_name, _held_bytes
         files = record.get('files')
         if (not isinstance(files, list) or not 1 <= len(files) <= 128
                 or any(not isinstance(row, dict) or set(row) != {'path', 'sha256'}
@@ -2498,7 +2498,7 @@ def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
         for row in files:
             if hashlib.sha256(_held_bytes(output / row['path'])).hexdigest() != row['sha256']:
                 raise ValueError('live retained component bytes changed')
-        from .live_acceptance import read_document, valid_binding, validate_components, _producer_digest
+        from .live_evidence import read_document, valid_binding, validate_components, _producer_digest
         binding = read_document(output / 'invocation.json')
         if (not valid_binding(binding) or record.get('binding') != binding
                 or binding['cell'] != cell or binding['head'] != git_head(root)

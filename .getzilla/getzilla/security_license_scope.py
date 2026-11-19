@@ -364,7 +364,7 @@ def declaration_expectation(root,checker,inputs,source,run,*,now,scratch,checker
     from .expanded_security import _policy_digest
     from .security_inventory import declared_inventory
     from .security_python_target import validate_target,source_pins,closure_graphs
-    from .security_licenses import load_policy
+    from .security_license_contracts import load_policy
     from .security_factory_inputs import declaration
     from .security_data import _timestamp,MAX_AGE_SECONDS
     from .security_oci import LIMITS,validate_selection

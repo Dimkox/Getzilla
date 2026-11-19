@@ -800,7 +800,7 @@ def replace_retained(root, retained, incoming):
 def finding_consistent(finding, allowed, select_expression):
     """Recompute ordinary term checks from LIVE proof, not JSON declarations."""
     from .security_artifacts import family_identity, ArtifactError
-    from .security_licenses import _license_evidence
+    from .security_license_contracts import _license_evidence
 
     try:
         record = finding["family_record"]

@@ -18,6 +18,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / '.getzilla'), str(ROOT)]
 
+from getzilla import live_evidence
+
 
 class NestedSourceInventoryTests(unittest.TestCase):
     def test_source_inventory_is_relative_to_selected_subtree(self):
@@ -372,7 +374,7 @@ class ParserApplicabilityTests(unittest.TestCase):
                     return ProcessResult(command,0,stdout=json.dumps({'pypdf_version':version}))
                 with patch('subprocess.Popen',side_effect=AssertionError('unmocked child forbidden')), \
                         patch('socket.socket.connect',side_effect=AssertionError('unmocked network forbidden')), \
-                        patch.object(module,'execute',side_effect=probe), \
+                        patch.object(live_evidence,'execute',side_effect=probe), \
                         patch.dict(sys.modules,{namespace.__name__:namespace}):
                     observation=module.observe_parser_applicability(root,binding,python=owned_python)
                     report=module.record_suite(suite,expected_ids=expected,required_ids=expected,loader_errors=(),
@@ -416,7 +418,7 @@ class ParserApplicabilityTests(unittest.TestCase):
                             ProcessResult(['owned'],0,stdout=''),ProcessResult(['owned'],0,stdout='{}'),
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":"foreign"}'),
                             ProcessResult(['owned'],0,stdout='{"pypdf_version":null}',cleanup_metadata=CleanupMetadata(unavailable=True))):
-                        with patch.object(module,'execute',return_value=invalid),self.assertRaises(ValueError):
+                        with patch.object(live_evidence,'execute',return_value=invalid),self.assertRaises(ValueError):
                             module.observe_parser_applicability(root,binding,python=owned_python)
                     if version is None:
                         with self.assertRaises(ValueError):

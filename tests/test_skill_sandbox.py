@@ -98,6 +98,7 @@ class SandboxContracts(unittest.TestCase):
             outside.write_bytes(b'owned public fixture')
             (root / '.specify').mkdir()
             (root / '.specify/config.md').write_bytes(b'pinned-output')
+            (root / '.specify/config.md').chmod(0o644)
             result = sandbox.read_stage(root)
             self.assertEqual(dict(result)['.specify/config.md'], b'pinned-output')
             (root / '.specify/escape').symlink_to(outside)

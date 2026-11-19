@@ -245,7 +245,7 @@ class _RuleYamlContext:
     """Rules-only bounded data resolution; never a global config/authority mode."""
 
     def __init__(self):
-        self.nodes = self.bytes = self.references = 0
+        self.nodes = self._source_bytes = self.references = 0
         self.anchors = {}
         self.active = set()
 
@@ -256,8 +256,8 @@ class _RuleYamlContext:
 
     def string(self, value):
         size = len(value.encode('utf-8'))
-        self.bytes += size
-        if size > MAX_STRING_LENGTH or self.bytes > MAX_SPEC_BYTES:
+        self._source_bytes += size
+        if size > MAX_STRING_LENGTH or self._source_bytes > MAX_SPEC_BYTES:
             raise SpecError('rules YAML limit')
         return value
 
@@ -295,10 +295,10 @@ class _RuleYamlContext:
             self.reference()
             value, (nodes, size, height) = self.anchors[match[1]]
             # Charge the complete expansion BEFORE copying. Never reset per alias.
-            if self.nodes + nodes > MAX_NODES or self.bytes + size > MAX_SPEC_BYTES or depth + height > MAX_DEPTH:
+            if self.nodes + nodes > MAX_NODES or self._source_bytes + size > MAX_SPEC_BYTES or depth + height > MAX_DEPTH:
                 raise SpecError('rules YAML expansion limit')
             self.nodes += nodes
-            self.bytes += size
+            self._source_bytes += size
             return copy.deepcopy(value), index
         if not rest:
             nxt = _skip_blank(lines, index)

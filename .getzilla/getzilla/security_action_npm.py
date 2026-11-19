@@ -187,7 +187,7 @@ def verify_source(root, source, expected, *, now=None):
 
 def _qualify_source(result, source, *, supplemental=None):
     from .security_license_texts import recognized_license, reviewed_ancillary
-    from .security_licenses import ALLOWED, _license_evidence, _select_expression
+    from .security_license_contracts import ALLOWED, _license_evidence, _select_expression
     files = {name: body for name, body in result['files'].items() if name not in result['aliases']}
     archive_root = result['archive_root']
     metadata = {archive_root: result['package']}

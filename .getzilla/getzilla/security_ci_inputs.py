@@ -347,7 +347,7 @@ def observe_base(builder, base, volume, budget):
 
 def verify(artifacts, parent, index, policy, *, now=None):
     from .security_artifacts import read_file, MAX_INDEX_BYTES, MAX_ARTIFACT_BYTES, select_artifact, archive_files
-    from .security_licenses import artifact_catalog_source
+    from .security_license_contracts import artifact_catalog_source
     import json
 
     inventory, binding = scope(parent, index)
@@ -376,7 +376,7 @@ def verify(artifacts, parent, index, policy, *, now=None):
 def prepare(artifacts, parent, *, now=None, fetch=None, byte_budget=512 * 1024 * 1024):
     from .security_factory_inputs import _catalog_bytes
     from .security_license_acquisition import acquire_pypi
-    from .security_licenses import load_policy
+    from .security_license_contracts import load_policy
     from .security_tools import TRUSTED_ROOT
 
     if type(byte_budget) is not int or not 0 < byte_budget <= 512 * 1024 * 1024:

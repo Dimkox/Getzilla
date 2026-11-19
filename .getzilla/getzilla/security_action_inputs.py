@@ -316,7 +316,7 @@ def _verify_family(root, record, *, now=None):
         mapped.update(bundle['components'])
     if seen != set(entries) or mapped != ids:
         _fail('license-transitive-coverage', 'bundle membership omits components')
-    from .security_licenses import ALLOWED, _license_evidence, _select_expression
+    from .security_license_contracts import ALLOWED, _license_evidence, _select_expression
     evidence = [{'path': origin['index_path'], 'sha256': origin['index_sha256'], 'bytes': len(commit_raw)},
                 {'path': origin['tree_path'], 'sha256': origin['tree_sha256'], 'bytes': len(tree_raw)},
                 {'path': record['components']['path'], 'sha256': record['components']['sha256'], 'bytes': len(raw)}]
@@ -401,7 +401,7 @@ def finding_consistent(finding, allowed, select_expression):
     from .security_artifacts import ArtifactError, family_identity
     from .security_data import _clock
     from .security_license_family_conditions import allowed_for
-    from .security_licenses import _license_evidence
+    from .security_license_contracts import _license_evidence
     try:
         record = finding['family_record']
         identity = family_identity(record)
@@ -415,7 +415,9 @@ def finding_consistent(finding, allowed, select_expression):
             owned = {item['path'] for item in component['files']}
             legal, attribution = _license_evidence({p:b for p,b in evidence['files'].items() if p in owned},
                 component, identifiers, chosen)
-            selected.extend(chosen);terms.extend(legal);notices.extend(attribution)
+            selected.extend(chosen)
+            terms.extend(legal)
+            notices.extend(attribution)
         expected = dict(kind='action', reference=record['subject']['reference'], status='pass',
             selected_expression=' AND '.join(sorted(set(selected))), distribution='internal',
             **evidence['binding'], family_record=record,
@@ -430,7 +432,7 @@ def finding_consistent(finding, allowed, select_expression):
 def _component_inputs(files):
     """Unqualified lock/cache facts, including every observed term/policy gap."""
     from .security_license_texts import recognized_license
-    from .security_licenses import ALLOWED
+    from .security_license_contracts import ALLOWED
     candidates, gaps, cached = [], [], set()
     try:
         lock = _json(files.get('package-lock.json', b'{}'))
@@ -846,7 +848,7 @@ def _possible_lock(files):
 def _possible_evidence(root, record, files, members, prefix, metadata, entries, proof, proof_raw, source_proofs, *, now=None):
     """Qualify possible source closure; never assert exact binary inclusion."""
     from .security_action_npm import verify_source
-    from .security_licenses import ALLOWED, _select_expression, _license_evidence
+    from .security_license_contracts import ALLOWED, _select_expression, _license_evidence
     required = {'schema_version', 'kind', 'coverage_basis', 'exact_runtime_membership_proved', 'artifact_sha256',
                 'metadata_sha256', 'lock_sha256', 'entrypoints', 'npm_sources'}
     if (set(proof) != required or type(proof['schema_version']) is not int or proof['schema_version'] != 1

@@ -25,7 +25,8 @@ from .security_acquisition import _atomic, provision_tools, refresh_feeds
 from .security_data import MAX_AGE_SECONDS, SOURCE_URLS, SecurityDataError, _coverage, _acquisition, _json
 from .security_inventory import collect_inventory, declared_inventory, read_image_selection, canonical_digest
 from .security_license_acquisition import acquire_pypi
-from .security_licenses import ALLOWED, _select_expression, evaluate_artifacts, load_policy
+from .security_licenses import evaluate_artifacts
+from .security_license_contracts import ALLOWED, _select_expression, load_policy
 from .security_artifacts import MAX_INDEX_BYTES, read_file, ArtifactError as ArtifactError
 from .security_osv_snapshot import VulnerabilityError as VulnerabilityError
 from .security_oci import source_bindings, bound_fault, _bound_detail

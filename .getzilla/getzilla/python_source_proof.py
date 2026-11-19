@@ -4,6 +4,8 @@ from __future__ import annotations
 import ast
 import keyword
 from typing import AbstractSet, NamedTuple
+from functools import lru_cache
+from .architecture import ArchitectureError
 
 
 class Binding(NamedTuple):
@@ -144,3 +146,79 @@ def namespace_is_closed(tree: ast.AST, *, allow_instrumentation: bool = False,
                 node.value in reflective or node.value.startswith(('builtins.', '__builtin__.', '__builtins__.'))):
             return False
     return True
+
+
+def _queue_export_slice_prepared(tree: ast.Module, requested: frozenset[str], *, work_limit: int) -> ast.Module:
+    """Read an owned scalar tree; copy selected declarations before rewriting."""
+    import copy
+
+    @lru_cache(maxsize=None)
+    def names(node: ast.AST) -> set[str]:
+        return {item.id for item in ast.walk(node) if isinstance(item, ast.Name)}
+
+    @lru_cache(maxsize=None)
+    def writes(node: ast.AST) -> set[str]:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return {node.name}
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return {alias.asname or alias.name.split('.')[0] for alias in node.names}
+        targets = [item for item in ast.walk(node)
+                   if isinstance(item, (ast.Name, ast.Attribute, ast.Subscript))
+                   and isinstance(item.ctx, (ast.Store, ast.Del))]
+        return set().union(*(names(item) for item in targets)) if targets else set()
+
+    memo: dict[tuple[int, frozenset[str], bool, int], list[ast.stmt]] = {}
+
+    def closure(body: list[ast.stmt], seeds: set[str], *, returns: bool = False, depth: int = 0) -> list[ast.stmt]:
+        if depth > 64:
+            raise ArchitectureError('queue export syntax depth limit exceeded', code='limit')
+        key = (id(body), frozenset(seeds), returns, depth)
+        if key in memo:
+            return memo[key]
+        selected: dict[int, ast.stmt] = {}
+        wanted = set(seeds)
+        for _ in range(work_limit):
+            previous = (len(wanted), len(selected))
+            for index, node in enumerate(body):
+                wildcard = isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names)
+                mutation = isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and bool(names(node) & wanted)
+                returning = returns and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and any(isinstance(item, (ast.Return, ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
+                if not (writes(node) & wanted or wildcard or mutation or returning):
+                    continue
+                chosen = node
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    chosen = copy.copy(node)
+                    chosen.body = closure(node.body, set(), returns=True, depth=depth + 1) or [ast.Pass()]
+                    chosen.returns = None
+                    chosen.args = copy.deepcopy(node.args)
+                    for argument in (*chosen.args.posonlyargs, *chosen.args.args, *chosen.args.kwonlyargs,
+                                     *([chosen.args.vararg] if chosen.args.vararg else []),
+                                     *([chosen.args.kwarg] if chosen.args.kwarg else [])):
+                        argument.annotation = None
+                elif isinstance(node, (ast.If, ast.While, ast.For, ast.AsyncFor, ast.Try, ast.With, ast.AsyncWith)):
+                    chosen = copy.copy(node)
+                    for field in ('body', 'orelse', 'finalbody'):
+                        if hasattr(node, field):
+                            setattr(chosen, field, closure(getattr(node, field), wanted, returns=returns, depth=depth + 1))
+                    if hasattr(chosen, 'test') and not (names(chosen.test) & wanted):
+                        # The value interpreter joins both branches. Keep an
+                        # unknown predicate so the projection cannot imply reachability.
+                        chosen.test = ast.Name(id='__getzilla_unknown_predicate__', ctx=ast.Load())
+                    if isinstance(chosen, (ast.For, ast.AsyncFor)) and not (names(chosen.target) & wanted):
+                        chosen.iter = ast.Tuple(elts=[ast.Constant(value=None)], ctx=ast.Load())
+                    if isinstance(chosen, ast.Try):
+                        chosen.handlers = []
+                        for handler in node.handlers:
+                            selected_handler = copy.copy(handler)
+                            selected_handler.type = None
+                            selected_handler.body = closure(handler.body, wanted, returns=returns, depth=depth + 1)
+                            chosen.handlers.append(selected_handler)
+                selected[index] = chosen
+                wanted.update(names(chosen))
+            if previous == (len(wanted), len(selected)):
+                result = [selected[index] for index in sorted(selected)]
+                memo[key] = result
+                return result
+        raise ArchitectureError('queue export dependency limit exceeded', code='limit')
+
+    return ast.Module(body=closure(tree.body, set(requested)), type_ignores=[])

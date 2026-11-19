@@ -766,7 +766,7 @@ def module_requirements(observations, source_locks=None):
 
 def component_from_terms(identity, terms, *, expression=None, requires=None):
     """Qualify complete actual term bytes, independently of project policy approval."""
-    from .security_licenses import _license_evidence, _select_expression
+    from .security_license_contracts import _license_evidence, _select_expression
     from .security_license_texts import recognized_license, recognized_license_bundle, recognized_license_expression
 
     if not isinstance(terms, dict) or not terms:
@@ -842,7 +842,8 @@ def qualified_tool_bindings(checker, artifacts, license_result, *, now=None):
     """Bind both IDs only to independently re-evaluated ordinary joined output."""
     from .security_artifacts import artifact_identity, read_file, select_family
     from .security_data import _json
-    from .security_licenses import evaluate_artifacts, load_policy
+    from .security_licenses import evaluate_artifacts
+    from .security_license_contracts import load_policy
 
     if not isinstance(license_result, dict) or license_result.get("status") != "pass" or license_result.get("gaps"):
         fail("checker-tool-unqualified", "both checker tools require one ordinary joined license pass without gaps")
@@ -1095,7 +1096,7 @@ def finding_consistent(finding, allowed, select_expression):
     """Replay a checker finding from the independently verified live source root."""
     from .security_artifacts import ArtifactError, family_identity, read_file
     from .security_license_family_conditions import allowed_for
-    from .security_licenses import _license_evidence
+    from .security_license_contracts import _license_evidence
     try:
         record = finding['family_record']
         root, checker = _VERIFIED_FAMILIES[family_identity(record)]

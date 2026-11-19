@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import os as os  # compatibility module export
 from pathlib import Path
 import re
 import tempfile
@@ -11,7 +11,7 @@ import tomllib
 from email.parser import BytesParser
 
 from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BYTES,
-    archive_files, archive_inventory, artifact_identity, read_file, select_artifact)
+    archive_files, archive_inventory, artifact_identity as artifact_identity, read_file, select_artifact)
 from .security_data import _json
 from .security_python_target import digest
 
@@ -49,7 +49,7 @@ def declaration(root,inventory,policy,*,scratch):
     """Reobserve policy-pinned selectors; do not alter the source-use inventory."""
     if 'factory_offline_profile' not in policy:
         return None
-    from .security_licenses import factory_offline_intent
+    from .security_license_contracts import factory_offline_intent
     intent=factory_offline_intent(root,policy)
     if not intent or intent.get('code')!='license-factory-archive-delivery-unverified':
         _refuse()
@@ -94,7 +94,7 @@ def validate_declaration(value):
             or any(type(value[k]) is not str or not re.fullmatch('[a-f0-9]{64}',value[k])
                 for k in ('inventory_sha256','app_members_sha256'))):
         _refuse()
-    from .security_licenses import _policy
+    from .security_license_contracts import _policy
     _policy(dict(schema_version=1,project_repository='github.com/Dimkox/Getzilla',
         auto_allow=['MIT'],usage_distribution={},factory_offline_profile=value['policy_profile']))
     seen=set()
@@ -168,123 +168,15 @@ def _environment(value):
     return dict(value)
 
 
-def _command(command,stage):
-    from .python_test_runner import execute
-    from .security_tools import _environment as command_environment
-    from .public_security_context import _preparation_step
-    with _preparation_step('factory-target' if command[-1]=='--describe-target' else 'factory-output'):
-        result=execute(command,stage,command_environment(stage),timeout=120)
-        if result.returncode or result.terminal_state!='completed' or result.cleanup_error or len(result.stdout)>65536:
-            _refuse('artifact-factory-output')
-        return _json(result.stdout.encode())
 
 
-def _catalog_bytes(root,*,now=None):
-    from .security_artifacts import family_evidence
-    raw=read_file(root,'manifest.json',MAX_INDEX_BYTES)
-    bundle=_json(raw)
-    total=len(raw)
-    from .security_family_inputs import validate_frontiers
-    total+=validate_frontiers(root,bundle.get('family_frontiers',[]),now=now,
-        inventory_digest=bundle.get('inventory_digest'),records=bundle['records'])['bound_bytes']
-    if total>MAX_TOTAL:
-        _refuse('artifact-size')
-    for record in bundle['records']:
-        if 'kind' in record:
-            total+=family_evidence(root,record)['bound_bytes']
-        else:
-            total+=len(read_file(root,record['path'],MAX_ARTIFACT_BYTES))
-            total+=len(read_file(root,record['origin']['index_path'],MAX_INDEX_BYTES))
-            if record.get('redistributed_path'):
-                total+=len(read_file(root,record['redistributed_path'],MAX_ARTIFACT_BYTES))
-        if total>MAX_TOTAL:
-            _refuse('artifact-size')
-    return total
 
 
-def prepare(root,artifacts,tools,binding,checker,*,now=None,fetch=None):
-    """Run only the trusted builder on exact clean source data and exact wheel bytes."""
-    from .security_license_acquisition import acquire_pypi,_write
-    from .manifest import _open_root
-    from .security_licenses import load_policy
-    from .public_security_context import _preparation_step
-    declared=validate_declaration(binding['factory_inputs'])
-    # The caller has independently rederived the declaration and exact source binding.
-    main_bytes=_catalog_bytes(artifacts,now=now)
-    auxiliary=artifacts/'factory-output'
-    auxiliary.mkdir(mode=0o700,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='factory-output-',dir=tools) as directory:
-        stage=Path(directory)
-        builder=read_file(checker,'factory/runtime/build_offline_release.py',1024*1024)
-        helper=read_file(checker,'factory/runtime/setup_manager.py',1024*1024)
-        if hashlib.sha256(builder).hexdigest()!=declared['policy_profile']['builder_sha256']:
-            _refuse()
-        for name,raw in [('build_offline_release.py',builder),('setup_manager.py',helper)]:
-            (stage/name).write_bytes(raw)
-        command=['/usr/bin/python3.12','-E','-s','-S','-B',str(stage/'build_offline_release.py')]
-        observed=_command([*command,'--describe-target'],stage)
-        if set(observed)!={'environment','pointer_bits','releaselevel'} or observed['pointer_bits']!=64 or observed['releaselevel']!='final':
-            _refuse()
-        environment=_environment(observed['environment'])
-        inventory=output_inventory(declared,binding,environment)
-        with _preparation_step('factory-acquisition'):
-            bundle=acquire_pypi(inventory['dependencies'],auxiliary,inventory_digest=inventory['digest'],now=now,
-                byte_budget=MAX_TOTAL-main_bytes,**({'fetch':fetch} if fetch is not None else {}))
-        if bundle['gaps']:
-            _refuse()
-        wheelhouse=stage/'wheels'
-        wheelhouse.mkdir(mode=0o700)
-        for dep in inventory['dependencies']:
-            record=select_artifact(dep,bundle['records'])
-            raw=read_file(auxiliary,record['path'],MAX_ARTIFACT_BYTES)
-            verify_wheel(dep,raw)
-            (wheelhouse/dep['artifact_filename']).write_bytes(raw)
-        if main_bytes+_catalog_bytes(auxiliary,now=now)>MAX_TOTAL:
-            _refuse('artifact-size')
-        stem=stage/'factory-output'
-        built=_command([*command,'--repository',str(root),'--expected-head',binding['source']['head_sha'],
-            '--wheelhouse',str(wheelhouse),'--inventory',str(root/'factory/runtime/runtime-wheels-linux-x86_64-cpython312.json'),
-            '--output',str(stem),'--product-version',declared['product_version']],stage)
-        if (set(built)!={'archive','manifest','sidecar','archive_sha256','manifest_sha256','source_head','profile','target_environment','host_enforced'}
-                or built['source_head']!=binding['source']['head_sha'] or built['profile']!=PROFILE
-                or built['host_enforced'] is not True or _environment(built['target_environment'])!=environment):
-            _refuse('artifact-factory-output')
-        descriptor=None
-        published_bytes=main_bytes+_catalog_bytes(auxiliary,now=now)
-        try:
-            _,descriptor=_open_root(auxiliary)
-            for kind,suffix in [('archive','.zip'),('manifest','.manifest.json'),('sidecar','.sha256')]:
-                expected=Path(str(stem)+suffix)
-                if built[kind]!=str(expected):
-                    _refuse('artifact-factory-output')
-                raw=read_file(stage,expected.name,MAX_ARTIFACT_BYTES if kind=='archive' else MAX_INDEX_BYTES)
-                published_bytes+=len(raw)
-                if published_bytes>MAX_TOTAL:
-                    _refuse('artifact-size')
-                if kind!='sidecar' and hashlib.sha256(raw).hexdigest()!=built[kind+'_sha256']:
-                    _refuse('artifact-hash')
-                _write(descriptor,expected.name,raw)
-            context=inventory['dependencies'][0]['delivery_context']
-            bundle['deliveries']=[dict(context=context,kind='factory-offline-archive',profile=PROFILE,
-                path='factory-output.zip',sha256=built['archive_sha256'],manifest_path='factory-output.manifest.json',
-                manifest_sha256=built['manifest_sha256'],sidecar_path='factory-output.sha256',
-                components=[dict(artifact_id=artifact_identity(record),prefix='site-packages/') for record in bundle['records']])]
-            _write(descriptor,'manifest.json',json.dumps(bundle,sort_keys=True,separators=(',',':')).encode())
-            envelope=dict(schema_version=1,declaration_sha256=digest(declared),source=binding['source'],run=binding['run'],
-                environment=environment,builder_sha256=hashlib.sha256(builder).hexdigest(),helper_sha256=hashlib.sha256(helper).hexdigest())
-            _write(descriptor,'factory-input.json',json.dumps(envelope,sort_keys=True,separators=(',',':')).encode())
-        finally:
-            if isinstance(descriptor,int):
-                os.close(descriptor)
-        observed=verify(artifacts,binding,load_policy(checker),now=now,checker=checker)
-        if main_bytes+observed['projection']['payload_size']>MAX_TOTAL:
-            _refuse('artifact-size')
-        return observed
 
 
 def verify(artifacts,binding,policy,*,now=None,checker=None):
     """Recompute complete target, original-use, source-app and final composition joins."""
-    from .security_licenses import artifact_catalog_source
+    from .security_license_contracts import artifact_catalog_source
     from .security_tools import TRUSTED_ROOT
     checker=TRUSTED_ROOT if checker is None else checker
     declared=validate_declaration(binding['factory_inputs'])
@@ -316,3 +208,19 @@ def verify(artifacts,binding,policy,*,now=None,checker=None):
     projection=artifact_catalog_source(inventory,root,policy,now=now)
     projection['payload_size']+=len(raw)
     return dict(inventory=inventory,root=root,projection=projection)
+
+
+def _command(command, stage):
+    from .security_factory_build import _command as operation
+    return operation(command, stage)
+
+
+def _catalog_bytes(root, *, now=None):
+    from .security_factory_build import _catalog_bytes as operation
+    return operation(root, now=now)
+
+
+def prepare(root, artifacts, tools, binding, checker, *, now=None, fetch=None):
+    """Run only the trusted builder on exact clean source data and exact wheel bytes."""
+    from .security_factory_build import prepare as operation
+    return operation(root, artifacts, tools, binding, checker, now=now, fetch=fetch)

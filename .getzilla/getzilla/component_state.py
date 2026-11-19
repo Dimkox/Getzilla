@@ -379,8 +379,7 @@ class ManifestState:
         return self.agents
 
 
-def mode_matches(actual: int, expected: int) -> bool:
-    return bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR) if fsx.WINDOWS else stat.S_IMODE(actual) == expected
+from .fsx import mode_matches as mode_matches
 
 
 

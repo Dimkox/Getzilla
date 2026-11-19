@@ -41,6 +41,7 @@ _POLICY_PATHS = (
     'architecture/system.yaml', 'architecture/rules.yaml',
     'scripts/getzilla_cli.py', 'scripts/getzilla_hook.py',
     'scripts/getzilla_security.py', 'scripts/getzilla_startup_cpu.py',
+    'trust-ci/lock_profile_validation.py', 'scripts/getzilla_sync_lock_validation.py',
 )
 
 

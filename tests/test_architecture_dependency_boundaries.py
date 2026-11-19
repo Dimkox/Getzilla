@@ -19,6 +19,236 @@ from getzilla.python_source_proof import namespace_is_closed
 
 
 class ArchitectureDependencyBoundaryTests(unittest.TestCase):
+    def test_fixed_asset_reads_exclude_component_publication(self):
+        from getzilla import baseline_assets, component_state, fsx
+        self.assertIs(component_state.mode_matches, getattr(fsx, 'mode_matches', None))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/baseline_assets.py').read_bytes())
+        selected = _queue_export_slice(tree, frozenset({'load', 'preflight_destination', 'validate_resources'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'component_state'
+                             for node in ast.walk(selected)))
+        self.assertIs(baseline_assets.BoundRoot, fsx.ReadOnlyBoundRoot)
+        import stat
+        for windows in (False, True):
+            with mock.patch.object(fsx, 'WINDOWS', windows):
+                for actual in (0o444, 0o644, 0o664, 0o755):
+                    for expected in (0o444, 0o644, 0o755):
+                        wanted = (bool(actual & stat.S_IWRITE) == bool(expected & stat.S_IWUSR)
+                                  if windows else stat.S_IMODE(actual) == expected)
+                        self.assertEqual(fsx.mode_matches(actual, expected), wanted)
+
+    def test_grant_read_consumers_use_the_exact_shared_readonly_root(self):
+        from getzilla import fsx
+        from getzilla.component_state import BoundRoot
+        for name in ('read', '__init__', 'check', '__exit__'):
+            self.assertIs(getattr(BoundRoot, name), getattr(fsx.ReadOnlyBoundRoot, name))
+        for name in ('util', 'state'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'component_state'
+                                 for node in ast.walk(tree)))
+        import subprocess
+        code = ("import sys,tempfile,hashlib;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+                "from getzilla import util,state;"
+                "root=Path(sys.argv[2]);file=root/'owned';file.write_bytes(b'owned');"
+                "assert util.file_sha256(file,strict_root=root)==hashlib.sha256(b'owned').hexdigest();"
+                "assert 'getzilla.component_state' not in sys.modules")
+        with tempfile.TemporaryDirectory() as directory:
+            observed = subprocess.run([sys.executable, '-B', '-c', code, str(ROOT / '.getzilla'), directory],
+                                      capture_output=True, text=True, timeout=10)
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+
+    def test_review_policy_consumers_do_not_import_prompt_routing(self):
+        from getzilla import router, review_plan
+        self.assertIs(router.escalate_route, getattr(review_plan, 'escalate_route', None))
+        self.assertIs(router.load_routing_config, getattr(review_plan, 'load_routing_config', None))
+        self.assertIs(router.REVIEW_EVIDENCE, getattr(review_plan, 'REVIEW_EVIDENCE', None))
+        self.assertIs(router.DEFAULT_ROUTING, getattr(review_plan, 'DEFAULT_ROUTING', None))
+        for name in ('verification', 'review_plan'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'router'
+                                 for node in ast.walk(tree)))
+        with tempfile.TemporaryDirectory() as directory:
+            result = review_plan.escalate_route({'risk': 'low', 'delivery_lane': 'light'},
+                                                'high', Path(directory))
+        self.assertEqual(result['effective_risk'], 'high')
+        self.assertEqual(result['added_reviewers'], review_plan.DEFAULT_ROUTING['review_floors']['delivery'])
+
+    def test_factory_input_declaration_excludes_trusted_builder_execution(self):
+        from getzilla import security_factory_inputs, security_factory_build
+        self.assertTrue(callable(security_factory_build.prepare))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_factory_inputs.py').read_bytes())
+        projection = _queue_export_slice(tree, frozenset({'declaration', 'validate_declaration', 'verify'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_factory_build'
+                             for node in ast.walk(projection)))
+        self.assertEqual(security_factory_inputs.PROFILE, 'ubuntu-24.04-x86_64-cpython312')
+
+    def test_bare_module_package_fallback_uses_supplied_paths(self):
+        from getzilla import architecture_fitness as fitness
+        self.assertEqual(fitness._module_package('tools/standalone.py'), 'tools')
+        self.assertEqual(fitness._module_package('owned/standalone.py', ('owned',), ()), '')
+
+    def test_fitness_metadata_exports_exclude_reflective_ast_rewriting(self):
+        from getzilla import architecture_fitness as fitness
+        tree = ast.parse((ROOT / '.getzilla/getzilla/architecture_fitness.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'_module_package'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'python_source_proof'
+                             for node in ast.walk(projection)))
+        with mock.patch.object(fitness, 'MAX_QUEUE_ADAPTER_MODULES', 0):
+            with self.assertRaises(fitness.ArchitectureError) as captured:
+                fitness._QueueBudget('head').source('owned.py', b'x = 1\n')
+        self.assertEqual(captured.exception.queue_refusal['category'], 'modules')
+        self.assertEqual(captured.exception.queue_refusal['limit'], 0)
+
+    def test_each_split_implementation_owner_mutation_changes_policy_binding(self):
+        import importlib
+        from getzilla.verification_plan import policy_binding
+        owners = ('verification_actions.py', 'git_ranges.py', 'governance_records.py',
+                  'security_image_authority.py', 'release_transport.py', 'verification_policy_source.py',
+                  'workflow_inputs.py', 'workflow_cas.py', 'workflow_storage.py', 'live_evidence.py',
+                  'agent_eval_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'grant_authoring.py',
+                  'intake_authoring.py', 'security_publication.py', 'security_windows_publication.py',
+                  'verification_scope.py', 'public_security_context.py', 'metrics_journal.py',
+                  'architecture_fitness.py', 'python_source_proof.py', 'queue_refusal.py',
+                  'economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py',
+                  'router.py', 'review_plan.py', 'fsx.py', 'component_state.py', 'baseline_assets.py',
+                  'continuity_authoring.py', 'historical_data.py', 'lock_profile_validation.py')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = policy_binding(root)['implementation']
+            for name in owners:
+                with self.subTest(owner=name):
+                    module = importlib.import_module('getzilla.' + name[:-3])
+                    raw = (ROOT / '.getzilla/getzilla' / name).read_bytes()
+                    changed = raw + b'\n# source policy mutation control\n'
+                    with mock.patch.object(module.__loader__, 'get_data', return_value=changed):
+                        observed = policy_binding(root)['implementation']
+                    self.assertEqual(observed[name], hashlib.sha256(changed).hexdigest())
+                    self.assertNotEqual(observed[name], original[name])
+
+    def test_static_lock_validator_and_generator_body_bytes_are_policy_inputs(self):
+        from getzilla.verification_plan import policy_binding
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('trust-ci/lock_profile_validation.py', 'scripts/getzilla_sync_lock_validation.py'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                raw = (ROOT / name).read_bytes()
+                path.write_bytes(raw)
+                before = policy_binding(root)
+                self.assertEqual(before['inputs'][name], hashlib.sha256(raw).hexdigest())
+                changed = raw + b'\n# exact source mutation control\n'
+                path.write_bytes(changed)
+                after = policy_binding(root)
+                self.assertEqual(after['inputs'][name], hashlib.sha256(changed).hexdigest())
+                self.assertNotEqual(after['digest'], before['digest'])
+
+    def test_stored_workflow_consumer_excludes_cas_publication(self):
+        from getzilla import workflow_artifacts, workflow_cas
+        context = workflow_artifacts._cas_context()
+        self.assertIs(type(context), workflow_cas._CASContext)
+        self.assertIs(context.bound_cas_recovery_sequence, workflow_artifacts._CAS_RECOVERY_SEQUENCE)
+        self.assertIs(context.bound_workflowartifacterror, workflow_artifacts.WorkflowArtifactError)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/workflow_artifacts.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'validate_stored_workflow'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'workflow_cas'
+                             for node in ast.walk(projection)))
+
+    def test_eval_read_consumer_excludes_baseline_and_critic_authoring(self):
+        from getzilla import agent_evals, agent_eval_authoring
+        for name in ('review_quality', 'accept_baseline'):
+            self.assertIs(getattr(agent_evals, name), getattr(agent_eval_authoring, name))
+        import subprocess
+        for first in ('agent_evals', 'agent_eval_authoring'):
+            code = ("import sys;sys.path.insert(0,sys.argv[1]);"
+                    "__import__('getzilla.'+sys.argv[2]);"
+                    "from getzilla import agent_evals as core,agent_eval_authoring as author;"
+                    "assert core.accept_baseline is author.accept_baseline;"
+                    "assert core.review_quality is author.review_quality")
+            observed = subprocess.run([sys.executable, '-B', '-c', code, str(ROOT / '.getzilla'), first],
+                                      capture_output=True, text=True, timeout=10)
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes())
+        projection = _queue_export_slice(tree, frozenset({'required_suites'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'agent_eval_authoring'
+                             for node in ast.walk(projection)))
+
+    def test_license_catalog_contract_does_not_import_artifact_evaluation(self):
+        from getzilla import security_licenses, security_license_contracts
+        for name in ('load_policy', 'artifact_catalog_source', '_license_evidence'):
+            self.assertIs(getattr(security_licenses, name), getattr(security_license_contracts, name))
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_license_contracts.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'security_licenses'
+                             for node in ast.walk(tree)))
+        with self.assertRaises(security_license_contracts.ArtifactError):
+            security_license_contracts._policy({})
+
+    def test_live_evidence_consumer_excludes_producer_orchestration(self):
+        from getzilla import live_acceptance, live_evidence
+        for name in ('valid_binding', 'read_document', 'validate_components', '_held_bytes'):
+            self.assertIs(getattr(live_acceptance, name), getattr(live_evidence, name))
+        self.assertIs(live_acceptance._ParserObservation, live_evidence._ParserObservation)
+        tree = ast.parse((ROOT / '.getzilla/getzilla/verification.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'live_acceptance'
+                             for node in ast.walk(tree)))
+        self.assertFalse(live_evidence.valid_binding({}))
+        import json
+        modules = ('live_acceptance', 'disposable_resources', 'factory_tests', 'python_test_runner',
+                   'live_lifecycle', 'live_contracts', 'live_evidence', 'verification_policy_source')
+        hashes = {}
+        for name in modules:
+            module = __import__('getzilla.' + name, fromlist=[name])
+            hashes[module.__name__] = hashlib.sha256(module.__loader__.get_data(module.__file__)).hexdigest()
+        for name in ('trust-ci/tests/run_postgres_suite.py', 'trust-ci/tests/postgres_restart_probe.py'):
+            hashes[name] = hashlib.sha256(live_evidence._held_bytes(ROOT / name)).hexdigest()
+        expected = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+        self.assertEqual(live_evidence._producer_digest(ROOT, 'trust-ci'), expected)
+        with mock.patch.object(live_evidence.__loader__, 'get_data', return_value=b'changed consumer'):
+            self.assertNotEqual(live_evidence._producer_digest(ROOT, 'trust-ci'), expected)
+
+    def test_spec_json_pairs_demand_excludes_intake_publication(self):
+        tree = ast.parse((ROOT / '.getzilla/getzilla/spec.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'_pairs_object', '_reject_constant'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'intake_publication'
+                             for node in ast.walk(projection)))
+        from getzilla import spec
+        self.assertEqual(spec._pairs_object([('x', 1)]), {'x': 1})
+        with self.assertRaises(spec.SpecError):
+            spec._pairs_object([('x', 1), ('x', 2)])
+
+
+    def test_intake_input_demand_does_not_reenter_workflow_compiler(self):
+        from getzilla import workflow_artifacts, workflow_inputs
+        self.assertIs(workflow_artifacts.WorkflowArtifactError, workflow_inputs.WorkflowArtifactError)
+        for name in ('canonical_json', '_strict_json', '_read_regular'):
+            self.assertIs(getattr(workflow_artifacts, name), getattr(workflow_inputs, name))
+        for name in ('requirements_intake', 'intake_publication'):
+            tree = ast.parse((ROOT / ('.getzilla/getzilla/' + name + '.py')).read_bytes())
+            self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'workflow_artifacts'
+                                 for node in ast.walk(tree)))
+        with self.assertRaises(workflow_inputs.WorkflowArtifactError):
+            workflow_inputs._strict_json(b'{"x":1,"x":2}', limit=100)
+        self.assertEqual(workflow_inputs.canonical_json({'x': 1}), b'{"x":1}\n')
+
+    def test_replay_evaluator_demand_excludes_review_quality_orchestration(self):
+        tree = ast.parse((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
+                                           static_import_reads=True, forbidden_imports=_QUEUE_IMPORTS))
+        projection = _queue_export_slice(tree, frozenset({'required_suites'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'review_source'
+                             for node in ast.walk(projection)))
+        from getzilla import agent_evals
+        expected = hashlib.sha256((ROOT / '.getzilla/getzilla/agent_evals.py').read_bytes()).hexdigest()
+        self.assertEqual(agent_evals._runner_digest(), expected)
+        with mock.patch.dict(agent_evals.__dict__, clear=False):
+            del agent_evals.__loader__
+            with self.assertRaisesRegex(agent_evals.EvalError, 'runner_source_unavailable'):
+                agent_evals._runner_digest()
+
     def test_plan_ordinary_export_keeps_closed_namespace_and_precise_demand(self):
         tree = ast.parse((ROOT / '.getzilla/getzilla/verification_plan.py').read_bytes())
         self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True,
@@ -202,7 +432,7 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
         from getzilla.verification_plan import policy_binding
         with tempfile.TemporaryDirectory() as directory:
             implementation = policy_binding(Path(directory))['implementation']
-        for name in ('verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
+        for name in ('agent_eval_authoring.py', 'security_factory_build.py', 'security_factory_inputs.py', 'security_license_contracts.py', 'live_evidence.py', 'intake_authoring.py', 'workflow_cas.py', 'workflow_storage.py', 'workflow_inputs.py', 'verification_policy_source.py', 'git_ranges.py', 'verification_actions.py', 'governance_records.py', 'security_image_authority.py', 'release_transport.py'):
             with self.subTest(name=name):
                 self.assertIn(name, implementation)
                 self.assertEqual(implementation[name], hashlib.sha256(
