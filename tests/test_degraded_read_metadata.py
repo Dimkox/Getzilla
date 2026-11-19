@@ -162,9 +162,10 @@ class DegradedReadMetadataTests(unittest.TestCase):
             (root / 'private-data/marker.txt').write_text('synthetic no-secret marker\n', encoding='utf-8')
             (root / 'sub/README.md').unlink()
             (root / 'sub/README.md').symlink_to('../private-data/marker.txt')
-            (root / '.getzilla/config/policy.json').write_text(
-                json.dumps({'secret_read_paths': ['private-data/**']}), encoding='utf-8',
-            )
+            policy_path = root / '.getzilla/config/policy.json'
+            policy = json.loads(policy_path.read_text(encoding='utf-8'))
+            policy['secret_read_paths'] = ['private-data/**']
+            policy_path.write_text(json.dumps(policy), encoding='utf-8')
             self.assertEqual(self.decision(root, {'tool_name': 'exec_command', 'tool_input': {
                 'cmd': 'cat README.md', 'workdir': str(root / 'sub'),
             }}), 'deny')
