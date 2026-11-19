@@ -41,21 +41,23 @@ class PythonArtifactTargetTests(unittest.TestCase):
             candidate_clean=True,checker_clean=True,same_project=True)
         run=dict(provider='github-actions',repository='owned/project',run_id='42',run_attempt='1',head_sha='a'*40)
         recipe='trust-ci/Dockerfile.api'
-        requirements='trust-ci/requirements.txt'
+        requirements='trust-ci/requirements-runtime.txt'
         (self.root/'trust-ci').mkdir()
         from getzilla.security_tools import TRUSTED_ROOT
-        build_requirements='trust-ci/requirements-build.txt'
+        source_inputs=('trust-ci/pyproject.toml', 'trust-ci/README.md', 'trust-ci/uv.lock',
+            'trust-ci/lock_profiles.py', 'trust-ci/lock_profile_validation.py', 'trust-ci/lock-profiles.json',
+            requirements, 'trust-ci/requirements-test.txt', 'trust-ci/requirements-runner.txt')
         raw=(TRUSTED_ROOT/recipe).read_bytes()
-        for path in (recipe,requirements,build_requirements):
+        for path in (recipe,*source_inputs):
             (self.root/path).write_bytes((TRUSTED_ROOT/path).read_bytes())
         row=dict(dockerfile=recipe,recipe_sha256=hashlib.sha256(raw).hexdigest(),build_sha256='2'*64,manifest='compose.yml',line=1,source_reference='compose-build:api')
         dep=dict(ecosystem='PyPI',name='owned',version='1',manifest=requirements,usage='runtime-and-development',extras=[])
         original=dict(dep,manifest='factory/uv.lock')
         inventory=dict(digest='a'*64,builds=[row],dependencies=[dep,original],images=[dict(manifest='compose.yml',line=1,
             source_reference='compose-build:api',reference='owned@sha256:'+'3'*64)])
-        graphs=dict(graphs={'trust-ci/pyproject.toml#runtime':[[requirements,build_requirements]]},
+        graphs=dict(graphs={'trust-ci/pyproject.toml#runtime':[[requirements]]},
             evidence={path:hashlib.sha256((self.root/path).read_bytes()).hexdigest()
-                      for path in (recipe,requirements,build_requirements)})
+                      for path in (recipe,*source_inputs)})
         guard=object()
         live=dict(source=source,run=run,builds={'2'*64:'owned@sha256:'+'3'*64},build_inputs=[row],native_guard=guard)
         with mock.patch.object(image_authority, '_GUARD',guard),mock.patch.object(image_authority, '_LIVE',live):

@@ -111,7 +111,8 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
                   'verification_scope.py', 'public_security_context.py', 'metrics_journal.py',
                   'architecture_fitness.py', 'python_source_proof.py', 'queue_refusal.py',
                   'economics_contracts.py', 'economics_reader.py', 'economics_snapshot.py',
-                  'router.py', 'review_plan.py', 'fsx.py', 'component_state.py', 'baseline_assets.py')
+                  'router.py', 'review_plan.py', 'fsx.py', 'component_state.py', 'baseline_assets.py',
+                  'continuity_authoring.py', 'historical_data.py', 'lock_profile_validation.py')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             original = policy_binding(root)['implementation']
@@ -124,6 +125,23 @@ class ArchitectureDependencyBoundaryTests(unittest.TestCase):
                         observed = policy_binding(root)['implementation']
                     self.assertEqual(observed[name], hashlib.sha256(changed).hexdigest())
                     self.assertNotEqual(observed[name], original[name])
+
+    def test_static_lock_validator_and_generator_body_bytes_are_policy_inputs(self):
+        from getzilla.verification_plan import policy_binding
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('trust-ci/lock_profile_validation.py', 'scripts/getzilla_sync_lock_validation.py'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                raw = (ROOT / name).read_bytes()
+                path.write_bytes(raw)
+                before = policy_binding(root)
+                self.assertEqual(before['inputs'][name], hashlib.sha256(raw).hexdigest())
+                changed = raw + b'\n# exact source mutation control\n'
+                path.write_bytes(changed)
+                after = policy_binding(root)
+                self.assertEqual(after['inputs'][name], hashlib.sha256(changed).hexdigest())
+                self.assertNotEqual(after['digest'], before['digest'])
 
     def test_stored_workflow_consumer_excludes_cas_publication(self):
         from getzilla import workflow_artifacts, workflow_cas
