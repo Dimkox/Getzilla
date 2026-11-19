@@ -808,11 +808,19 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
                 if record['input']['request_digest'] != request_digest:
                     raise ExecutionError('intent_conflict')
                 return existing, False
+            supervised_limit = getattr(backend, 'supervised_limit', 2)
+            if type(supervised_limit) is not int or not 1 <= supervised_limit <= 8:
+                raise ExecutionError('unsupported_backend_budget')
             if getattr(backend, 'supervised', False) and sum(
-                    item['backend']['kind'] == 'managed-local' and (item['execution_status'] not in store.TERMINAL
+                    item['backend']['kind'] == 'managed-local'
+                    and bool(item.get('mcp_request_id')) == bool(request.mcp_request_id)
+                    and (item['execution_status'] not in store.TERMINAL
                     or item['cleanup_status'] in {'pending', 'unconfirmed', 'failed'})
-                    for item in registry['records'].values()) >= 2:
+                    for item in registry['records'].values()) >= supervised_limit:
                 raise ExecutionError('backend_saturated')
+            resource_admission = getattr(backend, 'admit_resources', None)
+            if resource_admission is not None:
+                resource_admission(registry, request)
             if len(registry['records']) >= store.MAX_RECORDS:
                 raise store.RegistryError('registry_full')
             execution_id = secrets.token_hex(16)
@@ -838,7 +846,10 @@ def submit(root: Path, caller: CallerContext, request: SubmitRequest, *, backend
             registry['records'][execution_id] = record
             registry['intents'][intent] = execution_id
             return execution_id, True
-        registry, (execution_id, dispatch) = store.mutate_registry(root, allocate)
+        from contextlib import nullcontext
+        allocation_lock = getattr(backend, 'allocation_lock', nullcontext)
+        with allocation_lock():
+            registry, (execution_id, dispatch) = store.mutate_registry(root, allocate)
     record = registry['records'][execution_id]
     if not dispatch:
         return _view(root, record)
