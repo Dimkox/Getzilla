@@ -174,7 +174,7 @@ finally:writer.close()
 class JournalColocatedSDKTests(unittest.TestCase):
     def colocated_worlds(self, archive, external=False):
         members = ('__init__.py', 'fsx.py', 'verification_journal.py', 'verification_unittest.py', 'verification_journal_contracts.py', 'verification_actions.py', 'queue_refusal.py', 'python_test_runner.py', 'process_limits.py',
-                   'pytest_progress.py', '_cpu_capacity.py', 'verification_scope.py')
+                   'pytest_progress.py', '_cpu_capacity.py', 'cpu_budget.py', 'verification_scope.py')
         with tempfile.TemporaryDirectory(prefix='owned-colocated-sdk-', dir=ROOT / '.getzilla/runtime') as temporary:
             fixture = Path(temporary)
             project = fixture / 'project'
