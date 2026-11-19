@@ -1,4 +1,6 @@
 """Exercise actual consumers before their first product write."""
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,8 +121,19 @@ class AdmissionTests(unittest.TestCase):
             self.publish(root,intent)
             (root/'.getzilla/hooks/_lib.py').unlink()
             code,result,error=run_hook(root,'pre_tool_use.py',{'cwd':str(root),'session_id':'fixture-owner','tool_name':'Write','tool_input':{'file_path':'src/retention.py','content':'inert'}})
-            self.assertEqual(code,0,error)
+            self.assertEqual(code,2,error)
             self.assertEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny',result)
+            # Missing bootstrap is an intentional native blocking exit, not
+            # a successful policy evaluation. Verify all actual launch surfaces.
+            from tests.test_supply_chain_boundaries import native_hook, native_verdict
+            raw = json.dumps({'cwd': str(root), 'session_id': 'fixture-owner', 'tool_name': 'Write',
+                              'tool_input': {'file_path': 'src/retention.py', 'content': 'inert'}}).encode()
+            for harness in ('grok', 'claude', 'qwen', 'codex', 'gemini', 'copilot'):
+                for style in ('source', 'legacy', *(() if os.name == 'nt' else ('generated',))):
+                    with self.subTest(harness=harness, style=style):
+                        actual = native_hook(root, raw, harness, style)
+                        self.assertEqual(actual.returncode, 2, actual.stderr)
+                        self.assertEqual(native_verdict(json.loads(actual.stdout), harness), 'deny')
 
     def test_later_verifier_records_cut_as_data_and_rechecks_withdrawal(self):
         from getzilla.verification import _change_specs
