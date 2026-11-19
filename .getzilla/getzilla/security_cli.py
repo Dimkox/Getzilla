@@ -49,7 +49,7 @@ from .public_security_context import (  # noqa: F401 compatibility exports for s
     validate_input_profile,
     validate_selection_authority,
 )
-from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source, image_network_selection
+from .security_tools import TRUSTED_ROOT, TRIVY_DB_URL, _environment, refresh_images, refresh_image_database, scan_source
 
 REQUIRED_CHECKS = ('security-inventory', 'known-vulnerabilities', 'security-kev', 'security-epss',
                    'security-malicious-packages', 'security-licenses', 'security-container-images',
