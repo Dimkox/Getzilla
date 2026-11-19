@@ -125,6 +125,13 @@ class Session:
                     continue  # stderr is not a response, receipt or health failure.
                 for message in self.frames.feed(chunk):
                     if message.get('id') == wanted:
+                        # Parsing/progress does not extend admission or revive a
+                        # request whose cancel/deadline won before acceptance.
+                        current = self.watch()
+                        if self.clock() >= self.deadline:
+                            return Reply('deadline', reason='hard_deadline', remote_task_id=self.remote_task, sent=self.sent)
+                        if current != 'running':
+                            return self._cancel(current)
                         return message
                     if 'id' in message:
                         # A stale/late response never satisfies another request.

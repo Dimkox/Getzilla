@@ -93,6 +93,17 @@ class WireTests(unittest.TestCase):
         self.assertEqual((reply.status,reply.reason),('infra','oversize'))
         self.assertTrue(reply.sent)
 
+    def test_parse_boundary_cannot_accept_a_result_after_deadline(self):
+        session=Session(self.child(),deadline=time.monotonic()+1,watch=lambda:'running',request_id='parse-boundary')
+        original=session.frames.feed
+        def late_parse(chunk):
+            result=original(chunk)
+            if result:session.deadline=time.monotonic()-1
+            return result
+        session.frames.feed=late_parse
+        try:self.assertEqual(session.call('fixture_read',{}).status,'deadline')
+        finally:session.close()
+
     def test_remote_task_identity_is_separate_and_never_invented_done(self):
         result=self.call('task')
         self.assertEqual(result.remote_task_id,'remote-job-1')

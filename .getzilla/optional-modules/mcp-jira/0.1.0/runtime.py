@@ -61,6 +61,12 @@ class Runtime:
         return NativeProfileProofV1(request.digest(), owner.generation, owner.owner_handle)
 
     def current(self):
+        if not self._local_current():
+            return False
+        self.authority.validate_activation(self.request, self.handle)
+        return True
+
+    def _local_current(self):
         # Check disabled state before provider config, authority, credentials or
         # process admission. This read creates no file and loads no credential.
         with BoundRoot(self.root) as binding:
@@ -80,8 +86,9 @@ class Runtime:
                 return False
         if self.request.scope_digest != hashlib.sha256(json.dumps(self.profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest():
             return False
-        self.authority.validate_activation(self.request, self.handle)
-        return True
+        caller = execution.trusted_caller(self.root)
+        return (self.request.task_id, self.request.owner_id, self.request.authority_epoch) == (
+            caller.logical_task_id, caller.session_id, caller.authority_epoch)
 
     def attest_tool(self, root, event):
         from getzilla.supply_chain import ManagedToolIdentity
@@ -183,7 +190,7 @@ class Backend(managed.Backend):
         return self.runtime.host_budget.allocation_lock()
 
     def admit_resources(self, registry, request):
-        if request.label != self.label or not self.runtime.current():
+        if request.label != self.label or not self.runtime._local_current():
             raise execution.ExecutionError('mcp_disabled')
         reason = gate(self.runtime.host_budget.snapshot(self.runtime.root, registry), self.label)
         if reason:
