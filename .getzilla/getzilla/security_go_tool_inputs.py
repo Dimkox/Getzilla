@@ -767,7 +767,7 @@ def module_requirements(observations, source_locks=None):
 def component_from_terms(identity, terms, *, expression=None, requires=None):
     """Qualify complete actual term bytes, independently of project policy approval."""
     from .security_licenses import _license_evidence, _select_expression
-    from .security_license_texts import recognized_license, recognized_license_bundle
+    from .security_license_texts import recognized_license, recognized_license_bundle, recognized_license_expression
 
     if not isinstance(terms, dict) or not terms:
         fail("license-obligation-missing", "Go component has no retained source license/notice bytes")
@@ -776,6 +776,8 @@ def component_from_terms(identity, terms, *, expression=None, requires=None):
     licenses = []
     notices = []
     identifiers = set()
+    source_expressions = []
+    has_alternative = False
     for name, body in terms.items():
         safe_parts(name)
         if not isinstance(body, bytes) or not body or len(body) > MAX_METADATA_BYTES:
@@ -791,21 +793,35 @@ def component_from_terms(identity, terms, *, expression=None, requires=None):
                 recognized = recognized_license(body.decode("utf-8"))
             except UnicodeError:
                 fail("license-text-review", "Go legal text is not UTF-8")
+            exact_expression = recognized_license_expression(body.decode("utf-8"))
+            if exact_expression is not None:
+                has_alternative = True
+                source_expressions.append(exact_expression)
             if recognized:
                 identifiers.add(recognized)
+                source_expressions.append(recognized)
             else:
-                identifiers.update(recognized_license_bundle(body.decode("utf-8")) or ())
+                bundle = recognized_license_bundle(body.decode("utf-8")) or ()
+                identifiers.update(bundle)
+                if bundle and exact_expression is None:
+                    source_expressions.append(" AND ".join(bundle))
     if not licenses:
         fail("license-obligation-missing", "Go component has no complete license term file")
+    inferred = None
+    if has_alternative:
+        clauses = list(dict.fromkeys(source_expressions))
+        inferred = clauses[0] if len(clauses) == 1 else " AND ".join("(" + item + ")" for item in clauses)
+        if expression is not None and expression != inferred:
+            fail("license-conflict", "source expression overrides an exact retained alternative grant")
     if expression is None:
         if not identifiers:
             fail("license-text-review", "Go source license terms require exact text/expression review")
-        expression = " AND ".join(sorted(identifiers))
+        expression = inferred or " AND ".join(sorted(identifiers))
     # This stage proves source text, not project permission. The report-only
     # require_all API deliberately admits only six global policy IDs; do not
     # widen that untrusted-report gate to qualify copyleft source evidence.
     chosen, mentioned = _select_expression(expression, sorted(identifiers))
-    if set(chosen) != identifiers:
+    if not has_alternative and set(chosen) != identifiers:
         fail("license-text-review", "source expression does not select every retained complete grant")
     _license_evidence(files, {"expression": expression, "license_paths": licenses}, mentioned, chosen)
     component = {

@@ -56,11 +56,13 @@ class FamilyConditionsTests(unittest.TestCase):
         self.assertEqual(conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=True,source_modules=changed),list(licenses.ALLOWED))
 
     def test_every_fixture_matches_exact_recognition_and_profile(self):
-        from getzilla.security_license_texts import recognized_license_bundle
+        from getzilla.security_license_texts import recognized_license, recognized_license_bundle
         fixture=json.loads((ROOT/'tests/fixtures/security-license-internal-family-conditions.json').read_text())
         for sha,item in fixture['texts'].items():
             self.assertEqual(hashlib.sha256(item['text'].encode()).hexdigest(),sha)
-            self.assertEqual(recognized_license_bundle(item['text']),tuple(item['identifiers']))
+            single=recognized_license(item['text'])
+            identified=(single,) if single else recognized_license_bundle(item['text'])
+            self.assertEqual(identified,tuple(item['identifiers']))
             self.assertIsNone(recognized_license_bundle(item['text']+' changed'))
 
     def test_go_finding_replays_live_compact_proof_and_rejects_changed_terms(self):
