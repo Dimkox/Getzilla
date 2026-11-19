@@ -4235,6 +4235,7 @@
         ".getzilla/managed-components.json",
         ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
+        ".getzilla/optional-modules/reverse-engineering/0.1.0/elf.py",
         ".getzilla/templates",
         ".grok",
         ".qwen",

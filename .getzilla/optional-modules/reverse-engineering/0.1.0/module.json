@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "reverse-engineering",
+  "version": "0.1.0",
+  "publisher": "getzilla",
+  "core_api": {
+    "min": 1,
+    "max": 1
+  },
+  "license": "MIT",
+  "entitlement": null,
+  "dependencies": {},
+  "permissions": [
+    "reverse.artifact.read"
+  ],
+  "hooks": "declarative-v1",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "a31659b2e03a3a4de66cc2c1d9624049e04a924ef7f0830cf53270f0fa395b30",
+      "mode": 420,
+      "mutable": false
+    },
+    {
+      "path": "elf.py",
+      "sha256": "82a1c4d94dc6334fb721e49ff53873ce97df7adb8c0d9f030244df475b840dc5",
+      "mode": 420,
+      "mutable": false
+    }
+  ]
+}
