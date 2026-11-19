@@ -30,7 +30,7 @@ _CANONICAL = {name.lower(): name for name in ALLOWED}
 _NONALLOW = ('GPL-2.0-only', 'GPL-2.0-or-later', 'GPL-3.0-only', 'GPL-3.0-or-later',
              'LGPL-2.1-only', 'LGPL-2.1-or-later', 'LGPL-3.0-only', 'LGPL-3.0-or-later',
              'AGPL-3.0-only', 'AGPL-3.0-or-later', 'MPL-2.0', 'EPL-2.0', 'BSD-4-Clause',
-             'CC0-1.0', 'Unlicense', 'X11')
+             'CC0-1.0', 'Unlicense', 'X11', 'BlueOak-1.0.0')
 _RECOGNIZED = {name.lower(): name for name in (*ALLOWED, *_NONALLOW)}
 
 
@@ -642,6 +642,9 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
                 if raw_distribution=='internal':
                     result['details'].append(detail)
                 if selected_required:
+                    if kind == 'action' and distribution == 'internal':
+                        from .security_action_inputs import mark_selected_internal_family
+                        mark_selected_internal_family(record)
                     run_context.family_passed(subject,kind,detail)
             except (ArtifactError, SecurityDataError, ValueError, TypeError, KeyError) as exc:
                 code = getattr(exc, 'code', 'artifact-invalid')

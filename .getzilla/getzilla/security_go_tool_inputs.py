@@ -801,7 +801,12 @@ def component_from_terms(identity, terms, *, expression=None, requires=None):
         if not identifiers:
             fail("license-text-review", "Go source license terms require exact text/expression review")
         expression = " AND ".join(sorted(identifiers))
-    chosen, mentioned = _select_expression(expression, sorted(identifiers), require_all=True)
+    # This stage proves source text, not project permission. The report-only
+    # require_all API deliberately admits only six global policy IDs; do not
+    # widen that untrusted-report gate to qualify copyleft source evidence.
+    chosen, mentioned = _select_expression(expression, sorted(identifiers))
+    if set(chosen) != identifiers:
+        fail("license-text-review", "source expression does not select every retained complete grant")
     _license_evidence(files, {"expression": expression, "license_paths": licenses}, mentioned, chosen)
     component = {
         "id": identity,

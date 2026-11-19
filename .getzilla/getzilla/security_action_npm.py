@@ -219,7 +219,9 @@ def _qualify_source(result, source, *, supplemental=None):
                 expression = interpretation['expression']
         if not isinstance(expression, str) or not expression:
             _fail('license-metadata-missing', 'npm component has no exact SPDX expression')
-        evidence_ids = [*ALLOWED, 'X11'] if interpretation is not None else list(ALLOWED)
+        # Text/source qualification precedes the selected-use policy gate.
+        # Complete extra-ID evidence never expands evaluator permission.
+        evidence_ids = [*ALLOWED, 'X11', 'BlueOak-1.0.0']
         chosen, identifiers = _select_expression(expression, evidence_ids)
         for name, body in owned[parent].items():
             for declared in re.findall(rb'(?m)^\s*(?://|/\*+|\*|#)?\s*SPDX-License-Identifier:\s*([^\r\n*]+)', body):
