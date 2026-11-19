@@ -1,4 +1,4 @@
-"""Exact original publisher source terms for two immutable published npm objects.
+"""Exact original publisher source terms for three immutable published npm objects.
 
 The research packet is not runtime authority. Cold preparation fetches these
 fixed official objects; every use rechecks their bytes, source identity and all
@@ -13,6 +13,17 @@ from pathlib import Path
 from .security_artifacts import ArtifactError, read_file
 
 PROFILES = {
+    '19347cbcba429e9f240427ce4e5998efe30a47cb9131b5673fc2f0441f7f4f57': {
+        'id': 'xml-naming-0.1.0-source-mit-v1', 'name': 'xml-naming', 'version': '0.1.0',
+        'npm_url': 'https://registry.npmjs.org/xml-naming/-/xml-naming-0.1.0.tgz',
+        'registry_url': 'https://registry.npmjs.org/xml-naming/0.1.0', 'git_head': None,
+        'source_identity_basis': 'all-published-members-at-fixed-source-commit',
+        'source_commit': 'c0afc395948730bed124859d7fc7cccabe0aac8a',
+        'source_url': 'https://codeload.github.com/NaturalIntelligence/xml-naming/tar.gz/c0afc395948730bed124859d7fc7cccabe0aac8a',
+        'source_sha256': '1c845fcee71fd7d19f6c8af4b1df18db5441fe36c9fa702255c1202056d57d47',
+        'package_prefix': '', 'published_members': 4, 'term_path': 'LICENSE',
+        'term_sha256': '8e75fc0e776c62ccadb8178ece8d3daa9ba7601fb0a49b2dfb0ea9a7a5c0aa07', 'term_bytes': 1077,
+    },
     '9c864305f59a18ece5505610859e3308bd0c2250562f1d1f9ce9a8ea3be3518d': {
         'id': 'nodable-entities-2.1.0-source-mit-v1', 'name': '@nodable/entities', 'version': '2.1.0',
         'npm_url': 'https://registry.npmjs.org/@nodable/entities/-/entities-2.1.0.tgz',
@@ -88,7 +99,7 @@ def verify(root, source, payload, npm_files, *, now=None):
     metadata = _json(raw['registry'])
     dist = metadata.get('dist')
     if ((metadata.get('name'), metadata.get('version')) != (profile['name'], profile['version'])
-            or metadata.get('gitHead') != profile['git_head'] or not isinstance(dist, dict)
+            or (profile['git_head'] is not None and metadata.get('gitHead') != profile['git_head']) or not isinstance(dist, dict)
             or dist.get('tarball') != source['url']):
         _fail('artifact-npm-origin', 'supplemental registry identity/gitHead differs')
     _integrity(payload, dist.get('integrity'), {'sha512'})
@@ -104,7 +115,7 @@ def verify(root, source, payload, npm_files, *, now=None):
     matches = {}
     for name, body in npm_files.items():
         relative = name.split('/', 1)[1]
-        source_path = prefix + '/' + profile['package_prefix'] + '/' + relative
+        source_path = prefix + '/' + (profile['package_prefix'] + '/' if profile['package_prefix'] else '') + relative
         if upstream.get(source_path) != body:
             _fail('license-transitive-coverage', 'published npm member differs from exact supplemental source')
         matches[name] = {'source_path': source_path, 'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body)}
@@ -117,7 +128,10 @@ def verify(root, source, payload, npm_files, *, now=None):
     proofs.append({'path': term_path, 'sha256': profile['term_sha256'], 'bytes': len(term),
         'container_kind': 'supplemental-source-archive-member', 'artifact_path': value['archive']['path'],
         'artifact_sha256': value['archive']['sha256'], 'derived_path': derived,
-        'published_member_matches': matches, 'source_assurance': 'exact-published-member-source-match'})
+        'published_member_matches': matches, 'source_assurance': 'exact-published-member-source-match',
+        'source_identity_basis': profile.get('source_identity_basis', 'registry-gitHead-and-all-published-members'),
+        'registry_gitHead': profile['git_head'], 'source_commit': profile.get('source_commit', profile['git_head']),
+        'physical_bytes': 0})
     return {'terms': [(derived, term)], 'proofs': proofs,
             'bound_bytes': len(raw['registry']) + len(raw['archive'])}
 

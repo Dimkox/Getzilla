@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "scope": "Decoded complete text identification only; the source reader separately validates original container hash, exact selector, codec and decoded hash. No comment parsing occurs in the license helper.",
+  "complete_files": [
+    {
+      "identifier": "BSD-3-Clause",
+      "sha256": "bd773be0928aebf73959b15de6edd7abf4e78014bc9e8be3b96142ca251a018f",
+      "bytes": 1867,
+      "text": "Copyright 2008 Google Inc.  All rights reserved.\nhttps://developers.google.com/protocol-buffers/\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are\nmet:\n\n    * Redistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n    * Redistributions in binary form must reproduce the above\ncopyright notice, this list of conditions and the following disclaimer\nin the documentation and/or other materials provided with the\ndistribution.\n    * Neither the name of Google Inc. nor the names of its\ncontributors may be used to endorse or promote products derived from\nthis software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\nA PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\nOWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\nSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\nLIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\nTHEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n\nAuthor: kenton@google.com (Kenton Varda)\n Based on original Protocol Buffers design by\n Sanjay Ghemawat, Jeff Dean, and others.\n\nThe messages in this file describe the definitions found in .proto files.\nA valid .proto file can be translated directly to a FileDescriptorProto\nwithout any other information (e.g. without reading its imports).\n\n",
+      "sources": [
+        {
+          "name": "@protobuf-ts/plugin-framework",
+          "version": "2.9.4",
+          "artifact_sha256": "3b0d9fa38925795ce7b1b4673a75261810bb1779f60a7dc7dca6940f9840de9b",
+          "container_path": "package/build/commonjs/google/protobuf/descriptor.js",
+          "container_sha256": "a37ba611c3168b1542f972e3f9973b409487329db5504071299a08460a4bbeda",
+          "container_bytes": 34772,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 9,
+            "end_line_exclusive": 47
+          }
+        },
+        {
+          "name": "@protobuf-ts/plugin-framework",
+          "version": "2.9.4",
+          "artifact_sha256": "3b0d9fa38925795ce7b1b4673a75261810bb1779f60a7dc7dca6940f9840de9b",
+          "container_path": "package/build/es2015/google/protobuf/descriptor.js",
+          "container_sha256": "49d6e7e05d51aaeeb9f33aeeac5b7c77cac03c1273c84d7d053041e1b94a2770",
+          "container_bytes": 31832,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 6,
+            "end_line_exclusive": 44
+          }
+        }
+      ],
+      "review_note": "Complete BSD3 operative clauses and disclaimer; Google named in nonendorsement clause and owner wording retained. Whole decoded block, including URL, authors and descriptive prose, matches exact UTF8 bytes only; source decoder must independently verify original container and selector."
+    },
+    {
+      "identifier": "BSD-3-Clause",
+      "sha256": "32ae9a06ce10bb95444eaef5a0a6fe171c2b088a0ace3a03daaf5ff5dd60a8f7",
+      "bytes": 2150,
+      "text": "Copyright 2008 Google Inc.  All rights reserved.\nhttps://developers.google.com/protocol-buffers/\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are\nmet:\n\n    * Redistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n    * Redistributions in binary form must reproduce the above\ncopyright notice, this list of conditions and the following disclaimer\nin the documentation and/or other materials provided with the\ndistribution.\n    * Neither the name of Google Inc. nor the names of its\ncontributors may be used to endorse or promote products derived from\nthis software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\nA PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\nOWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\nSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\nLIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\nTHEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n\nAuthor: kenton@google.com (Kenton Varda)\n\nWARNING:  The plugin interface is currently EXPERIMENTAL and is subject to\n  change.\n\nprotoc (aka the Protocol Compiler) can be extended via plugins.  A plugin is\njust a program that reads a CodeGeneratorRequest from stdin and writes a\nCodeGeneratorResponse to stdout.\n\nPlugins written using C++ can use google/protobuf/compiler/plugin.h instead\nof dealing with the raw protocol defined here.\n\nA plugin executable needs only to be placed somewhere in the path.  The\nplugin should be named \"protoc-gen-$NAME\", and will then be used when the\nflag \"--${NAME}_out\" is passed to protoc.\n\n",
+      "sources": [
+        {
+          "name": "@protobuf-ts/plugin-framework",
+          "version": "2.9.4",
+          "artifact_sha256": "3b0d9fa38925795ce7b1b4673a75261810bb1779f60a7dc7dca6940f9840de9b",
+          "container_path": "package/build/commonjs/google/protobuf/compiler/plugin.js",
+          "container_sha256": "2ea2454c97c9db33670eda13caf2e90903ec967e7a797cfdd4690b242fbb844d",
+          "container_bytes": 6456,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 9,
+            "end_line_exclusive": 55
+          }
+        },
+        {
+          "name": "@protobuf-ts/plugin-framework",
+          "version": "2.9.4",
+          "artifact_sha256": "3b0d9fa38925795ce7b1b4673a75261810bb1779f60a7dc7dca6940f9840de9b",
+          "container_path": "package/build/es2015/google/protobuf/compiler/plugin.js",
+          "container_sha256": "33e76d6f78c2e8b317ba81b1c264a8a279a4b50edb1577b02c19460f6ac28404",
+          "container_bytes": 5990,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 6,
+            "end_line_exclusive": 52
+          }
+        }
+      ],
+      "review_note": "Complete BSD3 operative clauses and disclaimer; Google named in nonendorsement clause and owner wording retained. Whole decoded block, including URL, authors and descriptive prose, matches exact UTF8 bytes only; source decoder must independently verify original container and selector."
+    },
+    {
+      "identifier": "BSD-3-Clause",
+      "sha256": "182a1bc8985a586e8e0ca3b5a3af1ff3c28bd3475833a07f50b42b53dd7ac889",
+      "bytes": 1720,
+      "text": "Copyright 2008 Google Inc.  All rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are\nmet:\n\n* Redistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n* Redistributions in binary form must reproduce the above\ncopyright notice, this list of conditions and the following disclaimer\nin the documentation and/or other materials provided with the\ndistribution.\n* Neither the name of Google Inc. nor the names of its\ncontributors may be used to endorse or promote products derived from\nthis software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\nA PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\nOWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\nSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\nLIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\nTHEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\nCode generated by the Protocol Buffer compiler is owned by the owner\nof the input file used when generating it.  This code is not\nstandalone and requires a support library to be linked with it.  This\nsupport library is itself covered by the above license.\n",
+      "sources": [
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.9.4",
+          "artifact_sha256": "c82354b7e1596d66233f32b70038511c4473aedb4fd41aff10a8cc342c415e41",
+          "container_path": "package/build/commonjs/goog-varint.js",
+          "container_sha256": "8c5adc276a587ac290d1bf77648a992b025ea2bf02b3966bdb3f682a24f90f9a",
+          "container_bytes": 10090,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 2,
+            "end_line_exclusive": 34
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.9.4",
+          "artifact_sha256": "c82354b7e1596d66233f32b70038511c4473aedb4fd41aff10a8cc342c415e41",
+          "container_path": "package/build/es2015/goog-varint.js",
+          "container_sha256": "1d177e89d752c2721e05dfaf17cfc2f9d4bea613a52c2b62ada0d64d22c408ea",
+          "container_bytes": 9669,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 1,
+            "end_line_exclusive": 33
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.11.1",
+          "artifact_sha256": "3bb18cb373565b5c95e466c1db76e4b1d8166b62276a15e3547c36f9e25b502b",
+          "container_path": "package/build/commonjs/goog-varint.js",
+          "container_sha256": "8c5adc276a587ac290d1bf77648a992b025ea2bf02b3966bdb3f682a24f90f9a",
+          "container_bytes": 10090,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 2,
+            "end_line_exclusive": 34
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.11.1",
+          "artifact_sha256": "3bb18cb373565b5c95e466c1db76e4b1d8166b62276a15e3547c36f9e25b502b",
+          "container_path": "package/build/es2015/goog-varint.js",
+          "container_sha256": "1d177e89d752c2721e05dfaf17cfc2f9d4bea613a52c2b62ada0d64d22c408ea",
+          "container_bytes": 9669,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 1,
+            "end_line_exclusive": 33
+          }
+        }
+      ],
+      "review_note": "Complete BSD3 operative clauses and disclaimer; Google named in nonendorsement clause and owner wording retained. Whole decoded block, including URL, authors and descriptive prose, matches exact UTF8 bytes only; source decoder must independently verify original container and selector."
+    },
+    {
+      "identifier": "BSD-3-Clause",
+      "sha256": "1033ec013241782ef9264400da6635b26b7a14674d9601c6c767be84ad778af4",
+      "bytes": 1479,
+      "text": "Copyright (c) 2016, Daniel Wirtz  All rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are\nmet:\n\n* Redistributions of source code must retain the above copyright\n  notice, this list of conditions and the following disclaimer.\n* Redistributions in binary form must reproduce the above copyright\n  notice, this list of conditions and the following disclaimer in the\n  documentation and/or other materials provided with the distribution.\n* Neither the name of its author, nor the names of its contributors\n  may be used to endorse or promote products derived from this software\n  without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\nA PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\nOWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\nSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\nLIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\nTHEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n",
+      "sources": [
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.9.4",
+          "artifact_sha256": "c82354b7e1596d66233f32b70038511c4473aedb4fd41aff10a8cc342c415e41",
+          "container_path": "package/build/commonjs/protobufjs-utf8.js",
+          "container_sha256": "d2379d310a79047ab69a52110640897bc1d2541fd1e3363ad985e480d3ced1fc",
+          "container_bytes": 3310,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 2,
+            "end_line_exclusive": 28
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.9.4",
+          "artifact_sha256": "c82354b7e1596d66233f32b70038511c4473aedb4fd41aff10a8cc342c415e41",
+          "container_path": "package/build/es2015/protobufjs-utf8.js",
+          "container_sha256": "cefc299b891bf38ea3220ed5607a6ca285caf9a71d9c8dfc35dafa3237720b06",
+          "container_bytes": 3184,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 1,
+            "end_line_exclusive": 27
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.11.1",
+          "artifact_sha256": "3bb18cb373565b5c95e466c1db76e4b1d8166b62276a15e3547c36f9e25b502b",
+          "container_path": "package/build/commonjs/protobufjs-utf8.js",
+          "container_sha256": "d2379d310a79047ab69a52110640897bc1d2541fd1e3363ad985e480d3ced1fc",
+          "container_bytes": 3310,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 2,
+            "end_line_exclusive": 28
+          }
+        },
+        {
+          "name": "@protobuf-ts/runtime",
+          "version": "2.11.1",
+          "artifact_sha256": "3bb18cb373565b5c95e466c1db76e4b1d8166b62276a15e3547c36f9e25b502b",
+          "container_path": "package/build/es2015/protobufjs-utf8.js",
+          "container_sha256": "cefc299b891bf38ea3220ed5607a6ca285caf9a71d9c8dfc35dafa3237720b06",
+          "container_bytes": 3184,
+          "selector": {
+            "kind": "exact-line-comment-block-v1",
+            "start_line": 1,
+            "end_line_exclusive": 27
+          }
+        }
+      ],
+      "review_note": "Complete BSD3 operative clauses and disclaimer; Google named in nonendorsement clause and owner wording retained. Whole decoded block, including URL, authors and descriptive prose, matches exact UTF8 bytes only; source decoder must independently verify original container and selector."
+    }
+  ],
+  "source_index": {
+    "path": "action-source-supplements-20261118/protobuf-bsd-body-index.json",
+    "sha256": "8d747725b21f91e0c13be46236cffabb85d49c9f7845ccc659583775f586a960"
+  }
+}

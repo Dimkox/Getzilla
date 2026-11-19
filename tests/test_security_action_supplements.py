@@ -121,6 +121,32 @@ class SupplementalSourceTests(unittest.TestCase):
             with self.subTest(variant=variant), patch.dict(supplements.PROFILES, {source['sha256']: reviewed}, clear=True), self.assertRaises(ValueError):
                 verify_source(self.root, changed, expected, now=NOW)
 
+    def test_fixed_source_with_no_registry_githead_uses_all_published_members(self):
+        supplements, source, profile, expected = self.world()
+        from getzilla.security_action_npm import verify_source
+        import copy
+        npm = (self.root / source['path']).read_bytes()
+        with tarfile.open(fileobj=io.BytesIO(npm), mode='r:gz') as tar:
+            published = {m.name.split('/', 1)[1]: tar.extractfile(m).read() for m in tar if m.isfile()}
+        upstream = archive({**{'source/' + name: body for name, body in published.items()}, 'source/LICENSE': MIT})
+        (self.root / 'root-source.tgz').write_bytes(upstream)
+        changed, reviewed = copy.deepcopy(source), copy.deepcopy(profile)
+        changed['term_supplement']['archive'].update(path='root-source.tgz', sha256=sha(upstream), bytes=len(upstream))
+        registry = json.loads((self.root / 'registry.json').read_bytes())
+        registry.pop('gitHead')
+        raw = json.dumps(registry).encode()
+        (self.root / 'headless-registry.json').write_bytes(raw)
+        changed['term_supplement']['registry'].update(path='headless-registry.json', sha256=sha(raw), bytes=len(raw))
+        reviewed.update(git_head=None, package_prefix='', source_sha256=sha(upstream),
+                        source_identity_basis='all-published-members-at-fixed-source-commit', source_commit='a' * 40)
+        with patch.dict(supplements.PROFILES, {source['sha256']: reviewed}, clear=True):
+            result = verify_source(self.root, changed, expected, now=NOW)
+        proof = next(row for row in result['proofs'] if row.get('container_kind') == 'supplemental-source-archive-member')
+        self.assertIsNone(proof['registry_gitHead'])
+        self.assertEqual(proof['source_identity_basis'], 'all-published-members-at-fixed-source-commit')
+        self.assertEqual(proof['physical_bytes'], 0)
+        self.assertEqual(len(proof['published_member_matches']), len(published))
+
     def test_wrong_githead_source_hash_component_or_omitted_term_refuses(self):
         supplements, source, profile, expected = self.world()
         from getzilla.security_action_npm import verify_source

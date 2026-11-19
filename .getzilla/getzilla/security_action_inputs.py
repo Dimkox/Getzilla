@@ -870,7 +870,7 @@ def _possible_evidence(root, record, files, members, prefix, metadata, entries, 
                         'possible_components': [{key: component[key] for key in
                             ('id', 'name', 'version', 'expression', 'source_artifact_sha256', 'source_url', 'metadata_path')}
                             for component in components]},
-            'bound_bytes': record['bytes'] + sum(row['bytes'] for row in proofs)}
+            'bound_bytes': record['bytes'] + sum(row.get('physical_bytes', row['bytes']) for row in proofs)}
 
 
 def _licensed_fallback(files, record, source, custody, prefix):
