@@ -468,6 +468,7 @@ class SnapshotStore:
             self.files.clear()
             self.directories.clear()
             self.relative.clear()
+            self.absent.clear()
             self.native.shutdown()
             self.native = None
 

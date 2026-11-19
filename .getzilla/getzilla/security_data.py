@@ -816,8 +816,12 @@ def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisit
             # Pointer/object durability was already confirmed. If marker
             # removal is not durable, it can only reappear and refuse a read.
             try:
-                fsx.fsync_dir(store.directory(source_parts).descriptor)
-            except OSError:
+                directory = store.directory(source_parts)
+                if hasattr(directory, 'descriptor'):
+                    fsx.fsync_dir(directory.descriptor)
+                else:
+                    store.native.flush(directory.handle)
+            except (OSError, SecurityDataError):
                 evidence['publication_cleanup_warning'] = 'pending-marker durability unavailable'
             evidence['publication_outcome'] = 'committed'
     except OSError as exc:
