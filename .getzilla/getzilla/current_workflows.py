@@ -9,6 +9,7 @@ import contextvars
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 from . import baseline_assets, state
@@ -390,12 +391,13 @@ def prepare_latest(home, *, fetch=None):
         return [Step('baseline:current', 'fail', str(exc)[:500])]
 
 
-def inspect_current(home, project=None, agent=None, *, fetch=None):
-    from .baseline import BaselineStatus
+def inspect_current(home, project=None, agent=None, *, fetch=None, which=shutil.which, environ=None):
+    from .baseline import BaselineStatus, _security_availability
     from .release_transport import _release_fetch
+    missing, security = _security_availability(home, which=which, environ=environ)
     try:
         acquired = _acquire(home, agent or 'claude', fetch or _release_fetch, windows=os.name == 'nt')
-        details = {'freshness': 'fresh-official-source', 'workflow': {c: i for c, (_, i) in acquired.items()}}
+        details = {'security': security, 'freshness': 'fresh-official-source', 'workflow': {c: i for c, (_, i) in acquired.items()}}
         if project is not None:
             with BoundRoot(project) as binding:
                 for component, (payload, _) in acquired.items():
@@ -403,6 +405,7 @@ def inspect_current(home, project=None, agent=None, *, fetch=None):
                         actual = binding.read(name)
                         if actual is None or actual.content != body or not mode_matches(actual.mode, mode):
                             raise ValueError('CURRENT_WORKFLOW_ACTIVE_PAYLOAD_MISMATCH:'+component+':'+name)
-        return BaselineStatus(True, [], details)
+        return BaselineStatus(not missing, missing, details)
     except (OSError, ValueError, KeyError, TypeError, ArchitectureError, ComponentStateError) as exc:
-        return BaselineStatus(False, ['CURRENT_WORKFLOW_UNESTABLISHED:'+str(exc)[:300]], {'freshness': 'incomplete'})
+        return BaselineStatus(False, missing + ['CURRENT_WORKFLOW_UNESTABLISHED:'+str(exc)[:300]],
+                              {'security': security, 'freshness': 'incomplete'})
