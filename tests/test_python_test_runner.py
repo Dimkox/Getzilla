@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import inspect
 from importlib import metadata
 import json
 import os
@@ -21,6 +22,57 @@ from getzilla import fsx, python_test_runner, verification, queue_refusal
 from getzilla import verification_journal as diagnostics
 from getzilla.python_test_runner import RunnerError, execute, parallel_engine_ready, selected_workers
 from getzilla.verification_scope import FOCUSED_TEST_TARGETS, select_docs_state_scope
+
+
+class PublicDescriptorExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.assertIn('inherited_fds', inspect.signature(execute).parameters,
+                      'the bounded explicit descriptor transport must be implemented')
+
+    def test_invalid_or_duplicated_descriptors_refuse_before_spawn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (root / 'public').open('w+b') as handle:
+                for value in ([handle.fileno()], (True,), (-1,), (handle.fileno(),) * 2, (999999,)):
+                    with self.subTest(value=value), patch.object(fsx, 'owned_popen') as spawn:
+                        with self.assertRaises(RunnerError):
+                            execute([sys.executable, '--version'], root, {}, inherited_fds=value)
+                        spawn.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'descriptor transport unavailable on this platform')
+    def test_only_explicit_held_public_fixture_descriptor_reaches_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / 'read_fd.py'
+            child.write_text('import os,sys\nsys.stdout.buffer.write(os.read(int(sys.argv[1]),100))\n')
+            public = root / 'public'
+            public.write_bytes(b'public fixture descriptor')
+            with public.open('rb') as handle:
+                result = execute([sys.executable, str(child), str(handle.fileno())], root,
+                                 {'PATH': '/usr/bin:/bin'}, inherited_fds=(handle.fileno(),))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'public fixture descriptor')
+                self.assertEqual(result.cleanup_error, '')
+
+    @unittest.skipUnless(os.name == 'posix', 'descriptor transport unavailable on this platform')
+    def test_explicit_public_stdin_reaches_child_without_default_api_change(self):
+        self.assertIn('stdin_fd', inspect.signature(execute).parameters)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / 'stdin.py'
+            child.write_text('import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n')
+            source = root / 'public'
+            source.write_bytes(b'exact public stdin')
+            with source.open('rb') as handle:
+                result = execute([sys.executable, str(child)], root, {}, stdin_fd=handle.fileno())
+                self.assertEqual((result.returncode, result.stdout), (0, 'exact public stdin'))
+
+    def test_invalid_stdin_descriptor_refuses_before_child_effect(self):
+        self.assertIn('stdin_fd', inspect.signature(execute).parameters)
+        for value in (True, -1, 0, '3', 999999):
+            with self.subTest(value=value), patch.object(fsx, 'owned_popen') as spawn, self.assertRaises(RunnerError):
+                execute([sys.executable, '--version'], Path.cwd(), {}, stdin_fd=value)
+            spawn.assert_not_called()
 
 
 @contextlib.contextmanager

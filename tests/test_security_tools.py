@@ -188,7 +188,7 @@ class SecurityToolTests(unittest.TestCase):
             trivy_database_source(self.root, now=NOW)
 
     def test_sast_requires_actual_nonzero_coverage_without_parse_errors(self):
-        good = {'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
         self.assertEqual(validate_tool_report('opengrep', good, ['src/app.py'])['outcome'], 'pass')
         for report in ({}, {**good, 'paths': {'scanned': []}},
                        {**good, 'errors': [{'level': 'error', 'type': 'ParseError'}]},
@@ -204,6 +204,52 @@ class SecurityToolTests(unittest.TestCase):
         uncovered['metrics'].pop('src/app.py')
         with self.assertRaises(SecurityDataError):
             validate_tool_report('bandit', uncovered, ['src/app.py'])
+
+    def test_public_opengrep_report_helper_reuses_closed_version_and_roster_contract(self):
+        good = {'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['src/app.py']}}
+        for change, expected in (({'version': 'unknown'}, ['src/app.py']),
+                                 ({}, ['src/app.py', 'src/app.py']),
+                                 ({'paths': {'scanned': ['src/app.py', 'extra.py']}}, ['src/app.py'])):
+            with self.subTest(change=change, expected=expected), self.assertRaises(SecurityDataError):
+                validate_tool_report('opengrep', {**good, **change}, expected)
+
+    def test_real_expanded_consumer_delegates_original_source_and_rejects_inventory_gaps(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+
+        def legacy_report(command, _source, _scratch, **_options):
+            Path(command[command.index('--output') + 1]).write_text(json.dumps({
+                'version': '1.30.1', 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}))
+            return ProcessResult(command, 0)
+
+        observed = {'outcome': 'pass', 'summary': 'one complete source target', 'findings': [],
+                    'finding_count': 0, 'coverage': {'expected': ['app.js'], 'observed': ['app.js']}}
+        for inventory_files in ([], ['app.js', 'app.js']):
+            with self.subTest(inventory=inventory_files), \
+                 mock.patch.object(security_opengrep, 'scan_source', return_value=observed) as adapter, \
+                 mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+                 mock.patch.object(security_tools, '_process', side_effect=legacy_report):
+                reports = security_tools.scan_source(self.root, {'files': inventory_files})
+            result = next(row for row in reports if row['name'] == 'opengrep')
+            self.assertEqual(result['outcome'], 'blocked')
+            if inventory_files == []:
+                self.assertEqual(adapter.call_args.args[0], self.root)
+                self.assertEqual(adapter.call_args.kwargs['profile'], 'expanded')
+
+    def test_expanded_consumer_keeps_adapter_partial_even_when_legacy_report_is_clean(self):
+        from getzilla import security_opengrep
+        (self.root / 'app.js').write_text('console.log("inert");\n')
+        partial = {'outcome': 'blocked', 'summary': 'OpenGrep 1.30.1 incomplete: syntax_incomplete',
+                   'findings': [], 'finding_count': None, 'coverage': None}
+        with mock.patch.object(security_opengrep, 'scan_source', return_value=partial), \
+             mock.patch.object(security_tools, 'pinned_tool', return_value=self.root / 'public-tool'), \
+             mock.patch.object(security_tools, '_process_report', return_value={
+                 'results': [], 'errors': [], 'paths': {'scanned': ['app.js']}}), \
+             mock.patch.object(security_tools, '_process', return_value=ProcessResult([], 0)):
+            result = next(row for row in security_tools.scan_source(self.root, {'files': ['app.js']})
+                          if row['name'] == 'opengrep')
+        self.assertEqual(result['outcome'], 'blocked')
+        self.assertIn('syntax_incomplete', result['summary'])
 
     def test_misconfiguration_requires_target_coverage_and_nonfailure_results(self):
         report = {'SchemaVersion': 2, 'Results': [{'Target': 'Dockerfile', 'Class': 'config',
@@ -245,6 +291,58 @@ class SecurityToolTests(unittest.TestCase):
                 self.assertEqual([item['rule'] for item in result['findings']], ['generic-secret'])
                 self.assertNotIn(sentinel, json.dumps(result))
                 self.assertEqual(result['binary_inputs'], [])
+
+    def test_normal_gate_secret_consumer_detects_supported_non_utf8_without_disclosing_value(self):
+        from getzilla.verification import _secret_scan
+        sentinel = 'public-source-fixture-value'
+        assignment = 'api_key = ' + repr(sentinel) + '\n'
+        for name, raw in (
+            ('app.py', ('# coding: latin-1\n# café\n' + assignment).encode('latin-1')),
+            ('config.ps1', codecs.BOM_UTF16_LE + assignment.encode('utf-16-le')),
+            ('config.ps1', codecs.BOM_UTF16_BE + assignment.encode('utf-16-be')),
+            ('config.txt', codecs.BOM_UTF32_LE + assignment.encode('utf-32-le')),
+        ):
+            with self.subTest(name=name, digest=hashlib.sha256(raw).hexdigest()):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                findings = [item for item in result.details if item.get('code') == 'generic-secret']
+                self.assertEqual(len(findings), 1)
+                self.assertEqual(findings[0]['file_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertNotIn(sentinel, json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_distinguishes_valid_text_assets_and_unknown_binary(self):
+        from getzilla.verification import _secret_scan
+        valid = b'# coding: latin-1\n# caf\xe9\nprint(1)\n'
+        pixel = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+mGz8AAAAASUVORK5CYII=')
+        for name, raw, outcome in (('app.py', valid, 'pass'), ('pixel.png', pixel, 'pass'),
+                                   ('impostor.py', pixel, 'fail'), ('unknown.bin', b'\0\xffdata', 'fail')):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, outcome)
+                if name == 'pixel.png':
+                    self.assertTrue(any(item.get('code') == 'secret-binary-input' for item in result.details))
+
+    def test_normal_gate_secret_consumer_retains_visible_ascii_in_wide_and_binary_inputs(self):
+        from getzilla.verification import _secret_scan
+        assignment = b'api_key = "public-binary-fixture-value"\n'
+        for name, raw in (('wide.ps1', codecs.BOM_UTF16_LE + '# text\n'.encode('utf-16-le') + assignment),
+                          ('pixel.gif', b'GIF89a\0\xff' + assignment)):
+            with self.subTest(name=name):
+                (self.root / name).write_bytes(raw)
+                result = _secret_scan(self.root, [name])
+                self.assertEqual(result.status, 'fail')
+                self.assertTrue(any(item.get('code') == 'generic-secret' and 'byte_offset' in item
+                                    for item in result.details))
+                self.assertNotIn('public-binary-fixture-value', json.dumps(result.to_dict()))
+
+    def test_normal_gate_secret_consumer_refuses_over_cap_instead_of_silent_skip(self):
+        from getzilla.verification import _secret_scan
+        (self.root / 'large.txt').write_bytes(b'x' * 2_000_001)
+        result = _secret_scan(self.root, ['large.txt'])
+        self.assertEqual(result.status, 'fail')
+        self.assertTrue(any(item.get('code') == 'secret-input-unavailable' for item in result.details))
 
     def test_unknown_or_corrupt_source_blocks_without_requesting_a_custom_codec(self):
         requested = []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
 import re
@@ -20,6 +21,7 @@ MAX_SPEC_BYTES = 1_000_000
 MAX_STRING_LENGTH = 65_536
 MAX_DEPTH = 64
 MAX_NODES = 20_000
+MAX_RULE_REFERENCES = 512
 ALLOWED_SCHEMA_KEYS = {
     "$schema",
     "$id",
@@ -83,7 +85,11 @@ def load_schema(path: Path | None = None) -> dict[str, Any]:
     return data
 
 
-def parse_yaml_subset(text: str) -> Any:
+def parse_yaml_subset(text: str, *, rules_profile: bool = False) -> Any:
+    if type(rules_profile) is not bool:
+        raise SpecError("unknown YAML profile")
+    if rules_profile:
+        return _parse_rules_yaml(text)
     if not text.strip():
         raise SpecError("empty YAML")
     if "\t" in text:
@@ -118,7 +124,9 @@ def _skip_blank(lines: list[str], index: int) -> int:
     return index
 
 
-def _parse_block(lines: list[str], index: int, indent: int) -> tuple[Any, int]:
+def _parse_block(lines: list[str], index: int, indent: int, *, _rules=None, _depth=0) -> tuple[Any, int]:
+    if _rules is not None:
+        _rules.node(_depth)
     index = _skip_blank(lines, index)
     if index >= len(lines):
         raise SpecError("unexpected end of YAML")
@@ -127,11 +135,11 @@ def _parse_block(lines: list[str], index: int, indent: int) -> tuple[Any, int]:
         raise SpecError(f"bad indent at line {index + 1}")
     stripped = line.lstrip(" ")
     if stripped.startswith("- "):
-        return _parse_list(lines, index, indent)
-    return _parse_map(lines, index, indent)
+        return _parse_list(lines, index, indent, _rules=_rules, _depth=_depth)
+    return _parse_map(lines, index, indent, _rules=_rules, _depth=_depth)
 
 
-def _parse_map(lines: list[str], index: int, indent: int) -> tuple[dict[str, Any], int]:
+def _parse_map(lines: list[str], index: int, indent: int, *, _rules=None, _depth=0) -> tuple[dict[str, Any], int]:
     result: dict[str, Any] = {}
     while index < len(lines):
         index = _skip_blank(lines, index)
@@ -154,6 +162,10 @@ def _parse_map(lines: list[str], index: int, indent: int) -> tuple[dict[str, Any
             raise SpecError(f"duplicate or empty key at line {index + 1}")
         rest = rest.strip()
         index += 1
+        if _rules is not None:
+            _rules.key(key, _depth + 1)
+            result[key], index = _rules.value(lines, index, indent, rest, key, _depth + 1)
+            continue
         if rest == "":
             nxt = _skip_blank(lines, index)
             if nxt >= len(lines) or _indent_of(lines[nxt]) <= indent:
@@ -166,7 +178,7 @@ def _parse_map(lines: list[str], index: int, indent: int) -> tuple[dict[str, Any
     return result, index
 
 
-def _parse_list(lines: list[str], index: int, indent: int) -> tuple[list[Any], int]:
+def _parse_list(lines: list[str], index: int, indent: int, *, _rules=None, _depth=0) -> tuple[list[Any], int]:
     items: list[Any] = []
     while index < len(lines):
         index = _skip_blank(lines, index)
@@ -184,6 +196,10 @@ def _parse_list(lines: list[str], index: int, indent: int) -> tuple[list[Any], i
         rest = stripped[2:]
         index += 1
         if rest.strip() == "":
+            if _rules is not None:
+                value, index = _rules.value(lines, index, indent, '', None, _depth + 1)
+                items.append(value)
+                continue
             nxt = _skip_blank(lines, index)
             if nxt >= len(lines) or _indent_of(lines[nxt]) <= indent:
                 items.append(None)
@@ -197,7 +213,11 @@ def _parse_list(lines: list[str], index: int, indent: int) -> tuple[list[Any], i
             if not key:
                 raise SpecError(f"empty list mapping key at line {index}")
             inline_rest = inline_rest.strip()
-            if inline_rest == "":
+            if _rules is not None:
+                _rules.node(_depth + 1)
+                _rules.key(key, _depth + 2)
+                mapping[key], index = _rules.value(lines, index, indent, inline_rest, key, _depth + 2)
+            elif inline_rest == "":
                 nxt = _skip_blank(lines, index)
                 if nxt < len(lines) and _indent_of(lines[nxt]) > indent:
                     value, index = _parse_block(lines, nxt, _indent_of(lines[nxt]))
@@ -209,15 +229,192 @@ def _parse_list(lines: list[str], index: int, indent: int) -> tuple[list[Any], i
             child_indent = indent + 2
             peek = _skip_blank(lines, index)
             if peek < len(lines) and _indent_of(lines[peek]) == child_indent and not lines[peek].lstrip(" ").startswith("- "):
-                nested, index = _parse_map(lines, peek, child_indent)
+                nested, index = _parse_map(lines, peek, child_indent, _rules=_rules, _depth=_depth + 1)
                 for nested_key, nested_value in nested.items():
                     if nested_key in mapping:
                         raise SpecError(f"duplicate key {nested_key}")
                     mapping[nested_key] = nested_value
             items.append(mapping)
         else:
-            items.append(_parse_scalar(rest.strip(), index))
+            items.append(_rules.scalar(rest.strip(), _depth + 1) if _rules is not None else _parse_scalar(rest.strip(), index))
     return items, index
+
+
+class _RuleYamlContext:
+    """Rules-only bounded data resolution; never a global config/authority mode."""
+
+    def __init__(self):
+        self.nodes = self.bytes = self.references = 0
+        self.anchors = {}
+        self.active = set()
+
+    def node(self, depth):
+        self.nodes += 1
+        if depth > MAX_DEPTH or self.nodes > MAX_NODES:
+            raise SpecError('rules YAML limit')
+
+    def string(self, value):
+        size = len(value.encode('utf-8'))
+        self.bytes += size
+        if size > MAX_STRING_LENGTH or self.bytes > MAX_SPEC_BYTES:
+            raise SpecError('rules YAML limit')
+        return value
+
+    def key(self, value, depth):
+        self.node(depth)
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', value) or value == '<<':
+            raise SpecError('unsupported rules YAML key')
+        self.string(value)
+
+    def reference(self):
+        self.references += 1
+        if self.references > MAX_RULE_REFERENCES:
+            raise SpecError('rules YAML reference limit')
+
+    def value(self, lines, index, indent, rest, key, depth):
+        if rest.startswith('&'):
+            match = re.fullmatch(r'&([A-Za-z][A-Za-z0-9_-]{0,63})', rest)
+            if key != 'pattern-sources' or not match or match[1] in self.anchors or match[1] in self.active:
+                raise SpecError('unsupported rules YAML anchor')
+            self.reference()
+            name = match[1]
+            self.active.add(name)
+            try:
+                value, index = self.value(lines, index, indent, '', key, depth)
+                if not isinstance(value, list):
+                    raise SpecError('rules anchor must be a completed list')
+                self.anchors[name] = (value, self.metrics(value))
+                return value, index
+            finally:
+                self.active.remove(name)
+        if rest.startswith('*'):
+            match = re.fullmatch(r'\*([A-Za-z][A-Za-z0-9_-]{0,63})', rest)
+            if key != 'pattern-sources' or not match or match[1] in self.active or match[1] not in self.anchors:
+                raise SpecError('unsupported rules YAML alias')
+            self.reference()
+            value, (nodes, size, height) = self.anchors[match[1]]
+            # Charge the complete expansion BEFORE copying. Never reset per alias.
+            if self.nodes + nodes > MAX_NODES or self.bytes + size > MAX_SPEC_BYTES or depth + height > MAX_DEPTH:
+                raise SpecError('rules YAML expansion limit')
+            self.nodes += nodes
+            self.bytes += size
+            return copy.deepcopy(value), index
+        if not rest:
+            nxt = _skip_blank(lines, index)
+            if nxt >= len(lines) or _indent_of(lines[nxt]) <= indent:
+                return self.scalar('null', depth), index
+            return _parse_block(lines, nxt, _indent_of(lines[nxt]), _rules=self, _depth=depth)
+        return self.scalar(rest, depth), index
+
+    @staticmethod
+    def metrics(value):
+        nodes = size = height = 0
+        pending = [(value, 0)]
+        while pending:
+            item, depth = pending.pop()
+            nodes += 1
+            height = max(height, depth)
+            if isinstance(item, str):
+                size += len(item.encode('utf-8'))
+            elif isinstance(item, dict):
+                pending.extend((child, depth + 1) for pair in item.items() for child in pair)
+            elif isinstance(item, list):
+                pending.extend((child, depth + 1) for child in item)
+        return nodes, size, height
+
+    @staticmethod
+    def split_flow(raw, separator):
+        parts, stack, quote, escaped, start, index = [], [], None, False, 0, 0
+        while index < len(raw):
+            char = raw[index]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif quote == '"' and char == '\\':
+                    escaped = True
+                elif char == quote:
+                    if quote == "'" and index + 1 < len(raw) and raw[index + 1] == "'":
+                        index += 1
+                    else:
+                        quote = None
+            elif char in "'\"":
+                quote = char
+            elif char in '[{':
+                stack.append(']' if char == '[' else '}')
+            elif char in ']}':
+                if not stack or stack.pop() != char:
+                    raise SpecError('unsupported rules flow value')
+            elif char == separator and not stack:
+                parts.append(raw[start:index].strip())
+                start = index + 1
+            index += 1
+        if quote or stack:
+            raise SpecError('unsupported rules flow value')
+        parts.append(raw[start:].strip())
+        return parts
+
+    def scalar(self, raw, depth):
+        self.node(depth)
+        if len(raw.encode('utf-8')) > MAX_STRING_LENGTH or not raw:
+            raise SpecError('rules YAML scalar limit')
+        if raw.startswith('"'):
+            value = json.loads(raw)
+            if not isinstance(value, str):
+                raise SpecError('unsupported rules scalar')
+            return self.string(value)
+        if raw.startswith("'"):
+            if not raw.endswith("'") or "'" in raw[1:-1].replace("''", ''):
+                raise SpecError('unsupported rules scalar')
+            return self.string(raw[1:-1].replace("''", "'"))
+        if raw.startswith(('[', '{')):
+            if not raw.endswith(']' if raw[0] == '[' else '}'):
+                raise SpecError('unsupported rules flow value')
+            inner = raw[1:-1]
+            parts = self.split_flow(inner, ',') if inner.strip() else []
+            if any(not part for part in parts):
+                raise SpecError('unsupported rules flow value')
+            if raw[0] == '[':
+                return [self.scalar(part, depth + 1) for part in parts]
+            result = {}
+            for part in parts:
+                pair = self.split_flow(part, ':')
+                if len(pair) != 2 or pair[0] in result:
+                    raise SpecError('duplicate or unsupported rules flow key')
+                self.key(pair[0], depth + 1)
+                result[pair[0]] = self.scalar(pair[1], depth + 1)
+            return result
+        if (raw[0] in '&*!|>%@`]},' or raw.startswith('<<') or '#' in raw
+                or re.match(r'^[-?:](?:\s|$)', raw) or re.search(r':(?:\s|$)', raw)
+                or re.fullmatch(r'[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?', raw)
+                or re.fullmatch(r'[-+]?[0-9]+[eE][-+]?[0-9]+', raw)
+                or raw.lower() in {'.inf', '+.inf', '-.inf', '.nan'}
+                or re.match(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}', raw)):
+            raise SpecError('unsupported rules scalar')
+        if raw.lower() in {'true', 'false'}:
+            return raw.lower() == 'true'
+        if raw.lower() == 'null' or raw == '~':
+            return None
+        if re.fullmatch(r'-?(?:0|[1-9][0-9]*)', raw):
+            return int(raw)
+        if re.fullmatch(r'[-+]?[0-9]+', raw):
+            raise SpecError('ambiguous rules integer')
+        return self.string(raw)
+
+
+def _parse_rules_yaml(text):
+    try:
+        if not isinstance(text, str) or not 0 < len(text.encode('utf-8')) <= MAX_SPEC_BYTES or '\t' in text:
+            raise SpecError('rules YAML input limit')
+        lines = text.replace('\r\n', '\n').split('\n')
+        context = _RuleYamlContext()
+        value, index = _parse_block(lines, 0, 0, _rules=context)
+        if (_skip_blank(lines, index) < len(lines) or not isinstance(value, dict) or set(value) != {'rules'}
+                or not isinstance(value['rules'], list) or not value['rules']
+                or len(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > MAX_SPEC_BYTES):
+            raise SpecError('unsupported or oversized rules YAML')
+        return value
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise SpecError('unsupported or oversized rules YAML') from None
 
 
 def _parse_scalar(raw: str, line_no: int) -> Any:

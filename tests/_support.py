@@ -470,6 +470,7 @@ def offline_mirror(base: Path) -> Path:
     """
     if str(PROJECT / '.getzilla') not in sys.path:
         sys.path.insert(0, str(PROJECT / '.getzilla'))
+    import io
     from getzilla import baseline, updater
     from getzilla.security_osv_snapshot import download_database
 
