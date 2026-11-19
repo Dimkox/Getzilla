@@ -194,7 +194,7 @@ class NativeOsvRangeTests(unittest.TestCase):
                     'node_modules/synthetic-package': {'version': version}}}
                 context, root = fixtures._repo({'package-lock.json': json.dumps(lock)})
                 with context, tempfile.TemporaryDirectory(dir=fixtures.ROOT/'.getzilla/runtime') as directory:
-                    fixtures._mirror(Path(directory), 'npm', [record])
+                    fixtures._tampered_mirror(Path(directory), 'npm', [record])
                     config = root/KV.CONFIG_PATH
                     config.parent.mkdir(parents=True)
                     config.write_text(json.dumps({'accept': [{

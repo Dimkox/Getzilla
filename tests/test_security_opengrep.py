@@ -230,6 +230,8 @@ class AdapterRefusalTests(unittest.TestCase):
         self.root.chmod(0o700)
         self.rules = self.root / '.getzilla/sast/rules'
         shutil.copytree(Path(__file__).resolve().parents[1] / '.getzilla/sast/rules', self.rules)
+        self.rules.parent.chmod(0o755)
+        self.rules.parent.parent.chmod(0o755)
         (self.root / 'app.py').write_text('print("inert")\n')
         self.binary = self.root / 'opengrep'
         self.binary.write_text('#!/usr/bin/python3\nopen("ran","x").close()\n')
@@ -330,6 +332,8 @@ class ActualPinnedAdapterTests(unittest.TestCase):
         self.root.chmod(0o700)
         self.rules = self.root / '.getzilla/sast/rules'
         shutil.copytree(Path(__file__).resolve().parents[1] / '.getzilla/sast/rules', self.rules)
+        self.rules.parent.chmod(0o755)
+        self.rules.parent.parent.chmod(0o755)
         original = self.scanner.fsx.owned_popen
 
         def spawn(command, **kwargs):

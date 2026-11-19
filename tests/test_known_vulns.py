@@ -100,6 +100,7 @@ def _tampered_mirror(root: Path, ecosystem: str, records: list[dict]) -> None:
     payload = content.getvalue()
     digest = hashlib.sha256(payload).hexdigest()
     (root / '.snapshots/sha256' / digest).write_bytes(payload)
+    (root / '.snapshots/sha256' / digest).chmod(0o644)
     pointer = root / ecosystem / 'snapshot.json'
     document = json.loads(pointer.read_text(encoding='utf-8'))
     document.update(content_sha256=digest, payload_size=len(payload))
