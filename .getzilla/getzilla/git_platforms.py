@@ -131,9 +131,9 @@ def platform_catalog() -> dict:
         ('github-enterprise', 'GitHub Enterprise Server / Cloud on ghe.com', 'candidate', 'https://docs.github.com/en/enterprise-cloud@latest/admin',
          'No custom-host API, authentication or Trust CI adapter.'),
         ('entire-native', 'Entire native repositories', 'experimental', 'https://github.com/entireio/cli/tree/v0.12.2',
-         'Optional extra:entire; trusted CI provenance and automated merge are unsupported; no hosted E2E.'),
+         'Optional extra:entire; signed CI publisher/merge bridge is default-off and needs a qualified host profile; no hosted E2E.'),
         ('entire-mirror', 'Entire GitHub mirrors', 'experimental', 'https://docs.entire.com/guides/repositories/mirrors',
-         'Transport is Entire; GitHub authority is separate. LFS and automatic upstream/merge claims are unsupported.'),
+         'Transport is Entire; protected merge also requires an independent GitHub reader. LFS and default automatic merge remain unsupported.'),
         ('cursor-origin', 'Cursor Origin (native / mirrored)', 'candidate', 'https://cursor.com/docs/origin',
          'Vendor early beta; native and mirrored APIs require separate adapters.'),
         ('gitlab', 'GitLab.com / Self-Managed / Dedicated', 'candidate', 'https://docs.gitlab.com/api/',
@@ -171,8 +171,14 @@ def platform_catalog() -> dict:
                                        if key.startswith('entire-') else 'local Python tests; hosted OS matrix unverified'),
                           'hosted_e2e_verified': False, 'evidence': [evidence, 'tests/test_git_platforms.py'] +
                           (['tests/test_entire_adapter.py', 'tests/test_entire_authority.py',
-                            'tests/test_entire_process.py', 'tests/test_entire_install.py'] if key.startswith('entire-') else []),
+                            'tests/test_entire_process.py', 'tests/test_entire_install.py',
+                            'tests/test_entire_merge_authority.py'] if key.startswith('entire-') else []),
                           'limitations': [limitation]})
+    for entry in platforms:
+        if entry['id'].startswith('entire-'):
+            entry['protected_ci_bridge'] = {'status': 'source_only', 'default_enabled': False,
+                'publisher_contract': 'Entire SDK plugin v0.3.0', 'audit_date': '2026-11-19',
+                'external_acceptance': 'NOT_TESTED', 'evidence': 'tests/test_entire_merge_authority.py'}
     return {'schema_version': 1, 'updated_at': CATALOG_DATE, 'platforms': platforms}
 
 

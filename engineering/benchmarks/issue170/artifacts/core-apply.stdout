@@ -1,0 +1,28 @@
+{
+  "details": {
+    "admitted_files": 60,
+    "excluded": [],
+    "git_present_at_ingest": false,
+    "integrity_status": "verified",
+    "managed_commit": "81eadf1d28792d79e49c0c538080ba5b9c8799e9",
+    "operation_id": "op-147352572271bb655faf00a142932b6c",
+    "plan_id": "147352572271bb655faf00a142932b6ce1e2d3a471c71f93ab20ea8f0e118eee",
+    "project_health_status": "not_run",
+    "reason_code": null,
+    "runtime_payload_digest": "b872b8dff369bbe4d1907ee1cb713dcc9cc66ad405a8b3df9ad6c5f026a17377",
+    "schema_version": "adoption-receipt-v1",
+    "snapshot_digest": "abad4afc8cd0312d421f35e99e68e65f3a89351fa5264713b040d5ff48ddb8d8",
+    "source_baseline": {
+      "commit_oid": "c51f4f1f95afb2408cff5c23ac8fb53e4151869b",
+      "object_format": "sha1",
+      "tree_oid": "3ff0edaf2d039896397fe8d91d558935a038f823"
+    },
+    "source_digest": "6dab3b9de0c48a90d4dbe64b86f642168eac72353e155b762ec46504d1ed26f9",
+    "state": "PUBLISHED_LOCAL",
+    "target": "/work/candidate"
+  },
+  "operation_id": "op-147352572271bb655faf00a142932b6c",
+  "reason_code": null,
+  "schema_version": "getzilla-adopt-cli-v1",
+  "status": "published"
+}

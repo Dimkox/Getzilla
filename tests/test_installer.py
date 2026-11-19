@@ -853,11 +853,13 @@ print(json.dumps({'status': result.status, 'summary': result.summary,
             self.assertEqual(plan["target_state"], "absent")
             expected = {relative for relative, _ in MODULE.iter_source_files(ROOT)} - {MODULE.COMPONENT_MANIFEST}
             delivered = {entry["path"] for entry in plan["entries"]}
-            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD, MODULE.COMPONENT_MANIFEST}, expected)
+            self.assertEqual(delivered - {"AGENTS.md", MODULE.STACK_SYNC_RECORD, MODULE.COMPONENT_MANIFEST, MODULE.OWNERSHIP_PATH}, expected)
             for entry in plan["entries"]:
                 if entry["path"] == MODULE.STACK_SYNC_RECORD:  # synthesized: a fresh install keeps nothing local
                     self.assertEqual(entry["sha256"], hashlib.sha256(MODULE.FRESH_SYNC_RECORD).hexdigest())
                     continue
+                if entry['path'] == MODULE.OWNERSHIP_PATH:
+                    continue  # synthesized exact installed-file inventory; covered by OwnershipPlanTests
                 if entry['path'] == MODULE.COMPONENT_MANIFEST:
                     continue  # target-owned selection/ownership is verified against actual files in its regressions
                 if entry["path"] in {"AGENTS.md", "factory/README.md"}:
@@ -2103,3 +2105,56 @@ class OwnershipPlanTests(unittest.TestCase):
                 changed = MODULE.plan_install(ROOT, target)
             self.assertEqual(changed['quarantine_plan']['entries'], [])
             self.assertEqual((target / relative).read_bytes(), b'user change')
+
+
+class OwnershipPlanCustodyTests(unittest.TestCase):
+    def fixture(self, target):
+        relative = '.grok-stack/adaptive_grok/state.py'
+        for entry in MODULE._ownership_payload((MODULE.InstallEntry(relative, b'owned', 0o644),)):
+            path = target / entry.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(entry.content)
+            path.chmod(entry.mode)
+        return relative
+
+    def test_duplicate_manifest_keys_cannot_establish_quarantine_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / 'consumer'
+            self.fixture(target)
+            manifest = target / MODULE.OWNERSHIP_PATH
+            raw = manifest.read_text()
+            manifest.write_text(raw.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
+            before = _snapshot(target)
+            plan = MODULE.plan_install(ROOT, target)
+            self.assertFalse(plan['consumer_inventory']['complete'])
+            self.assertIn('invalid-or-unsafe-ownership-manifest', plan['consumer_inventory']['uncertainty'])
+            self.assertEqual(plan['quarantine_plan']['entries'], [])
+            self.assertEqual(_snapshot(target), before)
+
+    @unittest.skipUnless(hasattr(os, 'symlink'), 'symlinks unavailable')
+    def test_owned_directory_replacement_cannot_supply_quarantine_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            target = parent / 'consumer'
+            relative = self.fixture(target)
+            foreign = parent / 'foreign'
+            (foreign / 'adaptive_grok').mkdir(parents=True)
+            sentinel = foreign / 'adaptive_grok/state.py'
+            sentinel.write_bytes(b'foreign retained bytes')
+            read = MODULE._read_target_relative
+            swapped = []
+            def replace_before_read(root, name, **kwargs):
+                if name == relative and not swapped:
+                    (target / '.grok-stack').rename(target / 'retained-stack')
+                    try:
+                        (target / '.grok-stack').symlink_to(foreign, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(str(error))
+                    swapped.append(True)
+                return read(root, name, **kwargs)
+            with patch.object(MODULE, '_read_target_relative', side_effect=replace_before_read):
+                plan = MODULE.plan_install(ROOT, target)
+            self.assertTrue(swapped)
+            self.assertFalse(plan['consumer_inventory']['complete'])
+            self.assertEqual(plan['quarantine_plan']['entries'], [])
+            self.assertEqual(sentinel.read_bytes(), b'foreign retained bytes')

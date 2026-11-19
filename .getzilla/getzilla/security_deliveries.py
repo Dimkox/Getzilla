@@ -15,6 +15,8 @@ from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BY
 from .security_data import _json
 
 PROFILE = 'ubuntu-24.04-x86_64-cpython312'
+_CHECKER_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_LICENSE = 'legal/project/LICENSE'
 
 
 def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], dependencies: list[dict]) -> dict:
@@ -106,8 +108,16 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
         actual = {path: member for path, member in members.items() if path.startswith('site-packages/')}
         if actual != source_members:
             raise ArtifactError('license-obligation-missing', 'extracted output differs from source wheels, including LICENSE/NOTICE custody')
+        # This one project-owned text is admitted only with the exact checked
+        # source license bytes. An archive declaration cannot approve new terms
+        # or authorize any other legal/ payload.
+        project_license = members.get(_PROJECT_LICENSE)
+        if project_license is not None:
+            approved = read_file(_CHECKER_ROOT, 'LICENSE', 1_048_576)
+            if project_license != {'size': len(approved), 'sha256': hashlib.sha256(approved).hexdigest()}:
+                raise ArtifactError('license-obligation-missing', 'project license differs from the exact approved checker source')
         if (not any(path.startswith('app/getzilla_factory/') for path in members)
-                or any(not path.startswith(('app/getzilla_factory/', 'site-packages/')) for path in members)):
+                or any(path != _PROJECT_LICENSE and not path.startswith(('app/getzilla_factory/', 'site-packages/')) for path in members)):
             raise ArtifactError('license-delivery-composition', 'archive has unknown contents outside the qualified Factory output')
         verified[context] = {'context': context, 'kind': delivery['kind'], 'profile': delivery['profile'],
                              'archive_sha256': archive_digest, 'manifest_sha256': manifest_digest,

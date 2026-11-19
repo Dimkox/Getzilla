@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -93,6 +94,13 @@ class GraphStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             (project / 'a.py').write_text('x = 1\n', encoding='utf-8')
+            # The runner's private TMPDIR can be inside the source worktree.
+            # Give this scope its own Git identity instead of inheriting it.
+            subprocess.run(['git', 'init', '-q', str(project)], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(project), 'add', 'a.py'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(project), '-c', 'user.name=Fixture',
+                            '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'],
+                           check=True, capture_output=True)
             before = make_graph_input(*discover_scope(project)[:2], GraphConfig()).identity
             store = GraphStore(project / '.getzilla' / 'index' / 'graph.sqlite')
             build_full_index(make_graph_input(*discover_scope(project)[:2], GraphConfig()), store)

@@ -178,4 +178,3 @@ def _replace_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
         with contextlib.suppress(OSError):
             os.unlink(temporary)
         raise
-

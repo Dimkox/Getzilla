@@ -26,15 +26,31 @@ class NativeIntakeContext:
     request_digest: str
     publication_id: str
     at: str
+    max_rounds: int | None = None
+    native_event_digest: str | None = None
+    rebind_epoch: bool = False
+
+
+def earlier_task_epoch(previous, current):
+    fields = {'repository','logical_task_id','authority_epoch'}
+    return (type(previous) is dict and type(current) is dict and set(previous) == fields and set(current) == fields
+            and all(previous[key] == current[key] for key in ('repository','logical_task_id'))
+            and type(previous['authority_epoch']) is int and type(current['authority_epoch']) is int
+            and 0 <= previous['authority_epoch'] < current['authority_epoch'])
 
 
 def reduce_intake(previous: dict | None, event: dict, trusted: NativeIntakeContext) -> dict:
-    if (type(trusted) is not NativeIntakeContext or not isinstance(event, dict) or
+    from .intake_decisions import valid_event
+    native = (type(trusted) is NativeIntakeContext and valid_event(event)
+              and trusted.native_event_digest == digest(event,'intake-event-v1'))
+    if not native and (type(trusted) is not NativeIntakeContext or not isinstance(event, dict) or
             set(event) != {'id', 'kind'} or event['kind'] not in {'record','question_round','withdraw'}):
         raise IntakeError('unsupported_decision_ingress')
     value = copy.deepcopy(previous) if previous else {'identity':trusted.identity,'events':[],'rounds':0,'withdrawn':False}
     if value['identity'] != trusted.identity:
-        raise IntakeError('intake_task_epoch_mismatch')
+        if trusted.rebind_epoch is not True or not earlier_task_epoch(value['identity'],trusted.identity):
+            raise IntakeError('intake_task_epoch_mismatch')
+        value['identity'] = copy.deepcopy(trusted.identity)
     event_digest = digest(event,'intake-event-v1')
     for row in value['events']:
         if row['id'] == event['id']:
@@ -43,9 +59,14 @@ def reduce_intake(previous: dict | None, event: dict, trusted: NativeIntakeConte
             return value
     if len(value['events']) >= 4096:
         raise IntakeError('budget_exhausted')
+    if event['kind'] == 'question_round':
+        if type(trusted.max_rounds) is not int or not 1 <= trusted.max_rounds <= 32:
+            raise IntakeError('question_limits_unconfigured')
+        if value['rounds'] >= trusted.max_rounds:
+            raise IntakeError('question_budget_exhausted')
     value['events'].append({'id':event['id'],'event_digest':event_digest,'request_digest':trusted.request_digest,
                             'publication_id':trusted.publication_id,'at':trusted.at})
-    value['rounds'] = min(3,value['rounds'] + (event['kind']=='question_round'))
+    value['rounds'] = value['rounds'] + (event['kind']=='question_round')
     value['withdrawn'] = value['withdrawn'] or event['kind']=='withdraw'
     return value
 

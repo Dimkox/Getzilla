@@ -13,3 +13,5 @@ scripts/install.sh text eol=lf
 scripts/install.ps1 text eol=lf
 # Frozen issue162 publication: keep upstream CSV/Markdown bytes and recorded hashes.
 engineering/benchmarks/issue162/** -text whitespace=-trailing-space
+# Frozen issue170 observations retain original CSV line endings and log bytes.
+engineering/benchmarks/issue170/** -text whitespace=-trailing-space

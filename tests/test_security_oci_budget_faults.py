@@ -109,6 +109,8 @@ class BudgetFaultControls(unittest.TestCase):
             set(phases),
             {
                 "layout-json",
+                "member-read",
+                "component-read",
                 "blob-storage",
                 "blob-compressed",
                 "layer-count",

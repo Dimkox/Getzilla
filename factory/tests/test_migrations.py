@@ -62,6 +62,9 @@ WORKFLOW_028 = (
 )
 
 
+NATIVE_029 = ((29, "029_native_access_forward.sql", "9159f8d4472e195ac8776a4c1f9b2d9561e2f916b0fd41859c2c95a51efd38c2"),)
+
+
 class MigrationTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(run_disposable_exit, 'runtime_image_id',
@@ -446,10 +449,10 @@ class MigrationTests(unittest.TestCase):
 
     def test_packaged_migrations_are_contiguous_and_factory_only(self):
         migrations = discover_migrations()
-        self.assertEqual([item.version for item in migrations], list(range(1, 29)))
-        self.assertEqual(len({item.sha256 for item in migrations}), 28)
+        self.assertEqual([item.version for item in migrations], list(range(1, 30)))
+        self.assertEqual(len({item.sha256 for item in migrations}), 29)
         self.assertEqual(tuple((item.version, item.name, item.sha256) for item in migrations),
-                         BASELINE_001_025 + ACCESS_026_027 + WORKFLOW_028)
+                         BASELINE_001_025 + ACCESS_026_027 + WORKFLOW_028 + NATIVE_029)
         for item in migrations:
             self.assertIn("factory.", item.sql)
             self.assertNotIn("trust_ci", item.sql.lower())

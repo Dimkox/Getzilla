@@ -1,0 +1,372 @@
+{
+  "architecture": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "changed_file_inventory": {
+    "bases": [],
+    "mode": "route-base",
+    "union_count": 0,
+    "worktree_count": 0
+  },
+  "changed_files": [],
+  "check_status": "pass",
+  "checks": [
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "architecture-inputs",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "architecture authority inputs are absent; not executed"
+    },
+    {
+      "command": null,
+      "details": [
+        {
+          "code": "diff-check-command",
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "message": "exit=0: git diff --check",
+          "path": "worktree",
+          "severity": "info",
+          "stderr": "",
+          "stdout": ""
+        },
+        {
+          "code": "diff-check-command",
+          "command": [
+            "git",
+            "diff",
+            "--cached",
+            "--check"
+          ],
+          "exit_code": 0,
+          "message": "exit=0: git diff --cached --check",
+          "path": "index",
+          "severity": "info",
+          "stderr": "",
+          "stdout": ""
+        },
+        {
+          "code": "disposition-summary",
+          "config_sha256": null,
+          "configured": 0,
+          "disposed": 0,
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "observed": 0,
+          "path": "engineering/verification-dispositions.json",
+          "severity": "info",
+          "unresolved": 0
+        }
+      ],
+      "duration_hint": null,
+      "name": "git-diff-check",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "2/2 commands clean; 0 findings disposed; 0 unresolved; bases=none"
+    },
+    {
+      "command": null,
+      "details": [
+        {
+          "code": "mode-not-gated",
+          "message": "full PR suite is required: mode 'fast' is not a gated PR/release run",
+          "path": "",
+          "severity": "info"
+        }
+      ],
+      "duration_hint": null,
+      "name": "docs-state-scope",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "profile=full-pr-suite; evidence=verification:full-pr-suite; reason=mode-not-gated; paths=0; skipped=none"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "change-spec",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "0 specs checked; exempt=False"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "architecture",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "architecture is not configured"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "governance",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "governance is not configured"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "workflow-artifacts",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "no active change"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "diff-risk",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "no comparison base in this mode; assessment remains provisional"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "cost-guard",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "no comparison base and no paid-operation signal"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "eu-ai-act",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "EU AI Act component not installed"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "hook-health",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "no hook failed open during this route"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "workflow-baseline",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "not an installed Getzilla project (no .getzilla/AGBP_SYNC.json): the baseline is checked where Getzilla was installed"
+    },
+    {
+      "command": null,
+      "details": [
+        {
+          "code": "disposition-summary",
+          "config_sha256": null,
+          "configured": 0,
+          "disposed": 0,
+          "message": "Raw findings remain visible; effective outcomes include reviewed dispositions.",
+          "observed": 0,
+          "path": "engineering/verification-dispositions.json",
+          "severity": "info",
+          "unresolved": 0
+        }
+      ],
+      "duration_hint": null,
+      "name": "secret-scan",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "0 potential secrets; 0 disposed; 0 unresolved"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "contract-structure",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "0 contracts checked"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "sql-safety",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "0 unsafe SQL findings"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "known-vulnerabilities",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "34 pinned dependencies not checked: set GETZILLA_OSV_DB or GETZILLA_OSV_ONLINE=1"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "opengrep",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "opengrep not available"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "ruff",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "ruff not available"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "bandit",
+      "status": "skip",
+      "stderr": "",
+      "stdout": "",
+      "summary": "bandit not available"
+    },
+    {
+      "command": [
+        "pytest",
+        "-q"
+      ],
+      "details": [],
+      "duration_hint": null,
+      "name": "pytest",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "........................................................................ [ 24%]\n........................................................................ [ 48%]\n........................................................................ [ 72%]\n........................................................................ [ 96%]\n.........                                                                [100%]\n297 passed in 0.99s\n",
+      "summary": "exit=0"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "source-stability",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "repository fingerprint remained stable"
+    },
+    {
+      "command": null,
+      "details": [],
+      "duration_hint": null,
+      "name": "quality-gate",
+      "status": "pass",
+      "stderr": "",
+      "stdout": "",
+      "summary": "QG-01 admission checks passed"
+    }
+  ],
+  "ci_run_id": null,
+  "cost_guard": {
+    "status": "not_run"
+  },
+  "created_at": "2026-10-23T22:15:41+00:00",
+  "diff_risk": {
+    "status": "not_run"
+  },
+  "docs_state_scope": {
+    "artifact_files": [],
+    "changed_lockstep_tests": [],
+    "changed_paths_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "documentation_files": [],
+    "eligible": false,
+    "evidence_kind": "verification:full-pr-suite",
+    "focused_tests": [],
+    "mode": "fast",
+    "profile": "full-pr-suite",
+    "reason": "mode 'fast' is not a gated PR/release run",
+    "reason_code": "mode-not-gated",
+    "rejected_files": [],
+    "rejection": null,
+    "skipped_checks": [],
+    "state_files": []
+  },
+  "eu_ai_act": {
+    "status": "not_installed"
+  },
+  "evidence_status": "not_recorded",
+  "git_head": "81eadf1d28792d79e49c0c538080ba5b9c8799e9",
+  "governance": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "hook_health": {
+    "by_hook": {},
+    "degraded_events": 0,
+    "last": []
+  },
+  "mode": "fast",
+  "profiles": [
+    "base"
+  ],
+  "route_id": null,
+  "schema_version": 1,
+  "spec": {
+    "exempt": false,
+    "historical_migrations": [],
+    "specs": []
+  },
+  "stacks": {
+    "builtin": [
+      "python"
+    ],
+    "checked": [],
+    "details": {},
+    "detected": [
+      "python"
+    ],
+    "not_verified": [],
+    "untouched": []
+  },
+  "status": "pass",
+  "terminal_state": "completed",
+  "tree_fingerprint": "98abc247bccd6a9a6a605859925cd89038273d31901425c9ffa73f7a6995074f",
+  "workflow_artifacts": {
+    "configured": false,
+    "status": "not_configured"
+  },
+  "workflow_baseline": {
+    "reason": "source",
+    "status": "not_run"
+  }
+}

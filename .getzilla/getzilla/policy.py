@@ -255,7 +255,7 @@ def _intake_effect(root: Path, event: dict[str, Any], execution_cwd: object) -> 
             argv = commands[0]
             # The closed native repair APIs recheck owner, epoch and expected cut themselves.
             if (argv[:3] in (['python3','scripts/getzilla_artifacts.py','intake'],['python','scripts/getzilla_artifacts.py','intake']) and
-                    len(argv)>3 and argv[3] in {'inspect','assess','apply','recover'} and
+                    len(argv)>3 and argv[3] in {'inspect','assess','apply','recover','decide'} and
                     _execution_directory(root,execution_cwd) == root):
                 return False
             if argv[0] in {'pwd','cat','head','tail','wc'}:
