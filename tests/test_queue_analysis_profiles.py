@@ -49,8 +49,9 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         frame = selected.enter('actual')
         selected.source('owned.py', b'owned=1\n')
         footprint = selected.leave(frame)
-        for strict in (fit._QueueBudget('head'), fit._QueueBudget('base', profile=self.self_profile())):
-            with self.assertRaises(fit.ArchitectureError):
+        for strict, reason in ((fit._QueueBudget('head'), 'profile'),
+                               (fit._QueueBudget('base', profile=self.self_profile()), 'side')):
+            with self.assertRaisesRegex(fit.ArchitectureError, reason):
                 strict.merge(footprint)
         replay = fit._QueueBudget('head', profile=self.self_profile())
         replay.merge(footprint)
@@ -110,9 +111,12 @@ class QueueAnalysisProfileTests(unittest.TestCase):
                     for _ in range(2):
                         budget = fit._QueueBudget('head', profile=cache.profile)
                         if count == 129:
-                            with self.assertRaises(fit.ArchitectureError):
+                            with self.assertRaises(fit.ArchitectureError) as caught:
                                 fit._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
                                     source_path='src/use.py', source=source.encode(), budget=budget)
+                            self.assertEqual(caught.exception.queue_refusal['category'], 'modules')
+                            self.assertEqual(caught.exception.queue_refusal['limit'], 128)
+                            self.assertEqual(caught.exception.queue_refusal['observed'], 129)
                         else:
                             result = fit._queue_signals(repo.root, diff, ast.parse(source), 'head', cache, '', roots,
                                 source_path='src/use.py', source=source.encode(), budget=budget)
@@ -257,3 +261,50 @@ class QueueAnalysisProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(fit.ArchitectureError, 'profile changed'):
                 fit._queue_signals(Path(directory), SimpleNamespace(head_kind='worktree'), ast.parse('value=1'), 'head', cache, '', ('',),
                     source=b'value=1', budget=fit._QueueBudget('head', profile=selected))
+
+    def test_factory_listing_has_no_context_facade_and_keeps_completed_stop_contract(self):
+        from getzilla import security_factory_inputs as factory, verification_actions as actions
+        from getzilla import python_test_runner as runner
+        from getzilla.security_data import SecurityDataError
+        tree = ast.parse((ROOT / '.getzilla/getzilla/security_factory_inputs.py').read_bytes())
+        selected = fit._queue_export_slice(tree, frozenset({'_app_members'}))
+        self.assertFalse(any(isinstance(node, ast.ImportFrom) and node.module == 'public_security_context'
+                             for node in ast.walk(selected)))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scratch = root / 'scratch'
+            scratch.mkdir()
+            relative = 'factory/src/getzilla_factory/owned.py'
+            path = root / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'owned current source')
+            environment = {'OWNED': 'exact sanitized environment'}
+            completed = runner.ProcessResult(['git'], 0, stdout=relative + '\n')
+            with patch('getzilla.python_test_runner.execute', return_value=completed) as execute, \
+                    patch('getzilla.security_tools._environment', return_value=environment):
+                members = factory._app_members(root, scratch)
+            self.assertEqual(members, {'app/getzilla_factory/owned.py': {
+                'size': len(path.read_bytes()), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}})
+            call = execute.call_args
+            self.assertEqual(call.args[0], ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+                                           '-C', str(root), 'ls-files', 'factory/src/getzilla_factory'])
+            self.assertEqual(call.args[1].parent, scratch)
+            self.assertEqual(call.args[2], environment)
+            self.assertEqual(call.kwargs, {'timeout': 30})
+            for result in (runner.ProcessResult(['git'], 1, stop_metadata=actions.child_stop(1)),
+                           runner.ProcessResult(['git'], 124, terminal_state='timed_out',
+                               stop_metadata=actions.StopMetadata(decision='deadline', result_policy='limit_124', scope='process')),
+                           runner.ProcessResult(['git'], 0, cleanup_error='uncertain', stop_metadata=actions.child_stop(0))):
+                with self.subTest(state=result.terminal_state, cleanup=result.cleanup_error), \
+                        patch('getzilla.python_test_runner.execute', return_value=result), \
+                        patch('getzilla.security_tools._environment', return_value=environment):
+                    with self.assertRaisesRegex(SecurityDataError, 'completed Git observation') as caught:
+                        factory._app_members(root, scratch)
+                    self.assertEqual(actions.stop_details(caught.exception), actions.stop_details(result))
+            for error in (OSError('owned failure'), runner.RunCancelled(2, completed)):
+                with self.subTest(error=type(error).__name__), \
+                        patch('getzilla.python_test_runner.execute', side_effect=error), \
+                        patch('getzilla.security_tools._environment', return_value=environment):
+                    with self.assertRaises(type(error)) as caught:
+                        factory._app_members(root, scratch)
+                    self.assertIs(caught.exception, error)

@@ -579,8 +579,10 @@ class _QueueBudget:
     def merge(self, footprint: _QueueFootprint | None) -> None:
         if footprint is None:
             return
-        if footprint.side != self.side or footprint.profile != self.profile:
+        if footprint.side != self.side:
             raise ArchitectureError('queue source cache side mismatch', code='fitness')
+        if footprint.profile != self.profile:
+            raise ArchitectureError('queue source cache profile mismatch', code='fitness')
         for source in footprint.sources:
             self._source(source)
         for key, cost in footprint.work:
