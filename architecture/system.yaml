@@ -1950,6 +1950,30 @@
     },
     {
       "allowed_data": [
+        "DATA-PACKAGE-IDENTITY",
+        "DATA-REPOSITORY-SOURCE"
+      ],
+      "authentication": "none",
+      "direction": "from_to",
+      "failure_behavior": {
+        "correlation_id": "not_required",
+        "idempotency": "not_required",
+        "max_retries": 0,
+        "mode": "fail_closed",
+        "observable_signal": "SIG-LOCAL-VALIDATION-FAILURE",
+        "terminal_action": "reject",
+        "timeout_ms": 10000
+      },
+      "from": "NODE-OPTIONAL-SECURITY-ACQUISITION",
+      "id": "EDGE-OPTIONAL-SECURITY-NPM",
+      "network_policy": "allowlisted_egress",
+      "protocol": "https",
+      "sync_or_async": "synchronous",
+      "to": "NODE-NPM-REGISTRY",
+      "type": "dependency"
+    },
+    {
+      "allowed_data": [
         "DATA-PILOT-STATE"
       ],
       "authentication": "external_managed",
@@ -4386,6 +4410,9 @@
       "repository_paths": [
         ".getzilla/getzilla/security_acquisition.py",
         ".getzilla/getzilla/security_license_acquisition.py",
+        ".getzilla/getzilla/security_action_inputs.py",
+        ".getzilla/getzilla/security_action_npm_fetch.py",
+        ".getzilla/getzilla/security_release_tool_inputs.py",
         ".getzilla/getzilla/security_osv_snapshot.py"
       ],
       "runtime": {
@@ -4579,6 +4606,22 @@
       "data_classification": "DATA-REPOSITORY-SOURCE",
       "id": "NODE-PYPI-REGISTRY",
       "owner": "public PyPI registry and artifact endpoints",
+      "public_contracts": [],
+      "repository_paths": [],
+      "runtime": {
+        "evidence": "source_described",
+        "kind": "external_managed",
+        "lifecycle": "long_running",
+        "network": "external_managed"
+      },
+      "secrets": [],
+      "trust_domain": "TD-EXTERNAL-PLATFORM",
+      "type": "external_system"
+    },
+    {
+      "data_classification": "DATA-REPOSITORY-SOURCE",
+      "id": "NODE-NPM-REGISTRY",
+      "owner": "public npm registry and package source endpoints",
       "public_contracts": [],
       "repository_paths": [],
       "runtime": {
