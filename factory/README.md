@@ -1,5 +1,32 @@
 # Getzilla Factory M4-M8 control/evaluation and L5 landing runtime
 
+## Run one local coding task
+
+`run-local` executes an explicitly selected client in a new detached Git worktree,
+feeds it the existing TaskPacket and the full task prompt on stdin, runs the
+specified checks, and retains the patch, local commit, logs and JSON result.
+The original checkout stays untouched. A repeated identical run returns its
+saved result instead of invoking the client again.
+
+```sh
+getzilla-factory run-local \
+  --packet packet.json --prompt-file task.txt \
+  --repository /absolute/project --runtime /absolute/private/task-runs \
+  --writer-command '["codex","exec","--oss","--local-provider","ollama","--sandbox","workspace-write","-"]' \
+  --check-command '["python3","-m","unittest","discover"]'
+```
+
+Use an already configured local model and a trusted client command. The command
+gets a fresh private HOME and does not inherit provider credentials. No Factory
+server or GitHub App is needed for this explicit local launch. Commands are argv
+arrays, not shell scripts. `result.json` records actual exit codes; failed checks
+or edits outside packet paths cannot return `checks_passed`.
+
+This command does not acquire a service lease, promote an adapter, finalize a
+Factory claim, or publish changes. A Git worktree separates checkouts; the chosen
+client must provide any required OS sandbox. Successful checks leave the result
+at `review_required`, ready for independent review rather than automatic merge.
+
 ## 2.1.0 source-candidate contours
 
 BB contracts, the model-rotator registry, VibeVM store, FPF snapshot, and Linux setup manager are source-only and default-off. Setup requires explicit opt-in and offline inputs; U4/macOS, live qualification, service activation, provider execution, deployment, and production authority are excluded.

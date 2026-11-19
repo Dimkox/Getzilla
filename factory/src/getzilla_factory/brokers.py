@@ -69,6 +69,7 @@ class ProposalContext:
     max_cost_usd_micros: int
     max_token_units: int
     declared_capabilities: tuple[str, ...]
+    allowed_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

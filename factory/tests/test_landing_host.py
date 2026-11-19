@@ -220,46 +220,35 @@ class LandingHostCompositionTests(HostFixture):
             with self.subTest(root=root), self.assertRaises(SettingsError):
                 landing_host.build_landing_app(config, qwen_env_file=Path(self.data[root]) / "key")
 
-    def test_live_qwen_reads_file_only_after_source_validation_and_writer_lock(self):
+    def test_standalone_live_qwen_refuses_before_source_or_credential_access(self):
         self.write_config({**self.data, "selected_profile": "qwen-intl", "live_enabled": True})
         config = landing_host.load_host_config(self.config_path)
         from getzilla_factory.landing_server import compose_server_landing
         path = self.root / "synthetic-credentials"
-        events = []
-        def load(*, env_file):
-            self.assertEqual(path, env_file)
-            with self.assertRaises(LandingServiceError) as error:
-                self.reopen_store()
-            self.assertEqual("store_writer_active", error.exception.code)
-            events.append("credential")
-            raise RuntimeError("stop before HTTP")
-        with patch("getzilla_factory.landing_server._trusted_source"), patch(
-            "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source", side_effect=lambda: events.append("source")
-        ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=load):
-            with self.assertRaisesRegex(RuntimeError, "stop before HTTP"):
+        with patch("getzilla_factory.landing_server._trusted_source", side_effect=AssertionError("source access")), patch(
+            "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("credential access")
+        ) as key:
+            with self.assertRaisesRegex(SettingsError, "canonical Factory stop authority"):
                 compose_server_landing(config.settings, repository_root=config.control_repository, qwen_env_file=path)
-        self.assertEqual(["source", "credential"], events)
+        key.assert_not_called()
         self.assertTrue(self.reopen_store().database_path.is_file())
 
-    def test_grok_does_not_read_qwen_file_and_qwen_validation_failure_precedes_read(self):
+    def test_standalone_live_profiles_refuse_without_a_factory_authority(self):
         from getzilla_factory.landing_server import compose_server_landing
         for profile in ("grok-vision", "qwen-intl"):
             self.write_config({**self.data, "selected_profile": profile, "live_enabled": True})
             config = landing_host.load_host_config(self.config_path)
             with self.subTest(profile=profile), patch(
                 "getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("unexpected Qwen file read")
-            ), patch("getzilla_factory.landing_server._trusted_source"), patch(
-                "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source",
-                side_effect=RuntimeError("source invalid") if profile == "qwen-intl" else None
-            ), patch("getzilla_factory.landing_live_executors.api_key_from_environ", return_value=self.token), patch(
-                "getzilla_factory.landing_live_executors.compose_landing_live_grok", side_effect=RuntimeError("Grok selected")
+            ), patch("getzilla_factory.landing_server._trusted_source", side_effect=AssertionError("source access")), patch(
+                "getzilla_factory.landing_live_executors.api_key_from_environ", side_effect=AssertionError("credential access")
             ):
-                with self.assertRaisesRegex(RuntimeError, "source invalid" if profile == "qwen-intl" else "Grok selected"):
+                with self.assertRaisesRegex(SettingsError, "canonical Factory stop authority"):
                     compose_server_landing(config.settings, repository_root=config.control_repository,
                                            qwen_env_file=self.root / "missing")
             self.reopen_store().close()
 
-    def test_existing_writer_prevents_qwen_credential_read(self):
+    def test_standalone_live_refusal_does_not_disturb_existing_writer(self):
         from getzilla_factory.landing_server import compose_server_landing
         self.write_config({**self.data, "selected_profile": "qwen-intl", "live_enabled": True})
         config = landing_host.load_host_config(self.config_path)
@@ -267,9 +256,11 @@ class LandingHostCompositionTests(HostFixture):
         with patch("getzilla_factory.landing_server._trusted_source"), patch(
             "getzilla_factory.landing_renderer.ExactGitLandingWorkspace.validate_source"
         ), patch("getzilla_factory.landing_live_executors.qwen_api_key", side_effect=AssertionError("read before lock")):
-            with self.assertRaises(LandingServiceError) as error:
+            with self.assertRaisesRegex(SettingsError, "canonical Factory stop authority"):
                 compose_server_landing(config.settings, repository_root=config.control_repository,
                                        qwen_env_file=self.root / "missing")
+        with self.assertRaises(LandingServiceError) as error:
+            self.reopen_store()
         self.assertEqual("store_writer_active", error.exception.code)
         writer.close()
 

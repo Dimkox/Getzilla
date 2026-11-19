@@ -27,8 +27,15 @@ class OwnedLandingRuntime:
 def compose_server_landing(
     settings: FactorySettings, *, repository_root: Path, qwen_env_file: Path | None = None,
     provider_env_file: Path | None = None,
+    factory_service=None,
 ) -> OwnedLandingRuntime | None:
     settings.validate_landing()
+    if settings.landing_live_enabled:
+        from .factory_stop import FactoryStopError, require_factory_service
+        try:
+            require_factory_service(factory_service)
+        except FactoryStopError:
+            raise SettingsError('live landing requires canonical Factory stop authority') from None
     if provider_env_file is not None and qwen_env_file is not None:
         raise SettingsError("select one provider credential file")
     if settings.landing_quarantine_path is None:
@@ -95,11 +102,14 @@ def compose_server_landing(
             key_name = GROK_API_KEY_ENV if settings.landing_provider in {"grok", "grok-vision"} else QWEN_API_KEY_ENV
             # This is runtime-only opt-in acquisition, after all path/source
             # validation and ownership checks. Never persist or log the value.
-            service = compose(
-                api_key=(provider_api_key(profile.provider_id, env_file=provider_env_file)
+            def credential_loader():
+                return (provider_api_key(profile.provider_id, env_file=provider_env_file)
                          if provider_env_file is not None or profile.provider_id not in {"qwen", "grok"}
                          else api_key_from_environ(key_name) if profile.provider_id == "grok"
-                         else qwen_api_key(env_file=qwen_env_file)),
+                         else qwen_api_key(env_file=qwen_env_file))
+            service = compose(
+                credential_loader=credential_loader,
+                factory_service=factory_service,
                 binding=implemented_live_binding(enabled=True),
                 profile=profile,
                 source_repository=settings.landing_source_path,

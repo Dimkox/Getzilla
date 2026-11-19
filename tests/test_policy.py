@@ -299,7 +299,9 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(allowed)
             self.assertIn('already active', reason or '')
 
-    def test_mcp_write_requires_tool_bound_external_grant(self) -> None:
+    def test_legacy_mcp_write_requires_tool_bound_external_grant(self) -> None:
+        # Exercise the operation-authorization layer; public admission separately rejects unverified MCP identity.
+        from getzilla._policy_legacy import evaluate_pre_tool
         tool = 'mcp__github__create_issue'
         with github_project() as root:
             allowed, _ = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {'title': 'x'}})
@@ -319,6 +321,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_every_github_write_tool_needs_a_grant_and_reads_do_not(self) -> None:
         self.enterContext(mock.patch.object(self, 'longMessage', False))
+        # Isolate grant classification from the separate trusted-tool admission gate.
+        self.enterContext(mock.patch('getzilla.policy.check_tool_trust', return_value=(True, None)))
         # These names carry the write verb inside the name and used to pass with no grant (#193).
         from getzilla.policy import mcp_side_effect, sensitive_action
         writes = ('issue_write', 'sub_issue_write', 'pull_request_review_write', 'add_issue_comment',
@@ -406,7 +410,8 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(_mcp_github_reads(tool), tool)
         self.assertTrue(_mcp_github_reads('mcp__plugin_github_github__get_me'))
 
-    def test_a_project_can_name_its_own_read_tools_exactly(self) -> None:
+    def test_legacy_project_read_classification_accepts_exact_names(self) -> None:
+        from getzilla._policy_legacy import evaluate_pre_tool
         from getzilla.policy import mcp_side_effect
         with github_project() as root:
             tool = 'mcp__Ahrefs__site-explorer-metrics'
@@ -421,7 +426,8 @@ class PolicyTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
             self.assertTrue(allowed, reason)
 
-    def test_a_refusal_says_why_a_recorded_grant_does_not_cover_the_call(self) -> None:
+    def test_legacy_refusal_explains_why_recorded_grant_does_not_cover_call(self) -> None:
+        from getzilla._policy_legacy import evaluate_pre_tool
         # A grant of the wrong kind, tool or target must be named, not left to a blind retry.
         tool = 'mcp__github__issue_write'
         with github_project() as root:
@@ -442,7 +448,8 @@ class PolicyTests(unittest.TestCase):
             allowed, reason = evaluate_pre_tool(root, {'tool_name': tool, 'tool_input': {}})
             self.assertTrue(allowed, reason)
 
-    def test_github_write_grants_bind_to_the_local_repository(self) -> None:
+    def test_legacy_github_write_grants_bind_to_the_local_repository(self) -> None:
+        from getzilla._policy_legacy import evaluate_pre_tool
         # A grant names only the tool; the call's owner/repo must be the repository it binds (#184).
         tool = 'mcp__github__issue_write'
         with github_project() as root:

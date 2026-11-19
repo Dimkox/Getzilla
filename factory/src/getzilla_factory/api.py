@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .brokers import BrokerError, secret_free_identity
 from .contracts import ContractError, canonical_digest
@@ -24,6 +25,7 @@ from .execution_contracts import ExecutionContractError
 from .landing_contracts import MAX_INPUT_BYTES, MEDIA_TYPES
 from .landing_service import LandingApplicationService, LandingServiceError
 from .models import Actor, ExecutionStage, LeaseGrant, RunRole, TaskStatus
+from .access_authority import AccessAuthority, AccessError
 from .protocol import PROTOCOL_VERSION, PROTOCOL_VERSION_V2
 from .service import (
     AuthorizationError,
@@ -65,10 +67,12 @@ def _json(value: Any) -> Any:
 
 
 class Authenticator:
-    def __init__(self, tokens: Mapping[str, Actor]) -> None:
+    def __init__(self, tokens: Mapping[str, Actor] | AccessAuthority) -> None:
         if not tokens:
             raise ValueError("at least one local token is required")
-        self._actors = tuple((hashlib.sha256(token.encode()).digest(), actor) for token, actor in tokens.items())
+        self.access_authority = tokens if isinstance(tokens, AccessAuthority) else None
+        self._actors = (() if self.access_authority is not None else
+                        tuple((hashlib.sha256(token.encode()).digest(), actor) for token, actor in tokens.items()))
         self._rejection_lock = threading.Lock()
         self._rejections = 0
 
@@ -82,6 +86,9 @@ class Authenticator:
             return self._rejections
 
     def authenticate(self, authorization: str | None, scope: str) -> Actor:
+        if self.access_authority is not None:
+            session = self.access_session(authorization, scope)
+            return self.access_authority.actor(session)
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(401, "bearer authentication required", headers={"WWW-Authenticate": "Bearer"})
         candidate = hashlib.sha256(authorization[7:].encode()).digest()
@@ -94,6 +101,17 @@ class Authenticator:
         if scope not in matched.scopes:
             raise HTTPException(403, "scope denied")
         return matched
+
+    def access_session(self, authorization: str | None, scope: str):
+        if self.access_authority is None:
+            self.authenticate(authorization, scope)
+            raise HTTPException(503, 'source_authority_unavailable')
+        try:
+            return self.access_authority.open_session(authorization, scope)
+        except AccessError as exc:
+            status = (503 if str(exc) == 'access_authority_unavailable' else
+                      403 if str(exc) == 'access_scope_denied' else 401)
+            raise HTTPException(status, str(exc)) from None
 
 
 def _request_id(value: str | None, name: str) -> str:
@@ -274,6 +292,7 @@ def create_app(
     execution_enabled: bool = True,
     landing_service: LandingApplicationService | None = None,
     landing_only: bool = False,
+    access_service=None,
 ) -> FastAPI:
     if landing_only and (service is not None or landing_service is None or execution_enabled):
         raise ValueError("landing-only composition requires only a landing service")
@@ -284,6 +303,51 @@ def create_app(
         docs_url=None,
         redoc_url=None,
     )
+
+    @app.post('/v1/access/source-read', tags=['execution'])
+    async def access_source_read(request: Request, authorization: str | None = Header(None)):
+        session = authenticator.access_session(authorization, 'source:read')
+        if access_service is None:
+            raise HTTPException(503, 'source_authority_unavailable')
+        from .access_authority import _pairs
+        try:
+            payload = json.loads(await request.body(), object_pairs_hook=_pairs)
+        except (ValueError, UnicodeError, RecursionError):
+            raise HTTPException(422, 'invalid_access_request') from None
+        body = _closed(payload, {'grant', 'packet_digest', 'sources', 'destination_id'})
+        return await run_in_threadpool(access_service.prepare, session, _grant(body['grant']),
+            _digest(body['packet_digest'], 'packet_digest'), body['sources'], body['destination_id'])
+
+    @app.post('/v1/access/release', tags=['execution'])
+    def access_release(payload: dict, authorization: str | None = Header(None)):
+        session = authenticator.access_session(authorization, 'source:release')
+        if access_service is None:
+            raise HTTPException(503, 'source_authority_unavailable')
+        body = _closed(payload, {'prepared_id'})
+        return access_service.release(session, body['prepared_id'])
+
+    @app.exception_handler(AccessError)
+    async def access_error(_request: Request, error: AccessError):
+        code = str(error)
+        status = (409 if code == 'access_already_used' else
+                  422 if code.startswith('invalid_') else
+                  503 if code.endswith('unavailable') else 403)
+        return _error_response('unavailable' if status == 503 else 'denied', code, code, status)
+
+    @app.post('/v1/access/authority', tags=['control'])
+    def update_access_authority(payload: dict, authorization: str | None = Header(None)):
+        session = authenticator.access_session(authorization, 'factory:access-admin')
+        body = _closed(payload, {'expected_revision', 'authority'})
+        try:
+            revision = authenticator.access_authority.update(
+                session, body['expected_revision'], body['authority'])
+        except AccessError as error:
+            code = str(error)
+            status = (409 if code in {'stale_access_revision', 'stale_credential_generation'} else
+                      503 if code == 'access_authority_unavailable' else
+                      403 if code == 'access_denied' else 422)
+            raise HTTPException(status, code) from None
+        return {'revision': revision}
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_request: Request, error: StarletteHTTPException):

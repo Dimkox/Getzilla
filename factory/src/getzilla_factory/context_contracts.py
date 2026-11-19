@@ -6,6 +6,18 @@ from .v15_contracts import FrozenWire, closed, version, safe_text, path, digest,
 
 
 class ContextManifestV1(FrozenWire):
+    @staticmethod
+    def _version(data):
+        version(data)
+
+    @staticmethod
+    def _snapshot(snapshot):
+        closed(snapshot, ("base_sha", "head_sha", "dirty_fingerprint"))
+        sha(snapshot["base_sha"])
+        sha(snapshot["head_sha"])
+        if snapshot["dirty_fingerprint"] is not None:
+            digest(snapshot["dirty_fingerprint"])
+
     @classmethod
     def from_dict(cls, data, *, expected_tenant=None, expected_repository=None):
         closed(
@@ -25,7 +37,7 @@ class ContextManifestV1(FrozenWire):
                 "rule_bindings",
             ),
         )
-        version(data)
+        cls._version(data)
         for key in ("builder_version", "tenant_id", "repository_id", "change_id", "route_id"):
             identity(data[key])
         if expected_tenant is not None and data["tenant_id"] != expected_tenant:
@@ -33,11 +45,7 @@ class ContextManifestV1(FrozenWire):
         if expected_repository is not None and data["repository_id"] != expected_repository:
             raise ContractError("repository_mismatch")
         snapshot = data["source_snapshot"]
-        closed(snapshot, ("base_sha", "head_sha", "dirty_fingerprint"))
-        sha(snapshot["base_sha"])
-        sha(snapshot["head_sha"])
-        if snapshot["dirty_fingerprint"] is not None:
-            digest(snapshot["dirty_fingerprint"])
+        cls._snapshot(snapshot)
         digest(data["change_spec_digest"])
         timestamp(data["observed_at"])
         seen = set()

@@ -21,6 +21,10 @@ from factory.tests.test_landing_normalizer import draft, source
 
 
 class ProviderObservationTests(unittest.TestCase):
+    def setUp(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
+
     def test_selected_file_reads_only_the_named_provider_and_rejects_shell_values(self):
         from getzilla_factory.landing_live_executors import PROVIDER_KEY_NAMES, provider_api_key
         from getzilla_factory.landing_provider import LandingProviderError
@@ -219,6 +223,10 @@ class ProviderObservationTests(unittest.TestCase):
 
 
 class AdditionalProviderTests(unittest.TestCase):
+    def setUp(self):
+        from factory.tests.transport_stop_fixture import mock_transport_factory_boundary
+        mock_transport_factory_boundary(self)
+
     def run_provider(self, profile_id, *, response=None):
         from getzilla_factory.landing_extra_providers import landing_provider_executor
 
