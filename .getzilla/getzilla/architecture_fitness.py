@@ -2516,7 +2516,29 @@ def _module_member_demands(tree: ast.AST, access_name: str, patches: dict | None
     members: set[str] = set()
     covered: set[int] = set()
     patches = literal_patch_members(tree) if patches is None else patches
-    for node in ast.walk(tree):
+    nodes = tuple(ast.walk(tree))
+    # A literal builtin lookup is a member demand, not a module escape. Any
+    # observable rebinding retains the full closure, as dynamic lookup does.
+    shadowed_getattr = any(
+        isinstance(node, ast.Name) and node.id == 'getattr' and isinstance(node.ctx, (ast.Store, ast.Del))
+        or isinstance(node, ast.arg) and node.arg == 'getattr'
+        or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == 'getattr'
+        or isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split('.')[0]) == 'getattr' for alias in node.names)
+        or isinstance(node, ast.Attribute) and node.attr == 'getattr' and isinstance(node.ctx, (ast.Store, ast.Del))
+        or isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in {'setattr', 'delattr', 'exec', 'eval'}
+        for node in nodes
+    )
+    for node in nodes:
+        if (not shadowed_getattr and isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == 'getattr'
+                and len(node.args) in (2, 3) and not node.keywords
+                and isinstance(node.args[0], ast.Name) and node.args[0].id == access_name
+                and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str)
+                and node.args[1].value.isidentifier()):
+            members.add(node.args[1].value)
+            covered.add(id(node.args[0]))
         if isinstance(node, ast.Call) and id(node) in patches and patches[id(node)][0] == access_name:
             members.add(patches[id(node)][1])
             covered.add(id(node.args[0]))
@@ -2793,7 +2815,7 @@ def _local_queue_resolution_impl(
             budget=budget,
         )
         try:
-            analysis = analyze_queue_tree(tree, imported.names)
+            analysis = analyze_queue_tree(tree, imported.names, allow_local_ipc='queue' not in cache.modules)
         except QueueAnalysisLimit as exc:
             raise ArchitectureError(str(exc), code="limit") from exc
         # A projection with no queue imports, values or effects cannot create a
@@ -2816,7 +2838,8 @@ def _local_queue_resolution_impl(
                     alias = '__getzilla_factory_' + node.name
                     body.append(ast.Assign(targets=[ast.Name(id=node.name, ctx=ast.Store())], value=ast.Name(id=alias, ctx=ast.Load())))
             try:
-                analysis = analyze_queue_tree(ast.Module(body=body, type_ignores=[]), imported.names | aliases)
+                analysis = analyze_queue_tree(ast.Module(body=body, type_ignores=[]), imported.names | aliases,
+                                              allow_local_ipc='queue' not in cache.modules)
             except QueueAnalysisLimit as exc:
                 raise ArchitectureError(str(exc), code='limit') from exc
         exports = set(analysis.export_paths) - {'__getzilla_factory_' + name for name in factories}
@@ -3052,7 +3075,7 @@ def _queue_signals(
         budget=budget,
     )
     try:
-        analysis = analyze_queue_tree(tree, adapters.names)
+        analysis = analyze_queue_tree(tree, adapters.names, allow_local_ipc='queue' not in cache.modules)
     except QueueAnalysisLimit as exc:
         raise ArchitectureError(str(exc), code="limit") from exc
     unresolved = bool((adapters.unsupported or analysis.uncertain) and analysis.signals)
