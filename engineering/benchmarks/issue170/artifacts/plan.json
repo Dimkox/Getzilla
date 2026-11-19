@@ -1,0 +1,472 @@
+{
+  "blockers": [],
+  "capabilities": {
+    "atomic_no_replace_publish": true,
+    "case_collisions": "blocked",
+    "hardlink_detection": true,
+    "link_detection": true,
+    "nofollow_reads": true,
+    "notes": [],
+    "platform": "linux",
+    "strict_supported": true
+  },
+  "consistency_mode": "quiesced_two_pass",
+  "entries": [
+    {
+      "executable": false,
+      "path": ".devcontainer/devcontainer.json",
+      "sha256": "74f782d25a4e608c73d9a641abb3b9cdae30a758f4e9dee2f1a8baa3bd0a0cce",
+      "size": 441,
+      "type": "file"
+    },
+    {
+      "executable": true,
+      "path": ".devcontainer/on-create-command.sh",
+      "sha256": "b863a4cb17ddda2276b26ca97949e480a04fdd89000d8b3a292a95907cd0dafa",
+      "size": 165,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".editorconfig",
+      "sha256": "f45c88dc00e3e9f273cc30b2f139ee880ef27a6a404ca4d2fd7f0e96f9ec0f9c",
+      "size": 233,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/ISSUE_TEMPLATE/bug-report.md",
+      "sha256": "9402cd8b5222631aefe31b66e73ca54bc62baefe69dfb0512a9102efba3a5555",
+      "size": 643,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "sha256": "3936cb40ad3769b9521573765ba26d46789411b229d45aa35e8c4a769eceb9f6",
+      "size": 339,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/ISSUE_TEMPLATE/feature-request.md",
+      "sha256": "e72c8240e8a5cb5ff5d8172d6587032f9991c4188f376a6779aaa9d9b4f1c9a9",
+      "size": 430,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/dependabot.yml",
+      "sha256": "302ebab037f8926abc1cd7f106fd8775cff574bf6b8de6d0bcc050418035ed7c",
+      "size": 554,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/pull_request_template.md",
+      "sha256": "f92d7fa6366d19dfed8f7b49e753c506c39bb17e23f0908da9dea408f0f07800",
+      "size": 822,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/workflows/lock.yaml",
+      "sha256": "2353b6c6228552382f5588d0335a122d59056db069dc09d5a7c6e6fe0a18f92a",
+      "size": 661,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/workflows/publish.yaml",
+      "sha256": "c0b46ceaabfd958d7867c000ca2c39ce97aca5f1df54117f1bb93f0e585c6ea8",
+      "size": 2668,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".github/workflows/tests.yaml",
+      "sha256": "bc791f50ca9f29b20c953eca04217b30066215e5d59c8b77168865de2e925856",
+      "size": 1765,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".gitignore",
+      "sha256": "7c29846deb0881728ede7eec4b26bd3350b3757e3029670aa375e61d7cca2007",
+      "size": 89,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".pre-commit-config.yaml",
+      "sha256": "cc9ebeac449d346487dd65d3b31b4a008b7d40c56582c98d3ff72fff474c3b46",
+      "size": 407,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": ".readthedocs.yaml",
+      "sha256": "a4c65667267e129bb23e1c88455cd7617473ee5ed4d11738c2e6b908307b82be",
+      "size": 209,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "CHANGES.rst",
+      "sha256": "30c6dd7adaa94fc9d3db5ace9c37647c91af3af3acc9977eda020de717b6072b",
+      "size": 7946,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "CONTRIBUTING.rst",
+      "sha256": "264b34bd96728bd44d97a24194aea54a34368e2ada3df24707368f2de68064fa",
+      "size": 6571,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "LICENSE.txt",
+      "sha256": "63af09891b6be8ad1a4252ed43af0f4efba7fc948e228367bed7f3c5ae0b09d7",
+      "size": 1475,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "README.md",
+      "sha256": "2516a14cadb02e524672755d547a7edf75551138b27cce4620b19a598986d654",
+      "size": 1110,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/Makefile",
+      "sha256": "ffa975e0794eed8baca37b894e2cf2e689c354cd8ea5980dc2c80b18f96ac37b",
+      "size": 581,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/_static/itsdangerous-logo-sidebar.png",
+      "sha256": "6149a2fc980de448cdf4d027647ffdf13f34da49794be753b079fe8cc1dab404",
+      "size": 6629,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/_static/itsdangerous-logo.png",
+      "sha256": "5abfe1d072faeeafe8788042259b3bf715032cb1ebb4a0f6a30ef688552e6159",
+      "size": 18971,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/changes.rst",
+      "sha256": "94c7e3657f8795af8f66d20fb6208f83df46bce9cab9b82d2c16ad961a87f7e0",
+      "size": 45,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/concepts.rst",
+      "sha256": "6d042175f626cbc4b4e23fcb8eba7f15727f387f7afcd20c2a32c3f7db14e095",
+      "size": 5230,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/conf.py",
+      "sha256": "40f5e13a39d50776a4f5f98828211ff49a3b58b79aced9a61ae8a51a7bf6486b",
+      "size": 1976,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/encoding.rst",
+      "sha256": "6ba9be2255834de862aa33ad234ba65f47c52e459c7b0ae8deee60924c923ff2",
+      "size": 139,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/exceptions.rst",
+      "sha256": "c6d9476f5d1f039a7e2524872073d1c19e98e5336b3d61b7235c00a91b13968b",
+      "size": 332,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/index.rst",
+      "sha256": "f34927b5e59d05de4d09cf41279c41e565a41da3424579770ff213d4670f79f9",
+      "size": 1654,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/license.rst",
+      "sha256": "1e07e9c25f2618a040560b70e63f42259eab24e558d0f3532e6163d751cb4eea",
+      "size": 98,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/make.bat",
+      "sha256": "89a52884548ce62dd8ea6f58710e767ce865c08d47faeb3c79e0cec8b6174e77",
+      "size": 752,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/serializer.rst",
+      "sha256": "5bd1b914ee53d300abd18b3a9b7b0b81ff39d787c0ff8d8c8008500126a339e5",
+      "size": 3485,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/signer.rst",
+      "sha256": "37402951e0ddc75a8dd3019d9d1f9bbc2425f0bbf5b270838d1a9d9dcdf7366f",
+      "size": 1263,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/timed.rst",
+      "sha256": "6ec021e674528785b208a68c150022a07a2c36dedf5cbe0c1a50250cc7b34d6b",
+      "size": 689,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "docs/url_safe.rst",
+      "sha256": "2cf2c8d47eab05cf8e19f703c49cf2764e0142aa2d094680d3057c02fee17dbf",
+      "size": 615,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "pyproject.toml",
+      "sha256": "953e3af993d7ce64856e943e830ab0f0439a4994ae4bc5d5eb1dfdbc18bee521",
+      "size": 1868,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/build.in",
+      "sha256": "f10ec3ffef16a8dace9b58801e0da28819c98af4c8933410d7e7cacc952f9e9b",
+      "size": 6,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/build.txt",
+      "sha256": "e623540e870b119c29064c83467dad8b4b99150caf8b37acabf5ce9a86e2abaa",
+      "size": 227,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/dev.in",
+      "sha256": "59c4aae56502db599ff7af1057693acbe81b8e3e793f303393f68d69756c7ca6",
+      "size": 54,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/dev.txt",
+      "sha256": "a19e1555eba8be011d1e5ba6b6a6b87e818b2631cdacfc533cbeec815c1ef24b",
+      "size": 3125,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/docs.in",
+      "sha256": "15bc4ac3a6c319acd99bba37f54a43012443269449c304b993b7ee8990670ff4",
+      "size": 55,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/docs.txt",
+      "sha256": "711a3de180d52e23a95861ac02a0b5419153a13ba27c6531b4d42e39a02a5bea",
+      "size": 1141,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/tests.in",
+      "sha256": "f3399bf96daae93fb7adfa70d9fea1fac7eb27c9b29641e2ec4c28dbbdc748cb",
+      "size": 17,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/tests.txt",
+      "sha256": "6989747e91fc4c09ee14c58305a277a9387fb9ca71615dacf21b5b085c017c4f",
+      "size": 381,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/typing.in",
+      "sha256": "26b8a9c4c745b8765e88c7c6c2992aae86e5b3b82eeabe9201c76143c9341be2",
+      "size": 20,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "requirements/typing.txt",
+      "sha256": "d69053ffd15e7af37f96f3508cd618371ca82304a2619dfa81880ed37be9c4a1",
+      "size": 535,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/__init__.py",
+      "sha256": "e122bbe6c09edbdc5b460404d5942d3079ca52e65801fddb4a964eadf7f52006",
+      "size": 1427,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/_json.py",
+      "sha256": "c0f4069a07b6c99f77dbc107285ea069d19ec866022502b1b54fa22ca13a5270",
+      "size": 473,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/encoding.py",
+      "sha256": "c304f3e6aff7ccb71a01dba793afef4a84adc06a9859edf4ed997f53ceda4453",
+      "size": 1409,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/exc.py",
+      "sha256": "46bddec68d0c44511c3d996dc1e7322b5e955756c4d8af7f175f9dfa58dc527e",
+      "size": 3201,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/serializer.py",
+      "sha256": "3e67700032ea912c902d9d2338a0200ec016e24fc7d13940ef5122df3d02e5a2",
+      "size": 15601,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/signer.py",
+      "sha256": "60ed0257b341bc703a8f9e3d4441c91548d4a23c36a47ab0714a509d4ef23584",
+      "size": 9647,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/timed.py",
+      "sha256": "e91bc332a36e9863317f4f8796969974df4f51042646fad01a994a871ba2bd4b",
+      "size": 8083,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "src/itsdangerous/url_safe.py",
+      "sha256": "6b3e1ee5f5e2fefb3e61b5a3f186709f8c2254a7de0fef8610a453e547aee0fe",
+      "size": 2505,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/test_encoding.py",
+      "sha256": "af71dbee0825fc8ae947b6c789b05f2331afe60efae2aee5145727446385c3f0",
+      "size": 1004,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/test_serializer.py",
+      "sha256": "e9620d6a6999a77773e3a5733ca71cb81375dafd06ad0f3a5b2bea9404e66c26",
+      "size": 6863,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/test_signer.py",
+      "sha256": "219c2a399adc874f14534d1311e950c1e29b2c7d05d037770701b2af258b97a2",
+      "size": 3435,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/test_timed.py",
+      "sha256": "b75531b8901d48a6d7a5c4bbbb2342f02f6ef022185840121f7705c1e907979a",
+      "size": 3807,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_itsdangerous/test_url_safe.py",
+      "sha256": "64d2afc9ab467f209549841f0d87125243d646e011c725818eda8e75ad4d830d",
+      "size": 793,
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "tox.ini",
+      "sha256": "14944e648c4ab0168260332f94a27f45ea39a5b115e6e19c06d80ec533a1ee70",
+      "size": 960,
+      "type": "file"
+    }
+  ],
+  "exclusions": [],
+  "executable_mode": "posix-mode",
+  "path_profile": "portable-v1",
+  "plan_id": "147352572271bb655faf00a142932b6ce1e2d3a471c71f93ab20ea8f0e118eee",
+  "policy": {
+    "allow_sensitive_example_files": true,
+    "exceptions": [],
+    "exclude": [],
+    "executable_mode": "posix-mode",
+    "executable_paths": [],
+    "max_buffered_file_bytes": 16777216,
+    "max_depth": 64,
+    "max_file_bytes": 16777216,
+    "max_files": 100000,
+    "max_total_buffer_bytes": 67108864,
+    "max_total_bytes": 2147483648,
+    "path_profile": "portable-v1"
+  },
+  "policy_digest": "c3b9745635700be2aa24bc5cd937159d35bc3f20125e5c47715b49b246a9c338",
+  "scan": {
+    "bytes_scanned": 135624,
+    "candidates": 60,
+    "errors": [],
+    "files_scanned": 60,
+    "findings": [],
+    "rules_digest": "bba21f8e9dbc5b857039d911dab63c5f796c1b368140ffb618ef59296b5f37b2",
+    "scanner": "getzilla-builtin-secret-rules",
+    "scanner_version": "1",
+    "status": "pass",
+    "unsupported": []
+  },
+  "schema_version": "admission-plan-v1",
+  "source_digest": "6dab3b9de0c48a90d4dbe64b86f642168eac72353e155b762ec46504d1ed26f9",
+  "source_root": "/input",
+  "status": "PLAN_READY",
+  "target": "/work/candidate"
+}

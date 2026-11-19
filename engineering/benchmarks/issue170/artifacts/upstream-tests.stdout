@@ -1,0 +1,29 @@
+
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/test_itsdangerous/test_timed.py ____________
+ImportError while importing test module '/input/tests/test_itsdangerous/test_timed.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/input/tests/test_itsdangerous/test_timed.py:7: in <module>
+    from freezegun import freeze_time
+E   ModuleNotFoundError: No module named 'freezegun'
+__________ ERROR collecting tests/test_itsdangerous/test_url_safe.py ___________
+ImportError while importing test module '/input/tests/test_itsdangerous/test_url_safe.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/input/tests/test_itsdangerous/test_url_safe.py:8: in <module>
+    from test_itsdangerous.test_timed import TestTimedSerializer
+/input/tests/test_itsdangerous/test_timed.py:7: in <module>
+    from freezegun import freeze_time
+E   ModuleNotFoundError: No module named 'freezegun'
+=========================== short test summary info ============================
+ERROR ../input/tests/test_itsdangerous/test_timed.py
+ERROR ../input/tests/test_itsdangerous/test_url_safe.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 errors in 0.25s

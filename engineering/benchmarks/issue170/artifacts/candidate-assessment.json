@@ -1,0 +1,908 @@
+[
+  {
+    "rank": 1,
+    "a": "src/itsdangerous/serializer.py:238:Serializer.secret_key",
+    "b": "src/itsdangerous/signer.py:175:Signer.secret_key",
+    "cosine": 1.0000001192092896,
+    "same_file": false,
+    "kinds": "production/production",
+    "classification": "confirmed_duplicate",
+    "reason": "Both property getters have the same signature, docstring and return self.secret_keys[-1]. They read an existing list and have no external effects. This is a tiny compatibility accessor in two distinct public classes; duplication does not imply a useful refactor.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:238:Serializer.secret_key",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 238,
+        "end": 243,
+        "signature": "self",
+        "returns": "bytes",
+        "decorators": [
+          "property"
+        ],
+        "source_sha256": "cf099c670b1e3583aac125d99cecbbd344defcc759d41c3992953ce8a139ee58",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/signer.py:175:Signer.secret_key",
+        "path": "src/itsdangerous/signer.py",
+        "start": 175,
+        "end": 180,
+        "signature": "self",
+        "returns": "bytes",
+        "decorators": [
+          "property"
+        ],
+        "source_sha256": "cf099c670b1e3583aac125d99cecbbd344defcc759d41c3992953ce8a139ee58",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_signer.py:TestSigner.test_secret_keys (related rotation check; no direct getter assertion in upstream tests)"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 2,
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "cosine": 0.9952751994132996,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 109,
+        "end": 122,
+        "signature": "self: Serializer[str], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: None | _PDataSerializer[str]=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "b2368243b97a90bb092ccca3eb36c96810bce59539d274d590452cab43833638",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 141,
+        "end": 155,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "69c7c74ae39ccab40408c78d31525cea385d36e059ea8b444c2808112bc6387c",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 3,
+    "a": "tests/test_itsdangerous/test_url_safe.py:12:TestURLSafeSerializer.serializer_factory",
+    "b": "tests/test_itsdangerous/test_url_safe.py:22:TestURLSafeTimedSerializer.serializer_factory",
+    "cosine": 0.9904924631118774,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "Both return functools.partial with a secret key, but construct URLSafeSerializer and URLSafeTimedSerializer. The timed subclass adds timestamp/expiry behavior and inherits two test contracts. Removing either changes coverage.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_url_safe.py:12:TestURLSafeSerializer.serializer_factory",
+        "path": "tests/test_itsdangerous/test_url_safe.py",
+        "start": 12,
+        "end": 14,
+        "signature": "self",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "0bd3812bb820d1445703c45a496b0d110d0a0618a587ec9c741e48c3776be067",
+        "calls": [
+          "partial",
+          "pytest.fixture"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_url_safe.py:22:TestURLSafeTimedSerializer.serializer_factory",
+        "path": "tests/test_itsdangerous/test_url_safe.py",
+        "start": 22,
+        "end": 24,
+        "signature": "self",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "54e349f330ef29eda580972c778b3c62ee1810905744e7f0359faa13f062b169",
+        "calls": [
+          "partial",
+          "pytest.fixture"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_url_safe.py:TestURLSafeSerializer",
+      "test_url_safe.py:TestURLSafeTimedSerializer"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 4,
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "cosine": 0.9865446090698242,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 125,
+        "end": 138,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "911a3392e9d6dda24b6eb85647297a294bfbf151ca9d28c631d43f18b3067b70",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 141,
+        "end": 155,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "69c7c74ae39ccab40408c78d31525cea385d36e059ea8b444c2808112bc6387c",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 5,
+    "a": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9847107529640198,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 160,
+        "end": 173,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "c49961a9eac23151a64d962833d668c9f7432cd9917c5384e0c0d737df09c55d",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 176,
+        "end": 190,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "a1b76f319330a3a2184305e528851ca9f1e0f114d9d563b101a511a9bf499cae",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 6,
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "cosine": 0.9794905185699463,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 109,
+        "end": 122,
+        "signature": "self: Serializer[str], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: None | _PDataSerializer[str]=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "b2368243b97a90bb092ccca3eb36c96810bce59539d274d590452cab43833638",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 125,
+        "end": 138,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "911a3392e9d6dda24b6eb85647297a294bfbf151ca9d28c631d43f18b3067b70",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 7,
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9778594970703125,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 125,
+        "end": 138,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "911a3392e9d6dda24b6eb85647297a294bfbf151ca9d28c631d43f18b3067b70",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 160,
+        "end": 173,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "c49961a9eac23151a64d962833d668c9f7432cd9917c5384e0c0d737df09c55d",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 8,
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9748015999794006,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 109,
+        "end": 122,
+        "signature": "self: Serializer[str], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: None | _PDataSerializer[str]=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "b2368243b97a90bb092ccca3eb36c96810bce59539d274d590452cab43833638",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 176,
+        "end": 190,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "a1b76f319330a3a2184305e528851ca9f1e0f114d9d563b101a511a9bf499cae",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 9,
+    "a": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9704720973968506,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:125:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 125,
+        "end": 138,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "911a3392e9d6dda24b6eb85647297a294bfbf151ca9d28c631d43f18b3067b70",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 176,
+        "end": 190,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "a1b76f319330a3a2184305e528851ca9f1e0f114d9d563b101a511a9bf499cae",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 10,
+    "a": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+    "cosine": 0.9697661399841309,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 141,
+        "end": 155,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "69c7c74ae39ccab40408c78d31525cea385d36e059ea8b444c2808112bc6387c",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:176:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 176,
+        "end": 190,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "a1b76f319330a3a2184305e528851ca9f1e0f114d9d563b101a511a9bf499cae",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 11,
+    "a": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9572429656982422,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:141:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 141,
+        "end": 155,
+        "signature": "self: Serializer[bytes], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', *, serializer: _PDataSerializer[bytes], serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "69c7c74ae39ccab40408c78d31525cea385d36e059ea8b444c2808112bc6387c",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 160,
+        "end": 173,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "c49961a9eac23151a64d962833d668c9f7432cd9917c5384e0c0d737df09c55d",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 12,
+    "a": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+    "b": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+    "cosine": 0.9558669328689575,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/serializer.py:109:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 109,
+        "end": 122,
+        "signature": "self: Serializer[str], secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None=b'itsdangerous', serializer: None | _PDataSerializer[str]=None, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "b2368243b97a90bb092ccca3eb36c96810bce59539d274d590452cab43833638",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/serializer.py:160:Serializer.__init__",
+        "path": "src/itsdangerous/serializer.py",
+        "start": 160,
+        "end": 173,
+        "signature": "self, secret_key: str | bytes | cabc.Iterable[str] | cabc.Iterable[bytes], salt: str | bytes | None, serializer: t.Any, serializer_kwargs: dict[str, t.Any] | None=None, signer: type[Signer] | None=None, signer_kwargs: dict[str, t.Any] | None=None, fallback_signers: list[dict[str, t.Any] | tuple[type[Signer], dict[str, t.Any]] | type[Signer]] | None=None",
+        "returns": null,
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "c49961a9eac23151a64d962833d668c9f7432cd9917c5384e0c0d737df09c55d",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 13,
+    "a": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+    "b": "tests/test_itsdangerous/test_timed.py:69:TestTimestampSigner.test_malformed_future_timestamp",
+    "cosine": 0.9461004137992859,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "Both assert BadTimeSignature and no date_signed. One creates a signed malformed timestamp with Signer; the other uses a fixed future timestamp byte string. They exercise different parse inputs and must remain distinct regression cases.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+        "path": "tests/test_itsdangerous/test_timed.py",
+        "start": 59,
+        "end": 67,
+        "signature": "self, signer",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "bdad2e7aacb586ddeb74f9a80e01da46b1e01d78e36e9ba9b6119bc96821a0ac",
+        "calls": [
+          "Signer",
+          "other.sign",
+          "pytest.raises",
+          "signer.unsign",
+          "str"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_timed.py:69:TestTimestampSigner.test_malformed_future_timestamp",
+        "path": "tests/test_itsdangerous/test_timed.py",
+        "start": 69,
+        "end": 76,
+        "signature": "self, signer",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "f19f6c69333982f188bf3889883d5e16fe81d5d6b87d1e31ab0d73017d010c69",
+        "calls": [
+          "pytest.raises",
+          "signer.unsign",
+          "str"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_timed.py:TestTimestampSigner.test_malformed_timestamp",
+      "test_timed.py:TestTimestampSigner.test_malformed_future_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 14,
+    "a": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+    "b": "tests/test_itsdangerous/test_timed.py:30:TestTimestampSigner.signer_factory",
+    "cosine": 0.9348466396331787,
+    "same_file": false,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "Both fixtures return partial constructors, but one constructs Signer and the other TimestampSigner. The subclass adds timestamp and max_age contracts; inherited tests reuse the fixture intentionally.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+        "path": "tests/test_itsdangerous/test_signer.py",
+        "start": 19,
+        "end": 21,
+        "signature": "self",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "901a70839ee16d0cfd53ab63fa1ba2097a07921163f6c6bc875facae98ebe767",
+        "calls": [
+          "partial",
+          "pytest.fixture"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_timed.py:30:TestTimestampSigner.signer_factory",
+        "path": "tests/test_itsdangerous/test_timed.py",
+        "start": 30,
+        "end": 32,
+        "signature": "self",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "1ffab934f907a6faa2c1df91d09134c28c8a778a7e7f0670d7057daf42348fd7",
+        "calls": [
+          "partial",
+          "pytest.fixture"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_signer.py:TestSigner",
+      "test_timed.py:TestTimestampSigner"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 15,
+    "a": "tests/test_itsdangerous/test_serializer.py:131:TestSerializer.test_signer_cls",
+    "b": "tests/test_itsdangerous/test_serializer.py:139:TestSerializer.test_signer_kwargs",
+    "cosine": 0.9341742396354675,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "Both check changed key derivation and round-trip behavior. One injects a custom signer class through signer=Other; the other supplies signer_kwargs. These are distinct configuration paths. A nested class override is a dependency of the first only.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_serializer.py:131:TestSerializer.test_signer_cls",
+        "path": "tests/test_itsdangerous/test_serializer.py",
+        "start": 131,
+        "end": 137,
+        "signature": "self, serializer_factory, serializer: Serializer, value: Any",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "636b5bafbf699606793c6bc0061583e873ad44e243b9bac7ac2b548339ae28b0",
+        "calls": [
+          "other.dumps",
+          "other.loads",
+          "serializer.dumps",
+          "serializer_factory"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_serializer.py:139:TestSerializer.test_signer_kwargs",
+        "path": "tests/test_itsdangerous/test_serializer.py",
+        "start": 139,
+        "end": 144,
+        "signature": "self, serializer_factory, serializer: Serializer, value: Any",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "7b6ff620123e6c534967f179b1f2e13c1d7a9903b11316e7a387630148afba7d",
+        "calls": [
+          "other.dumps",
+          "other.loads",
+          "serializer.dumps",
+          "serializer_factory"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_signer_cls",
+      "test_serializer.py:TestSerializer.test_signer_kwargs"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 16,
+    "a": "src/itsdangerous/signer.py:258:Signer.validate",
+    "b": "src/itsdangerous/timed.py:160:TimestampSigner.validate",
+    "cosine": 0.9302794933319092,
+    "same_file": false,
+    "kinds": "production/production",
+    "classification": "related_distinct",
+    "reason": "Both turn unsign success or BadSignature into bool. TimestampSigner.validate adds max_age and passes it to timestamp-aware unsign; Signer.validate has no age contract. Their unsign targets and failure conditions differ. No external effects.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/signer.py:258:Signer.validate",
+        "path": "src/itsdangerous/signer.py",
+        "start": 258,
+        "end": 266,
+        "signature": "self, signed_value: str | bytes",
+        "returns": "bool",
+        "decorators": [],
+        "source_sha256": "b182c5430f31392a21dcc6696befe610f518f53aa93d6e6be0851e8496790622",
+        "calls": [
+          "self.unsign"
+        ]
+      },
+      {
+        "id": "src/itsdangerous/timed.py:160:TimestampSigner.validate",
+        "path": "src/itsdangerous/timed.py",
+        "start": 160,
+        "end": 167,
+        "signature": "self, signed_value: str | bytes, max_age: int | None=None",
+        "returns": "bool",
+        "decorators": [],
+        "source_sha256": "ebf2bc06ca1fa008d29433a4665ae84c32e8a9fbc8b840c895baf7f281657e3d",
+        "calls": [
+          "self.unsign"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_signer.py:TestSigner.test_signer",
+      "test_timed.py:TestTimestampSigner.test_max_age"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 17,
+    "a": "tests/test_itsdangerous/test_serializer.py:72:TestSerializer.test_bad_signature_exception",
+    "b": "tests/test_itsdangerous/test_serializer.py:81:TestSerializer.test_bad_payload_exception",
+    "cosine": 0.927420973777771,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "One corrupts a signature and checks recoverable payload under BadSignature. The other signs a malformed payload and checks BadPayload.original_error. Distinct error contracts and dependencies make them related tests, not interchangeable duplicates.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_serializer.py:72:TestSerializer.test_bad_signature_exception",
+        "path": "tests/test_itsdangerous/test_serializer.py",
+        "start": 72,
+        "end": 79,
+        "signature": "self, serializer: Serializer, value: Any",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "e4f27602d0f9e9a27ff92f3f1c64317872153201131d5e744b1cc28aede025e7",
+        "calls": [
+          "cast",
+          "pytest.raises",
+          "serializer.dumps",
+          "serializer.load_payload",
+          "serializer.loads"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_serializer.py:81:TestSerializer.test_bad_payload_exception",
+        "path": "tests/test_itsdangerous/test_serializer.py",
+        "start": 81,
+        "end": 89,
+        "signature": "self, serializer: Serializer, value: Any",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "7c4c5c7c790842fcab316e038c5625684eb0429d9960dbb3a50b5ef9a536d1dc",
+        "calls": [
+          "coerce_str",
+          "original.rsplit",
+          "pytest.raises",
+          "serializer.dumps",
+          "serializer.loads",
+          "serializer.make_signer",
+          "serializer.make_signer().sign"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_bad_signature_exception",
+      "test_serializer.py:TestSerializer.test_bad_payload_exception"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 18,
+    "a": "tests/test_itsdangerous/test_timed.py:49:TestTimestampSigner.test_timestamp_missing",
+    "b": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+    "cosine": 0.9264658689498901,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "Both assert BadTimeSignature with missing date_signed. One omits the timestamp entirely; the other signs an invalid timestamp. Exception message checks distinguish missing and malformed parse branches.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_timed.py:49:TestTimestampSigner.test_timestamp_missing",
+        "path": "tests/test_itsdangerous/test_timed.py",
+        "start": 49,
+        "end": 57,
+        "signature": "self, signer",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "4da29b0fd92815392f6fddb758d5fc6374731666654f0892b11e2a5b30ba38b4",
+        "calls": [
+          "Signer",
+          "other.sign",
+          "pytest.raises",
+          "signer.unsign",
+          "str"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_timed.py:59:TestTimestampSigner.test_malformed_timestamp",
+        "path": "tests/test_itsdangerous/test_timed.py",
+        "start": 59,
+        "end": 67,
+        "signature": "self, signer",
+        "returns": null,
+        "decorators": [],
+        "source_sha256": "bdad2e7aacb586ddeb74f9a80e01da46b1e01d78e36e9ba9b6119bc96821a0ac",
+        "calls": [
+          "Signer",
+          "other.sign",
+          "pytest.raises",
+          "signer.unsign",
+          "str"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_timed.py:TestTimestampSigner.test_timestamp_missing",
+      "test_timed.py:TestTimestampSigner.test_malformed_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 19,
+    "a": "src/itsdangerous/timed.py:56:TimestampSigner.unsign",
+    "b": "src/itsdangerous/timed.py:64:TimestampSigner.unsign",
+    "cosine": 0.9240380525588989,
+    "same_file": true,
+    "kinds": "production/production",
+    "classification": "false_positive",
+    "reason": "These are @overload type declarations with ellipsis bodies, not separate runtime implementations. The signatures distinguish serializer positional/keyword forms or bytes/string serializers, or return_timestamp False/True. Treat a proposed runtime duplicate removal as false positive. Preserve declarations for type checking.",
+    "source_evidence": [
+      {
+        "id": "src/itsdangerous/timed.py:56:TimestampSigner.unsign",
+        "path": "src/itsdangerous/timed.py",
+        "start": 56,
+        "end": 62,
+        "signature": "self, signed_value: str | bytes, max_age: int | None=None, return_timestamp: t.Literal[False]=False",
+        "returns": "bytes",
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "43dff25a0c347d2faf5514e6e8e88648623478e7205ada047253dbc00ec09ad7",
+        "calls": []
+      },
+      {
+        "id": "src/itsdangerous/timed.py:64:TimestampSigner.unsign",
+        "path": "src/itsdangerous/timed.py",
+        "start": 64,
+        "end": 70,
+        "signature": "self, signed_value: str | bytes, max_age: int | None=None, return_timestamp: t.Literal[True]=True",
+        "returns": "tuple[bytes, datetime]",
+        "decorators": [
+          "t.overload"
+        ],
+        "source_sha256": "c7a193de43002524c34eac9c994dc0ea5b9956e8e59c217e99e69f74dcfbc71d",
+        "calls": []
+      }
+    ],
+    "test_references": [
+      "test_serializer.py:TestSerializer.test_serializer",
+      "test_timed.py:TestTimestampSigner.test_return_timestamp"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  },
+  {
+    "rank": 20,
+    "a": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+    "b": "tests/test_itsdangerous/test_signer.py:23:TestSigner.signer",
+    "cosine": 0.9233790040016174,
+    "same_file": true,
+    "kinds": "test/test",
+    "classification": "related_distinct",
+    "reason": "signer_factory returns a callable partial(Signer,...); signer calls that fixture and returns a Signer instance. Their result types and fixture roles differ. Replacing one with the other breaks dependency injection.",
+    "source_evidence": [
+      {
+        "id": "tests/test_itsdangerous/test_signer.py:19:TestSigner.signer_factory",
+        "path": "tests/test_itsdangerous/test_signer.py",
+        "start": 19,
+        "end": 21,
+        "signature": "self",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "901a70839ee16d0cfd53ab63fa1ba2097a07921163f6c6bc875facae98ebe767",
+        "calls": [
+          "partial",
+          "pytest.fixture"
+        ]
+      },
+      {
+        "id": "tests/test_itsdangerous/test_signer.py:23:TestSigner.signer",
+        "path": "tests/test_itsdangerous/test_signer.py",
+        "start": 23,
+        "end": 25,
+        "signature": "self, signer_factory",
+        "returns": null,
+        "decorators": [
+          "pytest.fixture()"
+        ],
+        "source_sha256": "bfdb9d80d845ffef5ef4349fa0c8e3b0c95426eab6d8f14bfd1998b89bd33e83",
+        "calls": [
+          "pytest.fixture",
+          "signer_factory"
+        ]
+      }
+    ],
+    "test_references": [
+      "test_signer.py:TestSigner.test_signer"
+    ],
+    "validation": "static source review; full upstream suite run separately; no equivalence proof or refactor"
+  }
+]
