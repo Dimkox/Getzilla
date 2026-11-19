@@ -21,7 +21,7 @@ def digest(path: Path) -> str:
 
 
 _MARKER_NAMES = frozenset(
-    {"sys_platform", "platform_python_implementation", "implementation_name", "python_version", "python_full_version"}
+    {"sys_platform", "platform_system", "platform_python_implementation", "implementation_name", "python_version", "python_full_version"}
 )
 _VERSION_NAMES = frozenset({"python_version", "python_full_version"})
 _MARKER_OPERATORS = {
@@ -138,6 +138,7 @@ def _marker_environments(lock, rows):
                     "python_full_version": ".".join(map(str, version)),
                     "python_version": ".".join(map(str, version[:2])),
                     "sys_platform": platform,
+                    "platform_system": {"linux": "Linux", "win32": "Windows", "darwin": "Darwin"}[platform],
                     "implementation_name": implementation,
                     "platform_python_implementation": label,
                 }
@@ -217,6 +218,10 @@ def _rows(path: Path) -> dict[tuple[str, str], set[str]]:
 def _pins(requirements: list[str]) -> set[tuple[str, str]]:
     pins = set()
     for requirement in requirements:
+        requirement, separator, marker = requirement.partition(';')
+        if separator:
+            _marker_tree(marker.strip())
+        requirement = requirement.strip()
         match = re.fullmatch(r"([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?==([^\s;]+)", requirement)
         if not match:
             raise ValueError("project roots and groups must remain exact pins")

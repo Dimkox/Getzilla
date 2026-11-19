@@ -247,7 +247,7 @@ jobs:
           python trust-ci/lock_profiles.py --check
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation "$RUNNER_TEMP/trust-ci-source"
       - name: Set up pinned uv
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
@@ -717,9 +717,10 @@ jobs:
       - name: Install test requirements
         if: success() || failure()
         run: |
-          python -m pip install --disable-pip-version-check -r .getzilla/config/python-test-requirements.txt
+          python trust-ci/lock_profiles.py --check
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r trust-ci/requirements-runner.txt
           cp -R trust-ci "$RUNNER_TEMP/trust-ci-source"
-          python -m pip install --disable-pip-version-check "$RUNNER_TEMP/trust-ci-source[test]" ruff==0.16.3 bandit==1.9.4 tomli==2.4.1
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation "$RUNNER_TEMP/trust-ci-source"
       - name: Core tests on macOS
         if: success() || failure()
         run: |

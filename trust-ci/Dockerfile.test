@@ -12,6 +12,6 @@ COPY tests ./tests
 COPY sql ./sql
 RUN python lock_profiles.py --check \
     && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-test.txt \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation ".[test]"
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 CMD ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_postgres_integration.py", "-v"]

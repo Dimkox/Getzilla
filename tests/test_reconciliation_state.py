@@ -16,7 +16,7 @@ from tests.branch_support import git
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
-from getzilla import change, state
+from getzilla import change, state, package_status
 from getzilla.continuity import MAX_ITEM_BYTES, submit
 from getzilla.package_status import inspect_package
 from getzilla.review_plan import reconcile_route
@@ -135,7 +135,7 @@ class ReconciliationStateTests(unittest.TestCase):
         # Calibrate only the real serialized row-growth overhead on this fixture.
         # The independent oracle is the ordinary reader's fixed byte limit.
         expanded = self.read()
-        expanded['retained-public-padding'] = ''
+        expanded['retained-public-padding'] = []
         def encoded(document):
             return (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2,
                                allow_nan=False) + '\n').encode('utf-8')
@@ -143,10 +143,12 @@ class ReconciliationStateTests(unittest.TestCase):
         for character in ('p', '界'):
             for target in (262143, 262144, 262145):
                 with self.subTest(character=character, output_bytes=target):
-                    remaining = target - overhead
+                    remaining = target - overhead - 1024
                     width = len(character.encode('utf-8'))
                     padding = character * (remaining // width) + 'p' * (remaining % width)
+                    padding = [padding[index:index + 8192] for index in range(0, len(padding), 8192)]
                     projected = {**expanded, 'retained-public-padding': padding}
+                    padding[-1] += 'p' * (target - len(encoded(projected)))
                     self.assertEqual(len(encoded(projected)), target)
                     document = {**original, 'retained-public-padding': padding}
                     state.durable_json(self.root, self.path, document)
@@ -154,7 +156,7 @@ class ReconciliationStateTests(unittest.TestCase):
                     before = read_package_file(self.root, relative)
                     self.assertLess(len(before), MAX_FILE_BYTES)
                     authority = state.get_active_route(self.root)
-                    with mock.patch.object(change, 'durable_json', wraps=change.durable_json) as publication:
+                    with mock.patch.object(package_status, 'durable_json', wraps=change.durable_json) as publication:
                         if target > MAX_FILE_BYTES:
                             with self.assertRaises(ValueError):
                                 reconcile_route(self.root)
@@ -185,9 +187,10 @@ class ReconciliationStateTests(unittest.TestCase):
         legacy = self.read()
         legacy.pop('evidence_accounting')
         self.write(legacy)
-        current = reconcile_route(self.root)
+        with self.assertRaises(ValueError):
+            reconcile_route(self.root)
         self.assertNotIn('evidence_accounting', self.read())
-        findings = inspect_package(self.root, current, state.get_active_change(self.root))['findings']
+        findings = inspect_package(self.root, state.get_active_route(self.root), state.get_active_change(self.root))['findings']
         self.assertTrue(any(row['code'] == 'legacy_evidence_accounting' for row in findings))
 
     def test_malformed_duplicate_unknown_and_full_accounting_refuse(self):
@@ -211,7 +214,7 @@ class ReconciliationStateTests(unittest.TestCase):
             elif mutation == 'invalid-status':
                 rows[0]['status'] = 'accepted'
             else:
-                rows.extend({'id': f'run-{n}', 'kind': 'run', 'status': 'not_run', 'reason': 'not run'} for n in range(62))
+                rows.extend({'id': f'run-{n}', 'kind': 'run', 'status': 'not_run', 'reason': 'not run'} for n in range(package_status.MAX_ACCOUNTING_ROWS - 2))
             variants.append(doc)
         for doc in variants:
             with self.subTest(accounting=doc['evidence_accounting']):
@@ -246,14 +249,14 @@ class ReconciliationStateTests(unittest.TestCase):
         self.route()
         self.risk_diff()
         original, authority = self.path.read_bytes(), state.get_active_route(self.root)
-        native = change.durable_json
+        native = package_status.durable_json
         for after in (False, True):
             self.path.write_bytes(original)
             def interrupted(root, path, document):
                 if after:
                     native(root, path, document)
                 raise OSError('controlled public publication cut')
-            with self.subTest(after=after), mock.patch.object(change, 'durable_json', interrupted):
+            with self.subTest(after=after), mock.patch.object(package_status, 'durable_json', interrupted):
                 with self.assertRaises(OSError):
                     reconcile_route(self.root)
             self.assertEqual(state.get_active_route(self.root), authority)
@@ -268,11 +271,11 @@ class ReconciliationStateTests(unittest.TestCase):
         self.route()
         self.risk_diff()
         authority = state.get_active_route(self.root)
-        native = change.durable_json
+        native = package_status.durable_json
         def drift(root, path, document):
             native(root, path, document)
             (self.root / 'app.py').write_text('value = 99\n')
-        with mock.patch.object(change, 'durable_json', drift), self.assertRaises(ValueError):
+        with mock.patch.object(package_status, 'durable_json', drift), self.assertRaises(ValueError):
             reconcile_route(self.root)
         self.assertEqual(state.get_active_route(self.root), authority)
         self.assertEqual(self.kinds(), REQUIRED)  # extra not_run rows grant nothing
@@ -284,13 +287,13 @@ class ReconciliationStateTests(unittest.TestCase):
         self.route()
         self.risk_diff()
         authority = state.get_active_route(self.root)
-        native = change.durable_json
+        native = package_status.durable_json
         def drift(root, path, document):
             native(root, path, document)
             altered = json.loads(path.read_text())
             altered['foreign-retained'] = True
             path.write_text(json.dumps(altered))
-        with mock.patch.object(change, 'durable_json', drift), self.assertRaises(ValueError):
+        with mock.patch.object(package_status, 'durable_json', drift), self.assertRaises(ValueError):
             reconcile_route(self.root)
         self.assertTrue(self.read()['foreign-retained'])
         self.assertEqual(state.get_active_route(self.root), authority)
@@ -308,7 +311,7 @@ class ReconciliationStateTests(unittest.TestCase):
         self.route()
         self.risk_diff()
         original, authority = self.path.read_bytes(), state.get_active_route(self.root)
-        native = change.durable_json
+        native = package_status.durable_json
         for owner_change in (True, False):
             self.path.write_bytes(original)
             def drift(root, path, document):
@@ -318,7 +321,7 @@ class ReconciliationStateTests(unittest.TestCase):
                 else:
                     state.update_route(root, status='scoped')
             try:
-                with self.subTest(owner_change=owner_change), mock.patch.object(change, 'durable_json', drift):
+                with self.subTest(owner_change=owner_change), mock.patch.object(package_status, 'durable_json', drift):
                     with self.assertRaises(ValueError):
                         reconcile_route(self.root)
             finally:
@@ -350,8 +353,7 @@ class ReconciliationStateTests(unittest.TestCase):
         self.risk_diff()
         change.transition(self.root, current['change_id'], 'cancelled', 'public fixture cancelled')
         before, authority = self.path.read_bytes(), state.get_active_route(self.root)
-        with self.assertRaises(ValueError):
-            reconcile_route(self.root)
+        self.assertEqual(reconcile_route(self.root), authority)
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(state.get_active_route(self.root), authority)
 
@@ -362,12 +364,11 @@ class ReconciliationStateTests(unittest.TestCase):
         doc['evidence_accounting']['obligations'].append(row)
         self.write(doc)
         self.risk_diff()
-        reconcile_route(self.root)
-        rows = self.read()['evidence_accounting']['obligations']
-        self.assertIn(row, rows)
-        selected = next(item for item in rows if item.get('receipt_kind') == 'data_review')
-        self.assertNotEqual(selected['id'], row['id'])
-        self.assertEqual(len({item['id'] for item in rows}), len(rows))
+        before = self.path.read_bytes()
+        with self.assertRaises(ValueError):
+            reconcile_route(self.root)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertIn(row, self.read()['evidence_accounting']['obligations'])
 
     def test_release_amendment_selects_only_derived_writer_and_preserves_identity(self):
         original = self.route(package=False, prompt='Publish a release to production.')

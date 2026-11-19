@@ -20,7 +20,7 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/ci ci \
     && python lock_profiles.py --check \
     && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-runner.txt \
-    && python -m pip install --no-cache-dir --no-deps --no-build-isolation ".[test]" \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation . \
     && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/opengrep')" \
         "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86" \
     && echo "${OPENGREP_SHA256}  /usr/local/bin/opengrep" | sha256sum -c - \

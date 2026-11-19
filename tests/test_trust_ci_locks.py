@@ -41,7 +41,7 @@ class TrustCILockTests(unittest.TestCase):
             content = (ROOT / f"trust-ci/requirements-{name}.txt").read_text()
             self.assertIn("--hash=sha256:", content)
             self.assertIn("starlette==", content)
-            self.assertIn("setuptools==84.0.0", content)
+            self.assertIn("setuptools==84.1.0", content)
         for filename in ("Dockerfile.api", "Dockerfile.worker", "Dockerfile.test", "runner.Dockerfile"):
             content = (ROOT / "trust-ci" / filename).read_text()
             self._assert_frozen_commands(content)
@@ -49,10 +49,13 @@ class TrustCILockTests(unittest.TestCase):
             self.assertIn("--no-deps --no-build-isolation", content, filename)
             self.assertIn("--only-binary=:all:", content, filename)
             self.assertNotIn('".[test]"', content)
-        workflow = (ROOT / ".github/workflows/getzilla.yml").read_text()
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/getzilla.yml").read_text())["jobs"]
+        workflow = "\n".join(step["run"] for job in jobs.values() for step in job.get("steps", [])
+                             if "trust-ci-source" in step.get("run", ""))
         self._assert_frozen_commands(workflow)
-        self.assertEqual(workflow.count("--require-hashes"), 1)
-        self.assertEqual(workflow.count("--no-deps --no-build-isolation"), 1)
+        self.assertEqual(workflow.count("--require-hashes"), 2)
+        self.assertEqual(workflow.count("--no-deps --no-build-isolation"), 2)
 
     def _module(self):
         spec = importlib.util.spec_from_file_location("trust_lock_profiles", ROOT / "trust-ci/lock_profiles.py")
@@ -101,7 +104,7 @@ class TrustCILockTests(unittest.TestCase):
                     )
                 elif mutation == "backend-drift":
                     path = root / "pyproject.toml"
-                    path.write_text(path.read_text().replace("setuptools==84.0.0", "setuptools==75.8.0"))
+                    path.write_text(path.read_text().replace("setuptools==84.1.0", "setuptools==75.8.0"))
                     binding["inputs"]["pyproject.toml"] = module.digest(path)
                 else:
                     binding["profiles"]["unsupported"] = "0" * 64
@@ -228,7 +231,7 @@ class TrustCILockTests(unittest.TestCase):
             self.assertTrue(
                 any(item.name == "starlette" and item.manifest == "trust-ci/uv.lock" for item in dependencies)
             )
-            self.assertEqual(len([item for item in dependencies if item.manifest == "trust-ci/uv.lock"]), 42)
+            self.assertEqual(len([item for item in dependencies if item.manifest == "trust-ci/uv.lock"]), 47)
 
     def test_profile_integrity_and_graph_closure(self):
         path = ROOT / "trust-ci/lock_profiles.py"
