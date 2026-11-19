@@ -61,12 +61,30 @@ class TrustAdmissionTests(unittest.TestCase):
 
     def test_corrupt_policy_cannot_enable_mcp_and_local_read_stays_usable(self):
         with project_copy() as root:
-            (root / '.getzilla/config/policy.json').write_text('{', encoding='utf-8')
-            allowed, reason = evaluate_pre_tool(root, {'tool_name': 'mcp__unknown__get_status'})
+            policy = root / '.getzilla/config/policy.json'
+            original = policy.read_bytes()
+            read = {'tool_name': 'Read', 'tool_input': {'file_path': 'AGENTS.md'}}
+            mcp = {'tool_name': 'mcp__unknown__get_status',
+                   'tool_input': {'path': 'PRIVATE-SENTINEL', 'trusted': True}}
+            self.assertTrue(evaluate_pre_tool(root, read)[0])
+            try:
+                policy.write_text('{', encoding='utf-8')
+                allowed, reason = evaluate_pre_tool(root, mcp)
+                self.assertFalse(allowed)
+                self.assertIn('mcp_identity_unverified', reason or '')
+                self.assertNotIn('PRIVATE-SENTINEL', reason or '')
+                # An unknown custom secret policy cannot authorize even a local read.
+                allowed, reason = evaluate_pre_tool(root, read)
+                self.assertFalse(allowed)
+                self.assertEqual(reason, 'Mandatory policy configuration missing or invalid.')
+            finally:
+                policy.write_bytes(original)
+            self.assertEqual(policy.read_bytes(), original)
+            self.assertTrue(evaluate_pre_tool(root, read)[0])
+            allowed, reason = evaluate_pre_tool(root, mcp)
             self.assertFalse(allowed)
             self.assertIn('mcp_identity_unverified', reason or '')
-            self.assertTrue(evaluate_pre_tool(root, {'tool_name': 'Read',
-                                                    'tool_input': {'file_path': 'AGENTS.md'}})[0])
+            self.assertNotIn('PRIVATE-SENTINEL', reason or '')
 
 
 def payload(root, client, tool, inputs):
@@ -143,14 +161,20 @@ class TrustHookTests(unittest.TestCase):
             self.assertEqual(result['decision'], 'deny', result)
 
     def test_degraded_policy_and_library_refuse_mcp(self):
-        for relative in ('.getzilla/getzilla/policy.py', '.getzilla/hooks/_lib.py'):
+        for relative, expected_exit in (('.getzilla/getzilla/policy.py', 0),
+                                        ('.getzilla/hooks/_lib.py', 2)):
             with self.subTest(relative=relative), project_copy() as root:
                 (root / relative).write_text('raise ImportError("fixture failure")\n', encoding='utf-8')
                 code, result, error = run_hook(root, 'pre_tool_use.py',
-                    payload(root, 'claude', 'mcp__unknown__get_status', {}))
-                self.assertEqual(code, 0, error)
+                    payload(root, 'claude', 'mcp__unknown__get_status', {'path': 'PRIVATE-SENTINEL'}))
+                # Healthy bootstrap emits its policy verdict normally; unavailable
+                # bootstrap emits the same refusal with the native blocking exit.
+                self.assertEqual(code, expected_exit, error)
                 self.assertEqual(result['decision'], 'deny', result)
                 self.assertIn('mcp_identity_unverified', result.get('reason', ''))
+                self.assertNotIn('PRIVATE-SENTINEL', json.dumps(result) + error)
+                self.assertLess(len(json.dumps(result)), 2000)
+                self.assertLess(len(error), 1000)
 
 
 class TrustAuditTests(unittest.TestCase):
