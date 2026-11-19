@@ -210,8 +210,6 @@ def _profile_declaration(source,inventory,roots,run,policy,*,now=None,image_arti
         'security-licenses': ['artifact-license-catalog'] if any(counts.values()) else [],
         'security-container-images': images}
     body['image_profile'] = None
-    if network_selection is not None:
-        body['image_network_selection'] = image_network_selection(inventory, network_selection)
     if counts['images']:
         if any(not isinstance(item.get('reference'), str) or re.fullmatch(r'[^\s$@]+@sha256:[0-9a-f]{64}', item['reference']) is None for item in inventory['images']):
             raise SecurityDataError('image input requires explicit immutable identities')

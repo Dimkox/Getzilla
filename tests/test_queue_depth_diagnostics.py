@@ -196,7 +196,8 @@ class QueueDepthDiagnosticTests(unittest.TestCase):
     def test_sidecar_reaches_both_serializers_and_digest_without_changing_legacy_findings(self):
         error = self.refusal('cached-height')
         provenance, result = self.collect(error, count=70)
-        legacy = tuple((f'owned/jobs{i:03}.py', 'head', 'queue adapter depth limit exceeded') for i in range(70))
+        legacy = tuple((f'owned/jobs{i:03}.py', 'head', fit._queue_limit_text(error)) for i in range(70))
+        self.assertTrue(all(message.startswith(str(error)) for _, _, message in legacy))
         self.assertEqual(provenance.limits, legacy)
         self.assertEqual((provenance.state, provenance.reason), ('unsupported', 'analysis_limit_exceeded'))
         self.assertEqual(len(provenance.depth_contexts), 64)
@@ -263,7 +264,7 @@ class QueueDepthDiagnosticTests(unittest.TestCase):
                 retained, result = self.collect(real_error)
             except RuntimeError:
                 self.fail('optional context validation masked the original limit refusal')
-        self.assertEqual(retained.limits, (('owned/jobs000.py', 'head', str(real_error)),))
+        self.assertEqual(retained.limits, (('owned/jobs000.py', 'head', fit._queue_limit_text(real_error)),))
         self.assertEqual(result.status, 'unsupported')
         for error in (KeyboardInterrupt(), SystemExit(23)):
             with self.subTest(kind=type(error).__name__):

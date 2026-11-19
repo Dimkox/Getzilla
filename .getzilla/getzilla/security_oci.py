@@ -68,7 +68,7 @@ class OCIError(ValueError):
 _BOUND_LIMITS = {'compressed': 'max_compressed_bytes', 'unpacked': 'max_unpacked_bytes',
                  'storage': 'max_storage_bytes', 'layers': 'max_layers',
                  'expanded': 'max_unpacked_bytes', 'entries': 'max_tar_entries'}
-_BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed'},
+_BOUND_PHASES = {'compressed': {'budget-charge', 'layout-json', 'blob-compressed', 'member-read', 'component-read'},
                  'unpacked': {'budget-charge', 'layer-decoded', 'attestation-bytes', 'layer-cached-unpacked'},
                  'storage': {'budget-charge', 'blob-storage', 'scanner-entrypoint'},
                  'layers': {'budget-charge', 'layer-count', 'attestation-count'},
@@ -427,7 +427,7 @@ def read_members(image, paths, *, member_limit=2 * 1024 * 1024, total_limit=16 *
                     raise OCIError('Requested OCI evidence is truncated')
                 changes[name] = body
             with verified(layer['digest']) as (stream, size):
-                image._budget.charge('compressed', size)
+                image._budget.charge('compressed', size, phase='member-read')
                 _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
             for path in removed:
                 selected.pop(path, None)

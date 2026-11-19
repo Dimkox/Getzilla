@@ -174,6 +174,9 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
         source = repo / 'factory/src/getzilla_factory/__init__.py'
         source.parent.mkdir(parents=True)
         source.write_text("__version__='1.0.0'\n")
+        # The real builder requires the exact committed project license.
+        (repo / 'LICENSE').write_bytes((ROOT / 'LICENSE').read_bytes())
+        (repo / 'LICENSE').chmod(0o644)
         filename = self.record['filename']
         lock = repo / 'factory/uv.lock'
         lock.write_text('version = 1\nrevision = 3\nrequires-python = ">=3.12,<3.13"\n'
@@ -204,6 +207,12 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
                          'sidecar_path': 'release.sha256',
                          'components': [{'artifact_id': component_id(self.record), 'prefix': 'site-packages/'}]}
         self.save()
+
+    def test_project_license_needs_exact_approved_bytes_after_archive_rebinding(self):
+        self.prepare()
+        self.assertEqual(self.evaluate()['status'], 'pass')
+        self.rewrite_release(change='legal/project/LICENSE')
+        self.assertIn('license-obligation-missing', {gap['code'] for gap in self.evaluate()['gaps']})
 
     def test_explicit_synthetic_target_is_independent_of_the_test_host(self):
         builder = factory_builder()
@@ -324,10 +333,12 @@ class FactoryArchiveCustodyTests(ArtifactFixture):
                 with tempfile.TemporaryDirectory(dir=self.root) as temporary:
                     original = self.root
                     self.root = Path(temporary)
-                    self.prepare()
-                    self.rewrite_release(**{mutation: 'site-packages/example-1.0.0.dist-info/licenses/NOTICE'})
-                    self.assertEqual(self.evaluate()['status'], 'fail')
-                    self.root = original
+                    try:
+                        self.prepare()
+                        self.rewrite_release(**{mutation: 'site-packages/example-1.0.0.dist-info/licenses/NOTICE'})
+                        self.assertEqual(self.evaluate()['status'], 'fail')
+                    finally:
+                        self.root = original
 
     def test_absent_composition_wrong_digest_or_profile_and_detached_bytes_fail(self):
         self.prepare()

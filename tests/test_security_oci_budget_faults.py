@@ -98,7 +98,7 @@ class BudgetFaultControls(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "charge"
         ]
-        self.assertEqual(len(calls), 12)
+        self.assertEqual(len(calls), 14)
         phases = []
         for call in calls:
             phase = next((value.value for value in call.keywords if value.arg == "phase"), None)
@@ -108,6 +108,8 @@ class BudgetFaultControls(unittest.TestCase):
             set(phases),
             {
                 "layout-json",
+                "member-read",
+                "component-read",
                 "blob-storage",
                 "blob-compressed",
                 "layer-count",

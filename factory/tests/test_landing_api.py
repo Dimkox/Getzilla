@@ -441,6 +441,7 @@ class LandingApiTests(unittest.TestCase):
             and "landing-" not in path.name
             and path.name != "static-landing-spec.v1.schema.json"
             and path.name != "context-manifest.v1.schema.json"
+            and path.name != "context-manifest.v2.schema.json"
             and path.name != "decision-record.v1.schema.json"
             and path.name != "result-envelope.v1.schema.json"
             and path.name != "result-envelope.v2.schema.json"
