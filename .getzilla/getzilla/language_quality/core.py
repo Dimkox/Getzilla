@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import hashlib
-import importlib
+import importlib as importlib  # compatibility patch point for the canonical loader module
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -17,6 +17,7 @@ from ..cpu_budget import cpu_budget
 from ..util import changed_file_statuses, git_head
 from ..verification_scope import is_valid_inventory_path
 from .models import AdapterRequest
+from .adapters import load_adapter
 
 
 TOOLS = {'eslint': ('javascript', 'eslint'), 'detekt': ('kotlin', 'kotlin'),
@@ -413,7 +414,7 @@ def run_registry(root: Path, base: str | None, *, executor=None, cancellation=No
                 if inputs is None:
                     inputs = _read_inputs(root, inputs_files, explicit_configs)
                 details.update(input_digest=inputs[0], config_digest=inputs[1], dependency_digest=inputs[2])
-                adapter = importlib.import_module('.adapters.' + module, __package__)
+                adapter = load_adapter(module)
                 capabilities = adapter.capabilities(tool, driver)
                 if not capabilities.full or (scope.actual == 'changed' and not capabilities.incremental):
                     raise ValueError('adapter capability differs from registry contract')

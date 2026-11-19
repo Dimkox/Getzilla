@@ -352,3 +352,41 @@ class QueueAnalysisProfileTests(unittest.TestCase):
             self.assertIs(getattr(fit, name), getattr(resolver, name))
         self.assertIs(fit._QueueBudget, resolver._QueueBudget)
         self.assertIs(fit._QueueResolutionCache, resolver._QueueResolutionCache)
+
+    def test_language_adapter_loader_is_real_owner_with_unchanged_closed_core(self):
+        import importlib
+        from getzilla.python_source_proof import namespace_is_closed
+        from getzilla.language_quality import core, adapters
+        tree = ast.parse((ROOT / '.getzilla/getzilla/language_quality/core.py').read_bytes())
+        self.assertTrue(namespace_is_closed(tree, allow_instrumentation=True, static_import_reads=True,
+                                            forbidden_imports=fit._QUEUE_IMPORTS))
+        for name in ('eslint', 'kotlin', 'dart', 'swift'):
+            self.assertIs(adapters.load_adapter(name), importlib.import_module(
+                'getzilla.language_quality.adapters.' + name))
+        for name in ('../foreign', 'os', 'unknown', ''):
+            with self.assertRaises(ValueError):
+                adapters.load_adapter(name)
+        with patch.object(adapters.importlib, 'import_module', side_effect=ImportError('owned missing adapter')):
+            with self.assertRaisesRegex(ImportError, 'owned missing adapter'):
+                adapters.load_adapter('eslint')
+        self.assertIs(core.importlib, adapters.importlib)
+
+    def test_language_loader_and_actual_adapter_bodies_are_source_bound(self):
+        import importlib
+        from getzilla.verification_plan import policy_binding
+        labels = ('language_quality/core.py', 'language_quality/adapters/__init__.py',
+                  'language_quality/adapters/eslint.py', 'language_quality/adapters/kotlin.py',
+                  'language_quality/adapters/dart.py', 'language_quality/adapters/swift.py')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = policy_binding(root)
+            for label in labels:
+                with self.subTest(owner=label):
+                    identity = label[:-3].replace('/', '.').removesuffix('.__init__')
+                    module = importlib.import_module('getzilla.' + identity)
+                    raw = (ROOT / '.getzilla/getzilla' / label).read_bytes()
+                    changed = raw + b'\n# exact real adapter body mutation control\n'
+                    with patch.object(module.__loader__, 'get_data', return_value=changed):
+                        after = policy_binding(root)
+                    self.assertEqual(after['implementation'][label], hashlib.sha256(changed).hexdigest())
+                    self.assertNotEqual(before['digest'], after['digest'])
