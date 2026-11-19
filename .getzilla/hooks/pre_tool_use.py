@@ -452,7 +452,8 @@ def _degraded_tool(value: Any) -> str | None:
         return 'Read'
     if value.lower() in {name.lower() for name in _DEGRADED_WRITE_TOOLS} | {'write', 'create', 'str_replace', 'search_replace'}:
         return 'Write'
-    return value
+    # Unclassified native executors and dispatch envelopes cannot become an allow.
+    return None
 
 
 def _degraded_request(payload: Any) -> tuple[str, Any, Any]:
@@ -521,11 +522,12 @@ def _degraded_request(payload: Any) -> tuple[str, Any, Any]:
         return '', None, None
 
 
-def _degraded_payload() -> tuple[str, Any, Any]:
+def _degraded_payload() -> tuple[str, Any, Any] | None:
     try:
-        return _degraded_request(_read_tool_payload())
+        request = _degraded_request(_read_tool_payload())
+        return request if request[0] else None
     except (OSError, UnicodeError, ValueError, RuntimeError, RecursionError, TypeError):
-        return '', None, None
+        return None
 
 
 # Make stack importable even when cwd is project root
@@ -538,7 +540,12 @@ for _p in _ROOT_CANDIDATES:
     if s not in sys.path:
         sys.path.append(s)
 
+_BOOTSTRAP_READY = False
 try:
+    # Never resolve a missing local bootstrap from ambient PYTHONPATH/cwd.
+    _bootstrap_file = Path(__file__).resolve().parent / '_lib.py'
+    if not stat.S_ISREG(_bootstrap_file.lstat().st_mode):
+        raise ImportError('mandatory local bootstrap is not a regular file')
     from _lib import (
         record_degraded,
         RootContext,
@@ -552,8 +559,10 @@ try:
         tool_input,
         tool_name,
     )
+    _BOOTSTRAP_READY = True
 except Exception as _lib_error:
-    # If even _lib is missing, refuse only protected actions and leave a trace that policy did not run.
+    # The stdlib boundary can admit only classified fallback operations.
+    # A refusal exits2 so native hosts cannot ignore it as a nonblocking error.
     # Standard library only: the Getzilla package is what failed to import.
     import contextlib as _contextlib
     with _contextlib.suppress(Exception):
@@ -570,9 +579,13 @@ except Exception as _lib_error:
                     'error': f'{type(_lib_error).__name__}: {_lib_error}'[:300],
                 }) + '\n')
     _fallback_request = _degraded_payload()
-    print(_degraded_output(_INVALID_TOOL_REQUEST if _fallback_request is None else
-                           _degraded_denial(*_fallback_request)))
-    raise SystemExit(0 if (Path(__file__).resolve().parent / '_lib.py').is_file() else 1)
+    _fallback_reason = (_INVALID_TOOL_REQUEST if _fallback_request is None else
+                        _degraded_denial(*_fallback_request))
+    print(_degraded_output(_fallback_reason))
+    if _fallback_reason is not None:
+        raise SystemExit(2)
+    # Return normally after an admitted fallback. Legacy wrappers must not
+    # mistake SystemExit(0) for a failed bootstrap and replace this safe verdict.
 
 
 _DENIAL_WINDOW_SECONDS = 15 * 60
@@ -1100,5 +1113,5 @@ def main() -> None:
         emit(permission_output(reason is None,reason))
 
 
-if __name__ == '__main__':
+if __name__ == '__main__' and _BOOTSTRAP_READY:
     main()

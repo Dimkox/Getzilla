@@ -46,7 +46,7 @@ class HookDegradedTests(unittest.TestCase):
                             code, data, error = run_hook(root, 'pre_tool_use.py', {
                                 'cwd': str(root), 'tool_name': tool, 'tool_input': tool_input,
                             })
-                            self.assertEqual(code, 0, error)
+                            self.assertEqual(code, 2 if module == 'fsx' and expected == 'deny' else 0, error)
                             actual = data.get('decision') or data.get('hookSpecificOutput', {}).get('permissionDecision')
                             self.assertEqual(actual, expected, data)
                             events = degraded_events(root)
