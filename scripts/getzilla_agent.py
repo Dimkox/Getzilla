@@ -48,6 +48,9 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument('--request-id', required=True)
         if action == 'report':
             command.add_argument('--result', required=True, choices=sorted(RESULTS))
+            command.add_argument('--report-path', help='Private runtime report bytes; local observation only')
+            command.add_argument('--dataset-sha256', help='Exact reviewed dataset digest; not native authority')
+            command.add_argument('--dataset-path', help='Private frozen four-file dataset directory')
     for action in ('watchdog', 'watch'):
         command = commands.add_parser(action)
         command.add_argument('--heartbeat-seconds', type=int, default=180)
@@ -92,7 +95,8 @@ def run(args: argparse.Namespace, root: Path) -> dict | None:
         scope = {'requirement_ids': tuple(args.requirement)} if args.requirement else {}
         return record_agent_start(root, args.agent_id, args.agent_type, generation=args.generation, **scope)
     if args.action == 'report':
-        record_terminal_report(root, args.agent_id, args.generation, args.route_id, args.task_id, args.result)
+        record_terminal_report(root, args.agent_id, args.generation, args.route_id, args.task_id, args.result,
+                               report_path=args.report_path, dataset_sha256=args.dataset_sha256, dataset_path=args.dataset_path)
         return {'reported': True}
     if args.action == 'terminated':
         record = get_agent_state(root).get('active', {}).get(args.agent_id) or {}
