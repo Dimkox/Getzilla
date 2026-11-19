@@ -9,6 +9,7 @@ import sys
 from unittest.mock import patch
 EXPANDED_NOW = datetime(2026, 11, 3, tzinfo=timezone.utc)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
+from getzilla.security_publication import SnapshotWriter
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 URL = 'https://osv-vulnerabilities.storage.googleapis.com/PyPI/all.zip'
 from getzilla.security_acquisition import FetchResult, refresh_feeds
@@ -186,14 +187,14 @@ class QueryAcquisitionTests(unittest.TestCase):
         self.assertEqual(result['snapshot']['acquisition']['producer'], 'synthetic-public-injected-osv-query-v1')
         pointer = self.database / 'queries/native/snapshot.json'
         before = pointer.read_bytes()
-        original = security_data._SnapshotStore.write
+        original = SnapshotWriter.write
 
         def write(store, parts, payload):
             result = original(store, parts, payload)
             if parts[-1] == '.publication-pending.json':
                 (self.root / 'requirements.txt').write_text('public-package==2.0.0\n', encoding='utf-8')
             return result
-        with patch.object(security_data._SnapshotStore, 'write', write):
+        with patch.object(SnapshotWriter, 'write', write):
             result = refresh(self.root, self.database, transport=self.transport, now=NOW)
         self.assertEqual(result['status'], 'fail')
         self.assertEqual(pointer.read_bytes(), before)
@@ -205,14 +206,14 @@ class QueryAcquisitionTests(unittest.TestCase):
         pointer = self.database / 'queries/native/snapshot.json'
         before = pointer.read_bytes()
         before_payload = security_data.read_snapshot(self.database, self.query.SOURCE_ID, now=NOW)[0]
-        original, monotonic = (security_data._SnapshotStore.write, [0.0])
+        original, monotonic = (SnapshotWriter.write, [0.0])
 
         def write(store, parts, payload):
             result = original(store, parts, payload)
             if parts[-1] == '.publication-pending.json':
                 monotonic[0] = 181.0
             return result
-        with patch.object(self.module.time, 'monotonic', side_effect=lambda: monotonic[0]), patch.object(security_data._SnapshotStore, 'write', write):
+        with patch.object(self.module.time, 'monotonic', side_effect=lambda: monotonic[0]), patch.object(SnapshotWriter, 'write', write):
             result = self.module.refresh_query(self.root, self.database, transport=self.transport, now=NOW)
         self.assertEqual(result['status'], 'fail')
         self.assertEqual(pointer.read_bytes(), before)

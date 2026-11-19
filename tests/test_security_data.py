@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 EXPANDED_NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
+from getzilla.security_publication import SnapshotWriter
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 from getzilla import security_data as SD
 
@@ -294,7 +295,7 @@ class SnapshotTests(unittest.TestCase):
         self.publish()
         pointer = self.database / 'PyPI/snapshot.json'
         before = pointer.read_bytes()
-        original, original_clock = (self.data._SnapshotStore.write, self.data._clock)
+        original, original_clock = (SnapshotWriter.write, self.data._clock)
         current = [NOW]
 
         def write(store, parts, payload, **kwargs):
@@ -302,7 +303,7 @@ class SnapshotTests(unittest.TestCase):
             if parts[-1] == '.publication-pending.json':
                 current[0] += timedelta(seconds=1)
             return result
-        with patch.object(self.data._SnapshotStore, 'write', write), patch.object(self.data, '_clock', side_effect=lambda supplied: original_clock(current[0] if supplied is None else supplied)):
+        with patch.object(SnapshotWriter, 'write', write), patch.object(self.data, '_clock', side_effect=lambda supplied: original_clock(current[0] if supplied is None else supplied)):
             with self.assertRaises(self.data.SecurityDataError):
                 self.data.publish_snapshot(self.database, 'osv:PyPI', archive([record('PUBLIC-2')]), acquisition={'last_verified_sync_utc': (NOW - timedelta(seconds=259200)).isoformat(), 'retrieval_kind': 'download'}, coverage=self.data.osv_coverage(self.payload, 'PyPI'))
         self.assertEqual(pointer.read_bytes(), before)
@@ -358,8 +359,8 @@ class SnapshotTests(unittest.TestCase):
         self.publish()
         pointer = self.database / 'PyPI/snapshot.json'
         before = pointer.read_bytes()
-        self.assertTrue(callable(getattr(self.data._SnapshotStore, 'lock_publication', None)), 'supported publishers need an owned nonblocking serialization lock')
-        with self.data._SnapshotStore(self.database) as owner:
+        self.assertTrue(callable(getattr(SnapshotWriter, 'lock_publication', None)), 'supported publishers need an owned nonblocking serialization lock')
+        with SnapshotWriter(self.database) as owner:
             owner.lock_publication()
             with self.assertRaises(self.data.SecurityDataError):
                 self.publish(archive([record('PUBLIC-CONTENDING')]))
@@ -368,13 +369,13 @@ class SnapshotTests(unittest.TestCase):
 
     def test_post_pointer_failure_is_durable_unknown(self):
         self.publish()
-        original = self.data._SnapshotStore.write
+        original = SnapshotWriter.write
 
         def uncertain(store, parts, payload):
             original(store, parts, payload)
             if parts[-1] == 'snapshot.json':
                 raise OSError(errno.EIO, 'public postcommit failure')
-        with patch.object(self.data._SnapshotStore, 'write', uncertain):
+        with patch.object(SnapshotWriter, 'write', uncertain):
             with self.assertRaisesRegex(self.data.SecurityDataError, 'commit_unknown'):
                 self.publish(archive([record('PUBLIC-2')]))
         with self.assertRaisesRegex(self.data.SecurityDataError, 'unknown|reconcil'):
@@ -384,7 +385,7 @@ class SnapshotTests(unittest.TestCase):
 
         class PublicExit(BaseException):
             pass
-        original = self.data._SnapshotStore.write
+        original = SnapshotWriter.write
         for index, kind in enumerate((KeyboardInterrupt, SystemExit, PublicExit)):
             database = self.parent / f'public-primary-{index}'
 
@@ -393,7 +394,7 @@ class SnapshotTests(unittest.TestCase):
                 if parts[-1] == 'snapshot.json':
                     raise kind()
             observed = None
-            with patch.object(self.data._SnapshotStore, 'write', interrupted):
+            with patch.object(SnapshotWriter, 'write', interrupted):
                 try:
                     self.publish(database=database)
                 except BaseException as error:
@@ -403,13 +404,13 @@ class SnapshotTests(unittest.TestCase):
                 self.data.read_snapshot(database, 'osv:PyPI', now=NOW)
 
     def test_compatibility_export_error_does_not_relabel_commit(self):
-        original = self.data._SnapshotStore.write
+        original = SnapshotWriter.write
 
         def refuse_export(store, parts, payload):
             if parts[-1] == 'all.zip':
                 raise OSError(errno.EIO, 'public export failure')
             return original(store, parts, payload)
-        with patch.object(self.data._SnapshotStore, 'write', refuse_export):
+        with patch.object(SnapshotWriter, 'write', refuse_export):
             proof = self.publish()
         self.assertEqual(proof['publication_outcome'], 'committed')
         self.assertIn('compatibility_export_warning', proof)

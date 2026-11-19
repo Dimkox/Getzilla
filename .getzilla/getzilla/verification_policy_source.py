@@ -49,7 +49,7 @@ def implementation_source_binding() -> dict:
                  'security_build_inputs.py', 'security_image_registry.py', 'security_image_backend.py',
                  'security_image_producer.py', 'security_image_authority.py', 'security_image_provision.py', 'security_image_job.py',
                  'security_acquisition.py', 'startup_cpu.py', '_cpu_capacity.py',
-                 'security_intelligence.py', 'security_data.py', 'security_data_windows.py', 'security_osv_snapshot.py',
+                 'security_intelligence.py', 'security_data.py', 'security_publication.py', 'security_data_windows.py', 'security_windows_publication.py', 'security_osv_snapshot.py',
                  'security_artifacts.py', 'security_license_acquisition.py', 'security_packagist.py',
                  'cost_guard.py',
                  'baseline.py', 'baseline_assets.py', 'toolchain.py', 'updater.py', 'release_transport.py',

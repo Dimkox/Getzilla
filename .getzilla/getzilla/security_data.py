@@ -591,27 +591,6 @@ class _SnapshotStore:
                 self.relative[prefix] = self._open_directory(self.relative[prefix[:-1]], prefix[-1], create=create, owned=True)
         return self.relative[parts]
 
-    def lock_publication(self) -> None:
-        """Serialize supported publishers without waiting on another writer."""
-        try:
-            import fcntl
-        except ImportError:
-            raise SecurityDataError('snapshot publication locking is unavailable') from None
-        parent = self.directory(())
-        name = '.publication.lock'
-        try:
-            descriptor = fsx.open_at(parent.descriptor, name,
-                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            os.close(descriptor)
-        file = self._pin_file(parent, name, MAX_MANIFEST_BYTES)
-        try:
-            fcntl.flock(file.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise SecurityDataError('snapshot publication is busy or locking is unavailable') from None
-        self.confirm()
 
     def expect_absent(self, parts: tuple[str, ...]) -> None:
         parent = self.directory(parts[:-1])
@@ -661,172 +640,29 @@ class _SnapshotStore:
         self.confirm()
         return b''.join(chunks)
 
-    def write(self, parts: tuple[str, ...], payload: bytes):
-        parent = self.directory(parts[:-1], create=True)
-        name, key = parts[-1], (parent.descriptor, parts[-1])
-        try:
-            previous = self._pin_file(parent, name, MAX_PAYLOAD_BYTES)
-        except FileNotFoundError:
-            previous = None
-        temporary = f'.{name}.{uuid.uuid4().hex}.partial'
-        descriptor = fsx.open_at(parent.descriptor, temporary,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
-        try:
-            self.confirm()
-            offset = 0
-            while offset < len(payload):
-                written = os.write(descriptor, memoryview(payload)[offset:offset + 1024 * 1024])
-                if written < 1:
-                    raise OSError('incomplete snapshot temporary write')
-                offset += written
-            os.fsync(descriptor)
-            before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_size != len(payload):
-                raise SecurityDataError('snapshot temporary is not the expected regular file')
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            digest, size = hashlib.sha256(), 0
-            while chunk := os.read(descriptor, min(1024 * 1024, len(payload) + 1 - size)):
-                self.read_bytes += len(chunk)
-                if self.read_bytes > MAX_STORE_READ_BYTES:
-                    raise SecurityDataError('snapshot aggregate read budget exceeded')
-                digest.update(chunk)
-                size += len(chunk)
-                if size > len(payload):
-                    break
-            named = fsx.lstat_at(parent.descriptor, temporary)
-            if (size != len(payload) or digest.digest() != hashlib.sha256(payload).digest()
-                    or _file_identity(os.fstat(descriptor)) != _file_identity(before)
-                    or _file_identity(named) != _file_identity(before)):
-                raise SecurityDataError('snapshot temporary changed before publication')
-            self.confirm()
-            if previous is None:
-                try:
-                    fsx.lstat_at(parent.descriptor, name)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise SecurityDataError('snapshot target appeared during publication')
-            if self.before_replace is not None:
-                self.before_replace()
-                self.confirm()
-            fsx.replace_at(parent.descriptor, temporary, parent.descriptor, name)
-            self.last_replaced = parts
-            temporary = None
-            if key in self.files:
-                os.close(self.files.pop(key).descriptor)
-            after = os.fstat(descriptor)
-            self.files[key] = _File(os.dup(descriptor), parent.descriptor, name, _file_identity(after))
-            self.confirm()
-            fsx.fsync_dir(parent.descriptor)
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    named = fsx.lstat_at(parent.descriptor, temporary)
-                    opened = os.fstat(descriptor)
-                    if stat.S_ISREG(named.st_mode) and (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino):
-                        fsx.unlink_at(parent.descriptor, temporary)
-            os.close(descriptor)
 
-    def remove_owned(self, parts: tuple[str, ...]) -> None:
-        """Remove only the exact held protocol file, never a replacement."""
-        parent = self.directory(parts[:-1])
-        self._pin_file(parent, parts[-1], MAX_MANIFEST_BYTES)
-        self.confirm()
-        fsx.unlink_at(parent.descriptor, parts[-1])
-        file = self.files.pop((parent.descriptor, parts[-1]))
-        os.close(file.descriptor)
+
+
+def _snapshot_reader(database: Path):
+    if os.name == 'nt':
+        from .security_data_windows import SnapshotReader
+        return SnapshotReader(database)
+    return _SnapshotStore(database)
 
 
 def _snapshot_store(database: Path, *, create: bool = False):
     if os.name == 'nt':
         from .security_data_windows import SnapshotStore
         return SnapshotStore(database, create=create)
-    return _SnapshotStore(database, create=create)
+    from .security_publication import SnapshotWriter
+    return SnapshotWriter(database, create=create)
 
 
 def publish_snapshot(database: Path, source_id: str, payload: bytes, *, acquisition: dict[str, Any],
                      coverage: dict[str, Any], now: datetime | None = None, before_commit=None) -> dict[str, Any]:
     """Commit the authoritative pointer after its object; pre-commit failures keep the old pointer."""
-    folder = _source_directory(database, source_id)
-    current = _clock(now)
-    if not isinstance(payload, bytes):
-        raise SecurityDataError('snapshot payload must be bytes')
-    document = {'schema_version': 1, 'source_id': source_id, 'source_url': SOURCE_URLS[source_id],
-                'content_sha256': hashlib.sha256(payload).hexdigest(), 'payload_size': len(payload),
-                'acquisition': _acquisition(acquisition), 'coverage': _coverage(coverage)}
-    evidence = _validate(document, payload, source_id, now=current, required_scope=None)
-    serialized = (json.dumps(document, sort_keys=True) + '\n').encode('utf-8')
-    if len(serialized) > MAX_MANIFEST_BYTES:
-        raise SecurityDataError('snapshot manifest is too large')
-    source_parts = folder.relative_to(Path(database)).parts
-    target = ('.snapshots', 'sha256', document['content_sha256'])
-    pointer = (*source_parts, 'snapshot.json')
-    pending = (*source_parts, '.publication-pending.json')
-    try:
-        with _snapshot_store(database, create=True) as store:
-            store.lock_publication()
-            # Bind both trees before creating an object or committing a pointer.
-            store.directory(source_parts, create=True)
-            store.directory(target[:-1], create=True)
-            try:
-                store.read(pending, MAX_MANIFEST_BYTES)
-            except FileNotFoundError:
-                pass
-            else:
-                raise SecurityDataError('snapshot commit_unknown; checked reconciliation is required')
-            try:
-                existing = store.read(target, len(payload))
-            except FileNotFoundError:
-                store.write(target, payload)
-            else:
-                if existing != payload:
-                    raise SecurityDataError('existing immutable snapshot object differs; repair the cache')
-            staged = json.dumps({'schema_version': 1, 'source_id': source_id,
-                                 'next_manifest_sha256': hashlib.sha256(serialized).hexdigest()}).encode('utf-8')
-            store.write(pending, staged)
-            try:
-                def final_inputs():
-                    _freshness(document['acquisition'], source_id, _clock(now))
-                    if before_commit is not None:
-                        before_commit()
-                    _freshness(document['acquisition'], source_id, _clock(now))
-                store.before_replace = final_inputs
-                store.write(pointer, serialized)
-            except BaseException as error:
-                if store.last_replaced == pointer:
-                    # The durable precommit marker keeps later consumers from
-                    # accepting an indeterminate pointer switch.
-                    if not isinstance(error, Exception):
-                        raise
-                    raise SecurityDataError('snapshot commit_unknown; checked reconciliation is required') from error
-                store.remove_owned(pending)
-                raise
-            finally:
-                store.before_replace = None
-            if source_id.startswith('osv:'):
-                # Non-authoritative compatibility export, after pointer commit.
-                # A safe I/O failure does not erase the committed snapshot.
-                try:
-                    store.write((*source_parts, 'all.zip'), payload)
-                except OSError as exc:
-                    store.confirm()
-                    evidence['compatibility_export_warning'] = type(exc).__name__
-            store.confirm()
-            store.remove_owned(pending)
-            # Pointer/object durability was already confirmed. If marker
-            # removal is not durable, it can only reappear and refuse a read.
-            try:
-                directory = store.directory(source_parts)
-                if hasattr(directory, 'descriptor'):
-                    fsx.fsync_dir(directory.descriptor)
-                else:
-                    store.native.flush(directory.handle)
-            except (OSError, SecurityDataError):
-                evidence['publication_cleanup_warning'] = 'pending-marker durability unavailable'
-            evidence['publication_outcome'] = 'committed'
-    except OSError as exc:
-        raise SecurityDataError('snapshot publication failed before a confirmed commit') from exc
-    return evidence
+    from .security_publication import publish_snapshot as implementation
+    return implementation(database, source_id, payload, acquisition=acquisition, coverage=coverage, now=now, before_commit=before_commit)
 
 
 def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None,
@@ -835,7 +671,7 @@ def read_snapshot(database: Path, source_id: str, *, now: datetime | None = None
     folder = _source_directory(database, source_id)
     source_parts = folder.relative_to(Path(database)).parts
     try:
-        with _snapshot_store(database) as store:
+        with _snapshot_reader(database) as store:
             pending = (*source_parts, '.publication-pending.json')
             try:
                 store.read(pending, MAX_MANIFEST_BYTES)
@@ -903,7 +739,7 @@ def confirm_snapshots(database: Path, evidence: list[dict[str, Any]], *, now: da
                 if source_id not in {OSV_QUERY_SOURCE, *(f'osv:{name}' for name in OSV_ECOSYSTEMS)} or source_id in seen:
                     raise SecurityDataError('final snapshot source is invalid or repeated')
                 seen.add(source_id)
-                store = stack.enter_context(_snapshot_store(database))
+                store = stack.enter_context(_snapshot_reader(database))
                 parts = _source_directory(database, source_id).relative_to(Path(database)).parts
                 try:
                     store.read((*parts, '.publication-pending.json'), MAX_MANIFEST_BYTES)
@@ -934,8 +770,5 @@ def confirm_snapshots(database: Path, evidence: list[dict[str, Any]], *, now: da
 def copy_snapshot(source_database: Path, destination_database: Path, source_id: str, *,
                   now: datetime | None = None, required_scope: set[str] | None = None) -> dict[str, Any]:
     """Copy a valid snapshot without refreshing its original acquisition time."""
-    payload, evidence = read_snapshot(source_database, source_id, now=now, required_scope=required_scope)
-    if source_id.startswith('osv:') or source_id == OSV_QUERY_SOURCE:
-        confirm_snapshots(source_database, [evidence], now=now)
-    return publish_snapshot(destination_database, source_id, payload, acquisition=evidence['acquisition'],
-                            coverage=evidence['coverage'], now=now)
+    from .security_publication import copy_snapshot as implementation
+    return implementation(source_database, destination_database, source_id, now=now, required_scope=required_scope)
