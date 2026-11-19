@@ -531,7 +531,7 @@ def observe_final_files(image, retain):
                         retained += count
                 changes[name] = row
             with verified(layer['digest']) as (stream, size):
-                image._budget.charge('compressed', size, phase='blob-compressed')
+                image._budget.charge('compressed', size, phase='component-read')
                 _parse_layer(stream, layer['mediaType'], diff, image._budget, visit=visit)
             removed_paths = {path for path, opaque in removals if not opaque}
             opaque_paths = {path for path, opaque in removals if opaque}
