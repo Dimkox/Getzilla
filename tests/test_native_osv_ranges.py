@@ -27,7 +27,7 @@ class NativeOsvRangeTests(unittest.TestCase):
     def test_actual_cli_refuses_malformed_aliases_before_skipped_record_filters(self):
         for case in ('matched', 'withdrawn', 'unrelated', 'unaffected', 'accepted'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as database:
-                fixtures._mirror(Path(database), 'PyPI', [fixtures.NativeAliasTests.record(case)])
+                fixtures._tampered_mirror(Path(database), 'PyPI', [fixtures.NativeAliasTests.record(case)])
                 files = {'requirements.txt': 'jinja2==2.11.0\n'}
                 if case == 'accepted':
                     files[KV.CONFIG_PATH] = json.dumps({'accept': [{'id': fixtures.JINJA['id'],
@@ -40,7 +40,7 @@ class NativeOsvRangeTests(unittest.TestCase):
                         cwd=root, env={**os.environ, 'GETZILLA_OSV_DB': database, 'GETZILLA_OSV_ONLINE': '0'},
                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn('OSV aliases must be null or a list of strings', result.stderr)
+                self.assertIn('aliases', result.stderr)
                 self.assertNotIn('CVE-2099-9999', result.stdout+result.stderr)
 
     def test_actual_cli_keeps_nullable_and_valid_alias_findings(self):

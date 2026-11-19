@@ -283,7 +283,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
 def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | None = None,
                     additional_reviewers: tuple[str, ...] = ()) -> dict:
     from .state import get_active_route, update_route, task_transition
-    from .package_status import synchronize_accounting
+    from .change import _sync_receipt_obligations
     from .verification import _git_range_selection
     route = get_active_route(root)
     if not route:
@@ -320,11 +320,17 @@ def reconcile_route(root: Path, *, selection: Any = None, fingerprint: str | Non
         package = get_active_change(root)
         if package and _route_document(root, root / package['path'] / 'state.json').get('status') == 'cancelled':
             raise ValueError('attached package is cancelled; use route --cancel, then --new-task to retry; cancellation is terminal')
-        synchronize_accounting(root, route, updates['required_evidence'])
+        check_package = _sync_receipt_obligations(root, route, updates['required_evidence'])
         if (tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
                 or git_head(root) != updates['risk_assessment']['head']):
             raise ValueError('source changed during accounting synchronization')
-        return update_route(root, expected_route=route, **updates)
+        check_package()
+        published = update_route(root, expected_route=route, **updates)
+        if (get_active_route(root) != published or tree_fingerprint(root) != updates['risk_assessment']['tree_fingerprint']
+                or git_head(root) != updates['risk_assessment']['head']):
+            raise ValueError('route or source changed during reconciliation publication')
+        check_package()
+        return published
 
 
 def validate_review_plan(root: Path, route: dict) -> list[str]:

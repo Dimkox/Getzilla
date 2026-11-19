@@ -50,6 +50,7 @@ class SourceCensusTests(unittest.TestCase):
             with self.subTest(change=change):
                 target = self.root / 'src/app.py'
                 target.write_text('print("public")\n')
+                target.chmod(0o644)
                 with self.scanner.SourceCut(self.root, 'native') as cut:
                     if change == 'add':
                         (self.root / 'src/new.py').write_text('print(1)\n')

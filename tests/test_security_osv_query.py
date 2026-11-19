@@ -119,7 +119,7 @@ class QueryTests(unittest.TestCase):
 
     def test_mismatched_detail_identity_or_modified_or_aliases_refuses(self):
         for changed in ({'id': 'PUBLIC-WRONG'}, {'modified': '2026-11-01T00:00:00.123456788Z'},
-                        {'aliases': ['PUBLIC-BAD,']}):
+                        {'aliases': [False]}):
             def transport(method, url, body, deadline, maximum):
                 answer = {'results': [{'vulns': [{'id': ID, 'modified': MODIFIED}]}, {}]} if method == 'POST' else {**detail(), **changed}
                 return self.query.QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
