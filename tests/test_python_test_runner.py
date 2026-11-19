@@ -834,12 +834,13 @@ class CoreWorkerAllocationTests(unittest.TestCase):
 
     def test_pr_and_release_default_uses_live_bounded_capacity(self):
         for mode in ('pr', 'release'):
-            for affinity, quota, capacity, expected in ((26, 26, 26, 6), (7, None, 7, 5), (26, 4, 4, 2),
-                                                        (3, None, 3, 1), (2, None, 2, 1), (26, 1, 1, 1)):
+            for affinity, quota, capacity, expected in ((26, 26, 26, 6), (7, None, 7, 6), (26, 4, 4, 4),
+                                                        (3, None, 3, 3), (2, None, 2, 2), (26, 1, 1, 1)):
                 with self.subTest(mode=mode, affinity=affinity, quota=quota), fixture() as root, \
                      patch.object(os, 'sched_getaffinity', return_value=set(range(affinity)), create=True), \
                      patch.object(sys, 'platform', 'linux'), \
-                     patch.object(python_test_runner, 'linux_quota_capacity', return_value=quota):
+                     patch.object(os, 'cpu_count', return_value=28), \
+                     patch('getzilla.cpu_budget.linux_quota_capacity', return_value=quota):
                     (root / python_test_runner.CONFIG).unlink()
                     checks, runner = self.core_checks(root, mode)
                     self.assertEqual(runner.call_args.args[2], expected)
@@ -853,7 +854,7 @@ class CoreWorkerAllocationTests(unittest.TestCase):
 
     def test_unconfigured_private_child_never_starts_a_pr_pool(self):
         with fixture() as root, patch.dict(os.environ, {'_GETZILLA_TEST_CHILD': '1'}), \
-             patch.object(python_test_runner, 'linux_quota_capacity', side_effect=AssertionError('capacity read')):
+             patch('getzilla.cpu_budget.linux_quota_capacity', side_effect=AssertionError('capacity read')):
             (root / python_test_runner.CONFIG).unlink()
             self.assertIsNone(selected_workers(root))
             checks, runner = self.core_checks(root)
@@ -863,11 +864,13 @@ class CoreWorkerAllocationTests(unittest.TestCase):
     def test_explicit_worker_selection_keeps_precedence_and_diagnostics(self):
         for configured, override, expected, source in (
             (4, None, 4, 'configuration'), (4, '3', 3, 'environment'),
-            (64, None, 64, 'configuration'), (4, '0', 0, 'environment'),
+            (64, None, 26, 'configuration'), (4, '0', 0, 'environment'),
         ):
             with self.subTest(configured=configured, override=override), fixture(workers=configured) as root, \
                  patch.dict(os.environ, {} if override is None else {'GETZILLA_TEST_WORKERS': override}), \
-                 patch.object(python_test_runner, 'linux_quota_capacity', side_effect=AssertionError('capacity read')):
+                 patch.object(os, 'cpu_count', return_value=28), \
+                 patch.object(os, 'sched_getaffinity', return_value=set(range(28)), create=True), \
+                 patch('getzilla.cpu_budget.linux_quota_capacity', return_value=None):
                 checks, runner = self.core_checks(root)
                 self.assertEqual(runner.call_args.args[2], expected)
                 self.assertEqual(checks[0].details[0].get('selection_source'), source)
@@ -881,7 +884,7 @@ class CoreWorkerAllocationTests(unittest.TestCase):
         with fixture(workers='auto') as root, \
              patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
              patch.object(sys, 'platform', 'linux'), \
-             patch.object(python_test_runner, 'linux_quota_capacity', return_value=4), \
+             patch('getzilla.cpu_budget.linux_quota_capacity', return_value=4), \
              patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
             checks, runner = self.core_checks(root)
             self.assertEqual(runner.call_args.args[2], 4)
@@ -1197,8 +1200,8 @@ class CoverageLayout(unittest.TestCase):
                 python_test_runner._pytest_command(4, 'worksteal')
 
     def test_windows_auto_counts_logical_cpus_without_cgroup_reads(self) -> None:
-        # Windows has no sched_getaffinity and no cgroups: auto is the bounded CPU count.
-        for cpus, expected in ((8, 8), (96, 28), (None, 1)):
+        # Missing affinity evidence keeps the canonical conservative one-worker bound.
+        for cpus, expected in ((8, 1), (96, 1), (None, 1)):
             with self.subTest(cpus=cpus), fixture(workers='auto') as root, \
                  capacity_files(root, {}) as reads, \
                  patch.object(sys, 'platform', 'win32'), \
@@ -1213,8 +1216,8 @@ class CoverageLayout(unittest.TestCase):
         self.assertTrue(fsx.process_jobs_supported())
         self.assertTrue(python_test_runner._parallel_process_cleanup_supported())
         with fixture(workers='auto') as root:
-            self.assertEqual(selected_workers(root), min(28, os.cpu_count() or 1))
-        expected = (4, 'pytest-xdist') if parallel_engine_ready(False) else (0, 'unittest-degraded')
+            self.assertEqual(selected_workers(root), python_test_runner.cpu_budget().effective)
+        expected = (python_test_runner.cpu_budget(4).effective, 'pytest-xdist') if parallel_engine_ready(False) else (0, 'unittest-degraded')
         self.assertEqual(python_test_runner.select_engine(4, False), expected)
         command = python_test_runner._pytest_command(4, 'worksteal')
         self.assertEqual(command[command.index('-n') + 1], '4')
@@ -1792,10 +1795,10 @@ class CoverageLayout(unittest.TestCase):
              patch('getzilla.verification._ruff', return_value=CheckResult('ruff', 'pass', 'fixture')), \
              patch('getzilla.verification._bandit', return_value=CheckResult('bandit', 'pass', 'fixture')), \
              patch('getzilla.verification._factory_unit', return_value=[]), \
-             patch('getzilla.verification.cpu_budget', return_value=type('Budget', (), {'effective': 26})()), \
+             patch('getzilla.python_test_runner.cpu_budget', return_value=type('Budget', (), {'effective': 26})()), \
              patch('getzilla.verification.run_core_tests', return_value=Core()) as runner, \
              patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
-             patch.object(python_test_runner, 'linux_quota_capacity', return_value=26), \
+             patch('getzilla.cpu_budget.linux_quota_capacity', return_value=26), \
              patch.dict(os.environ, {'GETZILLA_VERIFY_CAPABILITY': 'repository-sandbox'}):
             os.environ.pop('GETZILLA_TEST_WORKERS', None)
             os.environ.pop('_GETZILLA_TEST_CHILD', None)
