@@ -91,6 +91,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("__version__='1.2.3'\n")
         (package / "server.py").write_text("raise SystemExit(0)\n")
+        (self.repo / "LICENSE").write_bytes((RUNTIME.parents[1] / "LICENSE").read_bytes())
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.name", "test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True)
@@ -127,6 +128,59 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
             inventory=self.inventory, output=self.base / stem, product_version="1.2.3",
             enforce_host=False, target_environment=self.environment,
         )
+
+    def assert_no_release(self, stem):
+        for suffix in ('.zip', '.manifest.json', '.sha256'):
+            self.assertFalse(Path(str(self.base / stem) + suffix).exists())
+
+    def test_project_license_retained_in_archive_and_manifest(self):
+        expected = (self.repo / 'LICENSE').read_bytes()
+        self.assertIn(b'Copyright (c) 2026 Dimkox', expected)
+        result = self.build('project-license')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(archive.read('legal/project/LICENSE'), expected)
+        manifest = json.loads(Path(result['manifest']).read_bytes())
+        entry = next(item for item in manifest['files'] if item['path'] == 'legal/project/LICENSE')
+        self.assertEqual(entry, {'path': 'legal/project/LICENSE', 'size': len(expected),
+                                'sha256': hashlib.sha256(expected).hexdigest(), 'mode': 0o644})
+
+    def test_project_license_missing_refuses_without_output(self):
+        (self.repo / 'LICENSE').unlink()
+        self.commit_fixture('missing project license')
+        with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+            self.build('missing-license')
+        self.assert_no_release('missing-license')
+
+    def test_project_license_symlink_refuses_without_output(self):
+        license_path = self.repo / 'LICENSE'
+        external = self.base / 'external-license'
+        external.write_bytes(license_path.read_bytes())
+        license_path.unlink()
+        license_path.symlink_to(external)
+        self.commit_fixture('linked project license')
+        with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+            self.build('linked-license')
+        self.assert_no_release('linked-license')
+
+    def test_project_license_changed_after_clean_check_refuses_without_output(self):
+        original = self.builder._git
+        def git(repository, *arguments):
+            result = original(repository, *arguments)
+            if arguments == ('ls-tree', self.head, '--', 'LICENSE'):
+                (self.repo / 'LICENSE').write_bytes(b'replaced after clean source check\n')
+            return result
+        with patch.object(self.builder, '_git', side_effect=git):
+            with self.assertRaisesRegex(setup.InstallerError, 'PROJECT_LICENSE_MISMATCH'):
+                self.build('changed-license')
+        self.assert_no_release('changed-license')
+
+    def test_project_license_copies_changed_committed_terms_verbatim(self):
+        expected = b'Future source license fixture: retain actual bytes, including \xff.\n'
+        (self.repo / 'LICENSE').write_bytes(expected)
+        self.commit_fixture('different committed license')
+        result = self.build('future-license')
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(archive.read('legal/project/LICENSE'), expected)
 
     @contextmanager
     def selected_legal_fixture(self):
@@ -353,7 +407,7 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         names = {name for name, _, _ in verified.files}
         self.assertIn("app/getzilla_factory/server.py", names)
         self.assertIn("site-packages/demo/__init__.py", names)
-        self.assertFalse(any(name.startswith("legal/") for name in names))
+        self.assertEqual({"legal/project/LICENSE"}, {name for name in names if name.startswith("legal/")})
 
     def test_output_stem_with_dotted_version_is_preserved(self):
         result = self.build("factory-1.2.3")
