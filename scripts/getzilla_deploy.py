@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ['preflight']:
         return _preflight(argv[1:])
+    if argv[:1] == ['recovery']:
+        return _recovery(argv[1:])
     parser = argparse.ArgumentParser(description='Prepare human-owned publish commands. Never executes tag, push, or release.')
     parser.add_argument('--record', action='store_true', help='Write a deploy/prepared receipt. Requires production approval.')
     parser.add_argument('--json', action='store_true')
@@ -67,6 +69,27 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(report.get('error', 'deploy prepare failed'), file=sys.stderr)
     return 0 if report.get('ok') else 1
+
+
+def _recovery(argv: list[str]) -> int:
+    parser = _PreflightParser(prog='getzilla deploy recovery', allow_abbrev=False,
+                              description='Inspect recovery or run a fixed public fixture; never deploys to DEV.')
+    parser.add_argument('--root', required=True, type=Path,
+                        help='Explicit owned0700 public fixture root; init requires it to be empty.')
+    parser.add_argument('--action', choices=('inspect', 'init', 'apply', 'recover', 'rollback'), default='inspect')
+    parser.add_argument('--json', action='store_true')
+    try:
+        args = parser.parse_args(argv)
+    except _UsageError:
+        print('getzilla deploy recovery: invalid arguments', file=sys.stderr)
+        return 2
+    from getzilla.deploy_rehearsal import initialize_fixture, run_fixture
+    report = initialize_fixture(args.root) if args.action == 'init' else run_fixture(args.root, args.action)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=True, indent=2))
+    else:
+        print('Public fixture: ' + report['state'] + '; ' + ', '.join(report['diagnostics']))
+    return 0 if report['state'] in {'initialized', 'fixture_verified', 'fixture_rolled_back', 'review_only'} else 1
 
 
 if __name__ == '__main__':
