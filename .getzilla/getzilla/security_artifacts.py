@@ -874,6 +874,8 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
     SecurityDataError. Callers must map either exception to unavailable.
     """
     from . import security_license_contracts as _catalog_policy
+    from .security_data import MAX_AGE_SECONDS, SecurityDataError, _clock, _timestamp
+    from .security_deliveries import verify_deliveries
     try:
         digest = inventory.get('digest') if isinstance(inventory, dict) else None
         if not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
@@ -884,14 +886,14 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             _binding(target_binding)
             if target_binding['inventory_sha256'] != digest:
                 raise ArtifactError('artifact-inventory-binding', 'Python target belongs to another source inventory')
-        current = _catalog_policy._clock(now)
+        current = _clock(now)
         raw = read_file(artifacts, 'manifest.json', MAX_INDEX_BYTES)
         bundle = _json(raw)
         if type(bundle.get('schema_version')) is not int or bundle['schema_version'] != 1 or bundle.get('inventory_digest') != digest:
             raise ArtifactError('artifact-inventory-binding', 'catalog schema or source inventory binding differs')
         acquired = bundle.get('last_verified_sync_utc')
-        age = (current - _catalog_policy._timestamp(acquired)).total_seconds()
-        if age < 0 or age > _catalog_policy.MAX_AGE_SECONDS:
+        age = (current - _timestamp(acquired)).total_seconds()
+        if age < 0 or age > MAX_AGE_SECONDS:
             raise ArtifactError('artifact-stale', 'catalog acquisition is future-dated or older than 72 hours')
         records = bundle.get('records')
         if not isinstance(records, list) or not records or len(records) > 10000 or not all(isinstance(record, dict) for record in records):
@@ -942,7 +944,7 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             if total > 512 * 1024 * 1024:
                 raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
             bindings.append(bound)
-        deliveries = _catalog_policy.verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
         total += sum(delivery['output_bytes'] for delivery in deliveries.values())
         if total > 512 * 1024 * 1024:
             raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')
@@ -985,7 +987,7 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
                                 'producer': 'getzilla-artifact-catalog-v1'},
                 'coverage': {'schema': 'artifact-license-catalog-1', 'scopes': ['catalog'],
                              'record_count': len(bindings), 'complete': True}}
-    except (ArtifactError, _catalog_policy.SecurityDataError):
+    except (ArtifactError, SecurityDataError):
         raise
     except (ValueError, TypeError, KeyError) as exc:
         raise ArtifactError('artifact-catalog-unavailable', str(exc)) from exc
