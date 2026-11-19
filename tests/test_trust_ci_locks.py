@@ -7,6 +7,8 @@ import json
 import re
 import shutil
 import tempfile
+import sys
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +62,8 @@ class TrustCILockTests(unittest.TestCase):
     def _module(self):
         spec = importlib.util.spec_from_file_location("trust_lock_profiles", ROOT / "trust-ci/lock_profiles.py")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        with patch.object(sys, "path", [str(ROOT / "trust-ci"), *sys.path]):
+            spec.loader.exec_module(module)
         return module
 
     def test_corrupt_or_stale_profiles_fail_closed(self):
@@ -238,7 +241,8 @@ class TrustCILockTests(unittest.TestCase):
         self.assertTrue(path.is_file())
         spec = importlib.util.spec_from_file_location("trust_lock_profiles", path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        with patch.object(sys, "path", [str(ROOT / "trust-ci"), *sys.path]):
+            spec.loader.exec_module(module)
         self.assertEqual(module.check(ROOT / "trust-ci"), [])
 
 

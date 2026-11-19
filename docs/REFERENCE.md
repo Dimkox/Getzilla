@@ -24,6 +24,17 @@ Getzilla installs a local Grok/Codex-style agent workflow into another repositor
 
 External merge checks follow repository visibility: GitHub Actions for public repositories, paid Trust CI with its configured signed approvals and holdout checks for private repositories. Local exploration and installation planning do not grant merge authority.
 
+The historical issue170 publication has one narrow source-data catalogue entry:
+`engineering/benchmarks/issue170/upstream-source.tar.gz`. Admission requires original
+commit `b106b5cc5acc0dbbe4d3112446512a077cea546f` in the candidate ancestry, the unchanged
+complete publication tree, exact original blob/size/SHA-256 and checksum manifest, and
+bounded complete gzip/tar validation. The assessment retains every member path,
+size, mode and digest. It does not extract or execute archived source. This entry
+forces high risk, the full profile and code/security/data/release reviews. The four
+original binary artifacts retain their high-risk classifications. Other archives,
+renamed copies, substitutions and missing provenance remain incomplete; this is not
+a general binary exception or a current runtime/source execution permission.
+
 ## Working order
 
 Route the task automatically and explore on its own branch. Keep bounded low-risk exploration free of a change package or review wave until delivery needs them. Commit the candidate and reconcile the route with its exact diff before selecting reviews and final verification. The [delivery contract](../AGENTS.md#delivery-contract) defines light, full and release qualification; [QUICKSTART.md](../QUICKSTART.md) shows the commands. Nothing merges without the selected reviews, qualifying local evidence and required external exact-head checks.

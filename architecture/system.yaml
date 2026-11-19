@@ -4295,6 +4295,7 @@
         ".getzilla/optional-modules/design-reference/0.1.0/reference.py",
         ".getzilla/optional-modules/design-reference/0.2.0/reference.py",
         ".getzilla/optional-modules/reverse-engineering/0.1.0/elf.py",
+        ".getzilla/optional-modules/mcp-jira/0.1.0",
         ".getzilla/templates",
         ".grok",
         ".qwen",
@@ -5043,7 +5044,8 @@
         "trust-ci/public-checker-inputs",
         "trust-ci/Dockerfile.worker",
         ".github/workflows/getzilla-public-producer.yml",
-        "trust-ci/lock_profiles.py"
+        "trust-ci/lock_profiles.py",
+        "trust-ci/lock_profile_validation.py"
       ],
       "runtime": {
         "evidence": "source_described",

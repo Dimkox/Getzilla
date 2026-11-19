@@ -22,3 +22,11 @@ python trust-ci/lock_profiles.py --check
 The refresh command checks the manifest against the lock offline and exports with `--frozen`; it does not update the lock. Hash bindings detect changed inputs/markers. Graph validation detects missing transitive pins even if export hashes are rebound. All artifacts are SHA-256 bound to the lock. Unsupported platforms or Python versions without a locked binary wheel fail installation; no source build or fresh dependency resolution is allowed by the consumers.
 
 The vulnerability inventory derives the complete42-package third-party graph from `uv.lock`. Existing requirements parsing does not enumerate every hash-continuation line; profile validation is separate. No live installation, image build, deployment or paid advisory qualification is established by these source locks. Refresh through a reviewed PR. Keep the required parent reviews and final verification after the complete source repair set.
+
+Pure profile validation has one canonical owner: `lock_profile_validation.py`.
+`lock_profiles.py` keeps the CLI and pinned-uv refresh operation. Docker images
+copy the pure leaf beside that wrapper. Core imports its byte-identical generated
+mirror from `.getzilla/getzilla/lock_profile_validation.py`; source joins check
+both copies and the standalone wrapper before validating captured data. After a
+canonical edit, run `python3 scripts/getzilla_sync_lock_validation.py --write`,
+then `--check`. The check never regenerates or executes validator source bytes.

@@ -60,7 +60,8 @@ def scope(parent, index):
             or consumer["requirements"] not in installed
             or installed[consumer["requirements"]] != consumer["requirements_sha256"]
             or any(type(path) is not str or path not in {'trust-ci/requirements.txt',
-                'trust-ci/requirements-test.txt', 'trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt'}
+                'trust-ci/requirements-test.txt', 'trust-ci/requirements-runtime.txt',
+                'trust-ci/requirements-build.txt', 'trust-ci/requirements-runner.txt'}
                 or type(sha) is not str or not re.fullmatch('[a-f0-9]{64}', sha) for path, sha in installed.items())):
         _refuse()
     dependencies, pins = [], {}
