@@ -150,6 +150,7 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     reasons, policies, risks, audit_categories = [], [], [], set()
     floor_reviewers: list[str] = []
     engine_sources, engine_members, engine_comparisons = {}, {}, []
+    historical_sources, historical_comparisons = {}, []
     fingerprint = fingerprint or tree_fingerprint(root)
     tree = None
     try:
@@ -195,12 +196,32 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
                     engine_valid = True
                 except (ValueError, OSError, KeyError, TypeError):
                     gaps.extend(['BINARY_OR_UNKNOWN_INVENTORY', 'INVALID_MANAGED_ENGINE_SOURCE'])
+            # One closed historical source publication is data for inspection,
+            # never runtime code authority. Its full original tree and bounded
+            # member catalogue remain part of this exact-source assessment.
+            from .historical_data import SOURCE_PATH, issue170_source
+            historical_valid = False
+            if SOURCE_PATH in changed_paths:
+                try:
+                    for ref in (base, head):
+                        if ref not in historical_sources:
+                            historical_sources[ref] = issue170_source(root, ref)
+                    if historical_sources[head] is None:
+                        raise ValueError('HISTORICAL_SOURCE_MISSING')
+                    historical_comparisons.append({'base': base, 'head': head, 'path': SOURCE_PATH})
+                    reasons.append({'rule': 'HISTORICAL_SOURCE_DATA', 'path': SOURCE_PATH, 'risk': 'high'})
+                    audit_categories.update(DEFAULT_AUDITS)
+                    historical_valid = True
+                except (ValueError, OSError, KeyError, TypeError):
+                    gaps.extend(['BINARY_OR_UNKNOWN_INVENTORY', 'INVALID_HISTORICAL_SOURCE_DATA'])
             # A file Git itself calls binary (a PDF, an image) cannot be read line by line, so it takes
             # the full review profile; it no longer blocks delivery outright (#209). Any other
             # unreadable row, an executable or archive binary, or a binary that is not a regular
             # file stays an incomplete inventory.
             for name in binaries:
                 if name == '.getzilla/getzilla.zip' and engine_valid:
+                    continue
+                if name == SOURCE_PATH and historical_valid:
                     continue
                 # A binary with no extension is a program as often as not, whatever its mode (#215).
                 extensionless = '.' not in name.rsplit('/', 1)[-1].lstrip('.')
@@ -270,6 +291,10 @@ def assess(root: Path, route: dict | None, selection: Any, fingerprint: str | No
     if engine_comparisons:
         assessment['engine_sources'] = {'containers': [engine_sources[ref] for ref in sorted(engine_sources)],
                                         'comparisons': engine_comparisons}
+    if historical_comparisons:
+        assessment['historical_data'] = {'catalogue_version': 1,
+            'sources': [{'ref': ref, 'catalogue': historical_sources[ref]} for ref in sorted(historical_sources)],
+            'comparisons': historical_comparisons}
     plan = {'schema_version': 1, 'assessment_digest': _digest(assessment), 'review_agents': reviewers, 'required_evidence': evidence}
     plan['digest'] = _digest(plan)
     return {'risk': risk_level, 'risk_assessment': assessment, 'review_plan': plan, 'explicit_review_agents': explicit,
