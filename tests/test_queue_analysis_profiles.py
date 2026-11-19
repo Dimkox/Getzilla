@@ -200,7 +200,7 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             before = policy_binding(root)
-            for name in ('cpu_budget', 'architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
+            for name in ('queue_source_scan', 'cpu_budget', 'architecture_metadata', 'security_go_tool_producer', 'security_go_contracts', 'security_go_tool_inputs', 'security_license_texts', 'security_license_family_conditions',
                          'security_license_source_conditions', 'security_license_go_term_variants'):
                 with self.subTest(owner=name):
                     module = importlib.import_module('getzilla.' + name)
@@ -318,3 +318,25 @@ class QueueAnalysisProfileTests(unittest.TestCase):
         from getzilla import architecture_metadata as metadata
         for name in names:
             self.assertIs(getattr(fit, name), getattr(metadata, name))
+
+    def test_changed_source_scan_has_actual_owner_and_canonical_result_types(self):
+        tree = ast.parse((ROOT / '.getzilla/getzilla/architecture_fitness.py').read_bytes())
+        self.assertFalse(any(isinstance(node, ast.FunctionDef) and node.name == '_new_queue_sources'
+                             for node in tree.body))
+        from getzilla import queue_source_scan as scan
+        self.assertIs(fit._new_queue_sources, scan._new_queue_sources)
+        self.assertIs(fit._QueueProvenanceResult, scan._QueueProvenanceResult)
+
+    def test_extracted_owner_leaf_first_imports_preserve_fit_identity(self):
+        import subprocess
+        for first in ('architecture_metadata', 'queue_source_scan'):
+            code = ("import sys,importlib;sys.path.insert(0,sys.argv[1]);"
+                    "importlib.import_module('getzilla.'+sys.argv[2]);"
+                    "from getzilla import architecture_fitness as f,architecture_metadata as m,queue_source_scan as s;"
+                    "assert f._new_queue_sources is s._new_queue_sources;"
+                    "assert f._QueueProvenanceResult is s._QueueProvenanceResult;"
+                    "assert f._trust_ci_metadata_paths is m._trust_ci_metadata_paths")
+            with self.subTest(first=first):
+                result = subprocess.run([sys.executable, '-B', '-c', code, str(ROOT / '.getzilla'), first],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)

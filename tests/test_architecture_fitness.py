@@ -9719,7 +9719,7 @@ class QueueDiagnosticProvenanceTests(unittest.TestCase):
         python = SimpleNamespace(tree=tree or (lambda path: ast.parse('pass')))
         read = reader or (lambda root, diff, path, side: b'import celery\n')
         with patch.object(FIT, '_python_paths', return_value=paths), \
-                patch.object(FIT, '_queue_module_inventory', return_value=SimpleNamespace(paths=())), \
+                patch.object(FIT, '_queue_module_inventory', return_value=FIT._QueueResolutionCache((), (), {}, {})), \
                 patch.object(FIT, '_module_package', return_value=''), \
                 patch.object(FIT, 'read_diff_file', side_effect=read), \
                 patch.object(FIT, '_queue_signals', side_effect=signals), \
