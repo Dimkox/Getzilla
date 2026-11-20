@@ -100,6 +100,8 @@ def _https(url, *, headers, timeout, budget, network_selection):
     selected = validate_network_selection(network_selection, required={parsed.hostname})
     defaults = ssl.get_default_verify_paths()
     context = ssl.create_default_context(cafile=defaults.openssl_cafile, capath=defaults.openssl_capath)
+    if context.minimum_version < ssl.TLSVersion.TLSv1_2:
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
     budget.check()
     connection = http.client.HTTPSConnection(parsed.hostname, timeout=timeout, context=context)
     connection.auto_open = 0  # HTTPConnection must never perform its DNS-based connect.
