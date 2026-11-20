@@ -8,35 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 import importlib
-import importlib.machinery
-import importlib.util
-import zipimport
+import zipimport as zipimport
+from .closed_loader_source import module_source as _module_source
 
-
-def _module_source(module) -> bytes:
-    """Read corresponding engine source through its actual closed loader; never execute it."""
-    loader = getattr(module, '__loader__', None)
-    if type(loader) not in {importlib.machinery.SourceFileLoader,
-                            importlib.machinery.SourcelessFileLoader, zipimport.zipimporter}:
-        raise ValueError('verification policy source loader is unavailable')
-    try:
-        filename = loader.get_filename(module.__name__)
-        if filename != module.__file__:
-            raise ValueError('verification policy source identity differs')
-        source = filename
-        if source.endswith('.pyc'):
-            try:
-                source = importlib.util.source_from_cache(source)
-            except ValueError:
-                source = source[:-1]
-        if not source.endswith('.py'):
-            raise ValueError('verification policy has no corresponding Python source')
-        content = loader.get_data(source)
-        if not isinstance(content, bytes) or not 0 < len(content) <= 4 * 1024 * 1024:
-            raise ValueError('verification policy source is unavailable or excessive')
-        return content
-    except (AttributeError, ImportError, OSError, TypeError) as exc:
-        raise ValueError('verification policy source cannot be bound') from exc
 
 
 def implementation_source_binding() -> dict:
@@ -83,6 +57,7 @@ def implementation_source_binding() -> dict:
         'retrieval/study_metrics.py', 'retrieval/study_lexical.py', 'retrieval/study_worker_entry.py',
         'retrieval/study_native_entry.py', 'retrieval/study_worker_dispatch.py', 'retrieval/lines.py',
         'security_corresponding_source.py', 'security_source_delivery.py', 'security_deliveries.py',
+        'closed_loader_source.py',
     ):
         identity = name[:-3].replace('/', '.')
         module = importlib.import_module('.' + identity, __package__)

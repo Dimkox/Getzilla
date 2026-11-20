@@ -88,10 +88,10 @@ def _read(root, relative, *, deadline=None):
 def _trusted_adapter_bytes():
     # Actual loaded source, including the lean SDKzip representation. The reader
     # admits only fixed standard loaders and checks source identity/size.
-    from .verification_policy_source import _module_source
+    from .closed_loader_source import module_source
     if __name__ != 'getzilla.security_corresponding_source' or __name__ not in sys.modules:
         raise ValueError('trusted corresponding-source adapter identity unavailable')
-    return _module_source(sys.modules[__name__])
+    return module_source(sys.modules[__name__])
 
 
 TRUSTED_ADAPTER_SHA256 = _sha(_trusted_adapter_bytes())

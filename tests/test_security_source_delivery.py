@@ -462,6 +462,8 @@ assert 'getzilla.zip/getzilla/security_corresponding_source.py' in source.__file
 body=source._trusted_adapter_bytes()
 assert hashlib.sha256(body).hexdigest()==source.TRUSTED_ADAPTER_SHA256==sys.argv[2]
 assert source.classify(Path(sys.argv[1]),[])==[]
+assert 'getzilla.verification_policy_source' not in sys.modules
+assert 'getzilla.live_evidence' not in sys.modules
 assert 'getzilla.verification' not in sys.modules
 assert 'getzilla.security_inventory' not in sys.modules
 print(json.dumps({'sha256':source.TRUSTED_ADAPTER_SHA256,'loader':type(source.__loader__).__name__}))
@@ -475,7 +477,7 @@ print(json.dumps({'sha256':source.TRUSTED_ADAPTER_SHA256,'loader':type(source.__
                 body = (package / 'security_corresponding_source.py').read_bytes() + suffix
                 with zipfile.ZipFile(stack / 'getzilla.zip', 'w') as archive:
                     archive.writestr('getzilla/security_corresponding_source.py', body)
-                    archive.writestr('getzilla/verification_policy_source.py', (package / 'verification_policy_source.py').read_bytes())
+                    archive.writestr('getzilla/closed_loader_source.py', (package / 'closed_loader_source.py').read_bytes())
                 completed = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', script,
                                             str(stack), hashlib.sha256(body).hexdigest()],
                                            capture_output=True, text=True, timeout=15)
@@ -494,6 +496,23 @@ print(json.dumps({'sha256':source.TRUSTED_ADAPTER_SHA256,'loader':type(source.__
         with patch.object(source, '__file__', source.__file__ + '.different'):
             with self.assertRaises(ValueError):
                 source._trusted_adapter_bytes()
+
+    def test_source_policy_binds_closed_loader_helper_actual_body(self):
+        from unittest.mock import patch
+        from getzilla import verification_policy_source as policy
+        from getzilla import closed_loader_source as helper
+        self.assertIs(policy._module_source, helper.module_source)
+        self.assertIs(policy.zipimport, helper.zipimport)
+        before = policy.implementation_source_binding()
+        self.assertIn('closed_loader_source.py', before)
+        original = policy._module_source
+        def changed(module):
+            body = original(module)
+            return body + b'\n# owned helper mutation\n' if module.__name__ == 'getzilla.closed_loader_source' else body
+        with patch.object(policy, '_module_source', side_effect=changed):
+            after = policy.implementation_source_binding()
+        self.assertEqual(set(before), set(after))
+        self.assertEqual({name for name in before if before[name] != after[name]}, {'closed_loader_source.py'})
 
     def test_source_policy_binds_each_new_actual_authority_owner(self):
         from unittest.mock import patch
