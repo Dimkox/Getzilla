@@ -32,7 +32,7 @@ def _validate_inspection_manifest(document, binding, *, budget=None):
              and document['definition'] == 'issue162-offline-inspection-v1')
     _keys(binding, ('manifest_sha256', 'registration_sha256', 'dataset_sha256', 'phase_a_sha256',
         'artifact_manifest_sha256', 'resource_profile_sha256', 'model_files', 'model_revisions',
-        'runtime_registration', 'independent_reviews', 'author'))
+        'runtime_registration', 'independent_reviews', 'author', 'graph_observation_sha256'))
     for field, expected in (('registration_digest', 'registration_sha256'), ('dataset_digest', 'dataset_sha256'),
             ('phase_a_binding_digest', 'phase_a_sha256'), ('artifact_manifest_digest', 'artifact_manifest_sha256')):
         _require(hex_digest(binding[expected]) and document[field] == binding[expected])
@@ -72,6 +72,7 @@ def _codec(codec):
 def _models(models, binding, budget):
     _keys(models, ('minilm', 'bge_m3'))
     _keys(binding['model_revisions'], ('minilm', 'bge_m3'))
+    _keys(binding['graph_observation_sha256'], ('minilm', 'bge_m3'))
     pins = {}
     _require(type(binding['model_files']) is tuple and 1 <= len(binding['model_files']) <= 4000)
     for row in binding['model_files']:
@@ -92,6 +93,7 @@ def _models(models, binding, budget):
         expected_external = {} if name == 'minilm' else {'model.onnx_data': {
             'bytes': pins[name + '/onnx/model.onnx_data'][0], 'sha256': pins[name + '/onnx/model.onnx_data'][1]}}
         _require(model['external_files'] == expected_external)
+        _require(model['graph_inspection_digest'] == binding['graph_observation_sha256'][name])
         for key in ('graph_inspection_digest', 'tokenizer_inspection_digest', 'session_conformance_digest'):
             _require(hex_digest(model[key]))
         _require(type(model['batch']) is int and model['batch'] == 1

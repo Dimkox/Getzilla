@@ -44,7 +44,7 @@ class PublicReviewWitnessTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'binding mismatch'):
                 get_receipt(root, route['route_id'], kind)
 
-    def _owned_roundtrip(self, mutation):
+    def _owned_roundtrip(self, mutation, *, prepare=None, consume=None, after_route=None):
         if os.name != 'posix' or not hasattr(os, 'register_at_fork'):
             self.skipTest('POSIX native-root witness profile; unsupported platforms fail closed')
         from getzilla import state
@@ -56,10 +56,12 @@ class PublicReviewWitnessTests(unittest.TestCase):
         from unittest.mock import patch
         import json
         import hashlib
-        fixture = OptionalModuleTests()
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        root = fixture.root
+        import tempfile
+        temporary = tempfile.TemporaryDirectory(prefix='public-review-owned-', dir=ROOT / '.getzilla/runtime')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        root.chmod(0o700)
+        OptionalModuleTests().install_core(root)
         with chdir(root), patch.dict('os.environ', {'GETZILLA_SESSION_ID': 'owner'}):
             self.addCleanup(state.bind_session, None)
             (root / '.getzilla/runtime').mkdir(mode=0o700, exist_ok=True)
@@ -121,6 +123,7 @@ class PublicReviewWitnessTests(unittest.TestCase):
             path = save(prefix + '/registration.json', registration)['path']
             tiny = witness._Composition('test-only-public-source/v1', PROFILE, tuple(catalogs),
                                         config['sha256'], tuple(old_hashes[name] for name in NAMES))
+            auxiliary = None if prepare is None else prepare(root, save)
             # A real committed application source is required, separate from Gitless corpus bytes.
             import subprocess
             (root / '.gitignore').write_text('.getzilla/runtime/\n')
@@ -129,6 +132,8 @@ class PublicReviewWitnessTests(unittest.TestCase):
                              'commit', '-qm', 'owned fixture source']):
                 subprocess.run(command, cwd=root, check=True, capture_output=True)
             owned_route(root)
+            if after_route is not None:
+                after_route(root)
             with self.assertRaises(TypeError):
                 witness.OperatorWitnessedPublicReviewedInputs()
             reference = witness._witness(root, path, tiny)
@@ -151,6 +156,8 @@ class PublicReviewWitnessTests(unittest.TestCase):
             from dataclasses import replace
             with self.assertRaisesRegex(ValueError, 'public_witness_unavailable'):
                 witness._witness(root, path, replace(tiny, profile=witness._PRODUCTION.profile))
+            if consume is not None:
+                consume(root, reference, tiny, save, auxiliary)
             if mutation == 'assurance':
                 registration['groups'][0]['delivery_assurance'] = 'authenticated-native-bridge'
                 wrong = save(prefix + '/wrong-assurance.json', registration)['path']
@@ -214,6 +221,68 @@ class PublicReviewWitnessTests(unittest.TestCase):
 
     def test_conflicting_registration_cannot_overwrite_owned_witness(self):
         self._owned_roundtrip('conflict')
+
+    def test_fresh_owner_witness_after_normal_ack_does_not_revive_old_ref(self):
+        from getzilla import state
+        from getzilla.change import start_change
+        from getzilla.spec import load_spec, dump_canonical_spec
+        from getzilla.continuity import ack_scope, submit, scope_gaps
+        from getzilla.retrieval import public_review_witness as witness
+        from tests.test_task_continuity import ContinuityTests
+        import shutil
+        package_path = None
+        def private_package():
+            for item in package_path.rglob("*"):
+                item.chmod(0o700 if item.is_dir() else 0o600)
+            package_path.chmod(0o700)
+            package_path.parent.chmod(0o700)
+        def typed(root):
+            nonlocal package_path
+            (root / 'tests').mkdir(exist_ok=True)
+            shutil.copyfile(__file__, root / 'tests/test_public_review_witness.py')
+            shutil.copytree(ROOT / '.getzilla/templates/change', root / '.getzilla/templates/change')
+            shutil.copytree(ROOT / 'schemas', root / 'schemas')
+            start_change(root)
+            package_path = root / state.get_active_change(root)['path']
+            spec = load_spec(package_path / 'change-spec.yaml')
+            spec['objective'].update(success_metric='Current source/data controls', target='Retain all exact public review facts')
+            spec['acceptance_criteria'] = [{'id': 'AC-001', 'statement': state.require_route_owner(root)['task'],
+                'evidence': [{'test': 'tests/test_public_review_witness.py'}]}]
+            spec['forbidden_outcomes'] = [{'id': 'FORBID-001', 'statement': 'No stale source or native authority.',
+                'evidence': [{'test': 'tests/test_public_review_witness.py'}]}]
+            spec['approvals']['required_scopes'] = ['scope_and_design_approval']
+            (package_path / 'change-spec.yaml').write_text(dump_canonical_spec(spec))
+            (package_path / 'requirements.md').write_text(state.require_route_owner(root)['task'] + '\n')
+            ack_scope(root, ContinuityTests().ack_request(root))
+            private_package()
+            self.assertFalse(scope_gaps(root))
+        def refresh(root, old, composition, save, unused):
+            message = 'Retain the current public review observations after the README punctuation amendment.'
+            amended = submit(root, message, 'owner')
+            pending = [row['id'] for row in amended['context']['pending']]
+            path = '.getzilla/runtime/public-witness-fixture/registration.json'
+            with self.assertRaises(ValueError):
+                witness._consume(old, composition)
+            with self.assertRaisesRegex(ValueError, 'public_witness_scope_unacknowledged'):
+                witness._witness(root, path, composition)
+            spec = load_spec(package_path / 'change-spec.yaml')
+            spec['acceptance_criteria'].append({'id': 'AC-002', 'statement': message,
+                'evidence': [{'test': 'tests/test_public_review_witness.py'}]})
+            (package_path / 'change-spec.yaml').write_text(dump_canonical_spec(spec))
+            with (package_path / 'requirements.md').open('a') as stream:
+                stream.write(message + '\n')
+            request = ContinuityTests().ack_request(root, pending)
+            request['items'].update({identifier: ['AC-002'] for identifier in pending})
+            ack_scope(root, request)
+            private_package()
+            self.assertFalse(scope_gaps(root))
+            current = witness._witness(root, path, composition)
+            self.assertNotEqual(current._receipt_digest, old._receipt_digest)
+            self.assertEqual(witness._consume(current, composition)['facts']['cells'], 40)
+            self.assertEqual(witness._witness(root, path, composition)._receipt_digest, current._receipt_digest)
+            with self.assertRaises(ValueError):
+                witness._consume(old, composition)
+        self._owned_roundtrip('refresh', after_route=typed, consume=refresh)
 
     def test_observation_notes_cannot_claim_authenticated_native_delivery(self):
         self._owned_roundtrip('assurance')

@@ -59,7 +59,8 @@ RECEIPT_KINDS = frozenset(
     }
 )
 # Factual publications share storage but can never satisfy required merge evidence.
-PUBLIC_REVIEW_OBSERVATION_KINDS = frozenset({'retrieval-public-witness-a', 'retrieval-public-witness-b', 'retrieval-public-producer-reference'})
+PUBLIC_REVIEW_OBSERVATION_KINDS = frozenset({'retrieval-public-witness-a', 'retrieval-public-witness-b', 'retrieval-public-producer-reference',
+    'retrieval-public-inspect-operation', 'retrieval-public-rank-operation', 'retrieval-public-inspection-outcome'})
 MAX_RECEIPT_BYTES = 262_144
 MAX_VERIFICATION_REPORT_BYTES = 8_388_608
 VERIFICATION_REPORT_CONTRACT = 'adaptive-grok.verification-report/v1'
