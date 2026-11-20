@@ -1,4 +1,5 @@
 """Inert local transport fixtures; not native/model qualification."""
+import secrets
 import unittest
 from unittest.mock import patch
 from getzilla_factory.qwen_native_handoff import QwenNativeHandoff, NativeHandoffError, prepare_local_request
@@ -181,7 +182,7 @@ class InertSocketTests(CanonicalClaimTests):
         runtime.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=runtime) as tmp:
             path=Path(tmp)/'handoff.sock'
-            token='inert-token-'+'x'*32
+            token = secrets.token_hex(24)
             self.sink._send=QwenNativeHandoff._send.__get__(self.sink)
             def receiver():
                 try:

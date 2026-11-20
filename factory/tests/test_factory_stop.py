@@ -4,6 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+import secrets
 import subprocess
 from pathlib import Path
 import tempfile
@@ -115,7 +116,8 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
             reset_fixture_tables(cursor)
             cursor.execute('TRUNCATE factory.kill_switch_heads')
             cursor.execute('INSERT INTO factory.metric_counters(singleton) VALUES (true)')
-        login, password = 'stop_bound_fixture', 'synthetic-fixture-only'
+        login = 'stop_bound_fixture'
+        password = secrets.token_hex(24)
         provision_runtime_login(self.url, login, password)
         def remove_login():
             with psycopg.connect(self.url) as connection:

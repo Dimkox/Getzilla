@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import os
+import secrets
 import time
 import unittest
 from unittest.mock import patch
@@ -119,7 +120,8 @@ class FactoryStopMigrationTests(unittest.TestCase):
         from getzilla_factory.service import AuthorizationError, FactoryService
         from getzilla_factory.store import PostgresFactoryStore, StoreError
         self.upgrade()
-        login, password = 'stop_fixture_runtime', 'synthetic-disposable-fixture-only'
+        login = 'stop_fixture_runtime'
+        password = secrets.token_hex(24)
         provision_runtime_login(DATABASE_URL, login, password)
         def remove_fixture_login():
             with self.psycopg.connect(DATABASE_URL) as connection:
