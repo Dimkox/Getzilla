@@ -46,7 +46,8 @@ class BoundaryTests(unittest.TestCase):
             (lambda s: s.update(convergence='block'), 'requirements-conflict'),
         ]:
             with self.subTest(reason=reason):
-                self.state = snapshot(); mutate(self.state)
+                self.state = snapshot()
+                mutate(self.state)
                 with self.assertRaisesRegex(WorkflowRejected, reason):
                     self.boundary.ready(None)
 
@@ -57,7 +58,8 @@ class BoundaryTests(unittest.TestCase):
                                      ('graph_digest', 'f' * 64, 'stale-candidate'),
                                      ('permission', 'deny', 'permission')]:
             with self.subTest(field=field):
-                old = self.state[field]; self.state[field] = value
+                old = self.state[field]
+                self.state[field] = value
                 with self.assertRaisesRegex(WorkflowRejected, reason):
                     self.boundary.validate(None, candidate, 'worker', 'factory-a')
                 self.state[field] = old
@@ -82,7 +84,6 @@ class NativeBoundaryTests(unittest.TestCase):
     def setUp(self):
         import json
         import tempfile
-        from pathlib import Path
         from unittest.mock import patch
         from datetime import datetime, timezone
         from getzilla import workflow_artifacts as artifacts
@@ -112,9 +113,11 @@ class NativeBoundaryTests(unittest.TestCase):
         self.graph = artifacts.compile_task_graph(self.root, 'change', bundle, self.route)
         artifacts.workflow_paths(self.root, 'change')['graph'].write_bytes(artifacts.canonical_json(self.graph))
         self.head_patch = patch('getzilla.util.git_head', return_value='3' * 40)
-        self.head_patch.start(); self.addCleanup(self.head_patch.stop)
+        self.head_patch.start()
+        self.addCleanup(self.head_patch.stop)
         self.session_patch = patch('getzilla.state.current_session', return_value=None)
-        self.session_patch.start(); self.addCleanup(self.session_patch.stop)
+        self.session_patch.start()
+        self.addCleanup(self.session_patch.stop)
         native = artifacts._load_native_spec(self.root, 'change')
         self.rows = []
         for i, node in enumerate(sorted(self.graph['tasks'], key=lambda node: node['key']), 1):

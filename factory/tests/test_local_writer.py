@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from getzilla_factory.execution_contracts import TaskPacketV1
-from test_execution_contracts import valid_packet
+from factory.tests.test_execution_contracts import valid_packet
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'local writer currently supports Linux')

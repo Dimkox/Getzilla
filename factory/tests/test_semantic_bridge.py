@@ -170,6 +170,8 @@ class SemanticBridgeTests(unittest.TestCase):
             "landing-backend-capability.v3.schema.json",
             "landing-attempt-status.v1.schema.json",
             "landing-failover-config.v1.schema.json",
+            "landing-failover-config.v2.schema.json",
+            "shared-landing-control-request.v1.schema.json",
             "landing-failover-result.v1.schema.json",
             "m7-autonomy-bridge.v1.schema.json",
             "m7-predecessor-bridges.v1.schema.json",
@@ -210,6 +212,8 @@ class SemanticBridgeTests(unittest.TestCase):
             "landing-backend-capability.v3.schema.json": 3,
             "landing-attempt-status.v1.schema.json": 1,
             "landing-failover-config.v1.schema.json": 1,
+            "landing-failover-config.v2.schema.json": 2,
+            "shared-landing-control-request.v1.schema.json": 1,
             "landing-failover-result.v1.schema.json": 1,
         }
         for name, version in versions.items():

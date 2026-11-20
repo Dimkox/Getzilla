@@ -3,7 +3,6 @@ from dataclasses import replace
 from datetime import timedelta
 import sqlite3
 import unittest
-from unittest.mock import patch
 
 from factory.tests import test_landing_sqlite_store as sqlite_tests
 source = sqlite_tests.source
@@ -82,7 +81,9 @@ class SharedDispatchTests(unittest.TestCase):
 class SharedControlBoundaryTests(unittest.TestCase):
     """Real current-access policy; source/Factory execution qualifies in PG case."""
     def setUp(self):
-        import base64,copy,json,tempfile
+        import base64
+        import json
+        import tempfile
         from datetime import datetime,timezone,timedelta
         from pathlib import Path
         from fastapi.testclient import TestClient
@@ -104,7 +105,8 @@ class SharedControlBoundaryTests(unittest.TestCase):
         temporary=tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(temporary.cleanup)
         root=Path(temporary.name)
-        control=root/'control';control.mkdir()
+        control=root/'control'
+        control.mkdir()
         self.now=datetime.now(timezone.utc)
         self.store=SQLiteLandingJobStore(root/'authority',repository_root=control,clock=lambda:self.now)
         self.addCleanup(self.store.close)
@@ -122,7 +124,8 @@ class SharedControlBoundaryTests(unittest.TestCase):
         payload['sources']=[dict(payload['sources'][0],repository_id=TARGET_REPOSITORY_ID)]
         payload['destinations']=[]
         path.write_text(json.dumps(payload))
-        self.auth=Authenticator(AccessAuthority.load(path));self.access=payload
+        self.auth=Authenticator(AccessAuthority.load(path))
+        self.access=payload
         self.admin=self.auth.access_session('Bearer synthetic-owned-credential-operator','factory:access-admin')
         profile=HttpLandingProfile.for_provider('qwen-intl',available=True)
         account=PaidAccountV1('user-a','account','tenant-a','scheduler','policy-v1',self.now.timestamp()-1,self.now.timestamp()+300,10**8,2,1,2)
@@ -157,7 +160,8 @@ class SharedControlBoundaryTests(unittest.TestCase):
     def test_same_uid_unauthorized_actor_and_revoked_source_are_denied(self):
         other={**self.headers,'Authorization':'Bearer synthetic-owned-credential-user-b'}
         self.assertEqual(403,self.client.post(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=other,json=self.document).status_code)
-        self.access['revision']=2;self.access['groups'][0]['members']=[]
+        self.access['revision']=2
+        self.access['groups'][0]['members']=[]
         self.auth.access_authority.update(self.admin,1,self.access)
         self.assertEqual(403,self.client.post(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers,json=self.document).status_code)
         self.assert_empty()
@@ -192,8 +196,10 @@ class SharedControlBoundaryTests(unittest.TestCase):
         self.service._provider._source_preflight=lambda:None
         from pathlib import Path
         replacement=Path(self.access['actors'][0]['token_file']).with_name('rotated-access-token')
-        replacement.write_text('new-synthetic-current-access-token');replacement.chmod(0o600)
-        self.access['revision']=2;self.access['actors'][0]['credential_generation']=2
+        replacement.write_text('new-synthetic-current-access-token')
+        replacement.chmod(0o600)
+        self.access['revision']=2
+        self.access['actors'][0]['credential_generation']=2
         self.access['actors'][0]['token_file']=str(replacement)
         self.auth.access_authority.update(self.admin,1,self.access)
         self.assertEqual(401,self.client.post(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers,json=self.document).status_code)
@@ -216,13 +222,16 @@ class SharedControlBoundaryTests(unittest.TestCase):
 
 class SharedOwnerCrashTests(unittest.TestCase):
     def test_killed_owner_at_every_durable_cut_never_reissues_child(self):
-        import subprocess,sys,tempfile
+        import subprocess
+        import sys
+        import tempfile
         from pathlib import Path
         from factory.tests.test_paid_admission import SCRATCH
         from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
         for cut in ('before_accept','after_accept','after_reserve','after_dispatch'):
             with self.subTest(cut=cut),tempfile.TemporaryDirectory(dir=SCRATCH) as temporary:
-                root=Path(temporary);(root/'control').mkdir()
+                root=Path(temporary)
+                (root/'control').mkdir()
                 completed=subprocess.run([sys.executable,'-m','factory.tests.shared_store_crash_fixture',str(root),cut],capture_output=True,text=True,timeout=10)
                 self.assertEqual(-9,completed.returncode,completed.stderr)
                 store=SQLiteLandingJobStore(root/'authority',repository_root=root/'control')
@@ -256,7 +265,8 @@ class SharedCredentialPinTests(unittest.TestCase):
 
 class SharedUnknownTransportTests(unittest.TestCase):
     def test_lost_before_accept_is_unknown_get_only_and_never_falls_back(self):
-        import subprocess,tempfile
+        import subprocess
+        import tempfile
         from pathlib import Path
         from factory.tests.test_landing_failover import configuration
         from factory.tests.test_landing_failover_transport import unix_responder,json_reply
@@ -266,11 +276,14 @@ class SharedUnknownTransportTests(unittest.TestCase):
         from getzilla_factory.landing_failover_journal import CallerJournal
         from getzilla_factory.landing_http import HttpLandingProfile
         common=Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],text=True).strip()).resolve()
-        runtime=common.parent/'.getzilla/runtime/tests';runtime.mkdir(mode=0o700,parents=True,exist_ok=True)
+        runtime=common.parent/'.getzilla/runtime/tests'
+        runtime.mkdir(mode=0o700,parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='ua-',dir=runtime) as temporary:
             document=configuration(Path(temporary),count=2)
             document.update(schema_version=2,shared_task_id='finite-task')
-            token=Path(document['backends'][0]['token_file']);token.write_text('t'*32);token.chmod(0o600)
+            token=Path(document['backends'][0]['token_file'])
+            token.write_text('t'*32)
+            token.chmod(0o600)
             document['backends'][1]['token_file']=str(token)
             config=FailoverConfig.from_dict(document)
             def respond(handler,method,target,headers):
@@ -301,7 +314,8 @@ class SharedReviewedRegressionTests(unittest.TestCase):
     def test_observe_refuses_reconfigured_actual_paid_task_and_source(self):
         from getzilla_factory.paid_admission import PaidTaskV1,PaidAccountV1,PaidPriceV1,PaidExecutionAdmission
         from getzilla_factory.landing_contracts import strict_json_object,LandingInputV1
-        key=next(iter(self.control.tasks));installed=self.control.tasks[key]
+        key=next(iter(self.control.tasks))
+        installed=self.control.tasks[key]
         bound=SharedControlBindingV1('user-a','account','paid-child','logical','a'*64,0,
             self.document['profile_digest'],installed.credential_digest,self.expected.exact_base_sha,self.expected.exact_base_tree)
         self.store.create_or_replay(LandingJobRecord(self.expected,'accepted',None,None),command_key=self.expected.job_id,request_digest=self.expected.input_digest,control_binding=bound)
@@ -314,7 +328,9 @@ class SharedReviewedRegressionTests(unittest.TestCase):
         new_admission=PaidExecutionAdmission(self.store,'account','replacement-paid','loader','c'*64)
         self.control.tasks[key]=replace(installed,admission=new_admission)
         self.assertEqual(403,self.client.get(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers).status_code)
-        facts=self.expected.to_dict();facts.pop('input_digest');facts['job_id']='different-preapproved-child'
+        facts=self.expected.to_dict()
+        facts.pop('input_digest')
+        facts['job_id']='different-preapproved-child'
         self.control.tasks[key]=replace(installed,expected_source=LandingInputV1.from_facts(facts))
         self.assertEqual(403,self.client.get(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers).status_code)
 
@@ -332,7 +348,8 @@ class SharedClockReviewedRegressionTests(unittest.TestCase):
         reservation=self.admission.reserve('qwen','qwen-plus','paid-inference','d'*64,50,20)
         with self.assertRaisesRegex(Exception,'paid_expired'):
             self.admission.dispatch(reservation,'a'*64,'d'*64,'qwen','qwen-plus')
-        path=self.store.database_path;self.store.close()
+        path=self.store.database_path
+        self.store.close()
         self.store=SQLiteLandingJobStore(path.parent,repository_root=__import__('pathlib').Path(self.tmp.name)/'repo',clock=lambda:initial)
         self.admission=PaidExecutionAdmission(self.store,'account','task','consumer-key','c'*64)
         with self.assertRaisesRegex(Exception,'clock_rollback'):
@@ -343,7 +360,8 @@ class SharedClockReviewedRegressionTests(unittest.TestCase):
         record=LandingJobRecord(item,'accepted',None,None)
         binding=SharedControlBindingV1(item.tenant_id,'account','task','logical','a'*64,0,'b'*64,'e'*64,item.exact_base_sha,item.exact_base_tree)
         self.store.create_or_replay(record,command_key=item.job_id,request_digest=item.input_digest,control_binding=binding)
-        initial=self.now;self.now+=timedelta(seconds=10)
+        initial=self.now
+        self.now+=timedelta(seconds=10)
         with self.assertRaisesRegex(Exception,'idempotency_conflict'):
             self.store.create_or_replay(record,command_key=item.job_id,request_digest=item.input_digest,control_binding=replace(binding,account_id='different'))
         self.now=initial

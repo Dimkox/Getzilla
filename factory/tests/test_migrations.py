@@ -136,7 +136,11 @@ class MigrationTests(unittest.TestCase):
         cursor.fetchone.return_value = (None, None)
         connection = MagicMock()
         connection.cursor.return_value.__enter__.return_value = cursor
-        with patch("psycopg.connect") as connect:
+        # This inventory control uses a fake connection, not a live identity
+        # preflight. Real empty-cluster tests retain their original binding.
+        with patch("psycopg.connect") as connect, patch.dict(
+            "os.environ", {"FACTORY_TEST_POSTGRES_JOURNAL": ""}
+        ):
             connect.return_value.__enter__.return_value = connection
             Fixture.setUpClass()
         inserted = [call.args[1][0] for call in cursor.execute.call_args_list
