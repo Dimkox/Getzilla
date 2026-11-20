@@ -145,7 +145,7 @@ class FixtureResetPostgresTests(unittest.TestCase):
         migrator = PostgresMigrator(url)
         migrator.apply()
         before = migrator.status()
-        self.assertEqual([row.version for row in before], list(range(1, 29)))
+        self.assertEqual([row.version for row in before], list(range(1, 31)))
         login = "factory_reset_runtime_" + str(os.getpid())
         password = f"local-{uuid.uuid4().hex}"
         provision_runtime_login(url, login, password)

@@ -38,6 +38,18 @@ class FactoryStopEntryTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             FactoryStopCapability(repository_id='claimed', actor_id='claimed', task_id='claimed')
 
+    def test_async_boundary_refuses_claimed_capability_before_observation(self):
+        from unittest.mock import AsyncMock, Mock
+        from getzilla_factory.factory_stop import FactoryStopError, require_stop_capability_async
+        claimed = Mock(check_async=AsyncMock())
+        async def exercise():
+            for value in (None, {'repository_id': 'claimed'}, claimed):
+                with self.assertRaises(FactoryStopError) as error:
+                    await require_stop_capability_async(value, input_digest='1' * 64)
+                self.assertEqual(error.exception.code, 'factory_stop_binding_required')
+        asyncio.run(exercise())
+        claimed.check_async.assert_not_awaited()
+
     def test_unbound_executor_refuses_before_lazy_credential_and_transport(self):
         import httpx
         from unittest.mock import Mock
@@ -201,6 +213,14 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
         task = self.intake()
         capability = self.service.landing_stop_capability(self.source, actor=self.actor, landing_store=self.landing_store)
         capability.check(input_digest=self.source.input_digest)
+        from getzilla_factory.factory_stop import FactoryStopError, require_stop_capability_async
+        async def exercise():
+            self.assertIs(await require_stop_capability_async(
+                capability, input_digest=self.source.input_digest), capability)
+            with self.assertRaises(FactoryStopError) as error:
+                await require_stop_capability_async(capability, input_digest='0' * 64)
+            self.assertEqual(error.exception.code, 'factory_stop_binding_required')
+        asyncio.run(exercise())
         self.assertEqual(capability._initial.task_id, task.task_id)
         self.assertEqual(capability._initial.actor_id, self.source.tenant_id)
         self.assertEqual(capability._initial.job_id, self.source.job_id)
@@ -273,11 +293,13 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
                         'role': 'assistant', 'content': draft().decode()}}],
                     'usage': {'prompt_tokens': 12, 'completion_tokens': 34, 'total_tokens': 46}}
         from getzilla_factory.landing_http import HttpLandingProfile
-        document['model'] = HttpLandingProfile.for_provider('qwen-intl', available=True).model_id
+        profile = HttpLandingProfile.for_provider('qwen-intl', available=True)
+        document['model'] = profile.model_id
         posts = Mock(side_effect=lambda request: httpx.Response(200, headers={'Content-Type': 'application/json'},
                                                                stream=httpx.ByteStream(canonical_json(document))))
         with patch.object(live, 'qwen_api_key', return_value='synthetic-key') as key:
-            result = live.probe_qwen(stop_capability=capability, transport=httpx.MockTransport(posts))
+            result = live.probe_qwen(stop_capability=capability, transport=httpx.MockTransport(posts),
+                admission=self.admission(profile.provider_id, profile.model_id, self.source.input_digest))
         self.assertEqual(result['state'], 'normalized')
         self.assertEqual(result['input_digest'], self.source.input_digest)
         self.assertEqual(key.call_count, 1)
@@ -410,6 +432,7 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
                                                          landing_store=self.landing_store)
         profile = HttpLandingProfile.for_provider('qwen-intl', available=True)
         entered, paused, closed = threading.Event(), threading.Event(), threading.Event()
+        pause_requested = threading.Event()
         container = os.environ['FACTORY_TEST_POSTGRES_CONTAINER_ID']
         def docker_state(action):
             self.assertTrue(_binding_matches(container, os.environ['FACTORY_TEST_POSTGRES_CONTAINER'],
@@ -418,12 +441,15 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
         connections = []
         original_connect = self.psycopg.AsyncConnection.connect
         original_async_execute = self.psycopg.AsyncCursor.execute
-        def pause():
-            docker_state('pause')
-            paused.set()
+        async def pause():
+            # Docker's bounded process owner installs signal handlers. Keep
+            # its exact identity check and pause on the main test thread.
+            pause_requested.set()
+            while not paused.is_set():
+                await asyncio.sleep(.005)
         async def paused_connect(*arguments, **keywords):
             if phase == 'connect' and entered.is_set() and not paused.is_set():
-                pause()
+                await pause()
             connection = await original_connect(*arguments, **keywords)
             connections.append(connection)
             return connection
@@ -431,7 +457,7 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
             selected = (phase == 'query' and str(query).startswith('WITH heads AS')) or (
                 phase == 'session' and 'FROM pg_roles WHERE rolname=session_user' in str(query))
             if selected and entered.is_set() and not paused.is_set():
-                pause()
+                await pause()
             return await original_async_execute(cursor, query, *arguments, **keywords)
         class Body(httpx.AsyncByteStream):
             async def __aiter__(inner):
@@ -448,7 +474,13 @@ class FactoryStopAuthorityTests(PaidProtocolTestCase):
               patch.object(self.psycopg.AsyncCursor, 'execute', paused_async_query)):
             result = workers.submit(executor.run, self.http_request(profile, capability))
             try:
-                self.assertTrue(paused.wait(5))
+                if not pause_requested.wait(5):
+                    # Surface an early executor refusal instead of hiding it
+                    # behind the downstream pause signal assertion.
+                    result.result(timeout=1)
+                    self.fail('authority outage did not reach the pause boundary')
+                docker_state('pause')
+                paused.set()
                 try:
                     result.result(timeout=2)
                 except LandingProviderError as error:

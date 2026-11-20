@@ -31,8 +31,8 @@ class FactoryStopMigrationTests(unittest.TestCase):
 
     def upgrade(self):
         available = discover_migrations()
-        self.assertEqual(available[-1].version, 27, 'composed stop and access migrations are missing')
-        self.assertEqual([item.version for item in PostgresMigrator(DATABASE_URL).apply()], [26, 27])
+        self.assertEqual([item.version for item in available], list(range(1, 31)))
+        self.assertEqual([item.version for item in PostgresMigrator(DATABASE_URL).apply()], list(range(26, 31)))
         self.assertEqual(PostgresMigrator(DATABASE_URL).apply(), ())
 
     def insert(self, connection, scope, enabled, key, *, created=None):
