@@ -604,6 +604,15 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
     if len(files) > MAX_FILES:
         gap('inventory-limit', '.', 'source file inventory exceeds its bound')
         files = []
+    from .security_corresponding_source import classify
+    try:
+        corresponding = classify(root, files)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        corresponding = []
+        gap('corresponding-source-unverified', '<corresponding-source>', str(exc)[:300])
+    if corresponding:
+        result['corresponding_sources'] = corresponding
+    retained_manifests = {row['manifest'] for row in corresponding}
     for relative in files:
         pure = PurePosixPath(relative)
         if relative.startswith('.getzilla/runtime/') or any(part in {'.git', '.venv', 'node_modules'} for part in pure.parts):
@@ -653,6 +662,8 @@ def collect_inventory(root: Path, *, image_bindings: dict[str, str] | list[dict]
                           require_digest=True, platform=data['platform'])
                     result['images'][-1].update(image_id=image_id, usage='build-ci')
             elif name == 'pyproject.toml':
+                if relative in retained_manifests:
+                    continue  # Exact constraints remain typed in corresponding_sources.
                 data = tomllib.loads(text)
                 project = data.get('project', {})
                 if 'dependencies' in project.get('dynamic', []):
