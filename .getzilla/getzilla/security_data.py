@@ -236,7 +236,11 @@ def _archive_census(payload: bytes, *, max_members: int = MAX_ARCHIVE_MEMBERS,
                 or count > max_members or size > max_directory):
             raise ValueError('archive census exceeds bound')
         start = end[zipfile._ECD_LOCATION] - size
-        if end[zipfile._ECD_SIGNATURE] == zipfile.stringEndArchive64:
+        # Newer Python versions point at the ZIP64 footer itself; older
+        # versions retain the following classic footer's location.
+        location = end[zipfile._ECD_LOCATION]
+        if (end[zipfile._ECD_SIGNATURE] == zipfile.stringEndArchive64
+                and payload[location:location + 4] != zipfile.stringEndArchive64):
             start -= zipfile.sizeEndCentDir64 + zipfile.sizeEndCentDir64Locator
         if start < 0 or start + size > len(payload):
             raise ValueError('invalid ZIP directory extent')
