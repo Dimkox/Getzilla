@@ -101,6 +101,30 @@ class ArchitectureFixtureBoundaryTests(unittest.TestCase):
                 raise ValueError('owned context exit')
         self.assertIs(verification_module._factory_unit, original_factory)
 
+    def test_copied_models_do_not_claim_the_original_repository_resource_profile(self):
+        policy = ROOT / 'architecture/queue-analysis-profile.json'
+        original_policy = policy.read_bytes()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            VerificationTests._adopt_architecture(root)
+            self.assertFalse((root / 'architecture/queue-analysis-profile.json').exists())
+            for relative in ('architecture/system.yaml', 'architecture/rules.yaml',
+                             'schemas/architecture-system.schema.json', 'schemas/architecture-rules.schema.json'):
+                self.assertEqual((root / relative).read_bytes(), (ROOT / relative).read_bytes())
+        self.assertEqual(policy.read_bytes(), original_policy)
+
+    def test_metadata_fixture_never_starts_the_unrelated_factory_suite(self):
+        # Execute the real metadata fixture under a tripwire; a Factory subprocess
+        # here used to recursively rerun its full suite inside Core discovery.
+        with patch.object(verification_module, '_factory_unit',
+                          side_effect=AssertionError('unrelated Factory suite reached')) as factory:
+            result = unittest.TestResult()
+            case = VerificationTests('test_verify_reports_architecture_metadata_without_exact_worktree_sha')
+            case.run(result)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+            factory.assert_not_called()
+            self.assertIs(verification_module._factory_unit, factory)
+
 
 _PASSING_UNITTEST = (
     'import unittest\n'
@@ -654,7 +678,10 @@ class VerificationTests(unittest.TestCase):
             target = root / rel
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(source, target)
+            # This fresh fixture has independent Git history. The self-source
+            # resource profile is repository authority, not portable model data.
+            ignored = shutil.ignore_patterns('queue-analysis-profile.json') if rel == 'architecture' else None
+            shutil.copytree(source, target, ignore=ignored)
         (root / 'architecture/adoption.json').write_text(_ADOPTION_MARKER, encoding='utf-8')
 
     @staticmethod
@@ -1416,6 +1443,7 @@ class VerificationTests(unittest.TestCase):
             receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
             self.assertTrue(receipt.is_file())
 
+    @_architecture_fixture_factory_boundary()
     def test_governance_runs_after_spec_and_architecture_and_failure_is_not_receipted(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1501,6 +1529,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertFalse(receipt.exists())
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_reports_architecture_metadata_without_exact_worktree_sha(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1553,6 +1582,7 @@ class VerificationTests(unittest.TestCase):
         }])
         self.assertTrue(any(item.get('code') == 'architecture-fitness' for item in result.details))
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_unconfigured_is_compatible_but_adopted_deletion_fails(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current code', 's1').to_dict()
@@ -1567,6 +1597,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertEqual(_check(report, 'architecture')['status'], 'fail')
 
+    @_architecture_fixture_factory_boundary()
     def test_verify_fails_after_committed_deletion_of_both_adopted_models(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1610,6 +1641,7 @@ class VerificationTests(unittest.TestCase):
                     self.assertEqual(_check(report, 'architecture')['status'], 'fail')
                     self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_adopted_deletion_remains_invalid_after_unrelated_descendants(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1661,6 +1693,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['architecture']['status'], 'not_configured')
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX without O_NOFOLLOW; Windows reads through the fsx engine')
+    @_architecture_fixture_factory_boundary()
     def test_adoption_marker_read_fails_when_nofollow_is_unavailable(self) -> None:
         with project_copy(git=True) as root:
             self._adopt_architecture(root)
@@ -1742,6 +1775,7 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue(created)
             self.assertTrue((architecture / 'adoption.json').is_file())
 
+    @_architecture_fixture_factory_boundary()
     def test_marker_backed_merge_deletion_fails_without_history_inference(self) -> None:
         with project_copy(git=True) as root:
             route = build_route(root, 'Review current architecture', 's1').to_dict()
@@ -1772,6 +1806,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_marker_backed_shallow_deletion_fails_at_depth_one(self) -> None:
         with project_copy(git=True) as source, tempfile.TemporaryDirectory() as tmp:
             self._adopt_architecture(source)
@@ -1805,6 +1840,7 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['status'], 'fail')
             self.assertIn('missing', _check(report, 'architecture')['summary'])
 
+    @_architecture_fixture_factory_boundary()
     def test_shallow_descendant_cannot_hide_prior_adoption_from_legacy_route(self) -> None:
         with project_copy(git=True) as source, tempfile.TemporaryDirectory() as tmp:
             legacy = subprocess.check_output(
