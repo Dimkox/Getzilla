@@ -176,7 +176,7 @@ class OperationsTests(unittest.TestCase):
         self.assertIn('-r requirements-runner.txt', runner)
         self.assertIn('--no-deps --no-build-isolation .', runner)
         for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
-                    'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
+                    'pytest-cov==7.1.0', 'ruff==0.16.3', 'bandit==1.9.4', 'tomli==2.5.0'):
             self.assertIn(pin, profile)
         self.assertIn('ARG OPENGREP_VERSION=1.30.1', runner)
         self.assertRegex(runner, r'ARG OPENGREP_SHA256=[0-9a-f]{64}\n')

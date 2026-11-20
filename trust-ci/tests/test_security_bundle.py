@@ -451,17 +451,12 @@ class SourceCoverageBindingTests(unittest.TestCase):
                     and isinstance(node.targets[0], ast.Name)
                     and node.targets[0].id in {'selected', 'python', 'sast', 'config', 'targets'}]
         cls.selection = compile(ast.Module(body=selected, type_ignores=[]), 'accepted-pure-targets', 'exec')
-        report = ast.parse((root / '.getzilla/getzilla/security_cli.py').read_text())
-        functions = [node for node in report.body if isinstance(node, ast.FunctionDef)
-                     and node.name in {'_detail_consistent', '_findings_consistent'}]
         engine = str(root/'.getzilla')
         if engine not in sys.path:
             sys.path.insert(0, engine)
             cls.addClassCleanup(lambda: sys.path.remove(engine))
-        namespace = {'__name__': 'getzilla.security_cli', '__package__': 'getzilla',
-                     'CHECK_FAMILIES': {}, 'datetime': datetime}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), 'accepted-pure-marker', 'exec'), namespace)
-        cls.marker_consistent = staticmethod(namespace['_detail_consistent'])
+        from getzilla.security_cli import _detail_consistent
+        cls.marker_consistent = staticmethod(_detail_consistent)
 
     def evaluate_source(self, filenames, *, coverage=None, skipped=()):
         from adaptive_trust_ci import public_admission
@@ -479,7 +474,11 @@ class SourceCoverageBindingTests(unittest.TestCase):
                          'files': [row['path'] for row in manifest]}
             namespace = {'inventory': inventory, 'Path': Path, **self.constants}
             exec(self.selection, namespace)
-            targets = namespace['targets']
+            # OpenGrep now runs through its own adapter, outside the native
+            # Bandit/Trivy loop. Preserve its independent source obligation.
+            from getzilla.opengrep_contract import targets as target_roster
+            targets = {**namespace['targets'],
+                       'opengrep': list(target_roster(namespace['sast'])) if namespace['sast'] else []}
             core = SimpleNamespace(policy_root=source,
                 inventory=SimpleNamespace(collect_inventory=lambda _: inventory),
                 security=SimpleNamespace(_policy_digest=lambda _: POLICY,
