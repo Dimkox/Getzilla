@@ -156,9 +156,9 @@ class CorrespondingSourceTamperTests(unittest.TestCase):
         actual_read = adapter._read
         self.assertIn('corresponding_sources', collect_inventory(self.copy))
         changed = False
-        def replace_after_read(root, relative):
+        def replace_after_read(root, relative, **kwargs):
             nonlocal changed
-            result = actual_read(root, relative)
+            result = actual_read(root, relative, **kwargs)
             if relative == name and not changed:
                 target.write_bytes(original + b'\n# changed during validation\n')
                 changed = True
@@ -169,3 +169,27 @@ class CorrespondingSourceTamperTests(unittest.TestCase):
             self.assertTrue(changed)
         finally:
             target.write_bytes(original)
+
+    def test_removing_both_complete_source_trees_refuses(self):
+        import shutil
+        import subprocess
+        import tempfile
+        from getzilla.security_corresponding_source import ROOTS
+        with tempfile.TemporaryDirectory(prefix='held-source-', dir=self.copy.parent) as saved:
+            try:
+                for index, prefix in enumerate(ROOTS):
+                    shutil.move(str(self.copy / prefix), str(Path(saved) / str(index)))
+                    subprocess.run(['git', '-C', str(self.copy), 'rm', '-qr', '--cached', '--', prefix], check=True)
+                result = collect_inventory(self.copy)
+                self.assertNotIn('corresponding_sources', result)
+                self.assertTrue(any(g['code'] == 'corresponding-source-unverified' for g in result['gaps']))
+            finally:
+                for index, prefix in enumerate(ROOTS):
+                    shutil.move(str(Path(saved) / str(index)), str(self.copy / prefix))
+                    subprocess.run(['git', '-C', str(self.copy), 'add', '-f', '--', prefix], check=True)
+
+    def test_original_budget_is_not_reset_between_reads(self):
+        from unittest.mock import patch
+        from getzilla import security_corresponding_source as adapter
+        with patch.object(adapter, 'monotonic', side_effect=[0, adapter.MAX_SECONDS + 1]):
+            self.assert_refused()
