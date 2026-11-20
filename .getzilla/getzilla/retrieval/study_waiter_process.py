@@ -51,13 +51,18 @@ class FrameInput:
 
     def next(self, deadline):
         while True:
+            if time.monotonic() >= deadline:
+                raise ValueError('channel deadline')
             end = self.buffer.find(b'\n')
             if end >= 0:
                 if end > MAX_FRAME:
                     raise ValueError('frame exceeded')
                 raw = bytes(self.buffer[:end])
                 del self.buffer[:end + 1]
-                return decode(raw)
+                value = decode(raw)
+                if time.monotonic() >= deadline:
+                    raise ValueError('channel deadline')
+                return value
             if len(self.buffer) > MAX_FRAME or time.monotonic() >= deadline:
                 raise ValueError('channel deadline')
             if self.fd is None:

@@ -64,3 +64,25 @@ class StudyControllerTests(unittest.TestCase):
                 native.request({'op': 'encode', 'sequence': 1, 'absolute_deadline': 0},
                                owner.FrameInput(io.BytesIO()))
             start.assert_not_called()
+
+    def test_expired_prebuffered_frame_is_not_consumed(self):
+        owner = self.owner()
+        reader = owner.FrameInput(io.BytesIO())
+        reader.buffer.extend(b'{"tiny":true}\n')
+        with self.assertRaisesRegex(ValueError, 'channel deadline'):
+            reader.next(0)
+        self.assertEqual(reader.buffer, b'{"tiny":true}\n')
+
+    def test_decode_time_consumes_the_same_absolute_deadline(self):
+        owner = self.owner()
+        reader = owner.FrameInput(io.BytesIO())
+        reader.buffer.extend(b'{"tiny":true}\n')
+        current, original = [0.0], owner.decode
+        def late_decode(raw):
+            value = original(raw)
+            current[0] = 2.0
+            return value
+        with patch.object(owner.time, 'monotonic', side_effect=lambda: current[0]), \
+                patch.object(owner, 'decode', side_effect=late_decode):
+            with self.assertRaisesRegex(ValueError, 'channel deadline'):
+                reader.next(1)

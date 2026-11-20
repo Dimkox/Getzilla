@@ -133,7 +133,7 @@ def _create_arguments(projection, execution_id, nonce, deadline, image_env=()):
             raise RetrievalError('study_export_path_unavailable')
     command = ('/usr/local/bin/python', '-I', '-S', '-B', ENTRY,
                '--nonce', nonce, '--deadline', str(deadline))
-    args = ['create', '--pull=never', '--name', f'getzilla-study-{execution_id}-{nonce[:16]}',
+    args = ['create', '--interactive', '--pull=never', '--name', f'getzilla-study-{execution_id}-{nonce[:16]}',
             '--label', f'getzilla.study.execution={execution_id}',
             '--label', f'getzilla.study.nonce={nonce}', '--network=none', '--read-only',
             '--user=65532:65532', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
@@ -274,7 +274,9 @@ class _Owner:
             mounts={'/model': str(self.projection.model_root),
                     '/software': str(self.projection.software_root),
                     '/worker': str(self.projection.worker_root)})
-        if (_observed_environment(observed['Config']['Env']) != self.expected_env
+        if (observed['Config'].get('OpenStdin') is not True
+                or observed['Config'].get('Tty') is not False
+                or _observed_environment(observed['Config']['Env']) != self.expected_env
                 or observed['HostConfig'].get('RestartPolicy', {}).get('Name') != 'no'):
             raise RetrievalError('study_container_environment_changed')
 
