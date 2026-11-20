@@ -319,10 +319,12 @@ def _degraded_ordinary_target(value: Any, directory: Path, patterns: tuple[str, 
                 names.append(candidate.relative_to(policy_root).as_posix().casefold())
             except ValueError:
                 pass
+            # Source hooks can serve another project. Its protected basenames
+            # and path classes cannot lose protection outside the install root.
             # Match a protected directory itself as well as its descendants.
             if any(fnmatch.fnmatchcase(name, pattern.casefold())
                    or (pattern.endswith('/**') and fnmatch.fnmatchcase(name.rstrip('/'), pattern[:-3].casefold()))
-                   for name in names for pattern in patterns):
+                   for name in names for declared in patterns for pattern in (declared, '*/' + declared)):
                 return False
         return True
     except (OSError, ValueError, RuntimeError):

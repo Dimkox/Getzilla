@@ -30,6 +30,30 @@ def write_event(root: Path, ts: str, hook: str = 'pre_tool_use') -> None:
 
 
 class HookDegradedTests(unittest.TestCase):
+    def test_degraded_protection_survives_external_root_target_aliases(self):
+        with project_copy() as root:
+            external = root.parent / 'external-owned-fixture'
+            external.mkdir()
+            (root / '.getzilla/getzilla/fsx.py').write_text('raise ImportError("owned degraded fixture")\n')
+            for name in ('AGENTS.md', 'README.md', 'VERSION', 'agents.MD'):
+                for inputs in ({'file_path': str(external / name)},
+                               {'file_path': name, 'workdir': str(external)}):
+                    with self.subTest(inputs=inputs):
+                        code, result, error = run_hook(root, 'pre_tool_use.py',
+                            {'cwd': str(root), 'tool_name': 'Write', 'tool_input': inputs})
+                        self.assertEqual(result.get('decision'), 'deny', result)
+                        self.assertEqual(code, 2, error)
+                        self.assertFalse((external / name).exists())
+            # A source hook can serve another project. Retain ordinary edits
+            # there rather than treating its own install root as write authority.
+            for inputs in ({'file_path': str(external / 'ordinary.py')},
+                           {'file_path': 'ordinary.py', 'workdir': str(external)}):
+                code, result, error = run_hook(root, 'pre_tool_use.py',
+                    {'cwd': str(root), 'tool_name': 'Write', 'tool_input': inputs})
+                self.assertEqual(result.get('decision'), 'allow', result)
+                self.assertEqual(code, 0, error)
+            self.assertEqual(list(external.iterdir()), [])
+
     def test_degraded_writes_cover_current_protected_classes_and_aliases(self):
         with project_copy() as root:
             config = json.loads((root / '.getzilla/config/policy.json').read_text())
