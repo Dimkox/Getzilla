@@ -7,14 +7,16 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from . import package_status as _package_status
 from .package_status import (collect_worktree, read_package_file,
-                             synchronize_accounting as synchronize_accounting,
-                             synchronize_review_accounting as _sync_receipt_obligations)
+                             synchronize_accounting as synchronize_accounting)
 from .state import (get_active_route, set_active_change, update_route, serialized_task,
                     require_route_owner, durable_json, durable_bytes, _safe_parents)
 from .spec import dump_canonical_spec, generate_spec
 from .util import dump_json, now_utc
 from .workflow_storage import change_directory
+
+_sync_receipt_obligations = _package_status.synchronize_review_accounting
 
 GOVERNANCE_AUTHORITY_NOTICE = (
     "Canonical governance JSON under `governance/` remains separately reviewed "

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from .security_data import SOURCE_URLS, SecurityDataError, osv_coverage, publish_snapshot
-from .security_intelligence import validate_epss, validate_kev
+from .security_intelligence import validate_epss as validate_epss, validate_kev as validate_kev
 from .release_transport import OPENGREP_ASSETS, OPENGREP_DOWNLOAD, OPENGREP_VERSION
 
 TRIVY_VERSION = '0.74.0'

@@ -67,7 +67,8 @@ class NpmLicenseBundleTests(unittest.TestCase):
                         '2c7c5d22ed5a8ee968c64757710979afcd77438c48b4a265b94e615babd8a901'}:
                     self.assertEqual(self.bundle(text),('BlueOak-1.0.0',))
                     from getzilla.security_licenses import ALLOWED, _select_expression
-                    with self.assertRaises(ValueError):_select_expression('BlueOak-1.0.0',list(ALLOWED))
+                    with self.assertRaises(ValueError):
+                        _select_expression('BlueOak-1.0.0',list(ALLOWED))
                 else:
                     self.assertIsNone(self.bundle(text))
 

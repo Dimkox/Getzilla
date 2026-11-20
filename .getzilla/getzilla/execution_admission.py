@@ -8,7 +8,7 @@ effects require an explicit qualified backend through execution.submit.
 
 import hashlib
 import json
-import re
+import re as re
 from pathlib import Path
 import shlex
 

@@ -29,7 +29,7 @@ import math
 import os
 import re
 import stat
-import uuid
+import uuid as uuid
 import zipfile
 import zlib
 from dataclasses import dataclass

@@ -7,7 +7,6 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -17,10 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
 PACKAGE = ROOT / '.getzilla/optional-modules/mcp-jira/0.1.0'
 spec = importlib.util.spec_from_file_location('getzilla_test_mcp', PACKAGE / '__init__.py', submodule_search_locations=[str(PACKAGE)])
-pkg = importlib.util.module_from_spec(spec); sys.modules[spec.name] = pkg; spec.loader.exec_module(pkg)
+pkg = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = pkg
+spec.loader.exec_module(pkg)
 from getzilla_test_mcp.transport import CAP, Frames, Session, TransportError, native_bypass
 from getzilla_test_mcp.admission import gate, scope_key
-from getzilla_test_mcp.runtime import Runtime, Backend
+from getzilla_test_mcp.runtime import Runtime
 
 PROGRAM = '''import sys,json,time,signal
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
@@ -53,18 +54,23 @@ class WireTests(unittest.TestCase):
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=2)
-            for stream in (process.stdin, process.stdout, process.stderr): stream.close()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
         self.addCleanup(cleanup)
         return process
 
     def call(self, mode, *, duration=.3, watch=lambda: 'running'):
         session = Session(self.child(), deadline=time.monotonic()+duration, watch=watch, request_id='request')
-        try: return session.call('fixture_read', {'mode': mode})
-        finally: session.close()
+        try:
+            return session.call('fixture_read', {'mode': mode})
+        finally:
+            session.close()
 
     def test_T20_ignored_cancel_keeps_remote_unconfirmed(self):
         cancelled = threading.Event()
-        timer = threading.Timer(.1, cancelled.set); timer.start(); self.addCleanup(timer.cancel)
+        timer = threading.Timer(.1, cancelled.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
         result = self.call('ignore_cancel', duration=1, watch=lambda: 'cancelled' if cancelled.is_set() else 'running')
         self.assertEqual(result.status, 'cancelled')
         self.assertTrue(result.sent)
@@ -76,18 +82,21 @@ class WireTests(unittest.TestCase):
         thread.start()
         self.assertEqual(self.call('ok').status, 'success')
         self.assertEqual(sum(range(10)), 45)
-        thread.join(1); self.assertFalse(thread.is_alive())
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
         self.assertEqual(values[0].status, 'deadline')
 
     def test_slow_late_disconnect_malformed_and_domain(self):
         for mode, expected in [('slow','success'), ('late','deadline'), ('disconnect','infra'),
                                ('malformed','infra'), ('domain','domain')]:
-            with self.subTest(mode=mode): self.assertEqual(self.call(mode, duration=.4).status, expected)
+            with self.subTest(mode=mode):
+                self.assertEqual(self.call(mode, duration=.4).status, expected)
 
     def test_T25_preparse_cap_and_huge_actual_child(self):
         frames = Frames()
         with patch('json.loads', side_effect=AssertionError('parser must not run')):
-            with self.assertRaisesRegex(TransportError,'oversize'): frames.feed(b'x'*(CAP+1))
+            with self.assertRaisesRegex(TransportError,'oversize'):
+                frames.feed(b'x'*(CAP+1))
         self.assertEqual(len(frames.pending),0)
         reply = self.call('huge', duration=1)
         self.assertEqual((reply.status,reply.reason),('infra','oversize'))
@@ -98,11 +107,14 @@ class WireTests(unittest.TestCase):
         original=session.frames.feed
         def late_parse(chunk):
             result=original(chunk)
-            if result:session.deadline=time.monotonic()-1
+            if result:
+                session.deadline=time.monotonic()-1
             return result
         session.frames.feed=late_parse
-        try:self.assertEqual(session.call('fixture_read',{}).status,'deadline')
-        finally:session.close()
+        try:
+            self.assertEqual(session.call('fixture_read',{}).status,'deadline')
+        finally:
+            session.close()
 
     def test_remote_task_identity_is_separate_and_never_invented_done(self):
         result=self.call('task')
@@ -162,14 +174,16 @@ class NativeTests(unittest.TestCase):
     def setUp(self):
         from tests.test_optional_modules import OptionalModuleTests
         from tests.execution_contract_support import owned_route
-        from getzilla import execution, state
+        from getzilla import state
         from getzilla.optional_modules import manage_modules
         from getzilla.module_runtime import ActivationRequestV1, plan_activation, commit_activation
         from getzilla.component_state import read_state
         from getzilla_test_mcp.admission import HostBudget
         import hashlib
         import shutil
-        self.fixture=OptionalModuleTests(); self.fixture.setUp(); self.addCleanup(self.fixture.doCleanups)
+        self.fixture=OptionalModuleTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
         self.root=self.fixture.root
         self.root.chmod(0o700)
         self.enterContext(patch.dict(os.environ,{'GETZILLA_SESSION_ID':'owner'}))
@@ -178,7 +192,9 @@ class NativeTests(unittest.TestCase):
         manage_modules(self.root,'install',{'mcp-jira':'0.1.0'},source=ROOT)
         python=Path(sys.executable).resolve()
         self.binary=self.fixture.workspace/'bin/python3'
-        self.binary.parent.mkdir(mode=0o700,parents=True); shutil.copyfile(python,self.binary); self.binary.chmod(0o755)
+        self.binary.parent.mkdir(mode=0o700,parents=True)
+        shutil.copyfile(python,self.binary)
+        self.binary.chmod(0o755)
         self.server_script=self.root/'fake_server.py'
         self.server_script.write_text(PROGRAM)
         self.server_script.chmod(0o644)
@@ -190,8 +206,10 @@ class NativeTests(unittest.TestCase):
         (self.root/'.getzilla/config/toolchain.json').chmod(0o644)
         # Public fixture sources meet the canonical source-reader custody rules.
         for path in self.root.rglob('*'):
-            if path.is_dir() and '.getzilla/runtime' not in str(path): path.chmod(0o755)
-            if path.is_file() and '.getzilla/runtime/' not in str(path): path.chmod(0o644)
+            if path.is_dir() and '.getzilla/runtime' not in str(path):
+                path.chmod(0o755)
+            if path.is_file() and '.getzilla/runtime/' not in str(path):
+                path.chmod(0o644)
         self.profile={'transport':'stdio','protocol':'2025-11-25','credential_scope':'local-uid:'+str(os.getuid()),
                       'tool_id':'fake-mcp','server_version':'1.0.0','endpoint':'stdio://fixture','tools':{'fixture_read':'read'}}
         class Authority:
@@ -223,7 +241,8 @@ class NativeTests(unittest.TestCase):
         calls=self.authority.calls
         result=self.runtime.call(tool='fixture_read',arguments={},intent_key='disabled')
         self.assertEqual(result['status'],'disabled')
-        self.assertEqual(self.authority.calls,calls); policy.assert_not_called()
+        self.assertEqual(self.authority.calls,calls)
+        policy.assert_not_called()
         self.assertEqual(before,{str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
         self.fixture.assert_user_settings()
 
@@ -250,7 +269,8 @@ class NativeTests(unittest.TestCase):
         from getzilla import execution
         from getzilla_test_mcp.admission import HostBudget
         from tests.execution_contract_support import CountingBackend,owned_route
-        other=self.fixture.workspace/'other-project';other.mkdir(mode=0o700)
+        other=self.fixture.workspace/'other-project'
+        other.mkdir(mode=0o700)
         owned_route(other)
         caller=execution.trusted_caller(other)
         for index in range(8):
@@ -278,38 +298,50 @@ class NativeTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
     def test_T21_two_hung_A_attempts_leave_B_and_canonical_local_checks_running(self):
         from dataclasses import replace
-        import hashlib,shutil
+        import hashlib
+        import shutil
         from getzilla import execution_store,supervised_execution
         from getzilla.module_runtime import plan_activation
-        script=self.root/'fake_server_b.py';script.write_text(PROGRAM);script.chmod(0o644)
-        config_path=self.root/'.getzilla/config/toolchain.json';config=json.loads(config_path.read_text())
+        script=self.root/'fake_server_b.py'
+        script.write_text(PROGRAM)
+        script.chmod(0o644)
+        config_path=self.root/'.getzilla/config/toolchain.json'
+        config=json.loads(config_path.read_text())
         config['tools'].append(dict(id='fake-mcp-b',commands=['python3'],managed=dict(executable=str(self.binary),sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest(),argv=[str(script)])))
-        local=self.fixture.workspace/'bin/true';shutil.copyfile('/usr/bin/true',local);local.chmod(0o755)
+        local=self.fixture.workspace/'bin/true'
+        shutil.copyfile('/usr/bin/true',local)
+        local.chmod(0o755)
         config['tools'].append(dict(id='local-true',commands=['true'],managed=dict(executable=str(local),sha256=hashlib.sha256(local.read_bytes()).hexdigest(),argv=[])))
         config_path.write_text(json.dumps(config))
         profile=dict(self.profile)
         self.runtime.profile={'servers':{'a':profile,'b':dict(profile,tool_id='fake-mcp-b')}}
         self.request=replace(self.request,scope_digest=hashlib.sha256(json.dumps(self.runtime.profile,sort_keys=True,separators=(',',':')).encode()).hexdigest())
         self.plan=plan_activation(self.root,'mcp-jira',self.request,native=self.runtime,runtime=self.runtime,authority=self.authority)
-        self.activate();values=[]
+        self.activate()
+        values=[]
         def hang(index):values.append(self.runtime.call(server_id='a',tool='fixture_read',arguments={'mode':'hang'},intent_key='branch-a-'+str(index),hard_timeout_seconds=5))
         threads=[threading.Thread(target=hang,args=(index,)) for index in range(2)]
         for thread in threads:
-            thread.start();self.addCleanup(lambda thread=thread:thread.join(5))
+            thread.start()
+            self.addCleanup(lambda thread=thread:thread.join(5))
         end=time.monotonic()+2
-        while len(execution_store.load_registry(self.root)['records'])<2 and time.monotonic()<end:time.sleep(.01)
+        while len(execution_store.load_registry(self.root)['records'])<2 and time.monotonic()<end:
+            time.sleep(.01)
         healthy=self.runtime.call(server_id='b',tool='fixture_read',arguments={},intent_key='branch-b',hard_timeout_seconds=3)
         self.assertEqual(healthy['reply'].status,'success')
         local_job=supervised_execution.start(self.root,tool_id='local-true',intent_key='local-check',hard_timeout_seconds=3)
         local_result=supervised_execution.observe(self.root,local_job['execution_id'],wait_seconds=3)
         self.assertEqual(local_result['execution']['execution_status'],'succeeded',local_result)
-        for thread in threads:thread.join(5);self.assertFalse(thread.is_alive())
+        for thread in threads:
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
         self.assertTrue(all(value['execution']['cleanup_status']=='confirmed' for value in values))
 
     @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
     def test_T22_actual_scope_saturation_has_two_owned_attempts_and_no_wait_queue(self):
         from getzilla import execution,execution_store
-        self.activate();values=[]
+        self.activate()
+        values=[]
         def call(index):
             values.append(self.runtime.call(tool='fixture_read',arguments={'mode':'hang'},intent_key='saturated-'+str(index),hard_timeout_seconds=2))
         threads=[threading.Thread(target=call,args=(index,)) for index in range(2)]
@@ -318,11 +350,14 @@ class NativeTests(unittest.TestCase):
             self.addCleanup(lambda thread=thread:thread.join(5))
         end=time.monotonic()+1.5
         while time.monotonic()<end:
-            if len(execution_store.load_registry(self.root)['records'])==2:break
+            if len(execution_store.load_registry(self.root)['records'])==2:
+                break
             time.sleep(.01)
         with self.assertRaisesRegex(execution.ExecutionError,'resource_busy'):
             self.runtime.call(tool='fixture_read',arguments={},intent_key='third',hard_timeout_seconds=2)
-        for thread in threads:thread.join(5);self.assertFalse(thread.is_alive())
+        for thread in threads:
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
         self.assertEqual(len(execution_store.load_registry(self.root)['records']),2)
         self.assertEqual(len(values),2)
         self.assertTrue(all(value['execution']['cleanup_status']=='confirmed' for value in values))
@@ -342,18 +377,22 @@ class NativeTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/bwrap').exists(),'Linux namespace profile required')
     def test_T27_disable_stops_owned_child_preserves_uncertainty_and_user_settings(self):
         from getzilla.module_runtime import quiesce_module
-        self.activate(); values=[]
+        self.activate()
+        values=[]
         thread=threading.Thread(target=lambda:values.append(self.runtime.call(tool='fixture_read',arguments={'mode':'ignore_cancel'},intent_key='disable',hard_timeout_seconds=3)))
         thread.start()
         from getzilla import execution_store
         end=time.monotonic()+2
         while time.monotonic()<end:
             records=execution_store.load_registry(self.root)['records'].values()
-            if any((record.get('launch') or {}).get('phase')=='released' for record in records): break
+            if any((record.get('launch') or {}).get('phase')=='released' for record in records):
+                break
             time.sleep(.01)
-        else: self.fail('fake MCP launch did not reach its owned gate')
+        else:
+            self.fail('fake MCP launch did not reach its owned gate')
         outcome=quiesce_module(self.root,'mcp-jira',runtime=self.runtime,deadline=time.monotonic()+2)
-        thread.join(2); self.assertFalse(thread.is_alive())
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
         self.assertEqual(outcome.workers,0)
         self.assertFalse(values[0]['remote_termination_confirmed'])
         self.assertEqual(values[0]['execution']['cleanup_status'],'confirmed')
@@ -377,16 +416,20 @@ class EffectsTests(unittest.TestCase):
         class Access:
             allowed=True
             def authorize(self,target,operation):
-                if not self.allowed:raise ValueError('permission_revoked')
+                if not self.allowed:
+                    raise ValueError('permission_revoked')
             def authorize_release(self,target,operation,arguments):self.authorize(target,operation)
             def validate_closure(self,resource,acceptance):raise ValueError('accepted_change_evidence_unavailable')
         class Provider:
             intent_reconciliation_qualified=True
-            calls=0;observations=0
+            calls=0
+            observations=0
             def emit(self,intent,arguments):
-                self.calls+=1;raise TimeoutError('synthetic lost write response')
+                self.calls+=1
+                raise TimeoutError('synthetic lost write response')
             def observe(self,intent):
-                self.observations+=1;return {'revision':'human-edit'}
+                self.observations+=1
+                return {'revision':'human-edit'}
         self.access,self.provider=Access(),Provider()
         self.effects=Effects(self.root,caller=self.caller,access=self.access,provider=self.provider,runtime=self.runtime)
         self.target={'site':'fixture-site','project':'TEST','resource':'1001'}
@@ -403,7 +446,8 @@ class EffectsTests(unittest.TestCase):
         self.assertEqual(current['outcome'],'unknown')
         self.assertEqual(self.provider.calls,1)
         self.access.allowed=False
-        with self.assertRaisesRegex(ValueError,'permission_revoked'):self.effects.reconcile(eid,self.operation)
+        with self.assertRaisesRegex(ValueError,'permission_revoked'):
+            self.effects.reconcile(eid,self.operation)
         self.assertEqual(self.provider.observations,1)
 
     def test_stable_operation_across_new_attempts_reuses_the_existing_intent(self):
@@ -425,7 +469,8 @@ class EffectsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'jira_argument_schema_unqualified'):
             jira.normalize('getIssue',dict(self.target,issueId='outside'))
         nested={'operation':'executeWrite','arguments':{'operation':'transition','arguments':dict(self.target,site='outside')}}
-        with self.assertRaisesRegex(ValueError,'jira_target_scope'):jira.normalize('executeWrite',nested)
+        with self.assertRaisesRegex(ValueError,'jira_target_scope'):
+            jira.normalize('executeWrite',nested)
         with self.assertRaisesRegex(ValueError,'accepted_change_evidence_unavailable'):
             jira.write('transition',self.target,execution_id=self.execution['execution_id'],operation_id=self.operation,baseline='revision-1',acceptance={'done':True,'merged':True})
         self.assertEqual(self.provider.calls,0)
@@ -434,7 +479,8 @@ class EffectsTests(unittest.TestCase):
 class PayloadTests(unittest.TestCase):
     def test_T26_core_payload_and_engine_archive_exclude_mcp_implementation(self):
         from tests.test_optional_modules import installer
-        import io,zipfile
+        import io
+        import zipfile
         install=installer()
         entries=install.build_payload(ROOT,selection=install.PayloadSelection(()))
         self.assertFalse([entry.path for entry in entries if '/optional-modules/mcp-jira/' in entry.path or '/modules/mcp-jira/' in entry.path])

@@ -69,7 +69,8 @@ class GoCompleteLicenseFileTests(unittest.TestCase):
                 if item['sha256']=='d2571186acad91c8a3121fb31f1aa5963e82ccd08608d00cef3eb3f3a6c8ad38':
                     self.assertEqual(recognized_license(item['text']),'BSD-2-Clause-Views')
                     from getzilla.security_licenses import ALLOWED, _select_expression
-                    with self.assertRaises(ValueError):_select_expression('BSD-2-Clause-Views',list(ALLOWED))
+                    with self.assertRaises(ValueError):
+                        _select_expression('BSD-2-Clause-Views',list(ALLOWED))
                 else:
                     self.assertIsNone(recognized_license(item['text']))
                 self.assertIsNone(recognized_license_bundle(item['text']))

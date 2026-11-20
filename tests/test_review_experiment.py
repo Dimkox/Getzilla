@@ -13,9 +13,12 @@ class ContractTests(unittest.TestCase):
     def test_missing_stale_self_and_contaminated_procedure(self):
         validate_protocol(protocol())
         for change in ({'review_minutes':0},{'expert_approval':{'actor':'owner','at':90,'procedure_version':'v1'}},{'accepted_sources':['c0']},{'expert_approval':{'actor':'expert','at':201,'procedure_version':'old'}}):
-            with self.assertRaises(ValueError): validate_protocol(protocol()|change)
-        p=protocol(); del p['inputs']['checks']
-        with self.assertRaises(ValueError):validate_protocol(p)
+            with self.assertRaises(ValueError):
+                validate_protocol(protocol()|change)
+        p=protocol()
+        del p['inputs']['checks']
+        with self.assertRaises(ValueError):
+            validate_protocol(p)
     def test_review_waiting_rework_and_unknown_consume_capacity(self):
         p=protocol()
         view={'as_of':200,'complete':True,'reviewer':'reviewer','available_minutes':60,'tasks':[{'task':'a','state':'waiting_review'},{'task':'b','state':'rework'}]}
@@ -41,7 +44,8 @@ class ContractTests(unittest.TestCase):
         p=protocol()
         rows={name:{'actor':'independent-human','decision':'accepted','candidate':'head','requirements':'v1','checks':True,'at':450,'defects':0} for pair in p['pairs'] for name in (pair['control'],pair['experiment'])}
         for change in ({'actor':'owner'},{'requirements':'old'},{'checks':False},{'decision':'revoked'}):
-            changed=copy.deepcopy(rows);changed['e0'].update(change)
+            changed=copy.deepcopy(rows)
+            changed['e0'].update(change)
             self.assertNotEqual(assess_experiment(p,changed,as_of=600)['decision'],'broader_experiment')
         result=assess_experiment(p,rows,as_of=600)
         self.assertEqual(result['decision'],'indeterminate')
@@ -65,7 +69,8 @@ class EconomicsBoundaryTests(unittest.TestCase):
         self.assertEqual(assess_experiment(p,rows,as_of=600)['decision'],'stop')
     def test_oversized_unknown_states_duplicate_and_window(self):
         p=protocol()
-        with self.assertRaises(ValueError):validate_protocol(p|{'task_class':'x'*70000})
+        with self.assertRaises(ValueError):
+            validate_protocol(p|{'task_class':'x'*70000})
         view={'as_of':200,'complete':True,'reviewer':'reviewer','available_minutes':60,'tasks':[{'task':'a','state':'active'},{'task':'a','state':'accepted'}]}
         self.assertFalse(review_admission(p,view,now=201)['admit'])
         rows={'c0':{'actor':'human','decision':'accepted','candidate':'head','requirements':'v1','checks':True,'at':450,'defects':1}}

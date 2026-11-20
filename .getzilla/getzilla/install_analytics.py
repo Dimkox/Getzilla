@@ -64,7 +64,8 @@ class Store:
             raise ValueError('invalid upload id')
         with self.db:
             record = self.event(identity)
-            if record is None: raise ValueError('unknown installation')
+            if record is None:
+                raise ValueError('unknown installation')
             record['delivery'][destination] = dict(accepted=accepted,processing=processing,attribution=attribution,upload_id=upload_id)
             self.db.execute('UPDATE installs SET record=? WHERE identity=?',(json.dumps(record),identity))
 
@@ -80,9 +81,11 @@ def collect(store, payload, *, now):
         or type(payload['occurred_at']) is not int or not now-72*3600 <= payload['occurred_at'] <= now+60):
         raise ValueError('invalid installation')
     row=store.db.execute('SELECT expires,record FROM tokens WHERE digest=?',(hashlib.sha256(payload['token'].encode()).hexdigest(),)).fetchone()
-    if not row or row[0] < now: raise ValueError('invalid or expired token')
+    if not row or row[0] < now:
+        raise ValueError('invalid or expired token')
     token=json.loads(row[1])
-    if token.get('consent') is not True or token.get('scope') != EVENT: raise ValueError('consent or scope refused')
+    if token.get('consent') is not True or token.get('scope') != EVENT:
+        raise ValueError('consent or scope refused')
     record={k:v for k,v in payload.items() if k!='token'}
     record.update(source=token['source'], identifiers=token['identifiers'], backend='accepted', delivery={d:dict(accepted=False,processing='unknown',attribution='unknown',upload_id=None) for d in ('ga4','metrika')})
     with store.db:
@@ -118,10 +121,13 @@ def client_event(state_home, version, env, *, ready, send, now=None):
     try:
         folder=Path(state_home)/'install-analytics'
         folder.mkdir(mode=0o700,parents=True,exist_ok=True)
-        if folder.is_symlink(): return False
+        if folder.is_symlink():
+            return False
         lock=folder/'lock'
-        try: lock.mkdir(mode=0o700)
-        except FileExistsError: return False
+        try:
+            lock.mkdir(mode=0o700)
+        except FileExistsError:
+            return False
         try:
             return _send_locked(folder,version,env,send,now)
         finally:
@@ -141,9 +147,11 @@ def _send_locked(folder, version, env, send, now):
         else:
             with os.fdopen(fd,'w') as stream:
                 json.dump(dict(event_id=secrets.token_hex(16),occurred_at=now,version=version,attempts=0,delivered=False),stream)
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2048: return False
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2048:
+            return False
         record=json.loads(path.read_text())
-        if record['delivered'] or record['attempts'] >= 3 or not 0 <= now-record['occurred_at'] <= 72*3600: return False
+        if record['delivered'] or record['attempts'] >= 3 or not 0 <= now-record['occurred_at'] <= 72*3600:
+            return False
         record['attempts']+=1
         path.write_text(json.dumps(record))
         payload=dict(token=env['GETZILLA_INSTALL_TOKEN'],event_id=record['event_id'],event=EVENT,version=record['version'],os=platform.system(),occurred_at=record['occurred_at'])

@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from fractions import Fraction
-from datetime import datetime
+from datetime import datetime as datetime
 from pathlib import Path
 from typing import TypedDict
 

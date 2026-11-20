@@ -190,7 +190,7 @@ class NativeWorkflowBoundary(WorkflowBoundary):
         return value
 
     def _native_inputs(self):
-        import json
+        import json as json
         from getzilla import workflow_artifacts as artifacts
         from getzilla.spec import canonical_spec_digest
         from getzilla.util import git_head

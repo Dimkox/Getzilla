@@ -76,7 +76,9 @@ class TraceContractTests(unittest.TestCase):
         for field, value in [('stage', 'raw_stage'), ('candidate_count', True),
                 ('usage_input_tokens', -1), ('provider_digest', 'private_provider'),
                 ('timing_source', 'provider_private_name')]:
-            bad = copy.deepcopy(row); bad[field] = value; self.rejected(bad)
+            bad = copy.deepcopy(row)
+            bad[field] = value
+            self.rejected(bad)
 
     def test_policy_and_evidence_have_closed_non_authoritative_shapes(self):
         self.validate(observation('policy', 'policy_observed', operation_id='op',
