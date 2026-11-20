@@ -2022,6 +2022,22 @@
           "mode": 420,
           "sha256": "5bffb99e398b3ece6eabd70d4ae8d1ec135de70996c0e874e7c6268488689496"
         },
+        ".getzilla/config/ci-image-blobs/70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.json": {
+          "mode": 420,
+          "sha256": "70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9"
+        },
+        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json": {
+          "mode": 420,
+          "sha256": "ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085"
+        },
+        ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json": {
+          "mode": 420,
+          "sha256": "b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79"
+        },
+        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json": {
+          "mode": 420,
+          "sha256": "e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4"
+        },
         ".getzilla/config/ci-images.json": {
           "mode": 420,
           "sha256": "27e95f49ec3d1d0a984d387d861c7c47fe05a979941737294b37bbc44a1be8b9"
@@ -2549,6 +2565,10 @@
         ".getzilla/getzilla/queue_provenance.py": {
           "mode": 420,
           "sha256": "ffb90e0774a595f24a6cdca22d0fafb03dcd1855b4b376df05c36dd34e290170"
+        },
+        ".getzilla/getzilla/queue_refusal.py": {
+          "mode": 420,
+          "sha256": "7bc1c015c4605a4195fe5728b333ec82a2af644365fd0f05b5ed4bb49fa453cd"
         },
         ".getzilla/getzilla/read_ledger.py": {
           "mode": 420,
@@ -5425,26 +5445,6 @@
         "user_prompt_submit.py": {
           "mode": 420,
           "sha256": "7b57f982b5408eb392e498923dbd59d317f867b1f6bc7eec396a2b47b85f47b0"
-        },
-        ".getzilla/getzilla/queue_refusal.py": {
-          "sha256": "7bc1c015c4605a4195fe5728b333ec82a2af644365fd0f05b5ed4bb49fa453cd",
-          "mode": 420
-        },
-        ".getzilla/config/ci-image-blobs/70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9.json": {
-          "sha256": "70bda1e795ded2a684ef9815955e05829b14ee5bb5c3eb2a940648e88f10fce9",
-          "mode": 420
-        },
-        ".getzilla/config/ci-image-blobs/ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085.json": {
-          "sha256": "ab20e934b27ba3ff927c1b4c9ff8cf6c32f315f743efe68dd3441182a87fb085",
-          "mode": 420
-        },
-        ".getzilla/config/ci-image-blobs/b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79.json": {
-          "sha256": "b7ddb46f14cdb6312b0ac3816e0513fe55904bd66e4525b8845058d3c1aa0f79",
-          "mode": 420
-        },
-        ".getzilla/config/ci-image-blobs/e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4.json": {
-          "sha256": "e4cb93687b062cd25a0e8f672d85a7708235009d70d31f8a7698d9370092a9c4",
-          "mode": 420
         }
       }
     },
