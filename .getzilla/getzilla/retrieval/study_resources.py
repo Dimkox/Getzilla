@@ -19,6 +19,7 @@ def resource_profile():
     """Fresh data projection; never a process, execution or resource permit."""
     return {'schema_version': 1, 'profile': 'issue162-owned-offline-v1',
             'cpu_count': 2, 'cpu_quota_cores': 2, 'runtime': 'runc',
+            'clock': 'same-kernel-boot-and-time-namespace',
             'cgroup_namespace': 'private', 'memory_bytes': MEMORY_BYTES, 'swap_bytes': 0,
             'pids': 128, 'uid': 65532, 'gid': 65532, 'network': 'none',
             'read_only_root': True, 'mounts': ['/model', '/software', '/worker'],

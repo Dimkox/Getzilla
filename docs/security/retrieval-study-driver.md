@@ -42,11 +42,38 @@ nonfinite output. BGE's separate rank2 output can remain symbolically shaped in
 the bound signature and is never used for pooling. Runtime conformance still
 requires the separately admitted real image and inspected artifacts.
 
-`study_resources` only compares readback data against the fixed offline profile:
+`study_resources` compares readback data against the fixed offline profile:
 two CPUs,6GiB,swap0,pids128,networknone,read-only root/model/software,nonprivileged
 UID,capdrop,no-new-privileges,seccomp,boundedtmpfs and no Docker log persistence.
-Passing dictionaries cannot mint a resource reference. There is currently no live
-resource issuer or native worker launch in these leaves.
+Passing dictionaries cannot mint a resource reference. `study_supervisor` accepts
+only the genuine operation owner's reference, uses the existing execution CAS
+and its original monotonic deadline, and owns the exact local-daemon container
+and attach process. Docker uses a pinned executable descriptor and private empty
+CLI configuration. Its stdlib PID1 controller owns exactly one separately
+killable native child; heartbeat loss, EOF, stage/global expiry or protocol faults
+retire that tree. Heartbeats never extend deadlines. Native code cannot block
+PID1's independent timers by holding the child's Python GIL.
+
+Only actual held image/process/channel, mount, kernel and artifact readback can
+issue a process-local live resource reference. Numeric Docker daemon PIDs are
+never treated as local PIDs without matching namespaces, starttime and argv.
+When direct host proc observation is unavailable, its gap and daemon PID scope
+remain explicit; fresh actual inside PID1 facts and owned Docker lifecycle stay
+mandatory. Same kernel boot/time namespace is required for absolute deadlines.
+Missing facts required by the selected profile refuse execution.
+
+The fixed worker export contains only its reviewed Python source closure, no
+bytecode, archive, runtime, credentials or corpus. The separately held software
+export preserves the entire pinned wheel union, including inert .pth, entrypoint
+metadata and .data members; isolated startup and direct paths never process
+those mechanisms. Source bytes cross only the admitted private pipe.
+
+The result port binds actual terminal execution and the existing captured
+diagnostic artifact. Its current observation definition explicitly reports an
+incomplete scientific manifest and cannot qualify PhaseB. The full fixed study
+driver, independent scientific manifest assembly and actual native qualification
+remain outstanding. No real model/container execution is supplied by these
+inert source controls.
 
 Before any actual tokenizer/model or lexical/dense/fusion ranking, the native
 composition still needs genuine PhaseA/B, separately explicit current operation
