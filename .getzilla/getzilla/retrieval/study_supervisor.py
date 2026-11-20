@@ -619,6 +619,8 @@ The fixed scientific driver must separately complete its registered manifest.
     raw = json.dumps(payload, sort_keys=True, allow_nan=False, separators=(',', ':')).encode() + b'\n'
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise RetrievalError('study_inspection_output_exceeded')
+    from .study_driver import _storage, _ports
+    _storage(_ports(), owner, additional=len(raw))
     from contextlib import nullcontext
     existing = getattr(owner.backend, 'run_artifact_context', None)
     context = (nullcontext((existing._folder, existing._directory)) if existing is not None
@@ -636,6 +638,7 @@ The fixed scientific driver must separately complete its registered manifest.
     admit_public_study_stage(owner.operation_ref, owner.reference, 'inspect_release', source_cuts=source_cuts)
     if artifact['sha256'] != hashlib.sha256(raw).hexdigest():
         raise RetrievalError('study_inspection_output_unavailable')
+    _storage(_ports(), owner)
     owner.report_artifact = artifact
 
 
