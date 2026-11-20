@@ -56,16 +56,19 @@ class MigrationPlanTests(unittest.TestCase):
             plan = install_into._make_plan(ROOT, target, include_dependencies=False, include_optional=False,
                                            selection=install_into.PayloadSelection.full_layout())
             self.assertEqual(digest_tree(target), before, 'planning is read-only, even on a dirty tree')
-            report = {item['path']: item for item in plan['existing_untracked']}
+            self.assertEqual(plan['existing_untracked'], [])
             self.assertFalse(plan['existing_untracked_truncated'])
-            for rel, (kind, _content) in UNTRACKED.items():
+            self.assertEqual(plan['existing_untracked_status'],
+                             {'state': 'unknown', 'reason': 'not-run-for-untrusted-config'})
+            report = {item['path']: item for item in plan['consumer_inventory']['entries']}
+            for rel in CONSUMER.keys() | UNTRACKED.keys():
                 with self.subTest(path=rel):
-                    self.assertEqual(report[rel]['class'], kind)
-                    self.assertEqual(report[rel]['action'], 'PRESERVE')
-            # Tracked consumer policy is not untracked work, and the plan never offers to delete anything.
-            self.assertNotIn('AGENTS.md', report)
-            self.assertNotIn('.github/workflows/ci.yml', report)
-            self.assertFalse({item['action'] for item in plan['existing_untracked']} - {'PRESERVE', 'CONFLICT'})
+                    self.assertEqual(report[rel]['action'], 'preserve')
+            self.assertEqual(report['client-consent.factory.json']['classification'], 'requirements')
+            self.assertEqual(report['docs/test-evidence/claw/af2554/summary.json']['classification'], 'evidence')
+            conflicts = {item['path'] for item in plan['entries'] if item.get('action') == 'preserve-conflict'}
+            self.assertIn('AGENTS.md', conflicts)
+            self.assertEqual(report['.github/workflows/ci.yml']['classification'], 'user-change')
             self.assertIn('.grok-stack/AGBP_SYNC.json', {item['path'] for item in plan['legacy_migration']})
 
     def test_an_untracked_file_at_an_installation_path_is_a_conflict(self) -> None:
@@ -76,9 +79,15 @@ class MigrationPlanTests(unittest.TestCase):
             owned = install_into.build_payload(ROOT)[0].path
             (target / owned).parent.mkdir(parents=True, exist_ok=True)
             (target / owned).write_text('local\n', encoding='utf-8')
-            report, _ = install_into._existing_untracked(target, frozenset({owned}))
-            self.assertEqual(report, [{'action': 'CONFLICT', 'path': owned, 'class': report[0]['class'],
-                                       'reason': 'untracked target file at a path the installation would write'}])
+            before = digest_tree(target)
+            entry = install_into.InstallEntry(owned, b'install content\n', 0o644)
+            plan = install_into._make_plan(ROOT, target, include_dependencies=False, include_optional=False,
+                                          payload=(entry,), full_payload=(entry,),
+                                          selection=install_into.PayloadSelection(()))
+            self.assertEqual(plan['existing_untracked'], [])
+            self.assertEqual(next(row for row in plan['entries'] if row['path'] == owned)['action'],
+                             'preserve-conflict')
+            self.assertEqual(digest_tree(target), before)
 
     def test_a_target_without_git_reports_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
