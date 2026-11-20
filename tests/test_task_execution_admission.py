@@ -62,11 +62,15 @@ class TaskExecutionAdmissionTests(unittest.TestCase):
 
     def test_fresh_native_read_works_without_route_grant_or_old_receipt(self):
         with project_copy(git=True) as root:
-            for tool, inputs in (('functions.read_file',{'path':'README.md'}),
-                                 ('functions.write_file',{'path':'source.py','content':'ordinary source'})):
+            for tool, inputs in (('Read',{'file_path':'README.md'}),
+                                 ('Write',{'file_path':'source.py','content':'ordinary source'})):
                 code, result, _ = run_hook(root,'pre_tool_use.py',{'cwd':str(root),'tool_name':tool,'tool_input':inputs})
                 self.assertEqual(code,0)
                 self.assertEqual(result['decision'],'allow')
+            for tool in ('functions.read_file', 'functions.write_file'):
+                _, result, _ = run_hook(root, 'pre_tool_use.py', {'cwd':str(root), 'tool_name':tool,
+                    'tool_input':{'path':'README.md'}})
+                self.assertEqual(result['decision'], 'deny')
             self.assertFalse((root/'source.py').exists(), 'a hook verdict is not an executed effect')
 
     def test_runtime_claims_and_source_change_cannot_mint_or_reuse_authority(self):

@@ -13,16 +13,13 @@ PREFIX = 'local-git-v1:'
 def repository_identity(root: Path) -> str:
     # Lazy existing Git registration proof avoids a state/architecture import cycle.
     from .architecture import ArchitectureError
-    from .architecture_diff import _git_binding, _git_command, _git_environment, _run_capped
+    from .architecture_diff import _git_binding, run_git_read
     from .fsx import _identity
 
     try:
         binding = _git_binding(root)
-        code, output, _error = _run_capped(
-            _git_command(['config', '--get-all', 'remote.origin.url'],
-                         safe_directory=binding.root, git_directory=binding.git_directory),
-            cwd=binding.root, env=_git_environment(), stdout_limit=16_384,
-            stderr_limit=4096, timeout=30)
+        code, output, _error = run_git_read(root, ['config', '--get-all', 'remote.origin.url'],
+            binding=binding, stdout_limit=16_384, stderr_limit=4096, timeout=30)
         # Git config exit1 and no output means absent. Empty/multiple values and
         # command errors must not become a local grant identity.
         if code != 1 or output:

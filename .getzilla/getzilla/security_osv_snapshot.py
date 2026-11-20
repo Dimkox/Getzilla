@@ -29,8 +29,7 @@ from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES, _git_command,
-                                _git_environment, _run_capped)
+from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES)
 from .package_status import _git_read
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
                             osv_aliases, osv_decision_ids, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
@@ -355,9 +354,9 @@ def _source_git_root(root: Path) -> bool:
 def _tracked_files(root: Path) -> list[str]:
     root_proven = _source_git_root(root)
     try:
-        code, output, _ = _run_capped(
-            _git_command(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], safe_directory=root),
-            cwd=root, env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
+        from .architecture_diff import run_git_read
+        code, output, _ = run_git_read(
+            root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], stdout_limit=MAX_GIT_OUTPUT_BYTES,
             stderr_limit=4096, timeout=60,
         )
     except (ArchitectureError, OSError) as exc:

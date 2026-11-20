@@ -777,7 +777,7 @@ class PackageStatusTests(unittest.TestCase):
         with project_copy(git=True) as root:
             route, _, _, _ = self.prepare(root)
             module = self.module()
-            with patch.object(module, '_run_capped', side_effect=module.ArchitectureError('timeout', code='timeout')):
+            with patch.object(module, 'run_git_read', side_effect=module.ArchitectureError('timeout', code='timeout')):
                 result = module.collect_worktree(root, route)
             self.assertIsNone(result['commits_ahead'])
             self.assertIsNone(result['uncommitted_product_zero_ahead'])
