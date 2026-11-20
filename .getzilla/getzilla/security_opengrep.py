@@ -294,7 +294,9 @@ def syntax_check(frontend: SyntaxFrontend, raw: bytes, run_root: Path, *, deadli
             result = _run([str(frontend.path), '-n', '-l', source.path], run_root,
                           dict(_ENVIRONMENT), deadline, inherited_fds=inherited)
         elif frontend.language == 'javascript':
-            result = _run([str(frontend.path), '--input-type=module', '--check'], run_root,
+            # Parsing needs no JIT code range; reserving it can exhaust a bounded
+            # worker's address space before Node ever examines the sealed bytes.
+            result = _run([str(frontend.path), '--jitless', '--input-type=module', '--check'], run_root,
                           dict(_ENVIRONMENT), deadline, stdin_fd=source.descriptor)
         else:
             raise OpenGrepError('syntax_frontend_unavailable')

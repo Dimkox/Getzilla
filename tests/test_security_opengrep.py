@@ -160,10 +160,16 @@ class SyntaxProfileTests(unittest.TestCase):
                      b'function broken( { console.log("inert"); }\n')]
         with tempfile.TemporaryDirectory() as directory:
             for language, valid, invalid in fixtures:
-                with self.subTest(language=language), self.scanner.syntax_frontend(language) as frontend:
+                with self.subTest(language=language), self.scanner.syntax_frontend(language) as frontend, \
+                        mock.patch.object(self.scanner, '_run', wraps=self.scanner._run) as observed:
                     self.scanner.syntax_check(frontend, valid, Path(directory))
                     with self.assertRaisesRegex(self.scanner.OpenGrepError, '^syntax_incomplete$'):
                         self.scanner.syntax_check(frontend, invalid, Path(directory))
+                    if language == 'javascript':
+                        self.assertEqual(observed.call_count, 2)
+                        for call in observed.call_args_list:
+                            self.assertEqual(call.args[0][1:], ['--jitless', '--input-type=module', '--check'])
+                            self.assertIn('stdin_fd', call.kwargs)
 
 
 @unittest.skipUnless(sys.platform.startswith('linux') and hasattr(os, 'memfd_create'),
