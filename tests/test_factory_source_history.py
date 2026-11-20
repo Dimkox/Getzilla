@@ -51,6 +51,9 @@ class FactorySourceHistoryTests(unittest.TestCase):
             and path != Path("factory/contracts/jsonschema/owner-autonomy.v1.schema.json")
             # Only the explicitly versioned successor is outside predecessor bytes.
             and path != Path("factory/contracts/jsonschema/earned-autonomy.v2.schema.json")
+            and path != Path("factory/contracts/jsonschema/context-manifest.v2.schema.json")
+            and path != Path("factory/contracts/jsonschema/paid-execution-authority.v1.schema.json")
+            and path != Path("factory/contracts/openapi/factory-access-workflow.v1.json")
         )
         self.assertEqual(
             # Re-anchored after the Getzilla rename (decisions.md 2026-10-08): the 18 files are
