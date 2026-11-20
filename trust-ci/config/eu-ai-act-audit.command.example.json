@@ -1,0 +1,7 @@
+{
+  "name": "eu-ai-act-audit",
+  "argv": ["python3", "scripts/getzilla_audit_bundle.py", "--ci-check"],
+  "timeout_seconds": 300,
+  "required": true,
+  "attest_argv": true
+}
