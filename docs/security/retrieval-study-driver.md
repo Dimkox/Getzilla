@@ -68,12 +68,26 @@ export preserves the entire pinned wheel union, including inert .pth, entrypoint
 metadata and .data members; isolated startup and direct paths never process
 those mechanisms. Source bytes cross only the admitted private pipe.
 
+`study_driver.run_fixed_study` accepts only a genuine current operation reference.
+It composes the fixed six arms, equal-weight RRF, original top100 and packing,
+240 queries and ten retained timing passes. It uses three fresh sequential cold
+processes per model, prepares both indices before warm scoring, and checks the
+same two fresh source cuts before encode, score and source-derived release.
+RANK reproduces the witnessed window and asset observations. Exact integer ratios
+decide the sixteen-task holdout boundary; missing observations stay INCONCLUSIVE.
+An owned query failure stops the attempt and remains a failed existing execution;
+it does not repeat the holdout or select a surviving subset.
+
 The result port binds actual terminal execution and the existing captured
-diagnostic artifact. Its current observation definition explicitly reports an
-incomplete scientific manifest and cannot qualify PhaseB. The full fixed study
-driver, independent scientific manifest assembly and actual native qualification
-remain outstanding. No real model/container execution is supplied by these
-inert source controls.
+diagnostic artifact. INSPECT scientific assembly uses only protected input ports
+and responses captured by the actual live owner. A supplied report dictionary
+cannot issue that result reference. A generic incomplete observation cannot
+qualify PhaseB; complete scientific facts still need actual native qualification,
+confirmed cleanup and independent reviews through the PhaseB owner. Marker,
+window mapping, ranks, timings and summary use the same immutable run folder,
+so the protected output reference retains the complete storage lineage. The
+separate fixed storage owner counts that folder and the approved retained roots.
+No real model/container execution is supplied by these inert source controls.
 
 Before any actual tokenizer/model or lexical/dense/fusion ranking, the native
 composition still needs genuine PhaseA/B, separately explicit current operation

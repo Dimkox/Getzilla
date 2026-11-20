@@ -19,7 +19,8 @@ import time
 MAX_FRAME = 1048576
 HEARTBEAT_SECONDS = 5
 STAGE_SECONDS = {'native-import': 180, 'load-tokenizer': 180, 'windows': 2,
-                 'load-model': 180, 'encode': 2, 'score': 2, 'release': 2}
+                 'load-model': 180, 'probe': 2, 'packing-probe': 2, 'inspect-length': 2,
+                 'encode': 2, 'prepare-index': 2, 'score': 2, 'release': 2}
 
 
 def _pairs(pairs):
@@ -51,13 +52,18 @@ class FrameInput:
 
     def next(self, deadline):
         while True:
+            if time.monotonic() >= deadline:
+                raise ValueError('channel deadline')
             end = self.buffer.find(b'\n')
             if end >= 0:
                 if end > MAX_FRAME:
                     raise ValueError('frame exceeded')
                 raw = bytes(self.buffer[:end])
                 del self.buffer[:end + 1]
-                return decode(raw)
+                value = decode(raw)
+                if time.monotonic() >= deadline:
+                    raise ValueError('channel deadline')
+                return value
             if len(self.buffer) > MAX_FRAME or time.monotonic() >= deadline:
                 raise ValueError('channel deadline')
             if self.fd is None:

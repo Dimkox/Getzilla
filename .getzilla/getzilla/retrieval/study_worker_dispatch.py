@@ -13,7 +13,7 @@ import time
 import hashlib
 
 from .budget import Budget, RetrievalError
-from .contracts import sha
+from .contracts import sha, digest
 from .study_windows import windows_for_file
 
 CONTROL = {'nonce', 'sequence', 'absolute_deadline'}
@@ -116,7 +116,8 @@ def _tokenizer(model, state):
 
 def _window_request(request, state):
     _fields(request, {'corpus', 'path', 'raw', 'functions'})
-    if type(request['raw']) is not str or 'window_counter' not in state:
+    if (type(request['raw']) is not str or 'window_counter' not in state
+            or request['corpus'] in state.get('prepared', {})):
         raise RetrievalError('study_windows_unavailable')
     rows = windows_for_file(request['corpus'], request['path'], request['raw'].encode(),
         request['functions'], state['window_counter'], budget=_budget(request))
@@ -184,27 +185,83 @@ def _encode(request, state):
     raise RetrievalError('study_encode_unavailable')
 
 
-def _score(request, state):
-    _fields(request, {'corpus', 'query_id'})
-    from .study_lexical import LexicalIndex
-    from .study_vectors import rrf_ranks
+def _probe(request, state):
+    _fields(request, {'model'})
+    if request['model'] != state.get('model'):
+        raise RetrievalError('study_model_unavailable')
+    from .study_onnx_worker import _encode_one
+    result = _encode_one(state['session'], state['contract'], state['tokenizers'][state['model']],
+                         'public offline conformance', state['np'])
+    return {'model': state['model'], 'vector_dimension': len(result['vector']),
+            'vector_digest': digest(result['vector']), 'raw_tokens': result['raw_tokens'],
+            'truncated': result['truncated'], 'probe': 'public offline conformance'}
+
+
+def _packing_probe(request, state):
+    _fields(request, ())
     from .study_context import pack_context
+    from .study_windows import StudyWindow
+    first, second = 'one\ntwo\n', 'two\nthree\n'
+    rows = [StudyWindow('small', 'inert.py', 'probe', 'inert.py:1:probe', start, end,
+        'b' * 64, sha(text.encode()), text, 4, False, 'a' * 64)
+        for start, end, text in ((1, 2, first), (2, 3, second))]
+    expected = (f'[small inert.py:1-2 sha256={"b" * 64} source-lines=1,2]\n'
+                'one\ntwo\n\n---\n' +
+                f'[small inert.py:2-3 sha256={"b" * 64} source-lines=3]\nthree\n\n---\n')
+    result = {}
+    for limit in (2048, 8192):
+        packed = pack_context([row.id for row in rows], {row.id: row for row in rows},
+                               state['codec'], limit, budget=_budget(request))
+        if packed.text != expected or packed.tokens != state['codec'].count(expected):
+            raise RetrievalError('study_packing_parity_failed')
+        result[str(limit)] = {'tokens': packed.tokens, 'context_sha256': sha(packed.text.encode()),
+                             'source_positions': packed.included_positions}
+    return result
+
+
+def _inspect_length(request, state):
+    _fields(request, {'model', 'corpus', 'window_id'})
+    row = state.get('windows', {}).get(request['corpus'], {}).get(request['window_id'])
+    counter = state.get('tokenizers', {}).get(request['model'])
+    if row is None or counter is None:
+        raise RetrievalError('study_window_unavailable')
+    result = counter.encode_one(row.text)
+    return {'window_id': row.id, 'model': request['model'],
+            'raw_tokens': result.raw_tokens, 'truncated': result.truncated}
+
+
+def _prepare_index(request, state):
+    _fields(request, {'corpus'})
+    from .study_lexical import LexicalIndex
     corpus = request['corpus']
-    query_id, query_corpus, text, vector = state['query']
-    if (request['query_id'], corpus) != (query_id, query_corpus):
-        raise RetrievalError('study_query_changed')
     windows = state['windows'][corpus]
     rows = tuple(windows[key] for key in sorted(windows))
     vectors = state['vectors'][(state['model'], corpus)]
     if set(vectors) != set(windows):
         raise RetrievalError('study_index_incomplete')
     budget, np = _budget(request), state['np']
-    index = state.setdefault('lexical', {}).get(corpus)
-    if index is None:
-        index = LexicalIndex(rows, budget=budget)
-        state['lexical'][corpus] = index
-    ranked = index.query(text, budget=budget)
+    if corpus in state.get('prepared', {}):
+        raise RetrievalError('study_index_repeated')
+    index = LexicalIndex(rows, budget=budget)
     matrix = np.asarray([vectors[row.id] for row in rows], dtype=np.float32)
+    budget.check()
+    state.setdefault('prepared', {})[corpus] = (rows, index, matrix)
+    return {'corpus': corpus, 'windows': len(rows)}
+
+
+def _score(request, state):
+    _fields(request, {'corpus', 'query_id'})
+    from .study_vectors import rrf_ranks
+    from .study_context import pack_context
+    corpus = request['corpus']
+    query_id, query_corpus, text, vector = state['query']
+    if (request['query_id'], corpus) != (query_id, query_corpus):
+        raise RetrievalError('study_query_changed')
+    if corpus not in state.get('prepared', {}):
+        raise RetrievalError('study_index_incomplete')
+    rows, index, matrix = state['prepared'][corpus]
+    windows, np, budget = state['windows'][corpus], state['np'], _budget(request)
+    ranked = index.query(text, budget=budget)
     scores = matrix @ np.asarray(vector, dtype=np.float32)
     if not np.isfinite(scores).all():
         raise RetrievalError('study_score_nonfinite')
@@ -242,8 +299,16 @@ def dispatch(request, state):
         return _window_request(request, state)
     if op == 'load-model':
         return _load_model(request, state)
+    if op == 'probe' and 'session' in state:
+        return _probe(request, state)
+    if op == 'packing-probe':
+        return _packing_probe(request, state)
+    if op == 'inspect-length':
+        return _inspect_length(request, state)
     if op == 'encode' and 'session' in state:
         return _encode(request, state)
+    if op == 'prepare-index' and 'session' in state:
+        return _prepare_index(request, state)
     if op == 'score' and 'query' in state:
         return _score(request, state)
     if op == 'release':

@@ -1,5 +1,7 @@
 import importlib
 import pickle
+import io
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
@@ -30,6 +32,17 @@ class StudySupervisorTests(unittest.TestCase):
             with self.subTest(kind=type(fake)), self.assertRaises(ValueError):
                 owner.check_study_inspection_result(fake, object())
 
+    def test_rank_deadline_cannot_restart_the_inspection_or_review_budget(self):
+        owner = self.owner()
+        now = time.monotonic()
+        rank = SimpleNamespace(operation='rank_public_study', original_deadline=now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 100.), now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 2.), now + 2.)
+        for value in (None, now - 1., float('inf'), 'caller timestamp'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                owner._bound_execution_deadline(SimpleNamespace(
+                    operation='rank_public_study', original_deadline=value), now + 100.)
+
     def test_raw_data_cannot_start_a_container_when_operation_owner_unavailable(self):
         owner = self.owner()
         with patch('getzilla.retrieval.study_docker_process._spawn') as spawn:
@@ -45,6 +58,7 @@ class StudySupervisorTests(unittest.TestCase):
             worker_root='/fixture/worker', cpu_ids=(2, 3))
         args, command = owner._create_arguments(projection, 'b' * 32, 'c' * 64, 10000)
         self.assertIn('--pull=never', args)
+        self.assertIn('--interactive', args)
         self.assertIn('--network=none', args)
         self.assertIn('--read-only', args)
         self.assertIn('--memory-swap=6442450944', args)
@@ -59,7 +73,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_failed_owned_start_retains_failure_and_actual_cleanup_not_repeat(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         admission = SimpleNamespace(consume=Mock())
         native = Mock()
         native.start.side_effect = ValueError('controlled unavailable')
@@ -74,7 +88,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_other_active_or_unconfirmed_model_owner_refuses(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         for status, cleanup in (('running', 'not_required'), ('failed', 'unconfirmed')):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 backend.admit_resources({'records': {'x': {'backend': {'kind': backend.kind},
@@ -86,7 +100,10 @@ class StudySupervisorTests(unittest.TestCase):
         resource.pid, resource.start_ticks, resource.command = 1234, '77', ('python', 'worker')
         resource.pidfd, resource.pid_scope = None, 'docker-daemon'
         with patch('os.readlink', return_value='pid:[unrelated]'), \
-                patch('os.pidfd_open') as pidfd:
+                patch.object(owner, '_start_ticks', return_value='77'), \
+                patch('builtins.open', return_value=io.BytesIO(b'python\0worker\0')), \
+                patch.object(owner.select, 'select', return_value=([], [], [])), \
+                patch('os.pidfd_open', return_value=42) as pidfd:
             resource._bind_direct_host_pid({'namespace_ids': {'pid': 'pid:[owned]'}})
         pidfd.assert_not_called()
         self.assertIsNone(resource.pidfd)
@@ -109,3 +126,20 @@ class StudySupervisorTests(unittest.TestCase):
                          owner._observed_environment(['OMP_NUM_THREADS=1', 'PATH=fixed']))
         with self.assertRaises(ValueError):
             owner._observed_environment(['PATH=fixed', 'PATH=other'])
+
+    def test_create_side_stdin_and_non_tty_are_rechecked_from_actual_config(self):
+        from tests.test_retrieval_study_resources import StudyResourceTests
+        owner = self.owner()
+        resource = object.__new__(owner._Owner)
+        resource.projection = SimpleNamespace(image_id='sha256:' + 'a' * 64,
+            cpu_ids=(2, 3), model_root='/fixture/model', software_root='/fixture/software',
+            worker_root='/fixture/worker')
+        resource.command, resource.expected_env = ('python', 'worker'), {}
+        observed = StudyResourceTests().fixture()
+        observed['Config'].update(Env=[], OpenStdin=True, Tty=False)
+        observed['HostConfig']['RestartPolicy'] = {'Name': 'no'}
+        resource.validate_container(observed)
+        for key, value in (('OpenStdin', False), ('Tty', True)):
+            broken = {**observed, 'Config': {**observed['Config'], key: value}}
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                resource.validate_container(broken)
