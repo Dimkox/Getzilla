@@ -263,8 +263,10 @@ def install(store, account, task, prices):
             ("paid_accounts", (account.account_id,), canonical_json(asdict(account))),
             ("paid_tasks", (account.account_id, task.task_id), canonical_json(asdict(task))),
         ]:
-            where = "account_id=?" if table == "paid_accounts" else "account_id=? AND task_id=?"
-            old = store._connection.execute(f"SELECT authority FROM {table} WHERE {where}", values).fetchone()
+            query = ("SELECT authority FROM paid_accounts WHERE account_id=?"
+                     if table == "paid_accounts" else
+                     "SELECT authority FROM paid_tasks WHERE account_id=? AND task_id=?")
+            old = store._connection.execute(query, values).fetchone()
             if old is not None and old[0] != blob:
                 _deny("paid_authority_conflict")
             if old is None:

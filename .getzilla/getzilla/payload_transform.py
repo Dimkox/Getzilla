@@ -42,7 +42,8 @@ class DataClass(Enum):
     PUBLIC = 'public'
     INTERNAL = 'internal'
     PERSONAL = 'personal'
-    SECRET = 'secret'
+    # Closed data-class label, never a credential or authentication value.
+    SECRET = 'secret'  # nosec B105
     UNKNOWN = 'unknown'
 
 

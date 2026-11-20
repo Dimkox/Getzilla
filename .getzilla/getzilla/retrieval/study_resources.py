@@ -66,8 +66,9 @@ def validate_container_readback(observed, *, image_id, cpu_ids, command, mounts)
                 or host['SecurityOpt'] != ['no-new-privileges:true']
                 or host['Devices'] != [] or host['DeviceRequests'] not in (None, [])
                 or host['LogConfig']['Type'] != 'none'
-                or set(host['Tmpfs']) != {'/tmp'}
-                or frozenset(host['Tmpfs']['/tmp'].split(',')) != TMPFS_OPTIONS):
+                # Validate the sole container-private tmpfs and its exact options.
+                or set(host['Tmpfs']) != {'/tmp'}  # nosec B108
+                or frozenset(host['Tmpfs']['/tmp'].split(',')) != TMPFS_OPTIONS):  # nosec B108
             raise RetrievalError('offline_profile_mismatch')
         actual_mounts = observed['Mounts']
         if type(actual_mounts) is not list or len(actual_mounts) != 3:

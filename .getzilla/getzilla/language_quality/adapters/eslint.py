@@ -63,7 +63,7 @@ def build_argv(request: AdapterRequest) -> tuple[str, ...]:
     argv = [*request.launcher, "--format", "json", "--no-color", "--exit-on-fatal-error"]
     # Even without --cache, ESLint removes the cache at cache-location. Keep
     # that operation outside the read-only workspace, in the core's private tmpfs.
-    argv.extend(("--cache-location", "/tmp/getzilla-eslint-cache"))
+    argv.extend(("--cache-location", "/tmp/getzilla-eslint-cache"))  # nosec B108
     if request.config_path is not None:
         argv.extend(("--config", _relative_file(request.config_path)))
     argv.append("--")

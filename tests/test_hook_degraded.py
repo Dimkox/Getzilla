@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import sys
 import unittest
@@ -29,6 +30,23 @@ def write_event(root: Path, ts: str, hook: str = 'pre_tool_use') -> None:
 
 
 class HookDegradedTests(unittest.TestCase):
+    def test_invalid_request_emits_one_denial_when_telemetry_fails(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            'invalid_request_hook_fixture', ROOT / '.getzilla/hooks/pre_tool_use.py')
+        owner = importlib.util.module_from_spec(spec)
+        with patch.object(sys, 'path', [str(ROOT / '.getzilla/hooks'), *sys.path]):
+            spec.loader.exec_module(owner)
+        self.assertTrue(owner._BOOTSTRAP_READY)
+        for error in (None, OSError('private telemetry diagnostic')):
+            emitted = []
+            with self.subTest(telemetry_failed=error is not None), \
+                    patch.object(owner, '_read_tool_payload', side_effect=ValueError('private input')), \
+                    patch.object(owner, 'record_degraded', side_effect=error) as record, \
+                    patch.object(owner, 'emit', side_effect=emitted.append):
+                self.assertIsNone(owner.main())
+            self.assertEqual(emitted, [owner.permission_output(False, owner._INVALID_TOOL_REQUEST)])
+            record.assert_called_once_with('pre_tool_use', 'invalid-tool-request')
+
     def test_own_stack_precedes_foreign_pythonpath_when_local_imports_break(self) -> None:
         for module in ('policy', 'fsx'):
             with self.subTest(module=module), project_copy() as root:

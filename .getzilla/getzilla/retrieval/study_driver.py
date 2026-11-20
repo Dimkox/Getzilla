@@ -219,8 +219,9 @@ def _primary(dataset, observations, metric_rows):
     status = ('INCONCLUSIVE' if not coverage['complete'] or coverage['failed'] or coverage['nondeterministic']
               or any(row['status'] == 'INCONCLUSIVE' for row in report) else
               'FAIL' if any(row['status'] == 'FAIL' for row in report) else 'PASS')
+    # Experiment counters, including the zero-indexed quality pass, are not passwords.
     return {'status': status, 'slices': report, 'observations': coverage,
-            'quality_pass': 0, 'warm_passes': 10, 'arm_order': ARMS}
+            'quality_pass': 0, 'warm_passes': 10, 'arm_order': ARMS}  # nosec B105
 
 
 def _check_rank_reproduction(inputs, model, graph, tokenizer, windows):

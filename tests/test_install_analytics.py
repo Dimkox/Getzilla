@@ -147,6 +147,20 @@ function Invoke-Python($python,$arguments) {
             self.assertEqual((Path(tmp)/'events').read_text().strip(),'event')
 
 class BoundaryTests(AnalyticsTests):
+    def test_worker_delivery_failure_is_nonfatal_and_does_not_retry(self):
+        import importlib.util
+        from unittest.mock import patch
+        path=Path(__file__).resolve().parents[1]/'scripts/getzilla_install_analytics.py'
+        spec=importlib.util.spec_from_file_location('install_analytics_failure_cli',path)
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(sys,'argv',[str(path),'--ready','--worker']), \
+                patch.object(module,'client_event',side_effect=OSError('private diagnostic')) as send, \
+                patch.object(module.subprocess,'run') as run:
+            self.assertIsNone(module.main())
+        send.assert_called_once()
+        run.assert_not_called()
+
     def test_revocation_and_consent_scope(self):
         self.store.revoke(self.token)
         with self.assertRaises(ValueError):

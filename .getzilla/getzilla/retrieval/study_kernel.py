@@ -72,16 +72,19 @@ def _mounts(text):
         if len(fields) < 10 or '-' not in fields:
             raise RetrievalError('study_kernel_mount_unavailable')
         target = fields[4]
-        if target in {'/', '/model', '/software', '/worker', '/tmp'}:
+        # Readback allowlist for required container mounts; opens no temporary file.
+        if target in {'/', '/model', '/software', '/worker', '/tmp'}:  # nosec B108
             if target in mounts:
                 raise RetrievalError('study_kernel_mount_unavailable')
             mounts[target] = fields
-    if set(mounts) != {'/', '/model', '/software', '/worker', '/tmp'}:
+    # Require the container-private tmpfs before checking its type and protections.
+    if set(mounts) != {'/', '/model', '/software', '/worker', '/tmp'}:  # nosec B108
         raise RetrievalError('study_kernel_mount_unavailable')
     for target in ('/', '/model', '/software', '/worker'):
         if 'ro' not in mounts[target][5].split(','):
             raise RetrievalError('study_kernel_mount_unavailable')
-    tmp = mounts['/tmp']
+    # Inspect recorded mount metadata, not a host temporary path.
+    tmp = mounts['/tmp']  # nosec B108
     if (not {'rw', 'nosuid', 'nodev', 'noexec'} <= set(tmp[5].split(','))
             or tmp[tmp.index('-') + 1] != 'tmpfs'):
         raise RetrievalError('study_kernel_mount_unavailable')

@@ -203,6 +203,8 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--network") + 1], "none")
         self.assertEqual(argv[argv.index("--pull") + 1], "never")
         self.assertEqual(argv[argv.index("--user") + 1], "65534:65534")
+        self.assertEqual(argv[argv.index("--tmpfs") + 1],
+                         '/tmp:rw,noexec,nosuid,size=64m,mode=1777')
         self.assertIn("type=bind,src=/private/snapshot,dst=/workspace,readonly", argv)
         self.assertIn("/workspace/web", argv)
         self.assertNotIn("--privileged", argv)

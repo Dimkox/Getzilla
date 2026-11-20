@@ -3,6 +3,18 @@ import unittest
 
 
 class StudyKernelTests(unittest.TestCase):
+    def test_required_tmpfs_cannot_be_missing_duplicated_or_executable(self):
+        owner = self.owner()
+        readonly = ''.join(f'1 0 0:1 / {target} ro - overlay overlay ro\n'
+                           for target in ('/', '/model', '/software', '/worker'))
+        temporary = '2 0 0:2 / /tmp rw,nosuid,nodev,noexec - tmpfs tmpfs rw\n'
+        self.assertIn('/tmp', owner._mounts(readonly + temporary))
+        for value in (readonly, readonly + temporary + temporary,
+                      readonly + temporary.replace(',noexec', ''),
+                      readonly + temporary.replace('- tmpfs ', '- ext4 ')):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                owner._mounts(value)
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_kernel')
