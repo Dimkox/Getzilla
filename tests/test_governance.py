@@ -294,7 +294,9 @@ def _git_commit_fixture(root: Path) -> str:
 
 
 def _materialize_architecture(root: Path) -> None:
-    shutil.copytree(ROOT / "architecture", root / "architecture")
+    # Independent toy Git histories use consumer limits, like installed projects.
+    shutil.copytree(ROOT / "architecture", root / "architecture",
+                    ignore=shutil.ignore_patterns("queue-analysis-profile.json"))
     shutil.copytree(ROOT / "engineering" / "contracts", root / "engineering" / "contracts")
     shutil.copytree(ROOT / "factory" / "contracts", root / "factory" / "contracts")
     shutil.copytree(ROOT / "pilot" / "contracts", root / "pilot" / "contracts")
@@ -1354,7 +1356,8 @@ class GovernanceKnowledgeTests(unittest.TestCase):
         evidence_documents: dict[str, object] | None = None,
     ) -> Path:
         root = _make_fixture(self)
-        shutil.copytree(ROOT / "architecture", root / "architecture")
+        shutil.copytree(ROOT / "architecture", root / "architecture",
+                        ignore=shutil.ignore_patterns("queue-analysis-profile.json"))
         for schema_name in ("architecture-system.schema.json", "architecture-rules.schema.json"):
             shutil.copy2(ROOT / "schemas" / schema_name, root / "schemas" / schema_name)
         shutil.copytree(ROOT / "engineering" / "contracts", root / "engineering" / "contracts")
@@ -1677,6 +1680,25 @@ class GovernanceKnowledgeTests(unittest.TestCase):
 class GovernanceHandoffTests(unittest.TestCase):
     NOW = datetime(2026, 8, 28, 13, 0, tzinfo=timezone.utc)
 
+    def test_ordinary_fixture_uses_consumer_limits_and_copied_self_profile_is_refused(self) -> None:
+        from getzilla import architecture_fitness as fitness
+
+        root = _make_fixture(self)
+        _materialize_architecture(root)
+        _git_commit_fixture(root)
+        declaration = "architecture/queue-analysis-profile.json"
+        self.assertFalse((root / declaration).exists())
+        profile = fitness._queue_analysis_profile(root, None, "head")
+        self.assertEqual((profile.name, profile.module_limit, profile.byte_limit),
+                         ("consumer-v1", 64, 2 * 1024 * 1024))
+        self.assertEqual(fitness.MAX_QUEUE_ANALYSIS_AST_NODES, 400_000)
+        self.assertEqual(fitness.MAX_QUEUE_ADAPTER_DEPTH, 8)
+        installer = runpy.run_path(str(ROOT / "scripts/install_into.py"))
+        self.assertNotIn(declaration, {relative for relative, _ in installer["iter_source_files"](ROOT)})
+        shutil.copy2(ROOT / declaration, root / declaration)
+        with self.assertRaisesRegex(ArchitectureError, "exact Getzilla source ancestry"):
+            fitness._queue_analysis_profile(root, None, "head")
+
     def _clean_fixture(self) -> tuple[Path, object, str, dict[str, object]]:
         root = _make_fixture(self)
         _materialize_architecture(root)
@@ -1853,13 +1875,13 @@ class GovernanceHandoffTests(unittest.TestCase):
         reads = 0
 
         def alternating_read(
-            descriptor: int, relative: str, *, label: str
+            descriptor: int, relative: str, *, label: str, anchor=None
         ) -> bytes:
             nonlocal reads
             if relative == shared_path:
                 reads += 1
                 return first_bytes if reads % 2 else head_bytes
-            return real_read(descriptor, relative, label=label)
+            return real_read(descriptor, relative, label=label, anchor=anchor)
 
         with mock.patch.object(
             governance, "_read_regular_bytes", side_effect=alternating_read
@@ -1881,12 +1903,12 @@ class GovernanceHandoffTests(unittest.TestCase):
         reads = 0
 
         def counted_read(
-            descriptor: int, relative: str, *, label: str
+            descriptor: int, relative: str, *, label: str, anchor=None
         ) -> bytes:
             nonlocal reads
             if relative == shared_path:
                 reads += 1
-            return real_read(descriptor, relative, label=label)
+            return real_read(descriptor, relative, label=label, anchor=anchor)
 
         with mock.patch.object(
             governance, "_read_regular_bytes", side_effect=counted_read
@@ -2449,8 +2471,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         subprocess.run(["git", "worktree", "add", "-q", "--detach", str(linked), head], cwd=root, check=True)
         real_pointer = architecture_diff._git_pointer
 
-        def mutate(path: Path) -> bytes:
-            content = real_pointer(path)
+        def mutate(path: Path, *, _guard=None) -> bytes:
+            content = real_pointer(path, _guard=_guard)
             if path == linked / ".git":
                 path.write_text(f"gitdir: {foreign / '.git'}\n", encoding="utf-8")
             return content
@@ -2458,6 +2480,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         with mock.patch.object(architecture_diff, "_git_pointer", side_effect=mutate):
             with self.assertRaises(ArchitectureError):
                 architecture_diff._git(linked, ["rev-parse", "HEAD"])
+        self.assertEqual((linked / ".git").read_text(), f"gitdir: {foreign / '.git'}\n")
 
     def test_linked_worktree_cannot_redirect_its_common_object_store(self) -> None:
         root, head = self._repository()
