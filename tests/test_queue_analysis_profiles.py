@@ -44,6 +44,53 @@ class QueueAnalysisProfileTests(unittest.TestCase):
             self.assertEqual(caught.exception.queue_refusal['category'], 'bytes')
             self.assertEqual(caught.exception.queue_refusal['observed'], limit + 1)
 
+    def test_self_ast600000_boundary_keeps_consumer400000(self):
+        self.assertEqual(fit.MAX_QUEUE_ANALYSIS_AST_NODES, 400_000)
+        for limit, profile in ((400_000, None), (600_000, self.self_profile())):
+            with self.subTest(limit=limit):
+                budget = fit._QueueBudget('head', profile=profile)
+                budget.source('owned.py', b'value=1', nodes=limit)
+                self.assertEqual(budget.ast_nodes, limit)
+                with self.assertRaises(fit.ArchitectureError) as caught:
+                    budget.source('owned.py', b'value=1', nodes=limit + 1)
+                self.assertEqual(caught.exception.queue_refusal['category'], 'nodes')
+                self.assertEqual(caught.exception.queue_refusal['limit'], limit)
+                self.assertEqual(caught.exception.queue_refusal['observed'], limit + 1)
+
+    def test_self_import_depth16_cold_and_warm_refusals_keep_exact_context(self):
+        from tests.test_queue_depth_diagnostics import QueueDepthDiagnosticTests
+        helper = QueueDepthDiagnosticTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        self.assertEqual(fit.MAX_QUEUE_ADAPTER_DEPTH, 8)
+        for limit, profile in ((8, fit._CONSUMER_PROFILE), (16, self.self_profile())):
+            with self.subTest(limit=limit):
+                cache = helper.graph(limit)._replace(profile=profile)
+                budget = fit._QueueBudget('head', profile=profile)
+                result = helper.resolve(cache, budget=budget)
+                self.assertEqual(result.height, limit)
+                self.assertEqual(result.source_modules, frozenset(f'toy.m{i}' for i in range(limit)))
+                self.assertEqual(len(budget.sources), limit)
+                for warm in (False, True):
+                    cache = helper.graph(limit + 1)._replace(profile=profile)
+                    if warm:
+                        start = limit // 2 + 1
+                        helper.resolve(cache, f'toy.m{start}', budget=fit._QueueBudget('head', profile=profile))
+                    with self.assertRaises(fit.ArchitectureError) as caught:
+                        helper.resolve(cache, budget=fit._QueueBudget('head', profile=profile))
+                    error = caught.exception
+                    self.assertEqual(error.queue_refusal['limit'], limit)
+                    self.assertEqual(error.queue_refusal['observed'], limit + 1)
+                    context = fit._queue_exception_depth_context(error, 'head')
+                    self.assertIsNotNone(context)
+                    self.assertEqual(context.limit, limit)
+                    self.assertEqual(context.attempted_depth, limit + 1)
+                    self.assertEqual(context.boundary, 'cached-height' if warm else 'live-depth')
+                    self.assertFalse(context.truncated)
+                    provenance = fit._QueueProvenanceResult('unsupported', 'analysis_limit_exceeded', (),
+                        depth_contexts=(('owned/jobs.py', 'head', context),))
+                    self.assertEqual(len(fit._queue_depth_findings(provenance)), 1)
+
     def test_self_warm_footprint_cannot_enter_default_or_other_side(self):
         selected = fit._QueueBudget('head', profile=self.self_profile())
         frame = selected.enter('actual')
@@ -154,7 +201,11 @@ class QueueAnalysisProfileTests(unittest.TestCase):
     def test_arbitrary_resource_profile_is_not_a_caller_limit(self):
         from getzilla.queue_analysis_profile import QueueAnalysisProfile
         for value in ((128, 4194304), QueueAnalysisProfile('getzilla-self-v1', 129, 4194304, ''),
-                      QueueAnalysisProfile('consumer-v1', 128, 4194304, '')):
+                      QueueAnalysisProfile('consumer-v1', 128, 4194304, ''),
+                      self.self_profile()._replace(node_limit=600_001),
+                      self.self_profile()._replace(depth_limit=17),
+                      fit._CONSUMER_PROFILE._replace(node_limit=600_000),
+                      fit._CONSUMER_PROFILE._replace(depth_limit=16)):
             with self.subTest(value=value), self.assertRaises(fit.ArchitectureError):
                 fit._QueueBudget('head', profile=value)
 

@@ -19,11 +19,14 @@ class QueueAnalysisProfile(NamedTuple):
     byte_limit: int
     source_digest: str
     binding: str = ''
+    node_limit: int = 400_000
+    depth_limit: int = 8
 
 
 CONSUMER_PROFILE = QueueAnalysisProfile('consumer-v1', 64, 2097152, '')
 GETZILLA_SELF_PROFILE = QueueAnalysisProfile('getzilla-self-v1', 128, 4194304,
-                                            hashlib.sha256(POLICY_SOURCE).hexdigest())
+                                            hashlib.sha256(POLICY_SOURCE).hexdigest(),
+                                            node_limit=600_000, depth_limit=16)
 
 
 def _select_profile(root: Path, diff, side: str) -> QueueAnalysisProfile:
