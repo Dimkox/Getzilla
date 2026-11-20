@@ -363,9 +363,12 @@ def image_network_selection(inventory: dict, selection: dict | None) -> dict:
     required = set()
     for item in inventory.get('images', []):
         reference = item.get('reference', '') if isinstance(item, dict) else ''
-        if reference.startswith('docker.io/'):
+        registry, _, repository = reference.partition('/') if isinstance(reference, str) else ('', '', '')
+        if not repository:
+            raise SecurityDataError('OCI fixed registry selection is unavailable')
+        if registry == 'docker.io':
             required.update({'registry-1.docker.io', 'auth.docker.io'})
-        elif reference.startswith('ghcr.io/'):
+        elif registry == 'ghcr.io':
             required.add('ghcr.io')
         else:
             raise SecurityDataError('OCI fixed registry selection is unavailable')

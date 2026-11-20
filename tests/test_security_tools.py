@@ -29,6 +29,12 @@ from tests.test_security_oci_layout import OwnedOciCase
 
 
 class NewOciExecutionPortTests(OwnedOciCase):
+    def test_network_selection_requires_exact_registry_component(self):
+        for reference in ('docker.io', 'ghcr.io/', 'foreign.example/docker.io/pkg',
+                          'docker.io.foreign.example/pkg', None):
+            with self.subTest(reference=reference), self.assertRaises(SecurityDataError):
+                security_tools.image_network_selection({'images': [{'reference': reference}]}, {})
+
     def test_two_record_contract_uses_one_selected_storage_ledger(self):
         from getzilla import security_oci_transport as transport
         from tests.test_security_oci_layout import owned_binding, owned_image, selected_profile, owned_network
