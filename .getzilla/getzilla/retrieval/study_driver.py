@@ -107,6 +107,7 @@ def _bind_output(owner, output):
     raw = json.dumps({'definition': 'issue162-owned-run-output-v1',
         'execution_id': owner.execution_id, 'operation_digest': owner.projection.operation_digest},
         sort_keys=True).encode() + b'\n'
+    owner.backend.run_artifact_context = output
     _storage(_ports(), owner, additional=len(raw))
     with _create_log(output._directory, '000.log') as stream:
         if stream.write(raw) != len(raw):
