@@ -87,6 +87,13 @@ def require_stop_capability(value, *, input_digest=None):
     return value
 
 
+async def require_stop_capability_async(value, *, input_digest=None):
+    if type(value) is not FactoryStopCapability or getattr(value, '_issuer', None) is not _ISSUER:
+        raise FactoryStopError('factory_stop_binding_required')
+    await value.check_async(input_digest=input_digest)
+    return value
+
+
 def require_factory_service(service):
     from .service import FactoryService
     from .store import PostgresFactoryStore

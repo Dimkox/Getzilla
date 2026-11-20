@@ -1,6 +1,7 @@
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 import os
 import threading
@@ -74,6 +75,16 @@ from factory.tests.test_execution_service import (
 )
 from factory.tests.test_postgres_integration import DATABASE_URL, NOW, OPERATOR, WORKER
 from factory.tests.postgres_fixture_reset import reset_fixture_tables
+
+
+def _pre_revision_is_killed(cursor, repositories):
+    """Historical claim consumer, only for constructing pre-026 fixture rows."""
+    scopes = ['global', *(f'repository:{item}' for item in repositories)]
+    cursor.execute(
+        'SELECT bool_or(enabled) FROM (SELECT DISTINCT ON (scope_key) scope_key,enabled '
+        'FROM factory.kill_switches WHERE scope_key=ANY(%s) '
+        'ORDER BY scope_key,created_at DESC,switch_id DESC) current', (scopes,))
+    return bool(cursor.fetchone()[0])
 
 
 class TrustedArtifactBroker:
@@ -519,17 +530,19 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             "artifact": ["artifacts", "structured_output"],
         }[proposal_kind]
         selection = self.selection(capabilities=capabilities)
-        execution = FactoryService(
-            store, execution_registry=trusted_registry(selection)
-        ).claim_execution(
-            owner=WORKER.actor_id,
-            role=RunRole.WRITER,
-            repositories=(task.repository_id,),
-            lease_seconds=60,
-            selection=selection,
-            actor=WORKER,
-            now=NOW,
-        )
+        # Restore the current consumer before returning the store to upgrade tests.
+        with mock.patch.object(store, '_is_killed', side_effect=_pre_revision_is_killed):
+            execution = FactoryService(
+                store, execution_registry=trusted_registry(selection)
+            ).claim_execution(
+                owner=WORKER.actor_id,
+                role=RunRole.WRITER,
+                repositories=(task.repository_id,),
+                lease_seconds=60,
+                selection=selection,
+                actor=WORKER,
+                now=NOW,
+            )
         context = store.proposal_context(execution.lease, execution.packet_digest)
         event = CanonicalEvent.from_payload(
             task_id=execution.lease.task_id,
@@ -1941,7 +1954,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
                 )
             self.drop_disposable_database(database_url, admin_url)
 
-    def populate_prefix_semantic_lifecycle(self, database_url):
+    def populate_prefix_semantic_lifecycle(self, database_url, *, schema_version):
         import psycopg
         from psycopg import sql
         from psycopg.conninfo import make_conninfo
@@ -1975,10 +1988,13 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
             self.addCleanup(drop_login, login)
             setattr(fixture_owner, f"semantic_{capability}_url",
                     make_conninfo(database_url, user=login, password=password))
-        fixture = fixture_owner.semantic_repair_fixture(
-            namespace="prefix-semantic", source_id="prefix-semantic", result_head_sha="4" * 40,
-            database_url=database_url,
-        )
+        historical_claim = (mock.patch.object(fixture_owner.store, '_is_killed', side_effect=_pre_revision_is_killed)
+                            if schema_version < 26 else nullcontext())
+        with historical_claim:
+            fixture = fixture_owner.semantic_repair_fixture(
+                namespace="prefix-semantic", source_id="prefix-semantic", result_head_sha="4" * 40,
+                database_url=database_url,
+            )
         coordinator = PostgresSemanticCoordinatorStore(fixture_owner.semantic_coordinator_url)
         repair_request = fixture_owner.semantic_repair_request(fixture)
         repaired = coordinator.request_repair(
@@ -2021,7 +2037,7 @@ class ExecutionPersistencePostgresTests(unittest.TestCase):
         FactoryService(store, snapshot_broker=TrustedSnapshotBroker()).finalize_execution(
             execution.lease, packet_digest=execution.packet_digest, actor=WORKER,
         )
-        self.populate_prefix_semantic_lifecycle(database_url)
+        self.populate_prefix_semantic_lifecycle(database_url, schema_version=packaged[-2].version)
         before = self.current_prefix_snapshot(database_url)
         self.assertEqual(
             [row[:3] for row in before["ledger"]],
