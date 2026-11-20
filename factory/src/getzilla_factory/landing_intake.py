@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from fractions import Fraction
 import hashlib
@@ -10,6 +11,7 @@ import re
 import stat
 import struct
 import tempfile
+import threading
 from typing import Callable, Iterable
 import zipfile
 
@@ -99,10 +101,26 @@ class PrivateLandingBlobStore:
         os.chmod(root, 0o700)
         self._root = root.resolve(strict=True)
         self._records: dict[tuple[str, str, str], LandingInputV1] = {}
+        self._submission_lock = threading.RLock()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._sweep_startup_orphans()
 
-    def accept(
+    @contextmanager
+    def submission_guard(self):
+        """One intake/create-or-replay/cleanup cut across this owner's services."""
+        with self._submission_lock:
+            yield
+
+    def accept(self, **facts) -> LandingInputV1:
+        with self.submission_guard():
+            return self._accept(**facts)[0]
+
+    def accept_for_submission(self, **facts) -> tuple[LandingInputV1, bool]:
+        """Return whether this cut created the intake, rather than borrowed it."""
+        with self.submission_guard():
+            return self._accept(**facts)
+
+    def _accept(
         self,
         *,
         job_id: str,
@@ -116,7 +134,8 @@ class PrivateLandingBlobStore:
         chunks: Iterable[bytes],
         received_at: datetime,
         expires_at: datetime,
-    ) -> LandingInputV1:
+        expected_source: LandingInputV1 | None = None,
+    ) -> tuple[LandingInputV1, bool]:
         if media_kind not in MEDIA_TYPES or media_type not in MEDIA_TYPES[media_kind]:
             raise LandingContractError("media_type")
         self._sweep_expired(self._now())
@@ -179,11 +198,14 @@ class PrivateLandingBlobStore:
                 "expires_at": self._format_time(expires_at),
             }
             record = LandingInputV1.from_facts(facts)
+            # Check owner-installed input before publishing or borrowing a blob.
+            if expected_source is not None and record != expected_source:
+                raise LandingContractError('shared_source_mismatch')
             existing = self._records.get(key)
             if existing is not None:
                 if existing != record:
                     raise LandingContractError("idempotency_conflict")
-                return existing
+                return existing, False
             target = self._root / f"{reference}.blob"
             if target.exists():
                 if target.is_symlink() or target.read_bytes() != payload:
@@ -194,7 +216,7 @@ class PrivateLandingBlobStore:
                 os.chmod(target, 0o600)
                 self._fsync_directory()
             self._records[key] = record
-            return record
+            return record, True
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -229,6 +251,10 @@ class PrivateLandingBlobStore:
         return payload
 
     def purge(self, record: LandingInputV1, *, reason: str) -> str:
+        with self.submission_guard():
+            return self._purge(record, reason=reason)
+
+    def _purge(self, record: LandingInputV1, *, reason: str) -> str:
         if reason not in _PURGE_REASONS:
             raise LandingContractError("purge_reason")
         key = (record.tenant_id, record.repository_id, record.job_id)
