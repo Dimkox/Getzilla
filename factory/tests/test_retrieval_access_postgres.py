@@ -548,7 +548,14 @@ class RetrievalAccessPostgresTests(unittest.TestCase):
         receiver, _client, (service, broker, handle, reference) = self.owned_composition(
             profile='factory.ephemeral-retrieval162/v1')
         prepared = next(iter(service._prepared.values()))
-        broker.admit_response(handle, reference)
+        finish_commit = service._queue._finish_commit
+        def delayed_publication(entry, request):
+            # COMMIT/receiver setup may take longer than the ready queue's
+            # 250ms window. Pending time must not consume that committed window.
+            time.sleep(.3)
+            finish_commit(entry, request)
+        with patch.object(service._queue, '_finish_commit', side_effect=delayed_publication):
+            broker.admit_response(handle, reference)
         self.assertEqual(service.run_once(), 1)
         time.sleep(max(0, prepared.deadline - time.monotonic()) + .06)
         self.assertIsNone(receiver.context)

@@ -177,6 +177,12 @@ class _NativeQueue:
         with self._lock:
             if self._entries.get(entry.prepared.identifier) is not entry or entry.state != 'pending':
                 raise AccessError('access_queue_unavailable')
+            now = time.monotonic()
+            if now >= entry.prepared.deadline:
+                raise AccessError('access_expired')
+            # Start the unchanged 250ms dispatch window only after confirmed
+            # COMMIT and receiver arming, never beyond the original capture.
+            entry.expires = min(entry.prepared.deadline, now + 0.250)
             entry.request, entry.state = request, 'ready'
             self.wakeup.set()
 
