@@ -554,7 +554,8 @@ def artifact_catalog_source(inventory: dict, artifacts: Path, policy: dict, *, n
             if total > 512 * 1024 * 1024:
                 raise ArtifactError('artifact-size', 'catalog exceeds the aggregate bound-byte budget')
             bindings.append(bound)
-        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []))
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, inventory.get('dependencies', []),
+            corresponding_source_delivery=inventory.get('corresponding_source_delivery'))
         total += sum(delivery['output_bytes'] for delivery in deliveries.values())
         if total > 512 * 1024 * 1024:
             raise ArtifactError('artifact-size', 'catalog and delivered outputs exceed the aggregate bound-byte budget')

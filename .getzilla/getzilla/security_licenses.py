@@ -139,7 +139,8 @@ def evaluate_artifacts(inventory: dict, artifacts: Path, policy: dict, *, now: d
             if key in indexed:
                 raise ArtifactError('artifact-manifest', 'duplicate exact artifact/source/use identity')
             indexed[key] = record
-        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, dependencies)
+        deliveries = verify_deliveries(artifacts, bundle.get('deliveries', []), records, dependencies,
+            corresponding_source_delivery=inventory.get('corresponding_source_delivery'))
         result['source_evidence'] = {'manifest_sha256': hashlib.sha256(raw).hexdigest(),
             'last_verified_sync_utc': bundle['last_verified_sync_utc'], 'age_seconds': age,
             'checked_at_utc': current.isoformat(), 'coverage': {'declared_packages': len(indexed)}}
