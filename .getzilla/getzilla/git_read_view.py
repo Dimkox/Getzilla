@@ -130,7 +130,7 @@ class GitReadView:
                 text = body.rstrip(b'\n')
                 if not (re.fullmatch(b'[0-9a-f]{40}|[0-9a-f]{64}', text)
                         or text.startswith(b'ref: refs/') and all(p not in {b'', b'.', b'..'} for p in text[5:].split(b'/'))
-                        and not any(c < 33 or c == 127 for c in text) and b'\\' not in text):
+                        and not any(c < 33 or c == 127 for c in text[5:]) and b'\\' not in text[5:]):
                     raise ValueError('Git reference topology unavailable')
                 (destination/name).write_bytes(body)
 
@@ -164,7 +164,7 @@ class GitReadView:
             records = []
             for directory in dict.fromkeys((self.binding.common_directory, self.binding.git_directory)):
                 for name in ('config', 'config.worktree'):
-                    raw = self.read(directory/name, 4096)
+                    raw = self.read(directory/name, MAX_BYTES)
                     if raw is not None:
                         records.extend(self.parse_config(raw))
             object_format = 'sha1'

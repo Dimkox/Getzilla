@@ -75,6 +75,21 @@ class GitReadViewTests(unittest.TestCase):
         (linked / 'value.txt').write_text('after!\n')
         self.assertIn(b' M value.txt', git._git(linked, ['status', '--porcelain=v1']))
 
+    def test_ordinary_remote_symbolic_reference_is_copied(self):
+        self.command('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/heads/main')
+        self.assertEqual(git._git(self.root, ['rev-parse', 'HEAD']), self.head.encode()+b'\n')
+        self.assertEqual(git._git(self.root, ['symbolic-ref', 'refs/remotes/origin/HEAD']), b'refs/heads/main\n')
+
+    def test_strict_configuration_above_relaxed_graph_limit_is_supported(self):
+        config = self.root/'.git/config'
+        with config.open('a') as stream:
+            for number in range(300):
+                stream.write(f'[branch "ordinary-{number}"]\n remote = origin\n merge = refs/heads/ordinary-{number}\n')
+        self.assertGreater(config.stat().st_size, 16_384)
+        original = config.read_bytes()
+        self.assertEqual(git._git(self.root, ['rev-parse', 'HEAD']), self.head.encode()+b'\n')
+        self.assertEqual(config.read_bytes(), original)
+
     def test_read_runner_rejects_writes_without_entering_child(self):
         with patch.object(git, '_run_capped', side_effect=AssertionError('child must not run')):
             for arguments in (['config', 'user.name', 'changed'],
