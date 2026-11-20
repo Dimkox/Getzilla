@@ -1,0 +1,2704 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Getzilla Factory access and workflow successors",
+    "version": "1.0.0",
+    "description": "Separate contract for approved access v1 and workflow v2 operations. Native authority, fencing, revocation and current-source validation remain mandatory. This document grants no authority."
+  },
+  "paths": {
+    "/v1/access/source-read": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Access Source Read",
+        "operationId": "prepareAccessSourceRead",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparedSourceRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "source:read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceReadRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/access/release": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Access Release",
+        "operationId": "releaseAccessSourceRead",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedRelease"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "source:release"
+      }
+    },
+    "/v1/access/authority": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Update Access Authority",
+        "operationId": "updateAccessAuthority",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorityUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorityRevision"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "factory:access-admin"
+      }
+    },
+    "/v1/access/result-retirement": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Access Result Retirement",
+        "operationId": "retireAccessResult",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetirementObservation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "factory:access-admin",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetirementRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/access/result-retirement/{envelope_digest}": {
+      "get": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Access Result Retirement Observation",
+        "operationId": "getAccessResultRetirement",
+        "parameters": [
+          {
+            "name": "envelope_digest",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Envelope Digest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetirementObservation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "factory:access-admin"
+      }
+    },
+    "/v2/workflow/intake-bindings": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Workflow Intake Bindings",
+        "operationId": "getWorkflowIntakeBindings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowBindings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "task:execute"
+      }
+    },
+    "/v2/workflow/ready": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Workflow Ready",
+        "operationId": "getWorkflowReady",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowReady"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkflowCandidate"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "task:execute"
+      }
+    },
+    "/v2/workflow/context": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Workflow Context",
+        "operationId": "getWorkflowContext",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observed current owner result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, denied, stale or invalid; never authorizes a mutation retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-scope": "task:execute"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Grant": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "reader",
+              "writer"
+            ]
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "expires_at": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "RFC 3339 timestamp with an explicit timezone."
+          },
+          "packet_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "task_id",
+          "run_id",
+          "owner",
+          "role",
+          "fence",
+          "expires_at",
+          "packet_digest"
+        ],
+        "additionalProperties": false
+      },
+      "Limits": {
+        "type": "object",
+        "properties": {
+          "wall_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 14400
+          },
+          "max_cost_usd_micros": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 25000000
+          },
+          "max_token_units": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2000000
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "max_events": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "infrastructure_retries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "semantic_repairs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          }
+        },
+        "required": [
+          "wall_seconds",
+          "max_cost_usd_micros",
+          "max_token_units",
+          "max_output_bytes",
+          "max_events",
+          "infrastructure_retries",
+          "semantic_repairs"
+        ],
+        "additionalProperties": false
+      },
+      "SourceKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant",
+          "project",
+          "provider",
+          "site",
+          "resource"
+        ],
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "site": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          }
+        }
+      },
+      "AccessActor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actor_id",
+          "kind",
+          "scopes",
+          "repositories",
+          "token_file",
+          "credential_generation",
+          "principal_id",
+          "tenant_id",
+          "projects",
+          "delegation_owner",
+          "delegation_expires_at"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "kind": {
+            "enum": [
+              "client",
+              "worker",
+              "operator",
+              "validator",
+              "adjudicator"
+            ]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+            },
+            "maxItems": 256
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256
+          },
+          "token_file": {
+            "type": "string"
+          },
+          "credential_generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "principal_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "project_id",
+                "repository_id"
+              ],
+              "properties": {
+                "project_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                }
+              }
+            },
+            "maxItems": 256
+          },
+          "delegation_owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delegation_expires_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 253402300799
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AccessAuthority": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "revision",
+          "actors",
+          "groups",
+          "sources",
+          "destinations"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": 2
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "actors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessActor"
+            },
+            "maxItems": 256,
+            "minItems": 1
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tenant_id",
+                "group_id",
+                "members"
+              ],
+              "properties": {
+                "tenant_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "group_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                  },
+                  "maxItems": 256
+                }
+              }
+            },
+            "maxItems": 256
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "key",
+                "repository_id",
+                "version",
+                "deleted",
+                "readers",
+                "groups",
+                "public"
+              ],
+              "properties": {
+                "key": {
+                  "$ref": "#/components/schemas/SourceKey"
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "deleted": {
+                  "type": "boolean"
+                },
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                  },
+                  "maxItems": 256
+                },
+                "groups": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                  },
+                  "maxItems": 256
+                },
+                "public": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "maxItems": 4096
+          },
+          "destinations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "destination_id",
+                "tenant_id",
+                "project_id",
+                "repository_id",
+                "readers",
+                "public",
+                "revision"
+              ],
+              "properties": {
+                "destination_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "tenant_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "project_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                },
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+                  },
+                  "maxItems": 256
+                },
+                "public": {
+                  "type": "boolean"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "maxItems": 256
+          }
+        },
+        "x-runtime-validator": "getzilla_factory.access_authority._snapshot"
+      },
+      "SourceReadRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grant",
+          "packet_digest",
+          "sources",
+          "destination_id"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/Grant"
+          },
+          "packet_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceKey"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "destination_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          }
+        },
+        "x-runtime-validator": "getzilla_factory.api._closed; getzilla_factory.api._grant; getzilla_factory.access_release.AccessReleaseService._capture_native_sources"
+      },
+      "PreparedSourceRead": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "prepared_id"
+        ],
+        "properties": {
+          "prepared_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "prepared_id"
+        ],
+        "properties": {
+          "prepared_id": {
+            "type": "string"
+          }
+        }
+      },
+      "QueuedRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "operation_id"
+        ],
+        "properties": {
+          "status": {
+            "const": "queued"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthorityUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_revision",
+          "authority"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "authority": {
+            "$ref": "#/components/schemas/AccessAuthority"
+          }
+        },
+        "x-runtime-validator": "getzilla_factory.api._closed; getzilla_factory.access_authority.AccessAuthority.update"
+      },
+      "AuthorityRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          }
+        }
+      },
+      "RetirementRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "envelope_digest",
+          "reason"
+        ],
+        "properties": {
+          "envelope_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "reason": {
+            "enum": [
+              "source_deleted",
+              "retention_expired",
+              "operator_retire"
+            ]
+          }
+        },
+        "x-runtime-validator": "getzilla_factory.api._closed; getzilla_factory.retrieval_retention.retire"
+      },
+      "RetirementObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "local_retired",
+          "ephemeral_retired",
+          "recipient",
+          "operation_id",
+          "retirement_request_digest"
+        ],
+        "properties": {
+          "local_retired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ephemeral_retired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipient": {
+            "enum": [
+              "confirmed",
+              "unknown"
+            ]
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "retirement_request_digest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retention_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cleanup_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clock_valid": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "EmptyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "ReadyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "node_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      },
+      "ContextRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grant"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/Grant"
+          }
+        }
+      },
+      "WorkflowCandidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_key",
+          "factory_task_id",
+          "snapshot_digest"
+        ],
+        "properties": {
+          "node_key": {
+            "type": "string"
+          },
+          "factory_task_id": {
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "WorkflowReady": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ready",
+          "blocked",
+          "snapshot_digest"
+        ],
+        "properties": {
+          "ready": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blocked": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "snapshot_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "WorkflowBindings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workflow_binding_version",
+          "owner",
+          "graph_digest",
+          "authority_digest",
+          "nodes"
+        ],
+        "properties": {
+          "workflow_binding_version": {
+            "const": 1
+          },
+          "owner": {
+            "type": "string"
+          },
+          "graph_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "authority_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "node_key",
+                "repository_id",
+                "source_type",
+                "source_id",
+                "source_digest",
+                "route_id",
+                "change_id",
+                "spec_digest",
+                "exact_head_sha",
+                "acceptance_ids"
+              ],
+              "properties": {
+                "node_key": {
+                  "type": "string"
+                },
+                "repository_id": {
+                  "type": "string"
+                },
+                "source_type": {
+                  "const": "api"
+                },
+                "source_id": {
+                  "type": "string"
+                },
+                "source_digest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "route_id": {
+                  "type": "string"
+                },
+                "change_id": {
+                  "type": "string"
+                },
+                "spec_digest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "exact_head_sha": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "acceptance_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "NativeSpecV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "change_id",
+          "objective",
+          "risk",
+          "acceptance_criteria",
+          "invariants",
+          "forbidden_outcomes",
+          "contracts",
+          "observability",
+          "rollback",
+          "approvals"
+        ],
+        "$defs": {
+          "obj_id": {
+            "type": "string",
+            "pattern": "^OBJ-[0-9]{3,6}$"
+          },
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]{3,6}$"
+          },
+          "inv_id": {
+            "type": "string",
+            "pattern": "^INV-[0-9]{3,6}$"
+          },
+          "forbid_id": {
+            "type": "string",
+            "pattern": "^FORBID-[0-9]{3,6}$"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "receipt",
+                  "review",
+                  "holdout",
+                  "command"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_./:-]+$"
+              }
+            }
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "change_id": {
+            "type": "string",
+            "pattern": "^[0-9]{8}-[A-Za-z0-9\u0400-\u04ff][A-Za-z0-9._:\u0400-\u04ff-]{2,120}$"
+          },
+          "objective": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "statement",
+              "success_metric",
+              "target"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NativeSpecV1/$defs/obj_id"
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "success_metric": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "risk": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tier",
+              "domains"
+            ],
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "green",
+                  "yellow",
+                  "red"
+                ]
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV1/$defs/ac_id"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV1/$defs/evidence"
+                  }
+                }
+              }
+            }
+          },
+          "invariants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV1/$defs/inv_id"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV1/$defs/evidence"
+                  }
+                }
+              }
+            }
+          },
+          "forbidden_outcomes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV1/$defs/forbid_id"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV1/$defs/evidence"
+                  }
+                }
+              }
+            }
+          },
+          "contracts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "openapi",
+              "json_schema",
+              "events"
+            ],
+            "properties": {
+              "openapi": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "json_schema": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "observability": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "metric",
+                "proves"
+              ],
+              "properties": {
+                "metric": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "proves": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV1/$defs/obj_id"
+                  }
+                }
+              }
+            }
+          },
+          "rollback": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "strategy",
+              "maximum_steps"
+            ],
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "feature_flag",
+                  "forward_fix",
+                  "restore",
+                  "migration_reversal"
+                ]
+              },
+              "maximum_steps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            }
+          },
+          "approvals": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "required_scopes"
+            ],
+            "properties": {
+              "required_scopes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "security",
+                    "data",
+                    "architecture",
+                    "release",
+                    "protected-path"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "NativeSpecV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "change_id",
+          "objective",
+          "risk",
+          "acceptance_criteria",
+          "invariants",
+          "forbidden_outcomes",
+          "contracts",
+          "observability",
+          "rollback",
+          "approvals"
+        ],
+        "$defs": {
+          "obj_id": {
+            "type": "string",
+            "pattern": "^OBJ-[0-9]{3,6}$"
+          },
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]{3,6}$"
+          },
+          "inv_id": {
+            "type": "string",
+            "pattern": "^INV-[0-9]{3,6}$"
+          },
+          "forbid_id": {
+            "type": "string",
+            "pattern": "^FORBID-[0-9]{3,6}$"
+          },
+          "sig_id": {
+            "type": "string",
+            "pattern": "^SIG-[0-9]{3,6}$"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "maxProperties": 1,
+            "properties": {
+              "test": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[A-Za-z0-9_./:-]+$"
+              },
+              "receipt": {
+                "type": "string",
+                "enum": [
+                  "verification",
+                  "code_review",
+                  "test_review",
+                  "bitrix_review",
+                  "security_review",
+                  "data_review",
+                  "release_review"
+                ]
+              },
+              "production_signal": {
+                "$ref": "#/components/schemas/NativeSpecV2/$defs/sig_id"
+              },
+              "attestation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_.:@/-]+$"
+              }
+            }
+          },
+          "criterion": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "statement",
+              "evidence"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NativeSpecV2/$defs/ac_id"
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "evidence": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "$ref": "#/components/schemas/NativeSpecV2/$defs/evidence"
+                }
+              }
+            }
+          }
+        },
+        "properties": {
+          "intake": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "draft_digest"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "const": 1
+              },
+              "draft_digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "schema_version": {
+            "const": 2
+          },
+          "change_id": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[0-9]{8}-[A-Za-z0-9\u0400-\u04ff][A-Za-z0-9._:\u0400-\u04ff-]{2,120}$"
+          },
+          "objective": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "statement",
+              "success_metric",
+              "target"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NativeSpecV2/$defs/obj_id"
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "success_metric": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            }
+          },
+          "risk": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tier",
+              "domains"
+            ],
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "green",
+                  "yellow",
+                  "red"
+                ]
+              },
+              "domains": {
+                "type": "array",
+                "maxItems": 50,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              }
+            }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/NativeSpecV2/$defs/criterion"
+            }
+          },
+          "invariants": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV2/$defs/inv_id"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "evidence": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV2/$defs/evidence"
+                  }
+                }
+              }
+            }
+          },
+          "forbidden_outcomes": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "statement",
+                "evidence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV2/$defs/forbid_id"
+                },
+                "statement": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "evidence": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV2/$defs/evidence"
+                  }
+                }
+              }
+            }
+          },
+          "contracts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "openapi",
+              "json_schema",
+              "events"
+            ],
+            "properties": {
+              "openapi": {
+                "type": "array",
+                "maxItems": 100,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "json_schema": {
+                "type": "array",
+                "maxItems": 100,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "events": {
+                "type": "array",
+                "maxItems": 100,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              }
+            }
+          },
+          "observability": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "metric",
+                "proves"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/NativeSpecV2/$defs/sig_id"
+                },
+                "metric": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "proves": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 500,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/components/schemas/NativeSpecV2/$defs/obj_id"
+                  }
+                }
+              }
+            }
+          },
+          "rollback": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "strategy",
+              "maximum_steps"
+            ],
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "feature_flag",
+                  "forward_fix",
+                  "restore",
+                  "migration_reversal"
+                ]
+              },
+              "maximum_steps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            }
+          },
+          "approvals": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "required_scopes"
+            ],
+            "properties": {
+              "required_scopes": {
+                "type": "array",
+                "maxItems": 50,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-z][a-z0-9_-]{0,127}$"
+                }
+              }
+            }
+          }
+        }
+      },
+      "WorkflowGraph": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "change_id",
+          "source_manifest_digest",
+          "write_agent",
+          "review_agents",
+          "tasks",
+          "graph_digest"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "change_id": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128
+          },
+          "source_manifest_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "write_agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "review_agents": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "key",
+                "title",
+                "depends_on",
+                "covers",
+                "files",
+                "interfaces",
+                "red",
+                "green",
+                "source_status",
+                "enrichment_required",
+                "source_sha256"
+              ],
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "pattern": "^TASK-[0-9a-f]{12}$"
+                },
+                "key": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "depends_on": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^TASK-[0-9a-f]{12}$"
+                  }
+                },
+                "covers": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(AC|INV|FORBID)-[0-9]{3,6}$"
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "maxItems": 200,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f][^\\\\\\u0000-\\u001f\\u007f]*$"
+                  }
+                },
+                "interfaces": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "red": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "green": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "source_status": {
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "complete"
+                  ]
+                },
+                "enrichment_required": {
+                  "type": "array",
+                  "maxItems": 5,
+                  "items": {
+                    "enum": [
+                      "covers",
+                      "files",
+                      "green",
+                      "interfaces",
+                      "red"
+                    ]
+                  }
+                },
+                "source_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          },
+          "graph_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "WorkflowSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "source_type",
+          "source_version",
+          "role",
+          "path",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "source_type": {
+            "enum": [
+              "spec-kit",
+              "bmad",
+              "superpowers"
+            ]
+          },
+          "source_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f]+$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "SourceBundle": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "manifest_digest",
+          "sources"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "manifest_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSource"
+            }
+          }
+        }
+      },
+      "WorkflowContext": {
+        "type": "object",
+        "required": [
+          "goal",
+          "specification",
+          "decisions",
+          "requirements",
+          "base_sha",
+          "head_sha",
+          "verification",
+          "limits"
+        ],
+        "additionalProperties": true,
+        "description": "WorkflowBoundary._snapshot requires these nonempty producer-owned facts (decisions may be empty), limits the serialized scope bytes, and retains extra context members. NativeWorkflowBoundary emits NativeWorkflowContext. Structural validity is not current owner/source/fence authority.",
+        "x-runtime-validator": "getzilla_factory.workflow.WorkflowBoundary._snapshot",
+        "x-native-producer-schema": {
+          "$ref": "#/components/schemas/NativeWorkflowContext"
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "NativeWorkflowContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workflow_context_version",
+          "graph_digest",
+          "authority_digest",
+          "goal",
+          "specification",
+          "decisions",
+          "requirements",
+          "base_sha",
+          "head_sha",
+          "verification",
+          "limits",
+          "graph",
+          "sources",
+          "source_documents"
+        ],
+        "properties": {
+          "workflow_context_version": {
+            "const": 1
+          },
+          "graph_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "authority_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "statement",
+                  "success_metric",
+                  "target"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/NativeSpecV1/$defs/obj_id"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "success_metric": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "statement",
+                  "success_metric",
+                  "target"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/NativeSpecV2/$defs/obj_id"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "success_metric": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                }
+              }
+            ]
+          },
+          "specification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NativeSpecV1"
+              },
+              {
+                "$ref": "#/components/schemas/NativeSpecV2"
+              }
+            ]
+          },
+          "decisions": {
+            "type": "array"
+          },
+          "requirements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
+          },
+          "base_sha": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "red",
+                "green"
+              ],
+              "properties": {
+                "red": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "green": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Limits"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/SourceBundle"
+          },
+          "source_documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "identity",
+                "content"
+              ],
+              "properties": {
+                "identity": {
+                  "$ref": "#/components/schemas/WorkflowSource"
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-runtime-validator": "getzilla_factory.workflow.NativeWorkflowBoundary._snapshot"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

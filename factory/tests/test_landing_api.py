@@ -32,6 +32,7 @@ from factory.tests.test_api import FakeService
 from factory.tests.test_landing_provider import clock as provider_clock
 from factory.tests.test_landing_provider import profile as fixture_profile
 from factory.tests._showcase_custody import validate_showcase
+from factory.tests.paid_fixture import PaidProtocolTestCase
 
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
@@ -112,8 +113,9 @@ class ContradictoryLandingProvider:
         return forged
 
 
-class LandingApiTests(unittest.TestCase):
+class LandingApiTests(PaidProtocolTestCase):
     def setUp(self):
+        super().setUp()
         self.temporary = tempfile.TemporaryDirectory(prefix="landing-api-")
         self.addCleanup(self.temporary.cleanup)
         self.blobs = CountingBlobStore(
@@ -448,8 +450,11 @@ class LandingApiTests(unittest.TestCase):
             and path.name != "result-channel-qualification.v1.schema.json"
             and path.name != "result-channel-qualification.v2.schema.json"
             and path.name != "native-result-handoff.v1.schema.json"
+            # Added paid authority has its own closed persisted-field binding.
+            and path.name != "paid-execution-authority.v1.schema.json"
             and path.name != "factory-result-admission.v1.json"
             and path.name != "factory-execution.v3.json"
+            and path.name != "factory-access-workflow.v1.json"
             and path.name != "bb-backend-profile.v1.schema.json"
             and path.name != "bb-lifecycle-observation.v1.schema.json"
             and path.name != "prediction-explanation.v1.schema.json"
