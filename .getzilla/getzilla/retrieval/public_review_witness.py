@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 
 from .. import state
-from ..continuity import context_binding
+from ..continuity import context_binding, scope_gaps
 from ..optional_modules import admit_module
 from ..receipts import get_receipt, write_receipt, _exact_head
 from ..util import tree_fingerprint
@@ -213,6 +213,7 @@ def observe_public_producer(root, registration_path):
     retained bytes, not native delivery or lossless scientific reconstruction.
     """
     capture = _Capture(root)
+    _require(not scope_gaps(capture.root, capture.route), 'public_witness_scope_unacknowledged')
     request = _json(capture.read(registration_path))
     _require(type(request) is dict and set(request) == {'schema_version', 'kind', 'original',
         'producer_identity', 'supplement'} and type(request['schema_version']) is int
@@ -233,7 +234,7 @@ def observe_public_producer(root, registration_path):
         'policy_sha256': capture.policy, 'module_manifest_sha256': capture.manifest,
         'statement': 'AUTOMATED COORDINATOR directly observed this external producer delivery; no native or human authentication.',
         'observations': {}}
-    if previous is not None:
+    if previous is not None and previous['details']['context'] == capture.context:
         _require({k: v for k, v in previous['details'].items() if k != 'observations'} ==
                  {k: v for k, v in details.items() if k != 'observations'}, 'public_witness_stale')
         details['observations'] = dict(previous['details']['observations'])
@@ -517,6 +518,7 @@ def _witness(root, registration_path, composition):
     _require(type(composition) is _Composition and (composition.profile != _PRODUCTION.profile
              or composition == _PRODUCTION), 'public_witness_unavailable')
     capture = _Capture(root)
+    _require(not scope_gaps(capture.root, capture.route), 'public_witness_scope_unacknowledged')
     registration = _json(capture.read(registration_path, limit=262144))
     required = {'schema_version', 'kind', 'dataset', 'predecessor', 'public_sources',
                 'config', 'author', 'groups', 'dispositions', 'no_answer_resolutions'}
@@ -567,7 +569,7 @@ def _witness(root, registration_path, composition):
         'authority_epoch': capture.context['authority_epoch'], 'context_digest': capture.context['digest'],
         'profile': composition.profile, 'registration_sha256': capture.dependencies[registration_path]['sha256']})
     previous = get_receipt(root, capture.route['route_id'], KIND)
-    if previous is not None:
+    if previous is not None and previous['details']['context'] == capture.context:
         _require(previous['details'] == payload, 'public_witness_conflict')
         capture.recheck()
         return _issue(root, previous, composition.profile)

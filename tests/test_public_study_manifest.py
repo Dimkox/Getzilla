@@ -45,6 +45,7 @@ def fixture():
     binding = {'manifest_sha256': h, 'registration_sha256': h, 'dataset_sha256': h,
         'phase_a_sha256': h, 'artifact_manifest_sha256': h, 'resource_profile_sha256': h,
         'model_files': tuple(files), 'model_revisions': {'minilm': 'b' * 40, 'bge_m3': 'b' * 40},
+        'graph_observation_sha256': {'minilm': h, 'bge_m3': h},
         'runtime_registration': deepcopy(runtime), 'independent_reviews': [report], 'author': ('author', 'author-session')}
     return document, binding
 

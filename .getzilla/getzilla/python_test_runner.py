@@ -38,7 +38,7 @@ import uuid
 
 from . import STACK_DIR, fsx
 from .fsx import owned_job, owned_popen, WINDOWS, kill_process_tree
-from ._cpu_capacity import linux_quota_capacity
+from .cpu_budget import cpu_budget
 from .verification_scope import FORCE_FULL_VARIABLE
 
 
@@ -76,22 +76,11 @@ class WorkerSelection:
 
 def _automatic_capacity() -> int:
     """A live bounded ceiling, not a reservation of CPU, PID or memory capacity."""
-    try:
-        available = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        available = 0
-    if available <= 0:
-        available = os.cpu_count() or 1
-    selected = min(28, max(1, available))
-    if sys.platform == 'linux':
-        quota = linux_quota_capacity()
-        if quota is not None:
-            selected = min(selected, quota)
-    return selected
+    return cpu_budget().effective
 
 
 def core_worker_selection(root: Path, mode: str) -> WorkerSelection:
-    """Keep explicit requests compatible; reserve bounded PR/release defaults."""
+    """Apply one host reserve to explicit requests and bounded PR/release defaults."""
     path = root / CONFIG
     value: object = None
     source = 'consumer'
@@ -125,14 +114,14 @@ def core_worker_selection(root: Path, mode: str) -> WorkerSelection:
         return WorkerSelection(0, 'child')
     if value is None:
         capacity = _automatic_capacity()
-        return WorkerSelection(min(DEFAULT_CORE_WORKER_CAP, max(1, capacity - DEFAULT_CORE_CPU_RESERVE)),
+        return WorkerSelection(min(DEFAULT_CORE_WORKER_CAP, capacity),
                                'default', capacity)
     if value == 'auto':
         if not _parallel_process_cleanup_supported():
             return WorkerSelection(0, source)
         capacity = _automatic_capacity()
         return WorkerSelection(capacity, source, capacity)
-    return WorkerSelection(int(value), source)
+    return WorkerSelection(cpu_budget(int(value)).effective if int(value) > 0 else 0, source)
 
 
 _CLEANUP_STAGES = frozenset({'owned_stop_reap', 'stdout_capture_file', 'stdout_capture_directory',

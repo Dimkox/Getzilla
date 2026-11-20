@@ -104,6 +104,11 @@ def prove_ci(binding, dep, record, scope, condition_profile):
 
 
 def validate(proof, subject, requirements):
+    if proof is None or isinstance(proof, (dict, list, tuple, str, int, float, bool)):
+        _refuse()
+    if type(proof) is not _Proof:
+        from .retrieval.research_use_conditions import validate_research_supplement
+        return validate_research_supplement(proof, subject, requirements)
     from . import security_image_authority as producer
 
     if (
