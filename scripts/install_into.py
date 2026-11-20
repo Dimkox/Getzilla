@@ -8,8 +8,8 @@ import json
 import os
 import re
 import stat
-import subprocess
-import threading
+import subprocess as subprocess  # compatibility module export
+import threading as threading  # compatibility module export
 import sys
 sys.dont_write_bytecode = True
 import uuid
@@ -1213,45 +1213,8 @@ def _ownership_payload(payload: tuple[InstallEntry, ...]) -> tuple[InstallEntry,
 
 
 def _consumer_git_status(target: Path) -> dict[str, object]:
-    # Put Git output outside the consumer. Disable optional index writes.
-    try:
-        process = subprocess.Popen(
-            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(target), "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            env={**{key: os.environ[key] for key in ('PATH', 'SYSTEMROOT', 'WINDIR') if key in os.environ},
-                 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_OPTIONAL_LOCKS': '0',
-                 'GIT_NO_LAZY_FETCH': '1', 'GIT_NO_REPLACE_OBJECTS': '1',
-                 'GIT_CEILING_DIRECTORIES': str(Path(os.path.abspath(target)).parent), 'LC_ALL': 'C'})
-        assert process.stdout is not None
-        chunks: list[bytes] = []
-        reader = threading.Thread(target=lambda: chunks.append(process.stdout.read(MAX_SOURCE_FILE_BYTES + 1)), daemon=True)
-        reader.start()
-        reader.join(timeout=5)
-        if reader.is_alive() or (chunks and len(chunks[0]) > MAX_SOURCE_FILE_BYTES):
-            process.kill()
-            process.wait()
-            reader.join(timeout=1)
-            process.stdout.close()
-            return {"state": "unknown", "reason": "timeout-or-output-limit", "records": []}
-        try:
-            code = process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            process.stdout.close()
-            return {"state": "unknown", "reason": "timeout", "records": []}
-        process.stdout.close()
-        if code:
-            return {"state": "unknown", "reason": "not-readable-git-tree", "records": []}
-        raw = chunks[0] if chunks else b""
-        if len(raw) > MAX_SOURCE_FILE_BYTES:
-            return {"state": "unknown", "reason": "output-limit", "records": []}
-        # Preserve NUL-delimited rename source records without guessing their
-        # role. No status record gives permission to change a consumer path.
-        records = raw.decode("utf-8", errors="strict").split("\0")
-        return {"state": "observed", "format": "porcelain-v1-z", "records": records[:-1]}
-    except (OSError, UnicodeError, subprocess.TimeoutExpired):
-        return {"state": "unknown", "reason": "unavailable", "records": []}
+    """Consumer configuration and attributes cannot authorize plan-time code execution."""
+    return {"state": "unknown", "reason": "not-run-for-untrusted-config", "records": []}
 
 
 def _consumer_inventory(target: Path) -> dict[str, object]:
@@ -1374,35 +1337,12 @@ _UNTRACKED_CLASSES = (
 
 
 def _existing_untracked(target: Path, owned: frozenset[str]) -> tuple[list[dict[str, str]], bool]:
-    """Untracked, non-ignored paths already in a git target, classified; the planner never removes any (#75).
+    """Compatibility listing; consumer Git tracking is deliberately not observed.
 
-    Requirements and evidence are never "unfinished work": every path is reported with
-    action PRESERVE, and a path the payload would also write is reported as a conflict.
+    Filesystem inventory supplies preservation and conflict information independently.
+    An empty listing cannot establish that the consumer has no untracked files.
     """
-    absolute = Path(os.path.abspath(target))
-    if not (absolute / ".git").exists():
-        return [], False
-    try:
-        proc = subprocess.run(  # nosec B603 B607 - fixed git argv, no shell
-            ["git", "-C", str(absolute), "ls-files", "--others", "--exclude-standard", "-z"],
-            capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return [], False
-    if proc.returncode != 0:
-        return [], False
-    paths = sorted(item for item in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if item)
-    report: list[dict[str, str]] = []
-    for relative in paths[:MAX_UNTRACKED_REPORT_ENTRIES]:
-        kind = next((name for name, pattern in _UNTRACKED_CLASSES if pattern.search(relative)), None) or (
-            "legacy-installation" if relative.startswith(tuple(item + "/" for item in LEGACY_MANAGED_DIRS)) else "user-change")
-        if relative in owned:
-            report.append({"action": "CONFLICT", "path": relative, "class": kind,
-                           "reason": "untracked target file at a path the installation would write"})
-        else:
-            report.append({"action": "PRESERVE", "path": relative, "class": kind,
-                           "reason": "not owned by the installation"})
-    return report, len(paths) > MAX_UNTRACKED_REPORT_ENTRIES
+    return [], False
 
 
 def _legacy_migration(target: Path) -> list[dict[str, str]]:
@@ -1549,6 +1489,7 @@ def _make_plan(
         "on_demand": "components left out are added when needed: getzilla components add agent:<name>|factory",
         "legacy_migration": legacy,
         "existing_untracked": untracked,
+        "existing_untracked_status": {"state": "unknown", "reason": "not-run-for-untrusted-config"},
         "existing_untracked_truncated": untracked_truncated,
         "dependency_advice": _dependency_advice(
             source,

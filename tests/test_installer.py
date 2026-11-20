@@ -2058,8 +2058,9 @@ class OwnershipPlanTests(unittest.TestCase):
                 before = _snapshot(target)
                 plan = MODULE.plan_install(ROOT, target)
                 inventory = plan['consumer_inventory']
-            self.assertEqual(plan['consumer_git_status']['state'], 'observed')
-            self.assertTrue(any('requirements.json' in row for row in plan['consumer_git_status']['records']))
+            self.assertEqual(plan['consumer_git_status'], {
+                'state': 'unknown', 'reason': 'not-run-for-untrusted-config', 'records': []})
+            self.assertIn('requirements.json', {row['path'] for row in inventory['entries']})
             self.assertFalse(inventory['complete'])
             self.assertIn('inventory-limit', inventory['uncertainty'])
             self.assertEqual(before, _snapshot(target))
