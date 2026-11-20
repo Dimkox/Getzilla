@@ -277,6 +277,26 @@ class ClaimCursor(NativeCursor):
 
 class AtomicClaimTests(NativeBoundaryTests):
     """Use the production claim implementation; replace only SQL transport."""
+    # These inherited controls also run with this subclass's atomic fixture.
+    # Declare them here so the closed inventory includes their existing IDs.
+    def test_real_compile_converge_binding_and_current_result(self):
+        super().test_real_compile_converge_binding_and_current_result()
+
+    def test_current_source_and_intent_and_owner_are_required(self):
+        super().test_current_source_and_intent_and_owner_are_required()
+
+    def test_intake_descriptor_precedes_tasks_and_handoff_cannot_promote_old_result(self):
+        super().test_intake_descriptor_precedes_tasks_and_handoff_cannot_promote_old_result()
+
+    def test_native_missing_cycle_self_and_unavailable_source(self):
+        super().test_native_missing_cycle_self_and_unavailable_source()
+
+    def test_native_current_permission_and_source_are_rechecked(self):
+        super().test_native_current_permission_and_source_are_rechecked()
+
+    def test_cancelled_task_and_stale_result_are_not_done(self):
+        super().test_cancelled_task_and_stale_result_are_not_done()
+
     def setUp(self):
         super().setUp()
         from contextlib import contextmanager
