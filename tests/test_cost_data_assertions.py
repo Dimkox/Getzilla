@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import textwrap
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,19 @@ from getzilla.cost_guard import python_findings
 class AssertionCostBoundaryTests(unittest.TestCase):
     def findings(self, body):
         return python_findings('sample.py', textwrap.dedent(body).encode())
+
+    def test_exact_static_fixture_calls_are_socket_inert(self):
+        # Observe these actual parser-only calls; this grants no general test exemption.
+        with patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connect, \
+                patch('socket.socket.connect', side_effect=AssertionError('network forbidden')) as socket_connect, \
+                patch('socket.socket.connect_ex', side_effect=AssertionError('network forbidden')) as connect_ex, \
+                patch('socket.getaddrinfo', side_effect=AssertionError('network forbidden')) as resolve:
+            self.test_inherited_unittest_assertion_compares_endpoint_without_a_paid_call()
+            self.test_nested_provider_call_is_still_found_inside_a_proven_assertion()
+            self.test_unproved_or_overridden_assertion_keeps_the_paid_host_signal()
+            self.test_dynamic_assertion_changes_and_nested_receiver_shadowing_stay_opaque()
+        for attempted in (connect, socket_connect, connect_ex, resolve):
+            attempted.assert_not_called()
 
     def test_inherited_unittest_assertion_compares_endpoint_without_a_paid_call(self):
         for imported, base in (('import unittest', 'unittest.TestCase'),
