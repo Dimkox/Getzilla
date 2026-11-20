@@ -212,6 +212,23 @@ class LandingLiveExecutorTests(PaidProtocolTestCase):
         self.assertEqual("executor_result", str(raised.exception))
 
 
+class CostSignalInertObservationTests(unittest.TestCase):
+    def test_exact_host_assertions_and_invalid_constructor_are_socket_inert(self):
+        # Call only these two real read-only methods, without fixture setup/admission.
+        # This observation is neither a test-base exemption nor transport authority.
+        case = LandingLiveExecutorTests('test_host_requirements_match_current_python_and_httpx')
+        with patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connect, \
+                patch('socket.socket.connect', side_effect=AssertionError('network forbidden')) as socket_connect, \
+                patch('socket.socket.connect_ex', side_effect=AssertionError('network forbidden')) as connect_ex, \
+                patch('socket.getaddrinfo', side_effect=AssertionError('network forbidden')) as resolve, \
+                patch('httpx.Client', side_effect=AssertionError('HTTP client forbidden')) as client, \
+                patch('httpx.AsyncClient', side_effect=AssertionError('HTTP client forbidden')) as async_client:
+            case.test_host_requirements_match_current_python_and_httpx()
+            case.test_non_https_base_url_fails_closed()
+        for attempted in (connect, socket_connect, connect_ex, resolve, client, async_client):
+            attempted.assert_not_called()
+
+
 class GrokReasoningUsageTests(PaidProtocolTestCase):
     def setUp(self):
         super().setUp()
