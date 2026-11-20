@@ -3808,7 +3808,7 @@ def evaluate_pre_tool(
 
     lowered_tool = tool.lower()
     is_read = is_read_tool(tool)
-    is_write = tool in {'apply_patch', 'Edit', 'Write'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
+    is_write = tool in {'apply_patch', 'Edit', 'Write', 'MultiEdit'} or any(word in lowered_tool for word in ('write_file', 'edit_file', 'delete_file'))
 
     normalized: list[str] = []
     for raw in candidate_paths:

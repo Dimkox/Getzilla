@@ -15,6 +15,7 @@ class GrepReadGrammarTests(unittest.TestCase):
     def fixture(self, root: Path, fault: str | None) -> None:
         authority.ReadAuthorityTests().fixture(root, fault)
         (root / '.getzilla/config/policy.json').write_text(json.dumps({
+            'schema_version': 2,
             'secret_read_paths': [*legacy.DEFAULT_SECRET_READ, 'private-data/**'],
         }), encoding='utf-8')
         (root / 'PUBLIC.md').write_text('synthetic public text\n', encoding='utf-8')

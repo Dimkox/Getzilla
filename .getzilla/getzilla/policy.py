@@ -238,7 +238,7 @@ def _intake_effect(root: Path, event: dict[str, Any], execution_cwd: object) -> 
     """Classify effects using existing target/command readers; unknown execution needs intake."""
     tool = str(event.get('tool_name',''))
     inputs = event.get('tool_input') or {}
-    if tool in {'apply_patch','Edit','Write'} or any(word in tool.lower() for word in ('write_file','edit_file','delete_file')):
+    if tool in {'apply_patch','Edit','Write','MultiEdit'} or any(word in tool.lower() for word in ('write_file','edit_file','delete_file')):
         targets = _legacy._extract_paths(inputs)
         if tool == 'apply_patch':
             for key in ('patch','input','command'):
