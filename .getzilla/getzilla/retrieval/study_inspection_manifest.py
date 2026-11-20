@@ -7,6 +7,11 @@ from .study_plan import EXPECTED_WINDOWS, EXPECTED_FUNCTIONS, MODELS
 from .study_codec import CODEC_SHA256, CODEC_BYTES
 
 
+def scientific_payload(value):
+    return {key: item for key, item in value.items()
+            if key not in {'operation_measurements', 'phase_measurements'}}
+
+
 def assemble(inputs, projection, *, catalog, graphs, tokenizers, conformance,
              windows, lengths, packing, execution_id, readback_digest):
     if (not hex_digest(readback_digest) or set(graphs) != set(MODELS)
@@ -45,7 +50,8 @@ def assemble(inputs, projection, *, catalog, graphs, tokenizers, conformance,
             'tokenizer_sha256': tokenizer['tokenizer_sha256'],
             'graph_sha256': graph['graph_sha256'], 'external_files': external,
             'graph_inspection_digest': graph['report_sha256'],
-            'tokenizer_inspection_digest': digest(tokenizer), 'session_conformance_digest': digest(probe),
+            'tokenizer_inspection_digest': digest(scientific_payload(tokenizer)),
+            'session_conformance_digest': digest(scientific_payload(probe)),
             'input_contract': {'names': [row['name'] for row in inputs_meta], 'dtype': 'int64',
                                'shape': list(inputs_meta[0]['shape'])},
             'output_contract': {'name': selected['name'], 'dtype': 'float32', 'shape': list(selected['shape']),
@@ -85,7 +91,7 @@ def assemble(inputs, projection, *, catalog, graphs, tokenizers, conformance,
             'truncation_counts': counts},
         'models': models, 'codec': {'name': 'o200k_base', 'bytes': CODEC_BYTES, 'sha256': CODEC_SHA256,
             'citation_definition': 'issue162-complete-context-serialization-v1',
-            'packing_parity_digest': digest(packing)}, 'runtime': runtime}
+            'packing_parity_digest': digest(scientific_payload(packing))}, 'runtime': runtime}
 
 
 def worker_contract(graph, model):

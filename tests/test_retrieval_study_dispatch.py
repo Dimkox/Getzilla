@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from tests.test_retrieval_study_windows import InertLineCounter, function
 from tests.test_retrieval_study_tokenizer import TinyTokenizer
@@ -14,6 +14,35 @@ from getzilla.retrieval.contracts import sha
 
 
 class StudyDispatchTests(unittest.TestCase):
+    def test_fixed_native_operations_report_scoped_process_measurements(self):
+        owner = self.owner()
+        result = owner.dispatch(self.request(op='release'), {'native_ready': True})
+        measured = result['operation_measurements']
+        self.assertGreaterEqual(measured['wall_seconds'], 0)
+        self.assertGreaterEqual(measured['cpu_seconds'], 0)
+        self.assertGreater(measured['peak_rss_bytes'], 0)
+        self.assertEqual(measured['scope'], 'native-child-process-lifetime-rusage-self-linux-kib-to-bytes')
+
+    def test_resource_import_is_lazy_linux_only_and_unknown_is_not_zero(self):
+        owner = self.owner()
+        original = builtins.__import__
+        def guard(name, *args, **kwargs):
+            if name == 'resource':
+                self.fail('unsupported platform imported Linux measurement resource')
+            return original(name, *args, **kwargs)
+        with patch.object(owner.sys, 'platform', 'win32'), patch('builtins.__import__', side_effect=guard):
+            result = owner.dispatch(self.request(op='release'), {'native_ready': True})
+        self.assertIsNone(result['operation_measurements']['peak_rss_bytes'])
+        self.assertEqual(result['operation_measurements']['scope'], 'process-peak-rss-unavailable')
+        resource = SimpleNamespace(RUSAGE_SELF=0, getrusage=lambda scope: SimpleNamespace(ru_maxrss=7))
+        with patch.object(owner.sys, 'platform', 'linux'), patch.dict('sys.modules', {'resource': resource}):
+            result = owner.dispatch(self.request(op='release'), {'native_ready': True})
+        self.assertEqual(result['operation_measurements']['peak_rss_bytes'], 7168)
+        resource.getrusage = Mock(side_effect=OSError('counter unavailable'))
+        with patch.object(owner.sys, 'platform', 'linux'), patch.dict('sys.modules', {'resource': resource}):
+            result = owner.dispatch(self.request(op='release'), {'native_ready': True})
+        self.assertIsNone(result['operation_measurements']['peak_rss_bytes'])
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_worker_dispatch')

@@ -13,6 +13,17 @@ from getzilla.retrieval.study_run_artifacts import RunArtifacts, serialized_payl
 
 
 class StudyDriverTests(unittest.TestCase):
+    def test_measured_telemetry_never_changes_rank_determinism_digest(self):
+        original = {'rankings': {'bm25': [['w', 1.]]}, 'packing': {}, 'query_id': 'q',
+                    'operation_measurements': {'wall_seconds': .1},
+                    'phase_measurements': {'packing_seconds': {'bm25:2048': .01}}}
+        first = digest(driver._rank_payload(original))
+        original['operation_measurements']['wall_seconds'] = .8
+        original['phase_measurements']['packing_seconds']['bm25:2048'] = .4
+        self.assertEqual(digest(driver._rank_payload(original)), first)
+        original['rankings']['bm25'][0][0] = 'changed-window'
+        self.assertNotEqual(digest(driver._rank_payload(original)), first)
+
     def test_bootstrap_marker_and_summary_preflight_before_retaining_bytes(self):
         from getzilla.retrieval import study_supervisor as supervisor
         with tempfile.TemporaryDirectory() as temporary:

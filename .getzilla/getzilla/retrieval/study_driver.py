@@ -13,9 +13,9 @@ from .budget import RetrievalError
 from .contracts import sha, digest
 from .study_plan import (MODELS, ARMS, EXPECTED_WINDOWS, STAGE_LIMITS,
                          original_function_mapping, map_source_documents, project_function_positions)
-from .study_results import Observations, paired_ratios
+from .study_results import Observations, paired_ratios, measurement_summary, quality_tables
 from .study_metrics import ranking_metrics
-from .study_inspection_manifest import assemble, worker_contract
+from .study_inspection_manifest import assemble, worker_contract, scientific_payload
 from .study_run_artifacts import RunArtifacts, serialized_payload
 
 
@@ -25,6 +25,7 @@ class StudyOutcome:
     execution_id: str
     artifacts: tuple
     inspection_result: object = None
+    measurements: dict | None = None
 
 
 def _ports():
@@ -74,6 +75,11 @@ def _storage(ports, owner, additional=0):
     if (type(observed.logical_bytes) is not int or observed.logical_bytes < 0
             or observed.logical_bytes + additional > 12 * 1024**3):
         raise RetrievalError('study_storage_budget_exceeded')
+    backend = getattr(owner, 'backend', None)
+    if backend is not None:
+        previous = getattr(backend, 'storage_peak', None)
+        if previous is None or previous.logical_bytes < observed.logical_bytes:
+            backend.storage_peak = observed
     return observed
 
 
@@ -133,7 +139,7 @@ def _prepare(owner, model, graphs, deadline):
 
 
 def _windows(ports, owner, catalog, grouped, *, stage_deadline):
-    rows = []
+    rows, observations = [], []
     for corpus, path, _, _, _ in catalog:
         _deadline(owner, stage_deadline, 0)
         with _cuts(ports, owner.operation_ref, catalog) as (handles, sources):
@@ -142,9 +148,11 @@ def _windows(ports, owner, catalog, grouped, *, stage_deadline):
                 'functions': list(grouped.get((corpus, path), ()))}, source_cuts=handles,
                 query_deadline=stage_deadline)
             rows.extend(result['windows'])
+            observations.append(result)
     actual = {corpus: sum(row['corpus'] == corpus for row in rows) for corpus in EXPECTED_WINDOWS}
     if actual != EXPECTED_WINDOWS:
         raise RetrievalError('study_historical_windows_mismatch')
+    owner.window_measurements = _combined_measurements(observations)
     return tuple(rows)
 
 
@@ -232,8 +240,10 @@ def _primary(dataset, observations, metric_rows):
               or any(row['status'] == 'INCONCLUSIVE' for row in report) else
               'FAIL' if any(row['status'] == 'FAIL' for row in report) else 'PASS')
     return {'status': status, 'slices': report, 'observations': coverage,
+            'status_scope': 'registered quality slices; not native-security/resource/product acceptance',
+            'suitability_decision': 'not issued; independent result/native-case review required',
             'quality_pass': 0, 'warm_passes': 10, 'arm_order': ARMS,
-            'timing_observations': observations.timings()}
+            'timing_observations': observations.timings(), 'quality_tables': quality_tables(dataset, metric_rows)}
 
 
 def _check_rank_reproduction(inputs, model, graph, tokenizer, windows):
@@ -248,6 +258,40 @@ def _check_rank_reproduction(inputs, model, graph, tokenizer, windows):
         raise RetrievalError('study_phase_b_reproduction_failed')
 
 
+def _rank_payload(result):
+    return scientific_payload(result)
+
+
+def _combined_measurements(results):
+    values = [row.get('operation_measurements') for row in results]
+    if not values or any(value is None for value in values):
+        return None
+    return {'operation_measurements': {
+        'wall_seconds': sum(row['wall_seconds'] for row in values),
+        'cpu_seconds': (None if any(row['cpu_seconds'] is None for row in values)
+                        else sum(row['cpu_seconds'] for row in values)),
+        'peak_rss_bytes': (None if any(row['peak_rss_bytes'] is None for row in values)
+                           else max(row['peak_rss_bytes'] for row in values)),
+        'scope': ('native-child-process-lifetime-rusage-self-linux-kib-to-bytes'
+                  if all(row['peak_rss_bytes'] is not None for row in values)
+                  else 'process-peak-rss-unavailable')}}
+
+
+def _sample(rows, model, corpus, phase, elapsed, result=None):
+    measurement = {} if result is None else result.get('operation_measurements', {})
+    if type(measurement) is not dict or measurement and (set(measurement) !=
+            {'wall_seconds', 'cpu_seconds', 'peak_rss_bytes', 'scope'}
+            or measurement['scope'] not in {'native-child-process-lifetime-rusage-self-linux-kib-to-bytes',
+                                          'process-peak-rss-unavailable'}):
+        raise RetrievalError('study_measurements_unavailable')
+    if len(rows) >= 81920:
+        raise RetrievalError('study_measurements_unavailable')
+    row = {'model': model, 'corpus': corpus, 'phase': phase, 'wall_seconds': elapsed,
+           'cpu_seconds': measurement.get('cpu_seconds'), 'peak_rss_bytes': measurement.get('peak_rss_bytes')}
+    measurement_summary([row])
+    rows.append(row)
+
+
 def _rank(ports, owner, inputs, catalog, functions, graphs, output):
     grouped, mapping = original_function_mapping(inputs.dataset[0], functions)
     queries = tuple(inputs.dataset[2]['queries'])
@@ -257,6 +301,8 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
     judgments = _judgments(inputs.dataset)
     observations, metrics = Observations(tuple(row['query_id'] for row in queries)), {}
     lexical_pass0 = {}
+    measurements = []
+    setup_started, setup_cpu = time.monotonic(), time.process_time()
     for model_index, model in enumerate(MODELS):
         for cold in range(3):
             start = time.monotonic()
@@ -265,28 +311,42 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                 owner = reference._owner
             _storage(ports, owner)
             native, tokenizer, load = _prepare(owner, model, graphs, _deadline(owner, start, 180))
+            _sample(measurements, model, None, 'cold_load', time.monotonic() - start,
+                    _combined_measurements((native, tokenizer, load)))
             _persist(ports, owner, output, f'cold-{model}-{cold}.json',
                 {'fresh_process': True, 'process_cold_not_disk_cold': True,
                  'native': native, 'tokenizer': tokenizer, 'model_load': load,
                  'seconds': time.monotonic() - start})
         if model != 'minilm':
             owner._request('inspect_tokenizer', {'op': 'load-tokenizer', 'model': 'minilm'})
+        window_started = time.monotonic()
         windows = _windows(ports, owner, catalog, grouped,
                            stage_deadline=time.monotonic() + STAGE_LIMITS['windows'])
+        _sample(measurements, model, None, 'windowing', time.monotonic() - window_started,
+                getattr(owner, 'window_measurements', None))
         _check_rank_reproduction(inputs, model, graphs[model], tokenizer, windows)
         by_corpus = {corpus: {row['id']: row for row in windows if row['corpus'] == corpus}
                      for corpus in EXPECTED_WINDOWS}
         for corpus in ('small', 'large'):
+            index_started = time.monotonic()
+            index_results = []
             limit = STAGE_LIMITS['small-index' if corpus == 'small' else model + '-large-index']
             stop = _deadline(owner, time.monotonic(), limit)
             for row in by_corpus[corpus].values():
                 _deadline(owner, stop, 0)
                 with _cuts(ports, owner.operation_ref, catalog) as (handles, _):
-                    owner._request('rank_encode', {'op': 'encode', 'kind': 'window',
+                    encoded_started = time.monotonic()
+                    encoded = owner._request('rank_encode', {'op': 'encode', 'kind': 'window',
                         'corpus': corpus, 'window_id': row['id']}, source_cuts=handles, query_deadline=stop)
+                    _sample(measurements, model, corpus, 'window_encoding',
+                            time.monotonic() - encoded_started, encoded)
+                    index_results.append(encoded)
             with _cuts(ports, owner.operation_ref, catalog) as (handles, _):
-                owner._request('rank_encode', {'op': 'prepare-index', 'corpus': corpus},
-                               source_cuts=handles, query_deadline=stop)
+                prepared = owner._request('rank_encode', {'op': 'prepare-index', 'corpus': corpus},
+                                           source_cuts=handles, query_deadline=stop)
+                index_results.append(prepared)
+            _sample(measurements, model, corpus, 'index', time.monotonic() - index_started,
+                    _combined_measurements(index_results))
         for iteration in range(10):
             for query in queries:
                 start, key = time.monotonic(), query['query_id']
@@ -294,11 +354,15 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                 stop = min(owner.deadline, start + 2)
                 try:
                     with _cuts(ports, owner.operation_ref, catalog) as (handles, _):
+                        encoded_started = time.monotonic()
                         embedding = owner._request('rank_encode', {'op': 'encode', 'kind': 'query',
                             'corpus': corpus, 'query_id': key, 'text': query['text']},
                             source_cuts=handles, query_deadline=stop)
+                        encoding_seconds = time.monotonic() - encoded_started
+                        scored_started = time.monotonic()
                         result = owner._request('rank_score', {'op': 'score', 'corpus': corpus,
                             'query_id': key}, source_cuts=handles, query_deadline=stop)
+                        score_seconds = time.monotonic() - scored_started
                         stable = {historical: actual for (name, historical), actual in mapping.items() if name == corpus}
                         value = _query_metrics(result, by_corpus[corpus], stable, judgments[query['task_id']])
                         if iteration == 0:
@@ -318,19 +382,42 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                     elapsed = time.monotonic() - start
                     if time.monotonic() >= stop:
                         raise RetrievalError('study_query_deadline')
-                    observations.add(model, iteration, key, result, seconds=elapsed,
-                                     absolute_deadline=stop, query_started=start)
+                    _sample(measurements, model, corpus, 'query_encoding', encoding_seconds, embedding)
+                    _sample(measurements, model, corpus, 'score_and_packing', score_seconds, result)
+                    phases = result.get('phase_measurements', {})
+                    for source, phase in (('lexical_seconds', 'lexical'), ('dense_seconds', 'dense_score'),
+                                          ('rrf_seconds', 'rrf')):
+                        if source in phases:
+                            _sample(measurements, model, corpus, phase, phases[source])
+                    for phase, seconds in phases.get('packing_seconds', {}).items():
+                        _sample(measurements, model, corpus, 'packing:' + phase, seconds)
+                    accepted = observations.add(model, iteration, key, _rank_payload(result), seconds=elapsed,
+                                                absolute_deadline=stop, query_started=start)
+                    _sample(measurements, model, corpus, 'query_total', accepted)
                 except Exception:
                     # A failed owner may already be retired. Never reacquire
                     # permission or repeat work merely to write a diagnostic;
                     # the existing execution owner retains failure/cleanup.
                     raise
-    return _primary(inputs.dataset, observations, metrics)
+    report = _primary(inputs.dataset, observations, metrics)
+    report['measurements'] = measurement_summary(measurements)
+    disk = getattr(owner.backend, 'storage_peak', None)
+    report['measurements'].update(setup_and_run_seconds=time.monotonic() - setup_started,
+        host_process_cpu_seconds=time.process_time() - setup_cpu,
+        setup_cost_scope='fixed rank stages before final artifact release/cleanup; acquisition/operator/review wait excluded',
+        acquisition_setup_seconds=None, cleanup_seconds=None, monetary_setup_cost=None,
+        storage_peak_logical_bytes=None if disk is None else disk.logical_bytes,
+        storage_scope_digest=None if disk is None else disk.scope_digest,
+        storage_scope='approved retained roots, export views and whole candidate runtime/par; logical deduplicated bytes',
+        native_authority_scenarios='not_performed_by_this_public_study_driver',
+        git_gitless_rank_parity='not_performed; no additional holdout evaluation')
+    return report
 
 
 def run_fixed_study(operation_ref):
     """Actual fixed producer only; no caller model, corpus, queries or flags."""
     from .study_supervisor import (_operation, owned_study_runtime, _inspection_result_after_terminal)
+    driver_started, driver_cpu = time.monotonic(), time.process_time()
     ports, projection = _ports(), _operation(operation_ref)
     inputs = ports.reviewed_public_study_inputs(operation_ref)
     catalog = ports.reviewed_public_study_catalog(operation_ref)
@@ -357,4 +444,13 @@ def run_fixed_study(operation_ref):
                      {'artifacts': [asdict(row) for row in output.manifest()]})
         result = (_inspection_result_after_terminal(owner)
                   if projection.operation == 'inspect_public_artifacts' else None)
-        return StudyOutcome(report['status'], owner.execution_id, output.manifest(), result)
+        final_storage = _storage(ports, owner)
+        final_measurements = {'driver_wall_seconds': time.monotonic() - driver_started,
+            'host_process_cpu_seconds': time.process_time() - driver_cpu,
+            'scope': 'this admitted operation, input checks through owned cleanup and final storage observation',
+            'peak_logical_storage_bytes': owner.backend.storage_peak.logical_bytes,
+            'final_logical_storage_bytes': final_storage.logical_bytes,
+            'storage_scope_digest': final_storage.scope_digest,
+            'preparation_acquisition_review_cost': None, 'monetary_cost': None,
+            'note': 'factual outcome data, not a Phase B or result authority reference'}
+        return StudyOutcome(report['status'], owner.execution_id, output.manifest(), result, final_measurements)
