@@ -21,6 +21,17 @@ class RunArtifact:
     sha256: str
 
 
+def serialized_payload(payload):
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False,
+                         separators=(',', ':')).encode() + b'\n'
+    except (ValueError, TypeError, UnicodeError):
+        raise RetrievalError('study_artifact_payload_unavailable') from None
+    if len(raw) > 16 * 1024**2:
+        raise RetrievalError('study_artifact_bytes_exceeded')
+    return raw
+
+
 class RunArtifacts:
     def __init__(self, root, *, byte_limit):
         if type(byte_limit) is not int or not 1 <= byte_limit <= 12 * 1024**3:
@@ -35,16 +46,14 @@ class RunArtifacts:
         return self
 
     def write(self, name, payload):
+        return self.write_bytes(name, serialized_payload(payload))
+
+    def write_bytes(self, name, raw):
         from ..parallel import _create_log
         if (self._directory is None or type(name) is not str
                 or not re.fullmatch('[a-z0-9_-]{1,160}\\.json', name) or name in self._files):
             raise RetrievalError('study_artifact_name_unavailable')
-        try:
-            raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False,
-                             separators=(',', ':')).encode() + b'\n'
-        except (ValueError, TypeError, UnicodeError):
-            raise RetrievalError('study_artifact_payload_unavailable') from None
-        if len(raw) > 16 * 1024**2 or self.used + len(raw) > self.limit:
+        if type(raw) is not bytes or len(raw) > 16 * 1024**2 or self.used + len(raw) > self.limit:
             raise RetrievalError('study_artifact_bytes_exceeded')
         with _create_log(self._directory, name) as output:
             offset = 0

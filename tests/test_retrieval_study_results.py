@@ -1,8 +1,24 @@
 import importlib
 import unittest
+from unittest.mock import patch
 
 
 class StudyResultTests(unittest.TestCase):
+    def test_observation_serialization_expiry_cannot_accept_an_overtime_query(self):
+        owner = self.owner()
+        accumulator = owner.Observations(('q',))
+        clock, original = [0.], owner.json.dumps
+        def serialize(*args, **kwargs):
+            raw = original(*args, **kwargs)
+            clock[0] = 2.
+            return raw
+        with patch.object(owner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(owner.json, 'dumps', side_effect=serialize):
+            with self.assertRaisesRegex(ValueError, 'study_query_deadline'):
+                accumulator.add('minilm', 0, 'q', {}, seconds=.1,
+                                absolute_deadline=2., query_started=0.)
+        self.assertEqual(accumulator.coverage()['observed'], 0)
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_results')

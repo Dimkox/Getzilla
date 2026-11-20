@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import select
+import stat
 import time
 import threading
 import contextvars
@@ -57,6 +58,59 @@ class LiveStudyResourceObservation:
     image_id: str
     readback_digest: str
     pid_scope: str
+
+
+@dataclass(frozen=True)
+class StudyReservedOutputDirectory:
+    relative_path: str
+    device: int
+    inode: int
+
+
+def reserved_study_output_directory(operation_ref, execution_id):
+    """Observe only the active owner's held empty bootstrap output directory."""
+    projection = _operation(operation_ref)
+    owners = [owner for owner in _LIVE.values() if type(owner) is _Owner
+              and owner.operation_ref is operation_ref and owner.execution_id == execution_id]
+    if len(owners) != 1:
+        raise RetrievalError('study_reserved_output_unavailable')
+    owner = owners[0]
+    if owner.projection != projection:
+        raise RetrievalError('study_reserved_output_unavailable')
+    record = owner.current()
+    output_record = record['output']
+    if (record['execution_generation'] != owner.admission.execution_generation
+            or record['execution_status'] != 'running'
+            or output_record is not None and output_record.get('artifact') is not None):
+        raise RetrievalError('study_reserved_output_unavailable')
+    from .study_run_artifacts import RunArtifacts
+    from .. import fsx
+    output = getattr(owner.backend, 'run_artifact_context', None)
+    if (type(output) is not RunArtifacts or output.root != projection.root
+            or type(output._directory) is not int or output._directory < 0
+            or output._folder.parent != projection.root / '.getzilla/runtime/par'
+            or re.fullmatch(r'[0-9]{8}T[0-9]{6}-[0-9]+-[0-9a-f]{32}', output._folder.name) is None):
+        raise RetrievalError('study_reserved_output_unavailable')
+    descriptors = [fsx.open_dir(projection.root)]
+    try:
+        for part in ('.getzilla', 'runtime', 'par', output._folder.name):
+            descriptors.append(fsx.open_dir_at(descriptors[-1], part))
+        held, named = fsx.fstat_dir(output._directory), fsx.fstat_dir(descriptors[-1])
+        keys = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                'st_mtime_ns', 'st_ctime_ns')
+        if (any(getattr(held, key) != getattr(named, key) for key in keys)
+                or not stat.S_ISDIR(held.st_mode) or stat.S_IMODE(held.st_mode) != 0o700
+                or held.st_uid != os.getuid() or fsx.listdir(output._directory)):
+            raise RetrievalError('study_reserved_output_unavailable')
+        after = fsx.fstat_dir(output._directory)
+        if any(getattr(held, key) != getattr(after, key) for key in keys):
+            raise RetrievalError('study_reserved_output_unavailable')
+        owner.current()
+        return StudyReservedOutputDirectory(output._folder.relative_to(projection.root).as_posix(),
+                                             held.st_dev, held.st_ino)
+    finally:
+        for descriptor in reversed(descriptors):
+            fsx.close_dir(descriptor)
 
 
 class StudyInspectionResultRef:
@@ -619,6 +673,8 @@ The fixed scientific driver must separately complete its registered manifest.
     raw = json.dumps(payload, sort_keys=True, allow_nan=False, separators=(',', ':')).encode() + b'\n'
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise RetrievalError('study_inspection_output_exceeded')
+    from .study_driver import _storage, _ports
+    _storage(_ports(), owner, additional=len(raw))
     from contextlib import nullcontext
     existing = getattr(owner.backend, 'run_artifact_context', None)
     context = (nullcontext((existing._folder, existing._directory)) if existing is not None
@@ -636,6 +692,7 @@ The fixed scientific driver must separately complete its registered manifest.
     admit_public_study_stage(owner.operation_ref, owner.reference, 'inspect_release', source_cuts=source_cuts)
     if artifact['sha256'] != hashlib.sha256(raw).hexdigest():
         raise RetrievalError('study_inspection_output_unavailable')
+    _storage(_ports(), owner)
     owner.report_artifact = artifact
 
 
