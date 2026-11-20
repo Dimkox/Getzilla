@@ -24,6 +24,12 @@ OWNERS = (
     'retrieval/contracts.py', 'retrieval/budget.py',
     'retrieval/evaluation_inputs.py', 'retrieval/evaluation_inputs_io.py',
     'execution.py', 'execution_store.py', 'execution_output.py', 'optional_modules.py',
+    'retrieval/study_driver.py', 'retrieval/study_plan.py', 'retrieval/study_results.py',
+    'retrieval/study_run_artifacts.py', 'retrieval/study_inspection_manifest.py',
+    'security_corresponding_source.py', 'retrieval/study_codec.py',
+    'retrieval/study_tokenizer.py', 'retrieval/study_context.py', 'retrieval/study_vectors.py',
+    'retrieval/study_metrics.py', 'retrieval/study_lexical.py', 'retrieval/study_worker_entry.py',
+    'retrieval/study_native_entry.py', 'retrieval/study_worker_dispatch.py', 'retrieval/lines.py',
 )
 
 
