@@ -923,7 +923,7 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
     def parse_config(raw):
         code, output, _ = _run_capped(
             _git_command(['config', '--null', '--no-includes', '--list', '--file=-']),
-            cwd=Path(Path(root).anchor), env=_git_environment(), stdout_limit=16_384,
+            cwd=Path(Path(root).anchor), env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
             stderr_limit=4096, timeout=_bounded_git_timeout(timeout, deadline), stdin_data=raw)
         if code or output and not output.endswith(b'\0'):
             raise ValueError('Git configuration syntax unavailable')
