@@ -11,6 +11,7 @@ import os
 import stat
 import time
 import hashlib
+import sys
 
 from .budget import Budget, RetrievalError
 from .contracts import sha, digest
@@ -261,27 +262,38 @@ def _score(request, state):
         raise RetrievalError('study_index_incomplete')
     rows, index, matrix = state['prepared'][corpus]
     windows, np, budget = state['windows'][corpus], state['np'], _budget(request)
+    started = time.monotonic()
     ranked = index.query(text, budget=budget)
+    lexical_seconds = time.monotonic() - started
+    started = time.monotonic()
     scores = matrix @ np.asarray(vector, dtype=np.float32)
     if not np.isfinite(scores).all():
         raise RetrievalError('study_score_nonfinite')
     dense = tuple((rows[i].id, float(scores[i])) for i in sorted(range(len(rows)),
                   key=lambda i: (-float(scores[i]), rows[i].id))[:100])
+    dense_seconds = time.monotonic() - started
     ranked['dense_' + state['model']] = dense
+    started = time.monotonic()
     ranked['rrf_' + state['model']] = rrf_ranks(tuple(tuple(key for key, _ in arm)
         for arm in (ranked['exact_symbol'], ranked['bm25'], dense)))
+    rrf_seconds = time.monotonic() - started
     packing = {}
+    packing_seconds = {}
     for arm, ranking in ranked.items():
         packing[arm] = {}
         for limit in (2048, 8192):
+            started = time.monotonic()
             packed = pack_context([key for key, _ in ranking], windows, state['codec'], limit, budget=budget)
+            packing_seconds[arm + ':' + str(limit)] = time.monotonic() - started
             packing[arm][str(limit)] = {'tokens': packed.tokens, 'functions': packed.functions,
                 'positions': packed.included_positions, 'context_sha256': sha(packed.text.encode())}
     budget.check()
-    return {'query_id': query_id, 'model': state['model'], 'rankings': ranked, 'packing': packing}
+    return {'query_id': query_id, 'model': state['model'], 'rankings': ranked, 'packing': packing,
+            'phase_measurements': {'lexical_seconds': lexical_seconds, 'dense_seconds': dense_seconds,
+                                   'rrf_seconds': rrf_seconds, 'packing_seconds': packing_seconds}}
 
 
-def dispatch(request, state):
+def _dispatch(request, state):
     if type(request) is not dict or type(request.get('op')) is not str:
         raise RetrievalError('study_worker_request_unavailable')
     op = request['op']
@@ -315,3 +327,21 @@ def dispatch(request, state):
         _fields(request, ())
         return {'status': 'ready_for_host_current_release'}
     raise RetrievalError('study_worker_request_unavailable')
+
+
+def dispatch(request, state):
+    started, cpu = time.monotonic(), time.process_time()
+    result = _dispatch(request, state)
+    peak = None
+    if sys.platform == 'linux':
+        try:
+            import resource
+            observed = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            peak = observed * 1024 if type(observed) is int and observed > 0 else None
+        except (ImportError, OSError, ValueError, OverflowError, AttributeError):
+            peak = None
+    return result | {'operation_measurements': {
+        'wall_seconds': time.monotonic() - started, 'cpu_seconds': time.process_time() - cpu,
+        'peak_rss_bytes': peak,
+        'scope': ('native-child-process-lifetime-rusage-self-linux-kib-to-bytes' if peak is not None
+                  else 'process-peak-rss-unavailable')}}

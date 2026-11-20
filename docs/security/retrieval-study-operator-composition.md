@@ -59,6 +59,13 @@ rank_op = register_public_study_operation(
 ranking = run_fixed_study(rank_op)
 ```
 
+`inspection.measurements` and `ranking.measurements` are factual per-operation
+wall/host CPU and scoped disk observations through cleanup. Preserve them in the
+operator's existing private run evidence together with the immutable returned
+artifact manifest. They are ordinary data; they cannot replace the genuine
+inspection result reference, independent reports or current operation admission.
+Native-child CPU/RSS and all phase samples remain in the fixed run artifacts.
+
 The rank registration must bind the witnessed contracts and exact current
 exports. Every RANK preparation step still requires B; there is no lexical-only
 bypass. The existing stable holdout label and CAS prevent a second attempt with

@@ -78,6 +78,26 @@ decide the sixteen-task holdout boundary; missing observations stay INCONCLUSIVE
 An owned query failure stops the attempt and remains a failed existing execution;
 it does not repeat the holdout or select a surviving subset.
 
+Private artifacts retain every timing pass and finite bounded phase samples.
+Cold/window/index/encoding/query wall times use the host monotonic clock;
+lexical/dense/RRF/packing phase times use the native child's monotonic clock.
+CPU observations use that child's process_time and exclude host/controller/daemon
+CPU. The summary uses the published median and default linear percentile95 rule.
+Peak RSS is the maximum observed sequential native-child lifetime RUSAGE_SELF
+value on Linux, converted from KiB to bytes. It is not whole-container peak RAM.
+The fixed storage owner supplies scoped logical disk observations and exact
+prewrite capacity checks. `StudyOutcome.measurements` includes actual driver
+wall/host CPU through cleanup and final storage; acquisition, operator review
+cost, monetary cost, unperformed updates and warm reload remain unknown or
+not_performed. Telemetry is excluded from scientific parity/rank determinism
+digests, while the original measured values stay in private artifacts.
+
+The one first quality pass also produces corpus/language/class/partition macro
+tables and each paired task's exact delta. Missing values keep the original
+group denominator and make the summary INCONCLUSIVE; no-answer groups remain
+separate from numeric recall. These tables reuse retained metrics and never
+evaluate the holdout a second time.
+
 The result port binds actual terminal execution and the existing captured
 diagnostic artifact. INSPECT scientific assembly uses only protected input ports
 and responses captured by the actual live owner. A supplied report dictionary
