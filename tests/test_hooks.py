@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.receipts import validate_evidence, write_receipt
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, get_active_route, set_active_route
+from getzilla.state import add_approval, approvals_path, get_active_route
 from tests._support import activate_owned_route
 import subprocess
 
@@ -615,25 +615,11 @@ class HookTests(unittest.TestCase):
         )
 
     def _task_hook(self, root: Path, hook: str, payload: dict):
-        """Positive policy fixture includes separate exact finite task consent."""
-        import importlib.util
+        """Use the fixture's existing exact grants through the canonical hook."""
         from copy import deepcopy
-        from getzilla.execution_admission import task_execution_resource
         payload = deepcopy(payload)
         if payload.get('tool_name') == 'Bash':
             payload['tool_input']['timeout_ms'] = 5000
-        spec = importlib.util.spec_from_file_location('task_fixture_lib', ROOT / '.getzilla/hooks/_lib.py')
-        lib = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = lib
-        spec.loader.exec_module(lib)
-        if subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=root, capture_output=True).returncode:
-            subprocess.run(['git', 'remote', 'add', 'origin', 'https://github.com/example/fixture.git'], cwd=root, check=True)
-        if not get_active_route(root):
-            set_active_route(root, build_route(root, 'Review exact local operation', 'task-fixture').to_dict())
-        add_approval(root, 'task-execution', 'synthetic owner delegated actual bounded test arguments', 5,
-                     actions=['task-tool-execute'],
-                     resources=[task_execution_resource(lib.tool_name(payload), lib.tool_input(payload))],
-                     source='explicit-user-consent')
         return run_hook(root, hook, payload)
 
     def test_root_shim_dispatches_pre_tool_use(self) -> None:
@@ -1057,13 +1043,13 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    self.assertIn('ambiguous-command-root', data['reason'])
 
             ledger = json.loads(
                 (session_root / '.getzilla/runtime/tool-denials.json').read_text(encoding='utf-8')
             )
             serialized = json.dumps(ledger, sort_keys=True)
-            self.assertIn('ambiguous-sensitive-shell', serialized)
+            self.assertIn('ambiguous-command-root', serialized)
             self.assertNotIn('git push origin feature', serialized)
 
     def test_benign_shell_expansion_and_read_chain_remain_soft(self) -> None:
@@ -1127,7 +1113,7 @@ class HookTests(unittest.TestCase):
                 'tool_input': {'command': 'xargs -a commands.txt git push origin feature'},
             })
             self.assertEqual(data['decision'], 'deny', (error, data))
-            self.assertIn('ambiguous-sensitive-shell', data['reason'])
+            self.assertIn('ambiguous-command-root', data['reason'])
 
             for index, command in enumerate((
                 'nice -n 10 git status --short',
@@ -1141,7 +1127,7 @@ class HookTests(unittest.TestCase):
                 with self.subTest(command=command):
                     _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
-                        'session_id': f'wrapped-read-{index}',
+                        'session_id': 'root-test',
                         'tool_name': 'Bash',
                         'tool_input': {'command': command},
                     })
@@ -1165,7 +1151,7 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    self.assertIn('ambiguous-command-root', data['reason'])
 
             self._grant(session_root, 'production', actions=['git-push-branch'], resources=['feature'])
             grant_borrow_commands = (
@@ -1190,7 +1176,7 @@ class HookTests(unittest.TestCase):
                 with self.subTest(command=command):
                     _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
-                        'session_id': f'benign-dispatch-argument-{index}',
+                        'session_id': 'root-test',
                         'tool_name': 'Bash',
                         'tool_input': {'command': command},
                     })
@@ -1242,7 +1228,7 @@ class HookTests(unittest.TestCase):
                 with self.subTest(command=command):
                     _, data, error = self._task_hook(session_root, 'pre_tool_use.py', {
                         'cwd': str(session_root),
-                        'session_id': f'single-shell-read-{index}',
+                        'session_id': 'root-test',
                         'tool_name': 'Bash',
                         'tool_input': {'command': command},
                     })
@@ -1270,11 +1256,8 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    if command.startswith('gh '):
-                        self.assertIn('Sensitive action external-write', data['reason'])
-                        self.assertIn('ambiguous-command-root', data['reason'])
-                    else:
-                        self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    self.assertIn('Sensitive read denied', data['reason'])
+                    self.assertIn('ambiguous-command-root', data['reason'])
 
             self._grant(root, 'production', actions=['git-push-branch'], resources=['feature'])
             command = 'printf ok\ngit push origin "$REFS"'
@@ -1323,7 +1306,7 @@ class HookTests(unittest.TestCase):
                         'tool_input': {'command': command},
                     })
                     self.assertEqual(data['decision'], 'deny', (command, error, data))
-                    self.assertIn('ambiguous-sensitive-shell', data['reason'])
+                    self.assertIn('ambiguous-command-root', data['reason'])
 
             self._grant(
                 session_root,
