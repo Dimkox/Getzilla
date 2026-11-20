@@ -131,6 +131,19 @@ class FramingTests(unittest.TestCase):
                 sink._read_http(Peer(bad),time.monotonic()+1,response=True)
 
 class InertSocketTests(CanonicalClaimTests):
+    # Keep inherited controls explicit in the closed source test inventory.
+    def test_once_only_even_after_new_sink_instance_or_lost_response(self):
+        super().test_once_only_even_after_new_sink_instance_or_lost_response()
+
+    def test_stale_cancelled_or_wrong_source_never_sends(self):
+        super().test_stale_cancelled_or_wrong_source_never_sends()
+
+    def test_crash_unknown_response_has_no_retry(self):
+        super().test_crash_unknown_response_has_no_retry()
+
+    def test_post_claim_revocation_holds_without_send(self):
+        super().test_post_claim_revocation_holds_without_send()
+
     def test_actual_uds_to_owned_fake_http_no_model(self):
         import json
         import socket
