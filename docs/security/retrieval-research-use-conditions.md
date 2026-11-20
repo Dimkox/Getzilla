@@ -69,3 +69,31 @@ actual current-owner and held-file path. The public production checker rejects
 their references. They never claim to qualify the real runtime or models.
 
 Supplemental grants remain held/current in the private host evidence graph for the unshipped internal operation. Existing wheel notices remain exact software members. No fourth mount or redistributed artifact is inferred from that limited custody scope.
+
+The inert preparation command is `python3 scripts/getzilla_research_materialize.py
+--root PROJECT --sources PRIVATE_SOURCE_MAP --output
+.getzilla/runtime/scratch/FRESH_NAME`. Use the real current owner session. The
+scratch parent must already exist. The source map contains paths only. Its exact
+440 keys must match the fixed catalog:29 wheel archives,29 saved indices,
+referenced model assets,codec,5 image blobs and357 retained source/legal files.
+The helper checks their fixed sizes and SHA256 values. It creates one new0700
+layout with0400 source/software files and a0600 closed registration. It refuses
+a reused destination and leaves a failed partial output for inspection.
+
+The helper validates all wheel members and every RECORD row, ZIP shape, names,
+file kinds, special modes and cross-wheel collisions. It preserves all3685
+software files (179121964bytes), including inert`.pth`,entrypoint metadata and
+`.data` members. It never runs installation rules, processes`.pth`, creates
+entrypoint scripts, remaps`.data`, imports wheel code or emits a use-condition
+reference. The helper rechecks the full derived software tree, including all hashes and
+directories, under the original preparation deadline. This is an extracted byte
+projection; it makes no installed ABI or native execution claim.
+
+The separate inert preparation bounds are180seconds,12GiB output bytes,
+3GB per acquired file,4000 derived software files,8192 whole-layout entries and
+256MiB derived software bytes. The helper checks free disk before copying and
+uses no-follow held source/output descriptors. It preserves original files.
+These bounds do not change public source/candidate/query limits or the four-file,
+262144-byte supplemental proof limit. Corpus BSD/MIT notices stay retained legal
+artifacts; they add no corpus source candidates. Read-only inference exports are
+a separate supervisor step after actual owner admission.
