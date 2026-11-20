@@ -175,7 +175,32 @@ _FRONTENDS = {
     'python': ('/usr/bin/python3.12', ('-I', '-S', '--version'), 'Python 3.12.', 'python3.12'),
     'php': ('/usr/bin/php8.3', ('-n', '-v'), 'PHP 8.3.', 'php8.3-default-tags'),
     'javascript': ('/usr/bin/node', ('--version',), 'v24.', 'node24-module'),
+    'typescript': ('/usr/bin/node', ('--version',), 'v24.', 'typescript5.9.3-module'),
 }
+TYPESCRIPT_COMPILER_PATH = Path('/usr/share/getzilla/typescript-5.9.3.js')
+_TYPESCRIPT_HELPER = (
+    "const fs=require('node:fs'),vm=require('node:vm');\n"
+    "const moduleObject={exports:{}};\n"
+    "vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),"
+    "{module:moduleObject,exports:moduleObject.exports},{timeout:10000});\n"
+    "const ts=moduleObject.exports; const raw=fs.readFileSync(0);\n"
+    "if(raw.length>16777216)process.exit(2);\n"
+    "const text=new TextDecoder('utf-8',{fatal:true}).decode(raw);\n"
+    "const parsed=ts.createSourceFile('sealed.ts',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);\n"
+    "if(ts.version!=='5.9.3'||parsed.parseDiagnostics.length)process.exit(1);\n"
+)
+
+
+def _typescript_bytes():
+    from .security_acquisition import TYPESCRIPT_COMPILER_SHA256
+    directory = fsx.open_dir(TYPESCRIPT_COMPILER_PATH.parent, flags=fsx.O_CLOEXEC)
+    try:
+        raw, _binding = _read_at(directory, TYPESCRIPT_COMPILER_PATH.name, 0, MAX_SOURCE_FILE)
+        if hashlib.sha256(raw).hexdigest() != TYPESCRIPT_COMPILER_SHA256:
+            raise OpenGrepError('typescript_compiler_pin_mismatch')
+        return raw
+    finally:
+        fsx.close_dir(directory)
 _ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
 _COMPILE_HELPER = (
     'import pathlib,sys\n'
@@ -298,6 +323,12 @@ def syntax_check(frontend: SyntaxFrontend, raw: bytes, run_root: Path, *, deadli
             # worker's address space before Node ever examines the sealed bytes.
             result = _run([str(frontend.path), '--jitless', '--input-type=module', '--check'], run_root,
                           dict(_ENVIRONMENT), deadline, stdin_fd=source.descriptor)
+        elif frontend.language == 'typescript':
+            with sealed_tool(_typescript_bytes(), executable=False) as compiler, \
+                    sealed_tool(_TYPESCRIPT_HELPER.encode('utf-8'), executable=False) as helper:
+                result = _run([str(frontend.path), '--jitless', '--preserve-symlinks-main',
+                               helper.path, compiler.path], run_root, dict(_ENVIRONMENT), deadline,
+                              inherited_fds=(compiler.descriptor, helper.descriptor), stdin_fd=source.descriptor)
         else:
             raise OpenGrepError('syntax_frontend_unavailable')
         frontend.assert_current()
@@ -625,7 +656,7 @@ def legacy_rule_prefix(profile: str, rules_root: Path) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]', '', prefix + '.')
 
 
-_LANGUAGE = {'.py': 'python', '.php': 'php', '.js': 'javascript'}
+_LANGUAGE = {'.py': 'python', '.php': 'php', '.js': 'javascript', '.ts': 'typescript'}
 
 
 def _expanded_absence(root: Path, deadline) -> bool:

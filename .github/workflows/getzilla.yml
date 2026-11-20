@@ -255,12 +255,23 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends python3.12 php8.3-cli
           python - <<'PY'
-          import sys
+          import os, pathlib, subprocess, sys
           sys.path.insert(0, '.getzilla')
-          from getzilla.security_opengrep import syntax_frontend
-          for language in ('python', 'php', 'javascript'):
+          from getzilla.security_acquisition import provision_typescript
+          parser = provision_typescript(pathlib.Path(os.environ['RUNNER_TEMP']) / 'typescript-parser')
+          subprocess.run(['sudo', 'install', '-d', '-m', '0755', '/usr/share/getzilla'], check=True)
+          subprocess.run(['sudo', 'install', '-T', '-m', '0644', str(parser), '/usr/share/getzilla/typescript-5.9.3.js'], check=True)
+          PY
+          python - <<'PY'
+          import pathlib, sys, tempfile
+          sys.path.insert(0, '.getzilla')
+          from getzilla.security_opengrep import syntax_check, syntax_frontend
+          for language in ('python', 'php', 'javascript', 'typescript'):
               with syntax_frontend(language) as frontend:
                   print(language, frontend.grammar, frontend.digest)
+                  if language == 'typescript':
+                      with tempfile.TemporaryDirectory() as directory:
+                          syntax_check(frontend, b'export const value: number = 1; throw new Error("must not execute");', pathlib.Path(directory))
           PY
       - name: Install test requirements
         if: (success() || failure()) && steps.source_checkout.outcome == 'success'
