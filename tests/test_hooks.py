@@ -622,7 +622,7 @@ class HookTests(unittest.TestCase):
         payload = deepcopy(payload)
         if payload.get('tool_name') == 'Bash':
             payload['tool_input']['timeout_ms'] = 5000
-        spec = importlib.util.spec_from_file_location('task_fixture_lib', ROOT / '.grok/hooks/_lib.py')
+        spec = importlib.util.spec_from_file_location('task_fixture_lib', ROOT / '.getzilla/hooks/_lib.py')
         lib = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = lib
         spec.loader.exec_module(lib)

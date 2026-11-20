@@ -28,7 +28,7 @@ class ReadAuthorityTests(unittest.TestCase):
         (child / '.ssh').mkdir()
         (child / '.ssh/known_hosts').write_text('synthetic public hosts\n', encoding='utf-8')
         (root / '.getzilla/config/policy.json').write_text(
-            json.dumps({'secret_read_paths': ['private-data/**']}), encoding='utf-8',
+            json.dumps({'schema_version': 2, 'secret_read_paths': ['private-data/**']}), encoding='utf-8',
         )
         if fault:
             (root / fault).write_text('raise ImportError("synthetic unavailable policy")\n', encoding='utf-8')
@@ -38,10 +38,15 @@ class ReadAuthorityTests(unittest.TestCase):
         code, output, error = run_hook(root, 'pre_tool_use.py', {
             'cwd': str(root), 'tool_name': tool, 'tool_input': inputs,
         })
-        self.assertEqual(code, 0, error)
+        decision = output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
+        # A missing mandatory bootstrap uses exit 2 to make native hosts block.
+        # Never accept a crash or an empty response as a denial.
+        self.assertIn(code, (0, 2), (output, error))
+        if code == 2:
+            self.assertEqual(decision, 'deny', (output, error))
         self.assertLess(len(json.dumps(output)), 2000)
         self.assertLess(len(error), 1000)
-        return output.get('decision') or output.get('hookSpecificOutput', {}).get('permissionDecision', 'allow')
+        return decision
 
     def test_healthy_and_faulted_conflicting_native_directories_do_not_select_public_root(self) -> None:
         for fault in FAULTS:
@@ -64,7 +69,7 @@ class ReadAuthorityTests(unittest.TestCase):
                 for nested in (False, True):
                     if nested:
                         (child / '.getzilla/config').mkdir(parents=True)
-                        (child / '.getzilla/config/policy.json').write_text('{}', encoding='utf-8')
+                        (child / '.getzilla/config/policy.json').write_text('{"schema_version": 2}', encoding='utf-8')
                     for tool, inputs, expected in (
                         ('exec_command', {'cmd': 'cat README.md', 'workdir': str(child)}, 'deny'),
                         ('Read', {'file_path': 'README.md', 'workdir': str(child)}, 'deny'),
@@ -92,7 +97,7 @@ class ReadAuthorityTests(unittest.TestCase):
             other = root.parent / 'other'
             (other / '.getzilla/config').mkdir(parents=True)
             (other / '.getzilla/config/policy.json').write_text(
-                json.dumps({'secret_read_paths': ['other-private/**']}), encoding='utf-8',
+                json.dumps({'schema_version': 2, 'secret_read_paths': ['other-private/**']}), encoding='utf-8',
             )
             (other / 'PUBLIC.md').write_text('synthetic public text\n', encoding='utf-8')
             (other / 'README.md').symlink_to(root / 'private-data/marker.txt')
@@ -112,7 +117,7 @@ class ReadAuthorityTests(unittest.TestCase):
             with project_copy() as root:
                 child = self.fixture(root, fault)
                 (child / '.getzilla/config').mkdir(parents=True)
-                (child / '.getzilla/config/policy.json').write_text('{}', encoding='utf-8')
+                (child / '.getzilla/config/policy.json').write_text('{"schema_version": 2}', encoding='utf-8')
                 self.assertEqual(self.request(root, 'Grep', {
                     'pattern': 'synthetic', 'workdir': str(child),
                 }), 'deny')
@@ -124,6 +129,7 @@ class ReadAuthorityTests(unittest.TestCase):
         with project_copy() as root:
             child = self.fixture(root, None)
             (root / '.getzilla/config/policy.json').write_text(json.dumps({
+                'schema_version': 2,
                 'secret_read_paths': [*legacy.DEFAULT_SECRET_READ, 'private-data/**'],
             }), encoding='utf-8')
             (root / '.env').write_text('synthetic parent marker\n', encoding='utf-8')
@@ -132,7 +138,7 @@ class ReadAuthorityTests(unittest.TestCase):
             script = child / 'deploy/read.py'
             script.write_text('# inert fixture: never executed\n', encoding='utf-8')
             (child / '.getzilla/config').mkdir(parents=True)
-            (child / '.getzilla/config/policy.json').write_text('{}', encoding='utf-8')
+            (child / '.getzilla/config/policy.json').write_text('{"schema_version": 2}', encoding='utf-8')
             (root / '.getzilla/config/project-policy.json').write_text(json.dumps({
                 'secret_consumers': [{'script': 'sub/deploy/read.py', 'secrets': ['.env']}],
             }), encoding='utf-8')
@@ -165,10 +171,11 @@ class ReadAuthorityTests(unittest.TestCase):
             with project_copy() as root:
                 child = self.fixture(root, fault)
                 (root / '.getzilla/config/policy.json').write_text(json.dumps({
+                    'schema_version': 2,
                     'secret_read_paths': [*legacy.DEFAULT_SECRET_READ, 'private-data/**'],
                 }), encoding='utf-8')
                 (child / '.getzilla/config').mkdir(parents=True)
-                (child / '.getzilla/config/policy.json').write_text('{}', encoding='utf-8')
+                (child / '.getzilla/config/policy.json').write_text('{"schema_version": 2}', encoding='utf-8')
                 external = root.parent / 'external'
                 external.mkdir()
                 (external / '.env').write_text('synthetic external marker\n', encoding='utf-8')

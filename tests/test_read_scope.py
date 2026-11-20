@@ -18,7 +18,7 @@ class ReadScopeTests(unittest.TestCase):
                 for nested in (False, True):
                     if nested:
                         (root / 'sub/.getzilla/config').mkdir(parents=True)
-                        (root / 'sub/.getzilla/config/policy.json').write_text('{}', encoding='utf-8')
+                        (root / 'sub/.getzilla/config/policy.json').write_text('{"schema_version": 2}', encoding='utf-8')
                     for command in (
                         'cd sub && cat README.md', 'cd sub; cat README.md',
                         'cd sub || cat README.md', '(cd sub && cat README.md)',
@@ -41,6 +41,7 @@ class ReadScopeTests(unittest.TestCase):
             with project_copy() as root:
                 helper.fixture(root, fault)
                 (root / '.getzilla/config/policy.json').write_text(json.dumps({
+                    'schema_version': 2,
                     'secret_read_paths': legacy.DEFAULT_SECRET_READ,
                 }), encoding='utf-8')
                 external = root.parent / 'external'
