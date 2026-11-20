@@ -120,6 +120,9 @@ class SemanticContractTests(unittest.TestCase):
             "repair-directive.v1.schema.json",
         }
         names = semantic_names | failover_names | {
+            # Approved independent successors do not extend the M5 subject.
+            "context-manifest.v2.schema.json",
+            "paid-execution-authority.v1.schema.json",
             "bb-backend-profile.v1.schema.json",
             "bb-lifecycle-observation.v1.schema.json",
             "context-manifest.v1.schema.json",
@@ -153,6 +156,7 @@ class SemanticContractTests(unittest.TestCase):
             names,
         )
         versions = {name: 1 for name in semantic_names | failover_names}
+        versions["context-manifest.v2.schema.json"] = 2
         versions["landing-backend-capability.v2.schema.json"] = 2
         versions["landing-backend-capability.v3.schema.json"] = 3
         versions["landing-provider-evidence.v2.schema.json"] = 2

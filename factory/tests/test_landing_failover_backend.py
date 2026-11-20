@@ -143,6 +143,10 @@ class BackendObservationTests(unittest.TestCase):
                                    command_key=item.job_id, request_digest=item.input_digest)
             store.close()
             with sqlite3.connect(root / "landing.sqlite3") as connection:
+                # A v1 database predates paid authority tables as well as observations.
+                from getzilla_factory.paid_admission import COLUMNS
+                for table in reversed(tuple(COLUMNS)):
+                    connection.execute(f"DROP TABLE {table}")
                 connection.execute("ALTER TABLE landing_jobs DROP COLUMN observation_json")
                 connection.execute("PRAGMA user_version = 1")
             migrated = SQLiteLandingJobStore(root, repository_root=Path(__file__).parents[2])
@@ -150,7 +154,7 @@ class BackendObservationTests(unittest.TestCase):
             retained = migrated.get(item.tenant_id, item.repository_id, item.job_id)
             self.assertIsNone(retained.observation)
             with sqlite3.connect(migrated.database_path) as connection:
-                self.assertEqual(2, connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(3, connection.execute("PRAGMA user_version").fetchone()[0])
 
 
 class DraftReceiptPersistenceTests(unittest.TestCase):

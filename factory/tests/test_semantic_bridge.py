@@ -150,6 +150,9 @@ class SemanticBridgeTests(unittest.TestCase):
 
     def test_bridge_contracts_are_closed_versioned_and_invent_no_m5_fields(self):
         expected = {
+            # Approved independent successors do not extend the M5 bridge.
+            "context-manifest.v2.schema.json",
+            "paid-execution-authority.v1.schema.json",
             "bb-backend-profile.v1.schema.json",
             "bb-lifecycle-observation.v1.schema.json",
             "context-manifest.v1.schema.json",
@@ -197,6 +200,7 @@ class SemanticBridgeTests(unittest.TestCase):
             expected,
         )
         versions = {
+            "context-manifest.v2.schema.json": 2,
             "semantic-execution-binding.v1.schema.json": 1,
             "semantic-validation-inputs.v1.schema.json": 1,
             "landing-provider-evidence.v2.schema.json": 2,
