@@ -19,7 +19,7 @@ CANONICAL_ROOTS = (
     'scratch/research-artifact-conditions-review-20261119',
     'scratch/research-metadata-snapshot-20261120-v1',
 )
-CANDIDATE_ROOTS = ('owned-public-review-v4', 'scratch/research-owned-inputs-v1',
+CANDIDATE_ROOTS = ('par', 'owned-public-review-v4', 'scratch/research-owned-inputs-v1',
                    'scratch/research-owned-inputs-v2')
 
 
@@ -114,11 +114,41 @@ def _observe(roots, *, deadline):
                                    digest(first[1]))
 
 
+def _validate_bootstrap_directory(root, reserved, execution_status):
+    relative = getattr(reserved, 'relative_path', None)
+    _require(type(relative) is str and execution_status == 'running', 'public_study_storage_unavailable')
+    parts = Path(relative).parts
+    _require(len(parts) == 4 and parts[:3] == ('.getzilla', 'runtime', 'par')
+             and parts[3] not in {'.', '..'} and not Path(relative).is_absolute(),
+             'public_study_storage_unavailable')
+    path = root / relative
+    with _directory(path) as descriptor:
+        info = os.fstat(descriptor)
+        _require((info.st_dev, info.st_ino) == (reserved.device, reserved.inode)
+                 and stat.S_IMODE(info.st_mode) == 0o700, 'public_study_storage_changed')
+        with os.scandir(descriptor) as entries:
+            _require(next(entries, None) is None, 'public_study_storage_bootstrap_not_empty')
+    return path
+
+
+def _output_directory(root, operation, execution_id, record):
+    from ..execution_output import capture_artifact
+    output = record['output']
+    artifact = None if output is None else output['artifact']
+    if artifact is None:
+        _require(record['execution_status'] == 'running', 'public_study_storage_unavailable')
+        from .study_supervisor import reserved_study_output_directory
+        reserved = reserved_study_output_directory(operation, execution_id)
+        path = _validate_bootstrap_directory(root, reserved, record['execution_status'])
+        return path, ('reserved', reserved.relative_path, reserved.device, reserved.inode)
+    _require(capture_artifact(root, artifact['path']) == artifact, 'public_study_storage_unavailable')
+    return (root / artifact['path']).parent, ('artifact', artifact)
+
+
 def study_storage_observation(operation, execution_id):
     from .public_study_operation import check_public_study_operation
     from ..architecture_diff import _git_binding
     from ..execution import trusted_caller, _authorize, _find
-    from ..execution_output import capture_artifact
     from ..execution_store import load_registry
     projection = check_public_study_operation(operation)
     root = projection.root
@@ -128,9 +158,7 @@ def study_storage_observation(operation, execution_id):
     _authorize(root, caller, record)
     _require(record['operation_id'] == projection.operation_digest and not record['expired'],
              'public_study_storage_unavailable')
-    artifact = record['output']['artifact']
-    _require(artifact is not None and capture_artifact(root, artifact['path']) == artifact,
-             'public_study_storage_unavailable')
+    output_directory, output_binding = _output_directory(root, operation, execution_id, record)
     common = _git_binding(root).common_directory
     _require(common is not None and common.name == '.git', 'public_study_storage_unavailable')
     canonical_runtime = common.parent / '.getzilla/runtime'
@@ -139,10 +167,11 @@ def study_storage_observation(operation, execution_id):
     roots += [('candidate:' + name, runtime / name) for name in CANDIDATE_ROOTS]
     roots += [('export:' + name, path) for name, path in (
         ('worker', projection.worker_root), ('software', projection.software_root), ('model', projection.model_root))]
-    roots.append(('execution:' + execution_id, (root / artifact['path']).parent))
+    roots.append(('execution:' + execution_id, output_directory))
     deadline = time.monotonic() + MAX_SECONDS
     observation = _observe(roots, deadline=deadline)
     check_public_study_operation(operation)
-    _require(load_registry(root) == registry and capture_artifact(root, artifact['path']) == artifact,
+    _require(load_registry(root) == registry
+             and _output_directory(root, operation, execution_id, record) == (output_directory, output_binding),
              'public_study_storage_changed')
     return observation

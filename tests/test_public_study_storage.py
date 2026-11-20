@@ -60,3 +60,66 @@ class StorageObservationTests(unittest.TestCase):
         with patch.object(storage, '_observe', side_effect=AssertionError('must not scan')):
             with self.assertRaises(ValueError):
                 storage.study_storage_observation({'allow': True}, 'invented')
+
+    def test_bootstrap_requires_running_record_and_original_empty_reserved_folder(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reserved = root / '.getzilla/runtime/par/owned-stamp'
+            reserved.mkdir(parents=True, mode=0o700)
+            info = reserved.stat()
+            observed = SimpleNamespace(relative_path='.getzilla/runtime/par/owned-stamp',
+                                       device=info.st_dev, inode=info.st_ino)
+            self.assertEqual(storage._validate_bootstrap_directory(root, observed, 'running'), reserved)
+            for status in ('succeeded', 'failed', 'cancel_requested'):
+                with self.subTest(status=status), self.assertRaises(ValueError):
+                    storage._validate_bootstrap_directory(root, observed, status)
+            (reserved / 'unexpected').write_bytes(b'x')
+            with self.assertRaises(ValueError):
+                storage._validate_bootstrap_directory(root, observed, 'running')
+            (reserved / 'unexpected').unlink()
+            for value in (SimpleNamespace(relative_path='../foreign', device=info.st_dev, inode=info.st_ino),
+                          SimpleNamespace(relative_path=observed.relative_path, device=info.st_dev, inode=info.st_ino + 1)):
+                with self.assertRaises(ValueError):
+                    storage._validate_bootstrap_directory(root, value, 'running')
+
+    def test_missing_artifact_without_genuine_live_owner_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for output in (None, {'artifact': None}):
+                with self.subTest(output=output), self.assertRaises(ValueError):
+                    storage._output_directory(root, object(), 'invented-execution',
+                                              {'execution_status': 'running', 'output': output})
+            with self.assertRaises(ValueError):
+                storage._output_directory(root, object(), 'invented-execution',
+                                          {'execution_status': 'succeeded', 'output': None})
+
+    def test_conservative_candidate_par_counts_orphans_and_deduplicates_current(self):
+        self.assertIn('par', storage.CANDIDATE_ROOTS)
+        self.assertNotIn('par', storage.CANONICAL_ROOTS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            par = root / '.getzilla/runtime/par'
+            current, failed = par / 'current', par / 'failed-orphan'
+            current.mkdir(parents=True, mode=0o700)
+            failed.mkdir(mode=0o700)
+            (current / '000.log').write_bytes(b'123')
+            orphan = failed / 'partial.log'
+            orphan.write_bytes(b'abcd')
+            scopes = (('candidate:par', par), ('execution:current', current))
+            first = storage._observe(scopes, deadline=time.monotonic() + 2)
+            self.assertEqual(first.logical_bytes, 7)
+            self.assertEqual(first, storage._observe((('candidate:par', par),), deadline=time.monotonic() + 2))
+            orphan.write_bytes(b'larger-orphan')
+            second = storage._observe(scopes, deadline=time.monotonic() + 2)
+            self.assertEqual(second.logical_bytes, 16)
+            self.assertNotEqual(first.identity_digest, second.identity_digest)
+            descriptor = os.open(orphan, os.O_RDONLY)
+            try:
+                orphan.unlink()
+                orphan.write_bytes(b'larger-orphan')
+                third = storage._observe(scopes, deadline=time.monotonic() + 2)
+                self.assertEqual(second.logical_bytes, third.logical_bytes)
+                self.assertNotEqual(second.identity_digest, third.identity_digest)
+            finally:
+                os.close(descriptor)
