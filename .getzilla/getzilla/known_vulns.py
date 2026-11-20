@@ -696,6 +696,145 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
     return list(parse(text))
 
 
+_COMPOSER_RELEVANT = ('name', 'version', 'require', 'require-dev', 'conflict', 'replace',
+             'provide', 'minimum-stability', 'prefer-stable', 'repositories', 'extra')
+_COMPOSER_PACKAGE = re.compile(r'[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*\Z')
+_COMPOSER_PLATFORM = re.compile(r'(?:php(?:-64bit|-ipv6|-zts|-debug)?|hhvm|(?:ext|lib)-[a-z0-9_.-]+|composer(?:-plugin-api|-runtime-api)?)\Z')
+
+
+def _composer_json_pairs(items):
+    result = {}
+    for key, value in items:
+        key.encode('utf-8', errors='strict')
+        if key in result:
+            raise ValueError('Composer duplicate JSON key')
+        result[key] = value
+    return result
+
+
+def _composer_bad_number(value):
+    raise ValueError('Composer floating or nonfinite JSON number is unsupported')
+
+
+def _composer_json(text):
+    value = json.loads(text, object_pairs_hook=_composer_json_pairs, parse_float=_composer_bad_number, parse_constant=_composer_bad_number)
+    if type(value) is not dict:
+        raise ValueError('Composer document must be an object')
+    return value
+
+
+def _composer_php_array(value):
+    # JsonFile::parseJson decodes associative PHP arrays. Empty objects encode
+    # as [] with the flags=0 used by Locker; ambiguous numeric keys stay closed.
+    if type(value) is dict:
+        if any(re.fullmatch(r'-?[0-9]+', key) for key in value):
+            raise ValueError('Composer numeric object keys are unsupported')
+        return {key: _composer_php_array(item) for key, item in value.items()} if value else []
+    if type(value) is list:
+        return [_composer_php_array(item) for item in value]
+    if type(value) is int and not -(2**63) <= value < 2**63:
+        raise ValueError('Composer integer exceeds native JSON range')
+    if type(value) is str:
+        value.encode('utf-8', errors='strict')
+    return value
+
+
+def _composer_content_hash(text):
+    """Match Composer Locker::getContentHash and JsonFile::encode(flags=0)."""
+    data = _composer_json(text)
+    selected = {key: data[key] for key in _COMPOSER_RELEVANT if key in data}
+    config = data.get('config', {})
+    if type(config) is not dict:
+        raise ValueError('Composer config must be an object')
+    if config.get('platform') is not None:
+        selected['config'] = {'platform': config['platform']}
+    selected = {key: selected[key] for key in sorted(selected)}
+    raw = json.dumps(_composer_php_array(selected), ensure_ascii=True, separators=(',', ':'),
+                     allow_nan=False).replace('/', '\\/').encode('ascii')
+    return hashlib.md5(raw, usedforsecurity=False).hexdigest()
+
+
+def _composer_version(value):
+    match = re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', value)
+    if match is None:
+        raise ValueError('Composer direct version needs a qualified stable resolver')
+    return tuple(int(part) for part in match.groups())
+
+
+def _composer_satisfies(version, constraint):
+    """Exact/caret/tilde stable subset; other Composer solver forms refuse."""
+    actual = _composer_version(version)
+    match = re.fullmatch(r'([\^~]?)(?:v)?(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?(?:\.(0|[1-9][0-9]*))?', constraint)
+    if match is None:
+        raise ValueError('Composer constraint requires a qualified resolver')
+    parts = [int(part) for part in match.groups()[1:] if part is not None]
+    lower = tuple(parts + [0] * (3 - len(parts)))
+    if not match[1]:
+        return actual == lower
+    index = (1 if len(parts) == 3 else 0) if match[1] == '~' else next(
+        (i for i, value in enumerate(parts) if value), len(parts) - 1)
+    upper = list(lower)
+    upper[index] += 1
+    upper[index + 1:] = [0] * (2 - index)
+    return lower <= actual < tuple(upper)
+
+
+def _validate_composer_binding(manifest_text, lock_text):
+    """Bind supported direct declarations to their exact sibling lock census."""
+    manifest, lock = _composer_json(manifest_text), _composer_json(lock_text)
+    if lock.get('content-hash') != _composer_content_hash(manifest_text):
+        raise ValueError('Composer manifest and lock content-hash differ')
+    for key in ('conflict', 'replace', 'provide'):
+        if key in manifest and type(manifest[key]) is not dict:
+            raise ValueError('Composer graph declarations must be objects')
+    if ('prefer-stable' in manifest and type(manifest['prefer-stable']) is not bool
+            or 'minimum-stability' in manifest and (type(manifest['minimum-stability']) is not str
+                or manifest['minimum-stability'] not in {'stable', 'RC', 'beta', 'alpha', 'dev'})
+            or 'repositories' in manifest and type(manifest['repositories']) not in {dict, list}):
+        raise ValueError('Composer resolution policy is malformed')
+    if any(manifest.get(key) for key in ('conflict', 'replace', 'provide', 'repositories')) or lock.get('aliases'):
+        raise ValueError('Composer alternate graph needs a qualified resolver')
+    packages = {}
+    production = set()
+    for section in ('packages', 'packages-dev'):
+        rows = lock.get(section)
+        if type(rows) is not list:
+            raise ValueError('Composer complete production and development census required')
+        for row in rows:
+            if (type(row) is not dict or type(row.get('name')) is not str or not _COMPOSER_PACKAGE.fullmatch(row['name'])
+                    or type(row.get('version')) is not str or row['name'] in packages):
+                raise ValueError('Composer package census malformed or duplicated')
+            packages[row['name']] = row['version']
+            if section == 'packages':
+                production.add(row['name'])
+    for section, platform_key in (('require', 'platform'), ('require-dev', 'platform-dev')):
+        declared = manifest.get(section, {})
+        if type(declared) is not dict:
+            raise ValueError('Composer declarations must be objects')
+        platform = {}
+        for name, constraint in declared.items():
+            if type(constraint) is not str or not constraint:
+                raise ValueError('Composer declaration needs a constraint')
+            if _COMPOSER_PLATFORM.fullmatch(name):
+                if not re.fullmatch(r'\*|(?:>=|<=|>|<|==|=|\^|~)?\s*v?[0-9]+(?:\.[0-9]+){0,2}', constraint):
+                    raise ValueError('Composer platform constraint needs a qualified resolver')
+                platform[name] = constraint
+            elif (not _COMPOSER_PACKAGE.fullmatch(name) or name not in packages
+                    or section == 'require' and name not in production
+                    or not _composer_satisfies(packages[name], constraint)):
+                raise ValueError('Composer direct dependency is not covered by the lock')
+        if lock.get(platform_key, {}) != platform:
+            raise ValueError('Composer platform declarations differ from lock')
+    config = manifest.get('config', {})
+    overrides = config.get('platform', {})
+    if type(overrides) is not dict or lock.get('platform-overrides', {}) != overrides:
+        raise ValueError('Composer platform overrides need an exact declaration')
+    if any(not _COMPOSER_PLATFORM.fullmatch(name) or value is not False and (
+            type(value) is not str or not re.fullmatch(r'v?[0-9]+(?:\.[0-9]+){0,2}', value))
+           for name, value in overrides.items()):
+        raise ValueError('Composer platform override is unsupported')
+
+
 def dependency_inventory(root: Path, config: dict[str, Any]) -> tuple[list[Dependency], list[str], dict[str, Any]]:
     from .component_state import BoundRoot, ComponentStateError
     patterns = tuple(config['exclude'])
@@ -706,7 +845,7 @@ def dependency_inventory(root: Path, config: dict[str, Any]) -> tuple[list[Depen
     if len(files) > 4096:
         raise VulnerabilityError('incomplete inventory: manifest census exceeds bound')
     if any(_manifest_parser(PurePosixPath(relative).name) is None
-           and PurePosixPath(relative).name != 'Cargo.toml' for relative in files):
+           and PurePosixPath(relative).name not in {'Cargo.toml', 'composer.json'} for relative in files):
         raise VulnerabilityError('incomplete inventory: unsupported dependency declaration')
     snapshots, texts, total = {}, {}, 0
     try:
@@ -738,6 +877,11 @@ def dependency_inventory(root: Path, config: dict[str, Any]) -> tuple[list[Depen
                     if relative not in cargo and any(tomllib.loads(texts[relative]).get(key) for key in (
                             'dependencies', 'dev-dependencies', 'build-dependencies', 'target', 'workspace', 'patch', 'replace')):
                         raise ValueError('Cargo unresolved declaration requires a qualified lock')
+                elif name == 'composer.json':
+                    lock = str(PurePosixPath(relative).with_name('composer.lock'))
+                    if lock not in texts:
+                        raise ValueError('Composer declaration requires its sibling lock')
+                    _validate_composer_binding(texts[relative], texts[lock])
                 elif _manifest_parser(name) is None:
                     # The current closed collector has no complete resolver
                     # for these declarations; never infer structural absence.
