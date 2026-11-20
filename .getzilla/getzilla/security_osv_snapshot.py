@@ -30,7 +30,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from .architecture_diff import (ArchitectureError, MAX_GIT_OUTPUT_BYTES)
-from .package_status import _git_read
+from . import fsx
+from .package_status import _git_read, _git_registration_absent
 from .security_data import (OSV_BUCKET, OSV_ECOSYSTEMS, SecurityDataError,
                             osv_aliases, osv_decision_ids, osv_coverage, publish_snapshot, qualified_packagist, read_snapshot)
 
@@ -341,11 +342,17 @@ def _source_git_root(root: Path) -> bool:
     A completed Git observation of a nested selection is always a refusal.
     """
     try:
+        if _git_registration_absent(root):
+            # A selected subdirectory cannot borrow its parent's Git identity,
+            # including when it is ignored or that registration is malformed.
+            if any(not _git_registration_absent(parent) for parent in root.parents):
+                raise VulnerabilityError('selected security source must be the exact Git worktree root')
+            return False
         code, output = _git_read(root, ['rev-parse', '--show-prefix', '--is-inside-work-tree'])
     except (OSError, ValueError) as exc:
         raise VulnerabilityError('cannot establish the exact selected Git worktree root') from exc
     if code:
-        return False
+        raise VulnerabilityError('cannot establish the exact selected Git worktree root')
     if output != b'\ntrue\n':
         raise VulnerabilityError('selected security source must be the exact Git worktree root')
     return True
@@ -353,6 +360,19 @@ def _source_git_root(root: Path) -> bool:
 
 def _tracked_files(root: Path) -> list[str]:
     root_proven = _source_git_root(root)
+    if not root_proven:
+        try:
+            with fsx.ReadOnlyBoundRoot(root) as bound:
+                files = []
+                for path in root.rglob('*'):
+                    if path.is_file() and not path.is_symlink() and '.git' not in path.relative_to(root).parts:
+                        files.append(path.relative_to(root).as_posix())
+                bound.check()
+                if _source_git_root(root):
+                    raise VulnerabilityError('selected security source changed during filesystem inventory')
+                return sorted(files)
+        except (OSError, ValueError) as exc:
+            raise VulnerabilityError('cannot establish standalone security filesystem inventory') from exc
     try:
         from .architecture_diff import run_git_read
         code, output, _ = run_git_read(
@@ -367,13 +387,7 @@ def _tracked_files(root: Path) -> list[str]:
         if output and not output.endswith(b'\0'):
             raise VulnerabilityError('security Git inventory is incomplete')
         return sorted({item for item in output.decode('utf-8', 'surrogateescape').split('\0') if item})
-    if root_proven:
-        raise VulnerabilityError('security Git inventory did not complete for the selected root')
-    files = []
-    for path in root.rglob('*'):
-        if path.is_file() and not path.is_symlink() and '.git' not in path.relative_to(root).parts:
-            files.append(path.relative_to(root).as_posix())
-    return sorted(files)
+    raise VulnerabilityError('security Git inventory did not complete for the selected root')
 
 
 def collect_dependencies(root: Path, *, exclude: Iterable[str] = DEFAULT_EXCLUDE) -> tuple[list[Dependency], list[str]]:
