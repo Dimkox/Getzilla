@@ -16,7 +16,7 @@ from .study_plan import (MODELS, ARMS, EXPECTED_WINDOWS, STAGE_LIMITS,
 from .study_results import Observations, paired_ratios
 from .study_metrics import ranking_metrics
 from .study_inspection_manifest import assemble, worker_contract
-from .study_run_artifacts import RunArtifacts
+from .study_run_artifacts import RunArtifacts, serialized_payload
 
 
 @dataclass(frozen=True)
@@ -75,16 +75,24 @@ def _storage(ports, owner, additional=0):
     return observed
 
 
-def _persist(ports, owner, output, name, payload, handles=None):
-    _storage(ports, owner)
+def _persist(ports, owner, output, name, payload, handles=None, *, absolute_deadline=None):
+    def current_deadline():
+        if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+            raise RetrievalError('study_query_deadline')
+    current_deadline()
+    raw = serialized_payload(payload)
+    _storage(ports, owner, additional=len(raw))
     owner.current()
     if handles is not None:
         stage = 'inspect_release' if owner.projection.operation == 'inspect_public_artifacts' else 'rank_release'
         ports.admit_public_study_stage(owner.operation_ref, owner.reference, stage, source_cuts=handles)
-    row = output.write(name, payload)
+    current_deadline()
+    row = output.write_bytes(name, raw)
+    current_deadline()
     _storage(ports, owner)
     if handles is not None:
         ports.admit_public_study_stage(owner.operation_ref, owner.reference, stage, source_cuts=handles)
+    current_deadline()
     return row
 
 
@@ -97,6 +105,7 @@ def _bind_output(owner, output):
     raw = json.dumps({'definition': 'issue162-owned-run-output-v1',
         'execution_id': owner.execution_id, 'operation_digest': owner.projection.operation_digest},
         sort_keys=True).encode() + b'\n'
+    _storage(_ports(), owner, additional=len(raw))
     with _create_log(output._directory, '000.log') as stream:
         if stream.write(raw) != len(raw):
             raise RetrievalError('study_artifact_write_unavailable')
@@ -220,7 +229,8 @@ def _primary(dataset, observations, metric_rows):
               or any(row['status'] == 'INCONCLUSIVE' for row in report) else
               'FAIL' if any(row['status'] == 'FAIL' for row in report) else 'PASS')
     return {'status': status, 'slices': report, 'observations': coverage,
-            'quality_pass': 0, 'warm_passes': 10, 'arm_order': ARMS}
+            'quality_pass': 0, 'warm_passes': 10, 'arm_order': ARMS,
+            'timing_observations': observations.timings()}
 
 
 def _check_rank_reproduction(inputs, model, graph, tokenizer, windows):
@@ -297,10 +307,15 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                         elapsed = time.monotonic() - start
                         if time.monotonic() >= stop:
                             raise RetrievalError('study_query_deadline')
-                        observations.add(model, iteration, key, result, seconds=elapsed)
                         _persist(ports, owner, output, f'rank-{model}-{iteration:02}-{sha(key.encode())}.json',
-                            {'query_id': key, 'pass': iteration, 'model': model, 'seconds': elapsed,
-                             'embedding': embedding, 'result': result, 'metrics': value if iteration == 0 else None}, handles)
+                            {'query_id': key, 'pass': iteration, 'model': model,
+                             'seconds_before_artifact_release': elapsed,
+                             'embedding': embedding, 'result': result, 'metrics': value if iteration == 0 else None},
+                             handles, absolute_deadline=stop)
+                    elapsed = time.monotonic() - start
+                    if time.monotonic() >= stop:
+                        raise RetrievalError('study_query_deadline')
+                    observations.add(model, iteration, key, result, seconds=elapsed)
                 except Exception:
                     # A failed owner may already be retired. Never reacquire
                     # permission or repeat work merely to write a diagnostic;

@@ -76,3 +76,8 @@ class Observations:
                 'failed': sum(row['error'] is not None for row in self._rows.values()),
                 'complete': len(self._rows) == expected,
                 'nondeterministic': self.nondeterministic()}
+
+    def timings(self):
+        return tuple({'model': model, 'pass': iteration, 'query_id': query,
+                      'seconds': row['seconds'], 'error': row['error'], 'result_digest': row['digest']}
+                     for (model, iteration, query), row in self._rows.items())
