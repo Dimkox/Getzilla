@@ -302,29 +302,32 @@ def _queue_depth_modules(value: object, maximum: int) -> tuple[int | None, tuple
 
 
 def _queue_depth_error(boundary: str, module: str, side: str, active: set[str], *,
-                       cached_height: int | None = None, cached_modules: frozenset[str] | None = None) -> ArchitectureError:
+                       cached_height: int | None = None, cached_modules: frozenset[str] | None = None,
+                       budget=None) -> ArchitectureError:
     error = ArchitectureError('queue adapter depth limit exceeded', code='limit')
     try:
         if (type(boundary) is not str or boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
                 or type(side) is not str or side not in {'base', 'head'}):
             return error
+        depth_limit = budget.depth_limit if budget is not None else MAX_QUEUE_ADAPTER_DEPTH
+        module_limit = budget.module_limit if budget is not None else MAX_QUEUE_ADAPTER_MODULES
         token, redacted = _queue_depth_token(module)
-        count, names, bad, truncated = _queue_depth_modules(active, MAX_QUEUE_ADAPTER_DEPTH)
+        count, names, bad, truncated = _queue_depth_modules(active, depth_limit)
         height = None
         cached_count, cached_names, cached_bad, cached_truncated = None, (), False, False
         unavailable = count is None
         if boundary == 'cached-height':
-            if type(cached_height) is int and 0 <= cached_height <= MAX_QUEUE_ADAPTER_MODULES:
+            if type(cached_height) is int and 0 <= cached_height <= module_limit:
                 height = cached_height
             else:
                 unavailable = True
             cached_count, cached_names, cached_bad, cached_truncated = _queue_depth_modules(
-                cached_modules, MAX_QUEUE_ADAPTER_MODULES)
+                cached_modules, module_limit)
             unavailable = unavailable or cached_count is None
         depth = count + (height if boundary == 'cached-height' else 1) if count is not None and (
             boundary != 'cached-height' or height is not None) else None
         error._queue_depth_context = _QueueDepthContext(boundary, side, token, count, names,
-            depth, MAX_QUEUE_ADAPTER_DEPTH, height, cached_count, cached_names,
+            depth, depth_limit, height, cached_count, cached_names,
             redacted or bad or cached_bad, truncated or cached_truncated, unavailable, _QUEUE_DEPTH_SEAL)
     except Exception:
         # Optional diagnostic failure must preserve the original refusal; interrupts propagate.
@@ -338,7 +341,7 @@ def _queue_depth_context_valid(context: object, side: object) -> bool:
     if (type(side) is not str or side not in {'base', 'head'} or type(context.side) is not str
             or context.side != side or type(context.boundary) is not str
             or context.boundary not in {'live-depth', 'cached-height', 'declaration-depth'}
-            or type(context.limit) is not int or context.limit != MAX_QUEUE_ADAPTER_DEPTH
+            or type(context.limit) is not int or context.limit not in {MAX_QUEUE_ADAPTER_DEPTH, _GETZILLA_SELF_PROFILE.depth_limit}
             or any(type(value) is not bool for value in (context.redacted, context.truncated, context.unavailable))):
         return False
     if type(context.attempted_module) is not str or (
@@ -346,14 +349,16 @@ def _queue_depth_context_valid(context: object, side: object) -> bool:
         return False
     if context.attempted_module == '<unavailable>' and not context.redacted:
         return False
-    for names, count, maximum in ((context.active_modules, context.active_count, 8),
-                                  (context.cached_modules, context.cached_count, 64)):
+    module_limit = (_GETZILLA_SELF_PROFILE.module_limit if context.limit == _GETZILLA_SELF_PROFILE.depth_limit
+                    else MAX_QUEUE_ADAPTER_MODULES)
+    for names, count, maximum in ((context.active_modules, context.active_count, context.limit),
+                                  (context.cached_modules, context.cached_count, module_limit)):
         if (type(names) is not tuple or len(names) > maximum or
                 any(type(name) is not str or (name != '<unavailable>' and _queue_depth_token(name)[1]) for name in names)
                 or names != tuple(sorted(set(names)))):
             return False
         if count is None:
-            if names or ((maximum == 8 or context.boundary == 'cached-height') and not context.unavailable):
+            if names or ((maximum == context.limit or context.boundary == 'cached-height') and not context.unavailable):
                 return False
         elif type(count) is not int or not 0 <= count <= sys.maxsize:
             return False
@@ -365,10 +370,10 @@ def _queue_depth_context_valid(context: object, side: object) -> bool:
         if '<unavailable>' in names and not context.redacted:
             return False
     if context.cached_height is not None and (type(context.cached_height) is not int or
-            not 0 <= context.cached_height <= MAX_QUEUE_ADAPTER_MODULES):
+            not 0 <= context.cached_height <= module_limit):
         return False
     if context.attempted_depth is not None and (type(context.attempted_depth) is not int or
-            not 0 <= context.attempted_depth <= sys.maxsize + MAX_QUEUE_ADAPTER_MODULES):
+            not 0 <= context.attempted_depth <= sys.maxsize + module_limit):
         return False
     if context.boundary != 'cached-height' and (
             context.cached_height is not None or context.cached_count is not None or context.cached_modules):
@@ -470,7 +475,7 @@ class _QueueBudget:
         self.side = side
         self.profile = profile if profile is not None else _CONSUMER_PROFILE
         if (type(self.profile) is not _QueueAnalysisProfile
-                or self.profile[:4] not in {_CONSUMER_PROFILE[:4], _GETZILLA_SELF_PROFILE[:4]}):
+                or self.profile._replace(binding='') not in {_CONSUMER_PROFILE, _GETZILLA_SELF_PROFILE}):
             raise ArchitectureError("queue resource profile is unavailable", code="fitness")
         self.sources: dict[tuple[str, str], _QueueSourceFootprint] = {}
         self.work: dict[str, int] = {}
@@ -486,6 +491,14 @@ class _QueueBudget:
     @property
     def byte_limit(self):
         return MAX_QUEUE_ANALYSIS_BYTES if self.profile.name == "consumer-v1" else self.profile.byte_limit
+
+    @property
+    def node_limit(self):
+        return MAX_QUEUE_ANALYSIS_AST_NODES if self.profile.name == "consumer-v1" else self.profile.node_limit
+
+    @property
+    def depth_limit(self):
+        return MAX_QUEUE_ADAPTER_DEPTH if self.profile.name == "consumer-v1" else self.profile.depth_limit
 
     def refusal(self, message: str, category: str, limit: int | None, observed: int | None,
                 *, site: str = 'budget', cached: tuple[str, ...] = ()) -> ArchitectureError:
@@ -515,8 +528,8 @@ class _QueueBudget:
         return error
 
     def check_depth(self, depth: int, *, site: str, cached: tuple[str, ...] = ()) -> None:
-        if depth > MAX_QUEUE_ADAPTER_DEPTH:
-            raise self.refusal('queue adapter depth limit exceeded', 'depth', MAX_QUEUE_ADAPTER_DEPTH,
+        if depth > self.depth_limit:
+            raise self.refusal('queue adapter depth limit exceeded', 'depth', self.depth_limit,
                                depth, site=site, cached=cached)
 
     def source(self, path: str, value: bytes, nodes: int = 0) -> None:
@@ -535,8 +548,8 @@ class _QueueBudget:
         node_total = self.ast_nodes + max(0, item.nodes - (previous.nodes if previous else 0))
         if byte_total > self.byte_limit:
             raise self.refusal('queue aggregate source byte limit exceeded', 'bytes', self.byte_limit, byte_total)
-        if node_total > MAX_QUEUE_ANALYSIS_AST_NODES:
-            raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', MAX_QUEUE_ANALYSIS_AST_NODES, node_total)
+        if node_total > self.node_limit:
+            raise self.refusal('queue aggregate AST node limit exceeded', 'nodes', self.node_limit, node_total)
         self.source_bytes, self.ast_nodes = byte_total, node_total
         self.sources[key] = item._replace(nodes=max(item.nodes, previous.nodes if previous else 0))
         for frame in self.frames:
@@ -2839,7 +2852,7 @@ def _queue_check_depth(budget, depth, *, site, module, side, active, cached=(), 
         if error.code == 'limit':
             boundary = {'active': 'live-depth', 'declaration': 'declaration-depth', 'cached': 'cached-height'}[site]
             advisory = _queue_depth_error(boundary, module, side, active,
-                cached_height=cached_height, cached_modules=cached_modules)
+                cached_height=cached_height, cached_modules=cached_modules, budget=budget)
             context = getattr(advisory, '_queue_depth_context', None)
             if context is not None:
                 error._queue_depth_context = context
