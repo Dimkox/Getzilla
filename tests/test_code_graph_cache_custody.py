@@ -47,6 +47,17 @@ class CacheCustodyTests(unittest.TestCase):
         self.assertEqual(self.cache.read_bytes(), content)
         self.assertEqual(sorted(p.name for p in self.cache.parent.iterdir()), ['graph.sqlite'])
 
+    def test_orphan_sidecar_is_preserved_before_creating_cache(self):
+        for suffix in ('-wal', '-shm', '-journal'):
+            with self.subTest(suffix=suffix):
+                sidecar = Path(str(self.cache) + suffix)
+                content = b'harmless owned orphan fixture'
+                sidecar.write_bytes(content)
+                self.refused_without_sqlite(self.cache)
+                self.assertFalse(self.cache.exists())
+                self.assertEqual(sidecar.read_bytes(), content)
+                sidecar.unlink()
+
     @unittest.skipUnless(hasattr(os, 'symlink'), 'links unavailable')
     def test_file_and_parent_links_refuse_without_sqlite(self):
         target = self.root / 'harmless.txt'

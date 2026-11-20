@@ -74,6 +74,12 @@ class CacheCustody:
     def _create(self):
         self.check_parent()
         self._parents()
+        for suffix in ('-wal', '-shm', '-journal'):
+            try:
+                fsx.lstat_at(self.parent, self.name + suffix)
+            except FileNotFoundError:
+                continue
+            raise GraphError('CACHE_SIDECAR_UNRECOGNIZED')
         self.descriptor = fsx.open_at(self.parent, self.name,
             os.O_RDWR | os.O_CREAT | os.O_EXCL | fsx.O_NOFOLLOW | fsx.O_CLOEXEC, 0o600)
         info = os.fstat(self.descriptor)
