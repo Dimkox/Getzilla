@@ -116,5 +116,3 @@ def unittest_runner(writer):
             writer.emit('collection', 'end')
             return super().run(test)
     return Runner
-
-

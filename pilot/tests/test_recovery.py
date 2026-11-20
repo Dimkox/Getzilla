@@ -7,7 +7,7 @@ import unittest
 from pilot.store import PilotStore, PilotStoreError
 from pilot.tests.support import issue_snapshot, make_control
 
-from pilot.tests.support import issue_snapshot, posix_runtime
+from pilot.tests.support import posix_runtime
 
 
 @posix_runtime

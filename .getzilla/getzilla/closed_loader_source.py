@@ -30,4 +30,3 @@ def module_source(module) -> bytes:
         return content
     except (AttributeError, ImportError, OSError, TypeError) as exc:
         raise ValueError('verification policy source cannot be bound') from exc
-

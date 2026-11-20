@@ -10,7 +10,7 @@ from pilot.store import PilotStore
 from pilot.tests.test_contracts import HEX64_A, HEX64_B
 from pilot.tests.support import issue_snapshot, make_control
 
-from pilot.tests.support import issue_snapshot, posix_runtime
+from pilot.tests.support import posix_runtime
 from pilot.validation import (
     BubblewrapTestRunner,
     CandidateValidator,

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from getzilla import execution, execution_store, fsx, managed_execution as managed, state
+from getzilla import execution, execution_store, fsx, managed_execution as managed, state as state
 from getzilla.component_state import BoundRoot, read_state
 from getzilla.module_runtime import OwnedRuntimeV1, NativeProfileProofV1, QuiescenceProofV1
 from getzilla.optional_modules import _validate_installed
@@ -281,7 +281,8 @@ class Backend(managed.Backend):
                 guard()
                 if os.write(self.gate_write, b'R') != 1:
                     raise OSError('launch gate unavailable')
-                os.close(self.gate_write); self.gate_write = None
+                os.close(self.gate_write)
+                self.gate_write = None
             execution._release_managed(root, admission, instance, recheck, release)
             deadline = execution._LIVE[(str(root.resolve()), admission.execution_id)][1]
             session = Session(process, deadline=deadline, watch=watch, request_id=request.mcp_request_id,
@@ -349,8 +350,10 @@ class SupervisorBackend(Backend):
             while offset<len(raw):
                 if time.monotonic()>=handoff_end:
                     raise execution.ExecutionError('mcp_handoff_timeout')
-                try: offset+=os.write(process.stdin.fileno(),raw[offset:offset+4096])
-                except BlockingIOError: time.sleep(.002)
+                try:
+                    offset+=os.write(process.stdin.fileno(),raw[offset:offset+4096])
+                except BlockingIOError:
+                    time.sleep(.002)
         finally:
             process.stdin.close()
         output=bytearray()
@@ -373,7 +376,8 @@ class SupervisorBackend(Backend):
                             pass
                 if selector.select(min(.02,max(0,end-time.monotonic()))):
                     chunk=os.read(process.stdout.fileno(),min(65536,CAP+1-len(output)))
-                    if not chunk: break
+                    if not chunk:
+                        break
                     if len(chunk)>CAP-len(output):
                         managed._cleanup(process)
                         raise execution.ExecutionError('mcp_result_limit')
@@ -388,6 +392,8 @@ class SupervisorBackend(Backend):
         if not output.startswith(b'R'):
             raise execution.ExecutionError('mcp_start_unconfirmed')
         if len(output)>1:
-            try: self.reply=Reply(**json.loads(output[1:]))
-            except (ValueError,TypeError): self.reply=None
+            try:
+                self.reply=Reply(**json.loads(output[1:]))
+            except (ValueError,TypeError):
+                self.reply=None
         return None

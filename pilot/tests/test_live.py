@@ -19,7 +19,7 @@ from pilot.live import (
 from pilot.store import PilotStore, PilotStoreError
 from pilot.tests.support import candidate_change, issue_snapshot, make_control, utc_time
 
-from pilot.tests.support import candidate_change, issue_snapshot, posix_runtime, utc_time
+from pilot.tests.support import posix_runtime
 from pilot.tests.test_coordinator import FakeExecutor, FakeIssueSource, FakeValidator
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, grant, profile
 from pilot.tests.test_github import gate_passed

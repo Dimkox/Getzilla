@@ -13,7 +13,7 @@ from pilot.live_github import CommandResult, PinnedGitHubTransport
 from pilot.store import PilotStore
 from pilot.tests.support import make_control, utc_time
 
-from pilot.tests.support import posix_runtime, utc_time
+from pilot.tests.support import posix_runtime
 from pilot.tests.test_github import BINDING, FakeGitHubTransport, gate_passed, grant
 
 

@@ -7,7 +7,7 @@ import unittest
 from pilot.workspace import ExactGitWorkspace, WorkspaceError, WorkspacePolicy
 from pilot.tests.support import issue_snapshot, make_control, make_source, run_git
 
-from pilot.tests.support import issue_snapshot, make_source, posix_runtime, run_git
+from pilot.tests.support import posix_runtime
 
 
 @posix_runtime

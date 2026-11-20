@@ -19,7 +19,7 @@ from pilot.profile import CODEX_OUTPUT_SCHEMA, exact_landing_profile
 from pilot.store import PilotStore
 from pilot.tests.support import issue_snapshot, make_control
 
-from pilot.tests.support import issue_snapshot, posix_runtime
+from pilot.tests.support import posix_runtime
 from pilot.workspace import PreparedWorkspace
 
 

@@ -137,8 +137,8 @@ def quality_tables(dataset, metric_rows):
                 if type(label) is not int or str(label) not in coverage:
                     raise RetrievalError('study_quality_scope_unavailable')
                 coverage[str(label)] += 1
-    return {'quality_pass': 0, 'groups': result, 'label_coverage': coverage,
-            'unknown_positions': 'preserved in retained per-query first-pass metrics; no refill'}
+    return dict(quality_pass=0, groups=result, label_coverage=coverage,
+            unknown_positions='preserved in retained per-query first-pass metrics; no refill')
 
 
 class Observations:
