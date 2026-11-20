@@ -67,6 +67,8 @@ def _deadline(owner, start, limit):
 
 
 def _storage(ports, owner, additional=0):
+    if type(additional) is not int or additional < 0:
+        raise RetrievalError('study_storage_budget_exceeded')
     from .public_study_storage import study_storage_observation
     observed = study_storage_observation(owner.operation_ref, owner.execution_id)
     if (type(observed.logical_bytes) is not int or observed.logical_bytes < 0
@@ -315,7 +317,8 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                     elapsed = time.monotonic() - start
                     if time.monotonic() >= stop:
                         raise RetrievalError('study_query_deadline')
-                    observations.add(model, iteration, key, result, seconds=elapsed)
+                    observations.add(model, iteration, key, result, seconds=elapsed,
+                                     absolute_deadline=stop, query_started=start)
                 except Exception:
                     # A failed owner may already be retired. Never reacquire
                     # permission or repeat work merely to write a diagnostic;
