@@ -24,7 +24,6 @@ _DEGRADED_SHELL_TOOLS = frozenset({'Bash', 'bash', 'run_shell_command', 'shell',
                                    'run_terminal_command', 'local_shell', 'container.exec'})
 _DEGRADED_WRITE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit', 'replace',
                                    'edit_file', 'apply_patch', 'create_file', 'str_replace_editor'})
-_DEGRADED_CONTROL_PLANE = re.compile(r'(?:^|[\s/"\'=>:])(?:\.getzilla/|\.grok/|\.claude/|\.codex/|\.qwen/|\.gemini/|AGENTS\.md\b)')
 _DEGRADED_SHELL_WRITE = re.compile(r'>|\b(?:tee|cp|mv|rm|install|ln|chmod|truncate|touch|rsync)\b|\bsed\s+-i|\bperl\s+-\S*i')
 _MAX_TOOL_PAYLOAD_BYTES = 1_048_576
 _INVALID_TOOL_REQUEST = 'invalid_tool_request: request classification is unavailable.'
@@ -179,6 +178,20 @@ _DEGRADED_SECRET_PATHS = (
     '**/.composer/auth.json', '**/.config/composer/auth.json', '**/.config/gcloud/**',
     '**/.azure/**', '**/.terraform.d/credentials.tfrc.json', '**/.cargo/credentials*', '**/.gem/credentials',
 )
+# A missing/broken config cannot remove the shipped protected classes. The
+# bounded local policy can add protection, but never authorize a degraded grant.
+_DEGRADED_CONTROL_PATHS = (
+    '.git/**', '.agents/**', '.github/**', '.cursor/**', '.getzilla/**', '.grok/**',
+    '.claude/**', '.codex/**', '.qwen/**', '.gemini/**', 'trust-ci/**', 'packages/**', 'bitrix/**',
+    '_lib.py', '.gitignore', 'AGENTS.md', 'README.md', 'CHANGELOG.md', 'VERSION',
+    'decisions.md', 'mistakes.md', 'Makefile', 'ruff.toml', 'bandit.yaml', '.coveragerc',
+    'scripts/getzilla_*.py', 'scripts/install_into.py', 'scripts/package_stack.py',
+    'user_prompt_submit.py', 'pre_tool_use.py', 'post_tool_use.py', 'pre_compact.py',
+    'session_start.py', 'session_end.py', 'stop_gate.py', 'subagent_start.py', 'subagent_stop.py',
+    'tests/_support.py', 'tests/test_*.py', 'engineering/runbooks/publish-v*.md',
+    '**/.git/**', '**/.agents/**', '**/.github/**', '**/.cursor/**', '**/.getzilla/**',
+    '**/.grok/**', '**/.claude/**', '**/.codex/**', '**/.qwen/**', '**/.gemini/**',
+)
 _DEGRADED_PUBLIC_NAMES = (
     '*.pub', '.env.example', '.env.sample', '.env.template', '.env.dist',
     'known_hosts', 'known_hosts.old', 'authorized_keys', 'authorized_keys2',
@@ -193,13 +206,13 @@ _DEGRADED_REASON = (
 )
 
 
-def _degraded_patterns() -> tuple[str, ...] | None:
+def _degraded_policy_paths(keys: tuple[str, ...], defaults: tuple[str, ...]) -> tuple[str, ...] | None:
     """Admit bounded regular config before reading; special files never wait for a writer."""
     path = Path(__file__).resolve().parents[2] / '.getzilla/config/policy.json'
     try:
         before = path.lstat()
     except FileNotFoundError:
-        return _DEGRADED_SECRET_PATHS
+        return defaults
     except OSError:
         return None
     if not stat.S_ISREG(before.st_mode) or before.st_size > 65536 or not before.st_mode & 0o444:
@@ -216,19 +229,104 @@ def _degraded_patterns() -> tuple[str, ...] | None:
                 return None
             raw = handle.read(65537)
             after = os.fstat(handle.fileno())
-        if len(raw) > 65536 or (observed.st_size, observed.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        current = path.lstat()
+        if (len(raw) > 65536 or (observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
             return None
-        config = json.loads(raw)
-        extra = config.get('secret_read_paths', []) if isinstance(config, dict) else None
-        if (not isinstance(extra, list) or len(extra) > 128
-                or any(not isinstance(item, str) or not item or len(item) > 4096 for item in extra)):
+        config = json.loads(raw, object_pairs_hook=_payload_object)
+        if not isinstance(config, dict):
             return None
-        return (*_DEGRADED_SECRET_PATHS, *extra)
+        result = list(defaults)
+        for key in keys:
+            extra = config.get(key, [])
+            if (not isinstance(extra, list) or len(extra) > 128
+                    or any(not isinstance(item, str) or not item or len(item) > 4096
+                           or any(ord(char) < 32 for char in item) for item in extra)):
+                return None
+            result.extend(extra)
+        return tuple(result)
     except (OSError, ValueError, RuntimeError):
         return None
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _degraded_patterns() -> tuple[str, ...] | None:
+    return _degraded_policy_paths(('secret_read_paths',), _DEGRADED_SECRET_PATHS)
+
+
+def _degraded_write_paths(inputs: dict, tool: str) -> list[str] | None:
+    """Classify target fields, never the replacement content, within fixed bounds."""
+    if tool == 'apply_patch':
+        patch = inputs.get('patch', inputs.get('input'))
+        if (not isinstance(patch, str) or len(patch) > _MAX_TOOL_PAYLOAD_BYTES
+                or ('patch' in inputs and 'input' in inputs and inputs['patch'] != inputs['input'])
+                or not patch.startswith('*** Begin Patch\n') or not patch.rstrip().endswith('*** End Patch')):
+            return None
+        return [line.split(': ', 1)[1] for line in patch.splitlines()
+                if line.startswith(('*** Add File: ', '*** Update File: ', '*** Delete File: ', '*** Move to: '))]
+    paths, pending, inspected = [], [inputs], 0
+    while pending:
+        item = pending.pop()
+        inspected += 1
+        if inspected > 256:
+            return None
+        if isinstance(item, dict):
+            if len(item) > 128:
+                return None
+            for key, value in item.items():
+                if key.lower() in _DEGRADED_PATH_KEYS - {'directory'}:
+                    values = value if isinstance(value, list) else [value]
+                    if not values or len(values) > 128:
+                        return None
+                    paths.extend(values)
+                elif isinstance(value, (dict, list)):
+                    pending.append(value)
+        elif isinstance(item, list):
+            if len(item) > 128:
+                return None
+            pending.extend(item)
+    return paths
+
+
+def _degraded_ordinary_target(value: Any, directory: Path, patterns: tuple[str, ...]) -> bool:
+    if (not isinstance(value, str) or not value or len(value) > 4096
+            or any(ord(char) < 32 for char in value) or any(char in value for char in '$`*?[]{}~')):
+        return False
+    raw = value.replace('\\', '/')
+    if (raw.startswith('//') or (sys.platform == 'win32' and raw.startswith('/'))
+            or (':' in raw and (sys.platform != 'win32' or len(raw) < 3
+                                or raw[1:3] != ':/' or ':' in raw[2:]))
+            or any(part.endswith((' ', '.')) and part not in {'.', '..'} for part in raw.split('/'))):
+        return False
+    try:
+        policy_root = Path(__file__).resolve().parents[2]
+        path = Path(raw)
+        path = path if path.is_absolute() else directory / path
+        resolved = path.resolve()
+        try:
+            target = resolved.stat()
+        except FileNotFoundError:
+            target = None
+        if target is not None and (not stat.S_ISREG(target.st_mode) or target.st_nlink != 1):
+            return False
+        for candidate in (path, resolved):
+            names = [candidate.as_posix().casefold()]
+            try:
+                names.append(candidate.relative_to(policy_root).as_posix().casefold())
+            except ValueError:
+                pass
+            # Match a protected directory itself as well as its descendants.
+            if any(fnmatch.fnmatchcase(name, pattern.casefold())
+                   or (pattern.endswith('/**') and fnmatch.fnmatchcase(name.rstrip('/'), pattern[:-3].casefold()))
+                   for name in names for pattern in patterns):
+                return False
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def _degraded_public_path(value: Any, directory: Path, patterns: tuple[str, ...], *, allow_directory=False) -> bool:
@@ -410,9 +508,12 @@ def _degraded_denial(tool: str, inputs: Any, execution_cwd: Any = ..., *, root: 
         except (OSError, TypeError, ValueError, RuntimeError):
             return _DEGRADED_REASON
     if tool in _DEGRADED_WRITE_TOOLS:
-        targets = [str(inputs.get(key)) for key in ('file_path', 'path', 'notebook_path', 'filePath') if inputs.get(key)]
-        targets += [str(inputs.get(key)) for key in ('patch', 'input') if isinstance(inputs.get(key), str)]
-        if any(_DEGRADED_CONTROL_PLANE.search(target.replace('\\', '/')) for target in targets):
+        patterns = _degraded_policy_paths(('control_plane_paths', 'protected_paths', 'secret_read_paths'),
+                                           (*_DEGRADED_CONTROL_PATHS, *_DEGRADED_SECRET_PATHS))
+        targets = _degraded_write_paths(inputs, tool)
+        directory = Path.cwd() if execution_cwd is ... else Path(execution_cwd)
+        if (patterns is None or not directory.is_absolute() or not targets or len(targets) > 128
+                or not all(_degraded_ordinary_target(target, directory, patterns) for target in targets)):
             return _DEGRADED_REASON
     return None
 
@@ -452,6 +553,8 @@ def _degraded_tool(value: Any) -> str | None:
         return value
     if value.lower() in _DEGRADED_READ_TOOLS or (value.startswith('mcp__') and 'read' in value.lower()):
         return 'Read'
+    if value.lower() == 'apply_patch':
+        return 'apply_patch'
     if value.lower() in {name.lower() for name in _DEGRADED_WRITE_TOOLS} | {'write', 'create', 'str_replace', 'search_replace'}:
         return 'Write'
     # Unclassified native executors and dispatch envelopes cannot become an allow.

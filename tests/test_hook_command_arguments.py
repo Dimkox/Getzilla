@@ -49,7 +49,6 @@ class CommandArgumentRootTests(unittest.TestCase):
     def test_quoted_metacharacters_are_literal_arguments(self):
         for command in (
             "rg 'left|right' docs",
-            "python3 -c 'print(1); print(2)'",
             'printf %s "literal (value); left|right"',
             "printf %s '$(literal)'",
         ):
@@ -59,15 +58,20 @@ class CommandArgumentRootTests(unittest.TestCase):
 
     def test_real_operators_and_substitutions_remain_ambiguous(self):
         for command in (
-            'true; false', 'true | false', '(true)',
+            'true | false', '(true)',
             'printf %s "$(fixture)"', 'printf %s `fixture`',
+            "python3 -c 'print(1); print(2)'",
         ):
             with self.subTest(command=command):
                 aliases = self.lib._command_directory_aliases(command)
                 self.assertIn('<ambiguous>', aliases.values())
 
+    def test_proven_sequential_commands_keep_linear_root_tracking(self):
+        self.assertNotIn('<ambiguous>', self.lib._command_directory_aliases('true; false').values())
+
     def test_native_payload_reaches_policy_without_executing_its_command(self):
         with project_copy() as root:
+            (root / 'docs').mkdir()
             payload = {'cwd': str(root), 'session_id': 'root-argument-fixture',
                        'tool_name': 'exec_command', 'tool_input': {'workdir': str(root)}}
             for command in ('trivy config --exit-code 1 .', "rg 'left|right' docs"):
@@ -88,8 +92,9 @@ class IndependentDenialObjectiveTests(unittest.TestCase):
         cls.lib = load_hook('_lib')
         cls.hook = load_hook('pre_tool_use')
 
-    def objective(self, command, action='ambiguous-sensitive-shell'):
-        context = self.lib.RootContext(str(PROJECT), PROJECT, {}, None, 'ambiguous-command-root')
+    def objective(self, command, action='ambiguous-sensitive-shell', *, proven=False):
+        context = self.lib.RootContext(str(PROJECT), PROJECT, {}, PROJECT if proven else None,
+                                       'session-root' if proven else 'ambiguous-command-root')
         return self.hook._denial_fingerprints(
             'fixture-session', 'Bash', {'command': command},
             'fixture ambiguous root', context, action,
@@ -104,9 +109,13 @@ class IndependentDenialObjectiveTests(unittest.TestCase):
 
     def test_known_sensitive_action_keeps_existing_grouping(self):
         self.assertEqual(
-            self.objective('fixture first', 'external-write'),
-            self.objective('fixture second', 'external-write'),
+            self.objective('fixture first', 'external-write', proven=True),
+            self.objective('fixture second', 'external-write', proven=True),
         )
+
+    def test_known_action_with_unproven_root_keeps_operands_separate(self):
+        self.assertNotEqual(self.objective('fixture first', 'external-write'),
+                            self.objective('fixture second', 'external-write'))
 
 
 if __name__ == '__main__':
