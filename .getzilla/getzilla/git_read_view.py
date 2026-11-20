@@ -167,7 +167,10 @@ class GitReadView:
             if not fsx.WINDOWS and (not getattr(os, 'O_NOFOLLOW', 0)
                     or not {os.open, os.stat}.issubset(getattr(os, 'supports_dir_fd', set()))):
                 raise ValueError('Git read directory capabilities unavailable')
-            self.path = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix='getzilla-git-read-')))
+            # Git canonicalizes temporary aliases (including Windows 8.3 names).
+            # Normalize only this freshly owned view, never an original source hint.
+            self.path = Path(self.stack.enter_context(
+                tempfile.TemporaryDirectory(prefix='getzilla-git-read-'))).resolve(strict=True)
             self.path.chmod(0o700)
             records = []
             for directory in dict.fromkeys((self.binding.common_directory, self.binding.git_directory)):
