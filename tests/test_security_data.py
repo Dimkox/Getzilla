@@ -152,7 +152,11 @@ class SnapshotTests(unittest.TestCase):
         empty = io.BytesIO()
         with zipfile.ZipFile(empty, 'w'):
             pass
-        for payload in (b'', b'PK\x03\x04partial', empty.getvalue(), osv_bytes('npm')):
+        with patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1):
+            damaged_zip64 = bytearray(archive([record(), record('PUBLIC-2')]))
+        footer = damaged_zip64.rfind(zipfile.stringEndArchive64)
+        damaged_zip64[footer + 32:footer + 40] = (3).to_bytes(8, 'little')
+        for payload in (b'', b'PK\x03\x04partial', empty.getvalue(), osv_bytes('npm'), bytes(damaged_zip64)):
             with self.subTest(payload=payload[:16]), self.assertRaises(SD.SecurityDataError):
                 publish(self.database, payload=payload)
             self.assertEqual(pointer.read_bytes(), previous)
@@ -452,6 +456,47 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaises(self.data.SecurityDataError):
                 self.data.osv_coverage(payload, 'PyPI')
         constructor.assert_not_called()
+
+    def test_zip64_census_and_coverage_use_actual_footer_location(self):
+        # A real ZIP64 footer, with the same format as the official npm feed.
+        with patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1):
+            payload = archive([record(), record('PUBLIC-2')])
+        self.assertIn(zipfile.stringEndArchive64, payload)
+        self.assertEqual(self.data.osv_coverage(payload, 'PyPI')['record_count'], 2)
+        end = zipfile._EndRecData(io.BytesIO(payload))
+        directory_size = end[zipfile._ECD_SIZE]
+        with zipfile.ZipFile(io.BytesIO(payload)) as reader:
+            expanded_size = sum(member.file_size for member in reader.infolist())
+        self.data._archive_census(payload, max_directory=directory_size, max_expanded=expanded_size)
+        for bounds in ({'max_directory': directory_size - 1}, {'max_expanded': expanded_size - 1}):
+            with self.subTest(bounds=bounds), self.assertRaises(self.data.SecurityDataError):
+                self.data._archive_census(payload, **bounds)
+        # Exercise the historical helper API with the actual classic footer
+        # position. The ZIP bytes and the validating parser remain real.
+        end[zipfile._ECD_LOCATION] = payload.rfind(zipfile.stringEndArchive)
+        with patch.object(zipfile, '_EndRecData', return_value=end):
+            self.data._archive_census(payload)
+
+    def test_zip64_census_count_boundary_and_tampering(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as writer:
+            for index in range(65536):
+                writer.writestr(str(index), b'')
+        payload = output.getvalue()
+        self.data._archive_census(payload, max_members=65536)
+        with self.assertRaises(self.data.SecurityDataError):
+            self.data._archive_census(payload, max_members=65535)
+        with patch.object(self.data, 'MAX_ARCHIVE_MEMBERS', 65535), patch.object(zipfile, 'ZipFile', side_effect=AssertionError('unbounded materialization')) as constructor:
+            with self.assertRaises(self.data.SecurityDataError):
+                self.data.osv_coverage(payload, 'PyPI')
+        constructor.assert_not_called()
+        footer = payload.rfind(zipfile.stringEndArchive64)
+        for offset, value in ((32, 65535), (40, self.data.MAX_CENTRAL_DIRECTORY_BYTES + 1)):
+            with self.subTest(offset=offset):
+                damaged = bytearray(payload)
+                damaged[footer + offset:footer + offset + 8] = value.to_bytes(8, 'little')
+                with self.assertRaises(self.data.SecurityDataError):
+                    self.data._archive_census(bytes(damaged))
 
     def test_remaining_read_budget_refuses_before_first_content_read(self):
         self.publish()
