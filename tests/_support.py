@@ -244,8 +244,10 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
                 if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
-                    # Original parent source-only declaration; no evidence grant.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
+                    # This owned app excludes framework tools and the optional
+                    # Factory corresponding-source payload before its first commit.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json',
+                                    'license-exception-inputs'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
