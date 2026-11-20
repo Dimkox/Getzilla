@@ -21,6 +21,14 @@ _READ = frozenset({'rev-parse', 'symbolic-ref', 'config', 'status', 'diff', 'sho
 
 def validate_arguments(arguments):
     values = list(arguments)
+    if values[:1] == ['merge-tree']:
+        if (len(values) != 4 or values[1] != '--write-tree'
+                or not all(re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}', value) for value in values[2:])
+                or len(values[2]) != len(values[3])):
+            raise ValueError('Git merge-tree observation arguments unavailable')
+        # The existing read child owns a private writable object directory.
+        # Its computed objects are discarded with that view, never published.
+        return
     if values[:2] == ['-c', 'protocol.allow=never']:
         values = values[2:]
     if values[:1] == ['--literal-pathspecs']:

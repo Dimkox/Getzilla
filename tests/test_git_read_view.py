@@ -93,6 +93,55 @@ class GitReadViewTests(unittest.TestCase):
         self.assertEqual(git._git(self.root, ['rev-parse', 'HEAD']), self.head.encode()+b'\n')
         self.assertEqual(config.read_bytes(), original)
 
+    def test_merge_tree_matches_real_merge_and_keeps_computed_objects_private(self):
+        self.command('checkout', '-qb', 'left')
+        (self.root/'left.txt').write_text('left branch\n')
+        self.command('add', 'left.txt')
+        self.command('commit', '-qm', 'left')
+        left = self.command('rev-parse', 'HEAD').decode().strip()
+        self.command('checkout', '-qb', 'right', self.head)
+        (self.root/'right.txt').write_text('right branch\n')
+        self.command('add', 'right.txt')
+        self.command('commit', '-qm', 'right')
+        right = self.command('rev-parse', 'HEAD').decode().strip()
+        def snapshot():
+            metadata = self.root/'.git'
+            paths = [metadata/'HEAD', metadata/'index', *sorted((metadata/'refs').rglob('*')),
+                     *sorted((metadata/'objects').rglob('*'))]
+            return {str(path.relative_to(metadata)): path.read_bytes() for path in paths if path.is_file()}
+        before = snapshot()
+        computed = git.run_git_bounded(self.root, ['merge-tree', '--write-tree', left, right]).strip()
+        self.assertRegex(computed, rb'^[a-f0-9]{40}$')
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.command('status', '--porcelain=v1'), b'')
+        absent = subprocess.run(['git', 'cat-file', '-e', computed.decode()], cwd=self.root,
+            env=git._git_environment(), capture_output=True, timeout=10)
+        self.assertNotEqual(absent.returncode, 0, 'computed tree leaked into original object store')
+        self.command('merge', '--no-ff', '-qm', 'real merge', 'left')
+        expected = self.command('rev-parse', 'HEAD^{tree}').strip()
+        self.assertEqual(computed, expected)
+        before = snapshot()
+        self.assertEqual(git.run_git_bounded(self.root, ['merge-tree', '--write-tree', left, right]).strip(), expected)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.command('status', '--porcelain=v1'), b'')
+
+    def test_merge_tree_accepts_only_exact_same_format_full_object_ids(self):
+        from getzilla.git_read_view import validate_arguments
+        for size in (40, 64):
+            validate_arguments(['merge-tree', '--write-tree', 'a'*size, 'b'*size])
+        malformed = (['merge-tree', '--write-tree', 'HEAD', 'a'*40],
+            ['merge-tree', '--write-tree', 'a'*40, 'b'*64],
+            ['merge-tree', '--write-tree', 'a'*39, 'b'*40],
+            ['merge-tree', '--write-tree', 'A'*40, 'b'*40],
+            ['merge-tree', '--write-tree', 'g'*40, 'b'*40],
+            ['merge-tree', '--write-tree', 'a'*40, 'b'*40, '--allow-unrelated-histories'],
+            ['merge-tree', '--trivial-merge', 'a'*40, 'b'*40],
+            ['-c', 'protocol.allow=never', 'merge-tree', '--write-tree', 'a'*40, 'b'*40])
+        with patch.object(git, '_run_capped', side_effect=AssertionError('child must not run')):
+            for arguments in malformed:
+                with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                    git.run_git_read(self.root, arguments)
+
     def test_read_runner_rejects_writes_without_entering_child(self):
         with patch.object(git, '_run_capped', side_effect=AssertionError('child must not run')):
             for arguments in (['config', 'user.name', 'changed'],
