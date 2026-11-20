@@ -101,6 +101,15 @@ def _operation(reference):
 
 
 def _container_environment(image_env):
+    cleared = {key: '' for key in _observed_environment(image_env)}
+    fixed = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
+             'LD_PRELOAD': '', 'LD_AUDIT': '', 'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1',
+             'MKL_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1', 'VECLIB_MAXIMUM_THREADS': '1',
+             'RAYON_NUM_THREADS': '1', 'CUDA_VISIBLE_DEVICES': '-1', 'NVIDIA_VISIBLE_DEVICES': 'void'}
+    return {**cleared, **fixed}
+
+
+def _observed_environment(image_env):
     if type(image_env) not in {tuple, list} or len(image_env) > 256:
         raise RetrievalError('study_image_environment_unavailable')
     cleared = {}
@@ -110,12 +119,8 @@ def _container_environment(image_env):
         key = item.split('=', 1)[0]
         if not re.fullmatch('[A-Za-z_][A-Za-z0-9_]{0,127}', key) or key in cleared:
             raise RetrievalError('study_image_environment_unavailable')
-        cleared[key] = ''
-    fixed = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
-             'LD_PRELOAD': '', 'LD_AUDIT': '', 'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1',
-             'MKL_NUM_THREADS': '1', 'NUMEXPR_NUM_THREADS': '1', 'VECLIB_MAXIMUM_THREADS': '1',
-             'RAYON_NUM_THREADS': '1', 'CUDA_VISIBLE_DEVICES': '-1', 'NVIDIA_VISIBLE_DEVICES': 'void'}
-    return {**cleared, **fixed}
+        cleared[key] = item.split('=', 1)[1]
+    return cleared
 
 
 def _create_arguments(projection, execution_id, nonce, deadline, image_env=()):
@@ -269,7 +274,7 @@ class _Owner:
             mounts={'/model': str(self.projection.model_root),
                     '/software': str(self.projection.software_root),
                     '/worker': str(self.projection.worker_root)})
-        if (observed['Config']['Env'] != self.expected_env
+        if (_observed_environment(observed['Config']['Env']) != self.expected_env
                 or observed['HostConfig'].get('RestartPolicy', {}).get('Name') != 'no'):
             raise RetrievalError('study_container_environment_changed')
 
@@ -296,8 +301,7 @@ class _Owner:
         if len(images) != 1 or images[0].get('Id') != self.projection.image_id:
             raise RetrievalError('study_image_unavailable')
         image_env = images[0].get('Config', {}).get('Env') or []
-        self.expected_env = [key + '=' + value for key, value in
-                             sorted(_container_environment(image_env).items())]
+        self.expected_env = _container_environment(image_env)
         args, self.command = _create_arguments(self.projection, self.execution_id, self.nonce,
                                                self.deadline, image_env)
         self.create_attempted = True
