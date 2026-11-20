@@ -13,11 +13,8 @@ from getzilla_factory.paid_admission import PaidAccountV1, PaidTaskV1, PaidPrice
 
 
 class PaidProtocolTestCase(unittest.TestCase):
-    def setUp(self):
+    def setUp(self, *, patch_executors=True):
         super().setUp()
-        from getzilla_factory.landing_live_executors import OpenAICompatibleLandingExecutor
-        from getzilla_factory.landing_provider import FixedCommandLandingProvider
-
         runtime = Path(
             os.environ.get("GETZILLA_TEST_RUNTIME", Path(__file__).resolve().parents[2] / ".getzilla/runtime/tests")
         )
@@ -42,6 +39,11 @@ class PaidProtocolTestCase(unittest.TestCase):
             100,
             10000,
         )
+        if not patch_executors:
+            return
+        from getzilla_factory.landing_live_executors import OpenAICompatibleLandingExecutor
+        from getzilla_factory.landing_provider import FixedCommandLandingProvider
+
         run = OpenAICompatibleLandingExecutor.run
         normalize = FixedCommandLandingProvider.normalize
         owner = self
