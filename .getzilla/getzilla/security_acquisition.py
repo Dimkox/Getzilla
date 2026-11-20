@@ -24,6 +24,10 @@ TRIVY_VERSION = '0.74.0'
 TRIVY_ARCHIVE_SHA256 = '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a'
 TRIVY_URL = f'https://github.com/aquasecurity/trivy/releases/download/v{TRIVY_VERSION}/trivy_{TRIVY_VERSION}_Linux-64bit.tar.gz'
 MAX_DOWNLOAD = 1024 * 1024 * 1024
+TYPESCRIPT_VERSION = '5.9.3'
+TYPESCRIPT_URL = 'https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz'
+TYPESCRIPT_ARCHIVE_SHA256 = '10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3'
+TYPESCRIPT_COMPILER_SHA256 = '3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675'
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ def _allowed_response(url: str, source_url: str) -> bool:
 def fetch_public(url: str) -> FetchResult:
     parsed = urllib.parse.urlsplit(url)
     allowed = {'github.com', 'www.cisa.gov', 'epss.empiricalsecurity.com', 'osv-vulnerabilities.storage.googleapis.com'}
-    if parsed.hostname not in allowed or not _allowed_response(url, url):
+    if (parsed.hostname not in allowed and url != TYPESCRIPT_URL) or not _allowed_response(url, url):
         raise SecurityDataError('security download requires a registered public HTTPS origin')
     request = urllib.request.Request(url, headers={'User-Agent': 'getzilla-security-acquisition/1', 'Accept-Encoding': 'identity'})
     opener = urllib.request.build_opener(_HTTPSRedirects(url))
@@ -197,6 +201,34 @@ def trivy_binary(archive: bytes) -> bytes:
         if len(payload) != matches[0].size:
             raise SecurityDataError('Trivy executable is incomplete')
         return payload
+
+
+def typescript_compiler(archive: bytes) -> bytes:
+    """Select one pinned JS parser without extracting or running package scripts."""
+    if hashlib.sha256(archive).hexdigest() != TYPESCRIPT_ARCHIVE_SHA256:
+        raise SecurityDataError('TypeScript archive differs from the reviewed pin')
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as bundle:
+        members = []
+        for member in bundle:
+            if len(members) >= 200:
+                raise SecurityDataError('TypeScript archive census exceeds bound')
+            members.append(member)
+        selected = [member for member in members if member.name == 'package/lib/typescript.js']
+        if len(selected) != 1 or not selected[0].isreg() or not 0 < selected[0].size <= 16 * 1024 * 1024:
+            raise SecurityDataError('TypeScript compiler archive member is unavailable')
+        with bundle.extractfile(selected[0]) as stream:
+            raw = stream.read(16 * 1024 * 1024 + 1)
+    if len(raw) != selected[0].size or hashlib.sha256(raw).hexdigest() != TYPESCRIPT_COMPILER_SHA256:
+        raise SecurityDataError('TypeScript compiler differs from the reviewed pin')
+    return raw
+
+
+def provision_typescript(destination: Path, *, fetch=fetch_public) -> Path:
+    archive = _body(fetch(TYPESCRIPT_URL), TYPESCRIPT_URL)
+    raw = typescript_compiler(archive)
+    path = destination / f'typescript-{TYPESCRIPT_VERSION}.js'
+    _atomic(path, raw)
+    return path
 
 
 def provision_tools(destination: Path, *, fetch: Callable[[str], FetchResult] = fetch_public) -> list[dict]:

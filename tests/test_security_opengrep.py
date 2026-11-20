@@ -125,7 +125,7 @@ class SyntaxProfileTests(unittest.TestCase):
 
     def test_caller_path_and_unproven_languages_cannot_mint_a_frontend(self):
         with mock.patch.dict(os.environ, {'PATH': '/candidate-controlled'}):
-            for language in ('go', 'typescript', 'jsx', 'caller-claims-python'):
+            for language in ('go', 'jsx', 'caller-claims-python'):
                 with self.subTest(language=language), self.assertRaisesRegex(
                         self.scanner.OpenGrepError, '^syntax_frontend_unavailable$'):
                     self.scanner.syntax_frontend(language)
@@ -137,6 +137,17 @@ class SyntaxProfileTests(unittest.TestCase):
         with mock.patch.object(self.scanner.fsx, 'WINDOWS', True), self.assertRaises(
                 self.scanner.OpenGrepError):
             self.scanner.syntax_frontend('python')
+
+    @unittest.skipUnless(Path('/usr/share/getzilla/typescript-5.9.3.js').is_file(),
+                         'pinned protected TypeScript parser is not installed')
+    def test_actual_typescript_template_and_types_parse_without_execution(self):
+        template = Path(__file__).resolve().parents[1] / '.getzilla/templates/eu-ai-act/transparency/typescript/aiTransparency.ts'
+        with tempfile.TemporaryDirectory() as directory, self.scanner.syntax_frontend('typescript') as frontend:
+            self.assertEqual(frontend.grammar, 'typescript5.9.3-module')
+            self.scanner.syntax_check(frontend, template.read_bytes(), Path(directory))
+            self.scanner.syntax_check(frontend, b'import "nonexistent-module"; export enum Mode { A, B }; const x: number=1; throw new Error("must not execute");', Path(directory))
+            with self.assertRaisesRegex(self.scanner.OpenGrepError, '^syntax_incomplete$'):
+                self.scanner.syntax_check(frontend, b'export const x: = ;', Path(directory))
 
     @unittest.skipUnless(os.name == 'posix' and os.getuid() != 0 and Path('/usr/bin/python3.12').exists(),
                          'actual protected Python3.12 frontend unavailable')
