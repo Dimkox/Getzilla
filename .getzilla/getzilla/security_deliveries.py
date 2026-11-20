@@ -6,6 +6,10 @@ legal decision, build provenance or independent release approval.
 from __future__ import annotations
 
 import hashlib
+import io
+import json
+import stat
+import zipfile
 from pathlib import Path, PurePosixPath
 import re
 
@@ -19,7 +23,23 @@ _CHECKER_ROOT = Path(__file__).resolve().parents[2]
 _PROJECT_LICENSE = 'legal/project/LICENSE'
 
 
-def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], dependencies: list[dict]) -> dict:
+def _legal_modes(payload):
+    """Read modes only after shared bounded ZIP validation; the builder emits files only."""
+    modes = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                raise ValueError('qualified Factory output has an undeclared directory member')
+            if member.filename.startswith('legal/'):
+                actual_mode = member.external_attr >> 16
+                if member.create_system != 3 or stat.S_IFMT(actual_mode) != stat.S_IFREG:
+                    raise ValueError('legal output member has no regular Unix mode')
+                modes[member.filename] = stat.S_IMODE(actual_mode)
+    return modes
+
+
+def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], dependencies: list[dict],
+                      *, corresponding_source_delivery: dict | None = None) -> dict:
     """Bind actual output bytes to exact source wheels and complete extracted members."""
     if not isinstance(deliveries, list) or len(deliveries) > 128:
         raise ArtifactError('license-delivery-invalid', 'delivery evidence must be a bounded list')
@@ -58,6 +78,7 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
                 or not isinstance(manifest.get('files'), list) or not 1 <= len(manifest['files']) <= 10000):
             raise ArtifactError('license-delivery-invalid', 'detached Factory member manifest is missing')
         declared = {}
+        declared_modes = {}
         for member in manifest['files']:
             if not isinstance(member, dict) or set(member) != {'path', 'size', 'sha256', 'mode'}:
                 raise ArtifactError('license-delivery-invalid', 'detached member identity is malformed')
@@ -65,6 +86,7 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
             if member['path'] in declared or type(member['size']) is not int or member['size'] < 0:
                 raise ArtifactError('license-delivery-invalid', 'detached member identity is duplicated or invalid')
             declared[member['path']] = {'size': member['size'], 'sha256': member['sha256']}
+            declared_modes[member['path']] = member['mode']
         if members != declared:
             raise ArtifactError('license-delivery-hash', 'actual archive members differ from detached manifest')
         components = delivery['components']
@@ -72,7 +94,7 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
             raise ArtifactError('license-delivery-composition', 'output requires its complete exact source wheel composition')
         expected = {artifact_identity(select_artifact(dep, records)) for dep in dependencies
                     if dep.get('delivery_context') == context}
-        source_members, component_ids = {}, set()
+        source_members, component_ids, verified_wheels = {}, set(), []
         for component in components:
             if not isinstance(component, dict) or set(component) != {'artifact_id', 'prefix'}:
                 raise ArtifactError('license-delivery-composition', 'output component lacks exact source identity')
@@ -95,6 +117,8 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
                 raise ArtifactError('license-delivery-target', 'source wheel platform/ABI does not match the offline profile')
             wheel = read_file(root, record['path'], MAX_ARTIFACT_BYTES)
             verify_origin(root, record, wheel)
+            verified_wheels.append({'name': record['name'], 'version': record['version'],
+                                    'filename': filename, 'sha256': record['sha256']})
             total += len(wheel)
             if total > 512 * 1024 * 1024:
                 raise ArtifactError('artifact-size', 'delivery composition exceeds its aggregate byte budget')
@@ -108,6 +132,17 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
         actual = {path: member for path, member in members.items() if path.startswith('site-packages/')}
         if actual != source_members:
             raise ArtifactError('license-obligation-missing', 'extracted output differs from source wheels, including LICENSE/NOTICE custody')
+        from .security_source_delivery import verify_members, subject_name
+        try:
+            modes = {}
+            if corresponding_source_delivery is not None:
+                if not delivery['path'].endswith('.zip'):
+                    raise ValueError('corresponding-source Factory output must be the qualified ZIP format')
+                modes = _legal_modes(payload)
+            legal_members = verify_members(corresponding_source_delivery,verified_wheels,
+                                           members,modes,declared_modes,checker=_CHECKER_ROOT)
+        except (OSError,ValueError,TypeError,KeyError,zipfile.BadZipFile) as exc:
+            raise ArtifactError('license-source-delivery',str(exc)) from exc
         # This one project-owned text is admitted only with the exact checked
         # source license bytes. An archive declaration cannot approve new terms
         # or authorize any other legal/ payload.
@@ -117,11 +152,18 @@ def verify_deliveries(root: Path, deliveries: list[dict], records: list[dict], d
             if project_license != {'size': len(approved), 'sha256': hashlib.sha256(approved).hexdigest()}:
                 raise ArtifactError('license-obligation-missing', 'project license differs from the exact approved checker source')
         if (not any(path.startswith('app/getzilla_factory/') for path in members)
-                or any(path != _PROJECT_LICENSE and not path.startswith(('app/getzilla_factory/', 'site-packages/')) for path in members)):
+                or any(path != _PROJECT_LICENSE and path not in legal_members
+                       and not path.startswith(('app/getzilla_factory/', 'site-packages/')) for path in members)):
             raise ArtifactError('license-delivery-composition', 'archive has unknown contents outside the qualified Factory output')
         verified[context] = {'context': context, 'kind': delivery['kind'], 'profile': delivery['profile'],
                              'archive_sha256': archive_digest, 'manifest_sha256': manifest_digest,
                              'sidecar_sha256': hashlib.sha256(sidecar).hexdigest(),
                              'output_bytes': len(payload) + len(detached) + len(sidecar),
                              'components': sorted(component_ids), 'members': source_members}
+        if legal_members:
+            verified[context]['corresponding_source_delivery'] = {
+                'proof_sha256': hashlib.sha256(json.dumps(corresponding_source_delivery,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+                'components': sorted(artifact_identity(identities[value]) for value in component_ids
+                                     if subject_name(identities[value]['name']) in {w['name'] for w in corresponding_source_delivery['packages']}),
+                'members': legal_members}
     return verified

@@ -14,6 +14,7 @@ from .security_artifacts import (ArtifactError, MAX_ARTIFACT_BYTES, MAX_INDEX_BY
     archive_files, archive_inventory, artifact_identity as artifact_identity, read_file, select_artifact)
 from .security_data import _json
 from .security_python_target import digest
+from .security_source_delivery import wheel_rows
 
 PROFILE = 'ubuntu-24.04-x86_64-cpython312'
 MARKERS = dict(sys_platform='linux',os_name='posix',platform_system='Linux',platform_machine='x86_64',
@@ -93,12 +94,20 @@ def declaration(root,inventory,policy,*,scratch):
     value=dict(schema_version=1,profile=PROFILE,policy_profile=policy['factory_offline_profile'],
         inventory_sha256=inventory['digest'],dependencies=deps,app_members_sha256=digest(_app_members(root,scratch)),
         product_version=project.get('project',{}).get('version'))
+    from .security_source_delivery import admitted_delivery
+    try:
+        source_delivery=admitted_delivery(root,inventory,wheel_rows(deps))
+    except (OSError,ValueError,TypeError,KeyError) as exc:
+        raise ArtifactError('artifact-factory-source-delivery',str(exc)) from exc
+    if source_delivery is not None:
+        value['corresponding_source_delivery']=source_delivery
     return validate_declaration(value)
 
 
 def validate_declaration(value):
-    if (type(value) is not dict or set(value)!={'schema_version','profile','policy_profile','inventory_sha256',
-            'dependencies','app_members_sha256','product_version'} or value['schema_version']!=1 or value['profile']!=PROFILE
+    fields={'schema_version','profile','policy_profile','inventory_sha256',
+            'dependencies','app_members_sha256','product_version'}
+    if (type(value) is not dict or set(value) not in (fields,fields|{'corresponding_source_delivery'}) or value['schema_version']!=1 or value['profile']!=PROFILE
             or type(value['product_version']) is not str or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.!+_-]{0,63}',value['product_version'])
             or type(value['dependencies']) is not list or not 1<=len(value['dependencies'])<=512
             or any(type(value[k]) is not str or not re.fullmatch('[a-f0-9]{64}',value[k])
@@ -121,6 +130,11 @@ def validate_declaration(value):
             _refuse()
         seen.add(dep['name'])
         _allowed_tags(dep['artifact_filename'])
+    from .security_source_delivery import validate_proof
+    try:
+        validate_proof(value.get('corresponding_source_delivery'),wheel_rows(value['dependencies']))
+    except (OSError,ValueError,TypeError,KeyError) as exc:
+        raise ArtifactError('artifact-factory-source-delivery',str(exc)) from exc
     if len(json.dumps(value).encode())>MAX_INDEX_BYTES:
         _refuse('artifact-size')
     return json.loads(json.dumps(value))
@@ -165,6 +179,8 @@ def output_inventory(declared,binding,environment=None):
     deps=[{**{k:v for k,v in dep.items() if k!='source_use_sha256'},'delivery_context':context}
         for dep in declared['dependencies']]
     result=dict(complete=True,gaps=[],dependencies=deps,tools=[],images=[],marker_environment=environment or MARKERS)
+    if 'corresponding_source_delivery' in declared:
+        result['corresponding_source_delivery']=declared['corresponding_source_delivery']
     result['digest']=digest(result)
     return result
 

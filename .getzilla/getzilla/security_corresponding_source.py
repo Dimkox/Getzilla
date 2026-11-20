@@ -11,8 +11,9 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 import stat
+import sys
 import tarfile
 import tomllib
 from time import monotonic
@@ -84,7 +85,16 @@ def _read(root, relative, *, deadline=None):
             os.close(fd)
 
 
-TRUSTED_ADAPTER_SHA256 = _sha(Path(__file__).read_bytes())
+def _trusted_adapter_bytes():
+    # Actual loaded source, including the lean SDKzip representation. The reader
+    # admits only fixed standard loaders and checks source identity/size.
+    from .verification_policy_source import _module_source
+    if __name__ != 'getzilla.security_corresponding_source' or __name__ not in sys.modules:
+        raise ValueError('trusted corresponding-source adapter identity unavailable')
+    return _module_source(sys.modules[__name__])
+
+
+TRUSTED_ADAPTER_SHA256 = _sha(_trusted_adapter_bytes())
 
 
 def surface_digest(root, files, *, deadline=None):
@@ -151,7 +161,59 @@ def _members(root, prefix, expected, *, deadline=None):
         raise ValueError('missing corresponding-source member')
 
 
-def classify(root, files):
+def _source_payload(root, name, *, deadline, files=None):
+    """Verify one fixed source and repack it; this alone grants no data role."""
+    if name not in CATALOG or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+        raise ValueError('fixed source custody unavailable')
+    version, snapshot_hash, map_hash, wheel_hash = CATALOG[name]
+    stem = name + '-' + version
+    def read(relative):
+        return _read(root, relative, deadline=deadline)
+    snapshot_raw, _ = read(LEGAL + stem + '-snapshot.json')
+    map_raw, _ = read(LEGAL + stem + '-source-map.json')
+    if _sha(snapshot_raw) != snapshot_hash or _sha(map_raw) != map_hash:
+        raise ValueError('source snapshot or map changed')
+    snapshot, source_map = json.loads(snapshot_raw), json.loads(map_raw)
+    if source_map['wheel'] != {'filename': stem + '-py3-none-any.whl', 'sha256': wheel_hash}:
+        raise ValueError('source map wheel identity changed')
+    original = snapshot['original_publisher_archive']
+    index_raw, _ = read(LEGAL + stem + '-index.json')
+    if (_sha(index_raw) != original['index_sha256']
+            or source_map['source']['original_archive_sha256'] != original['sha256']
+            or source_map['source']['original_index_sha256'] != original['index_sha256']
+            or source_map['source']['original_archive_url'] != original['url']):
+        raise ValueError('original source identity differs')
+    prefix = LEGAL + 'vendor/' + stem + '/'
+    members = snapshot['members']
+    expected = {m['path'] for m in members}
+    _members(root, prefix, expected, deadline=deadline)
+    if files is not None and set(p for p in files if p.startswith(prefix)) != {prefix + p for p in expected}:
+        raise ValueError('Git source membership differs')
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+        for member in members:
+            payload, mode = read(prefix + member['path'])
+            if (_sha(payload) != member['sha256'] or len(payload) != member['bytes'] or mode != member['mode']
+                    or member['original_path'] != stem + '/' + member['path']):
+                raise ValueError('corresponding-source content or mode differs')
+            payload.decode('utf-8')
+            info = tarfile.TarInfo(member['original_path'])
+            info.size, info.mode, info.mtime = len(payload), mode, 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = ''
+            archive.addfile(info, io.BytesIO(payload))
+    repack = io.BytesIO()
+    with gzip.GzipFile(fileobj=repack, filename='', mode='wb', compresslevel=9, mtime=0) as handle:
+        handle.write(output.getvalue())
+    _members(root, prefix, expected, deadline=deadline)
+    for member in members:
+        payload, mode = read(prefix + member['path'])
+        if _sha(payload) != member['sha256'] or mode != member['mode'] or len(payload) != member['bytes']:
+            raise ValueError('source changed during repack validation')
+    return snapshot, source_map, repack.getvalue(), prefix
+
+
+def classify(root, files, *, deadline=None):
     """Return typed retained declarations only for this exact reviewed composition."""
     controls = {LEGAL + name + '-' + row[0] + suffix
                 for name, row in CATALOG.items()
@@ -160,7 +222,8 @@ def classify(root, files):
         return []
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise ValueError('retained-source classification requires no-follow source custody')
-    deadline = monotonic() + MAX_SECONDS
+    if deadline is None:
+        deadline = monotonic() + MAX_SECONDS
     def read(relative):
         return _read(root, relative, deadline=deadline)
     before = surface_digest(root, files, deadline=deadline)
@@ -174,53 +237,20 @@ def classify(root, files):
         raise ValueError('declared runtime target does not match lock')
     rows = []
     for name, (version, snapshot_hash, map_hash, wheel_hash) in CATALOG.items():
-        stem = name + '-' + version
-        snapshot_raw, _ = read(LEGAL + stem + '-snapshot.json')
-        map_raw, _ = read(LEGAL + stem + '-source-map.json')
-        if _sha(snapshot_raw) != snapshot_hash or _sha(map_raw) != map_hash:
-            raise ValueError('source snapshot or map changed')
-        snapshot, source_map = json.loads(snapshot_raw), json.loads(map_raw)
         wheel = [w for w in wheels['wheels'] if w['name'] == name]
-        filename = stem + '-py3-none-any.whl'
+        filename = name + '-' + version + '-py3-none-any.whl'
         if wheel != [{'filename': filename, 'name': name, 'sha256': wheel_hash, 'version': version}]:
             raise ValueError('declared corresponding-source wheel changed')
         package = [p for p in lock['package'] if p['name'] == name and p['version'] == version]
         if len(package) != 1 or not any(w['hash'] == 'sha256:' + wheel_hash and w['url'].endswith('/' + filename) for w in package[0]['wheels']):
             raise ValueError('declared wheel has no exact lock artifact')
-        if source_map['wheel'] != {'filename': filename, 'sha256': wheel_hash}:
-            raise ValueError('source map wheel identity changed')
-        original = snapshot['original_publisher_archive']
-        index_raw, _ = read(LEGAL + stem + '-index.json')
-        if _sha(index_raw) != original['index_sha256']:
-            raise ValueError('original publisher index differs')
-        if (source_map['source']['original_archive_sha256'] != original['sha256']
-                or source_map['source']['original_index_sha256'] != original['index_sha256']
-                or source_map['source']['original_archive_url'] != original['url']):
-            raise ValueError('original source identity differs')
-        prefix = LEGAL + 'vendor/' + stem + '/'
-        members = snapshot['members']
-        expected = {m['path'] for m in members}
-        _members(root, prefix, expected, deadline=deadline)
-        if set(p for p in files if p.startswith(prefix)) != {prefix + p for p in expected}:
-            raise ValueError('Git source membership differs')
-        output = io.BytesIO()
-        with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
-            for member in members:
-                payload, mode = read(prefix + member['path'])
-                if (_sha(payload) != member['sha256'] or len(payload) != member['bytes'] or mode != member['mode']
-                        or member['original_path'] != stem + '/' + member['path']):
-                    raise ValueError('corresponding-source content or mode differs')
-                payload.decode('utf-8')
-                info = tarfile.TarInfo(member['original_path'])
-                info.size, info.mode, info.mtime = len(payload), mode, 0
-                info.uid = info.gid = 0
-                info.uname = info.gname = ''
-                archive.addfile(info, io.BytesIO(payload))
-        repack = io.BytesIO()
-        with gzip.GzipFile(fileobj=repack, filename='', mode='wb', compresslevel=9, mtime=0) as handle:
-            handle.write(output.getvalue())
+        snapshot, _source_map, repack, prefix = _source_payload(root, name, deadline=deadline, files=files)
         manifest = prefix + 'pyproject.toml'
-        project_raw, _ = read(manifest)
+        project_raw, project_mode = read(manifest)
+        expected_project = next(m for m in snapshot['members'] if m['path'] == 'pyproject.toml')
+        if (_sha(project_raw) != expected_project['sha256'] or len(project_raw) != expected_project['bytes']
+                or project_mode != expected_project['mode']):
+            raise ValueError('source project changed after retained-member validation')
         data = tomllib.loads(project_raw.decode())
         constraints = []
         def record(values, role, group=''):
@@ -230,18 +260,13 @@ def classify(root, files):
         record(data.get('build-system', {}).get('requires', []), 'build')
         for group, values in data.get('project', {}).get('optional-dependencies', {}).items():
             record(values, {'test': 'test', 'docs': 'docs', 'dev': 'development'}.get(group, 'optional'), group)
-        _members(root, prefix, expected, deadline=deadline)
-        for member in members:
-            payload, mode = read(prefix + member['path'])
-            if _sha(payload) != member['sha256'] or mode != member['mode'] or len(payload) != member['bytes']:
-                raise ValueError('source changed during repack validation')
         rows.append({'package': name, 'version': version, 'manifest': manifest,
-                     'members': sorted(prefix + p for p in expected), 'constraints': constraints,
+                     'members': sorted(prefix + m['path'] for m in snapshot['members']), 'constraints': constraints,
                      'role': 'retained-corresponding-source-data', 'surface_sha256': before,
                      'snapshot_sha256': snapshot_hash, 'source_map_sha256': map_hash,
-                     'original_publisher_archive': original,
-                     'repack': {'sha256': _sha(repack.getvalue()), 'bytes': len(repack.getvalue()),
-                                'members': [m['original_path'] for m in members]},
+                     'original_publisher_archive': snapshot['original_publisher_archive'],
+                     'repack': {'sha256': _sha(repack), 'bytes': len(repack),
+                                'members': [m['original_path'] for m in snapshot['members']]},
                      'declared_target': {'profile': wheels['profile'], 'lock_sha256': _sha(lock_raw), 'wheel': wheel[0]},
                      'artifact_observation': 'declared-target-only'})
     from .security_osv_snapshot import _tracked_files
