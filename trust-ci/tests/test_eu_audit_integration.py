@@ -10,6 +10,7 @@ import copy
 import io
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -244,11 +245,11 @@ class EuAuditIntegrationTests(unittest.TestCase):
         settings = ApiSettings(
             common=CommonSettings('postgresql://unused', self.case / 'policy.json',
                                   'https://ci.example.invalid', self.case / 'STOP'),
-            webhook_secret='fixture-only', trust_store_path=self.case / 'unused-trust-store.json',
-            read_token='fixture-read-token')
+            webhook_secret=secrets.token_hex(24), trust_store_path=self.case / 'unused-trust-store.json',
+            read_token=secrets.token_hex(24))
         client = TestClient(create_app(settings, store=store, policy=policy, trust_store=TrustStore({})))
         self.addCleanup(client.close)
-        headers = {'Authorization': 'Bearer fixture-read-token'}
+        headers = {'Authorization': f'Bearer {settings.read_token}'}
         if replay:
             with self.assertRaisesRegex(RuntimeError, 'test publication transport failed'):
                 runner.process(job, 'fixture-worker')
