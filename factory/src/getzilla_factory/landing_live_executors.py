@@ -368,18 +368,19 @@ class OpenAICompatibleLandingExecutor:
             raise
 
     async def _exchange(self, encoded: bytes, headers, deadline: float, capability=None, *, reservation=None, input_digest=None):
-        from .factory_stop import FactoryStopError, require_stop_capability
+        from .factory_stop import FactoryStopError, require_stop_capability_async
         if self._admission is None or reservation is None:
             raise LandingProviderError('paid_authority_required')
-        capability = require_stop_capability(capability, input_digest=input_digest)
         progress = {'admitted': False}
         async def watch():
             while True:
                 await capability.check_async()
                 await asyncio.sleep(.05)
-        work = asyncio.create_task(self._exchange_http(encoded, headers, deadline, capability, progress, reservation, input_digest))
-        watcher = asyncio.create_task(watch())
+        work = watcher = None
         try:
+            capability = await require_stop_capability_async(capability, input_digest=input_digest)
+            work = asyncio.create_task(self._exchange_http(encoded, headers, deadline, capability, progress, reservation, input_digest))
+            watcher = asyncio.create_task(watch())
             done, _ = await asyncio.wait((work, watcher), return_when=asyncio.FIRST_COMPLETED)
             if watcher in done:
                 await watcher
@@ -394,16 +395,16 @@ class OpenAICompatibleLandingExecutor:
             raise HttpProviderFailure(error.code, 'policy', dispatched=progress['admitted']) from None
         finally:
             for task in (work, watcher):
-                if not task.done():
+                if task is not None and not task.done():
                     task.cancel()
-            await asyncio.gather(work, watcher, return_exceptions=True)
+            await asyncio.gather(*(task for task in (work, watcher) if task is not None), return_exceptions=True)
 
     async def _exchange_http(self, encoded: bytes, headers, deadline: float, capability, progress, reservation, input_digest):
         from .landing_sse import QwenOmniStreamDecoder
-        from .factory_stop import require_stop_capability
+        from .factory_stop import require_stop_capability_async
         if self._admission is None or reservation is None:
             raise LandingProviderError("paid_authority_required")
-        capability = require_stop_capability(capability, input_digest=input_digest)
+        capability = await require_stop_capability_async(capability, input_digest=input_digest)
 
         decoder = QwenOmniStreamDecoder(self._profile) if self._profile.streaming else None
         response_status = None

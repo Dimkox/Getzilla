@@ -16,4 +16,6 @@ def mock_transport_factory_boundary(case):
         return Mock(input_digest=input_digest or digest, content_sha256=digest,
                     check=Mock(return_value=None), check_async=AsyncMock(return_value=None))
     case.enterContext(patch('getzilla_factory.factory_stop.require_stop_capability', side_effect=admitted))
+    case.enterContext(patch('getzilla_factory.factory_stop.require_stop_capability_async',
+                           new=AsyncMock(side_effect=admitted)))
     case.enterContext(patch('getzilla_factory.factory_stop.require_factory_service', return_value=None))
