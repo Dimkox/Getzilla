@@ -1,12 +1,9 @@
 """NEW pure data contract; no source/provider/scanner execution credit."""
-import importlib.util
 from pathlib import Path
 import sys
 import unittest
-path = Path(__file__).resolve().parents[2] / '.getzilla/getzilla/public_security_context.py'
-spec = importlib.util.spec_from_file_location('owned_public_context', path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '.getzilla'))
+from getzilla import public_security_context as module
 ACTIVE = False
 
 def guard(event, args):
