@@ -12,7 +12,8 @@ from getzilla_factory.shared_landing_contracts import SharedControlBindingV1
 
 
 def main():
-    root=Path(sys.argv[1]);cut=sys.argv[2]
+    root=Path(sys.argv[1])
+    cut=sys.argv[2]
     store=SQLiteLandingJobStore(root/'authority',repository_root=root/'control')
     item=source()
     now=datetime.now(timezone.utc).timestamp()

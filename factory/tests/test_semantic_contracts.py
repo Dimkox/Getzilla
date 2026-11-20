@@ -108,6 +108,8 @@ class SemanticContractTests(unittest.TestCase):
             "landing-backend-capability.v3.schema.json",
             "landing-attempt-status.v1.schema.json",
             "landing-failover-config.v1.schema.json",
+            "landing-failover-config.v2.schema.json",
+            "shared-landing-control-request.v1.schema.json",
             "landing-failover-result.v1.schema.json",
         }
         semantic_names = {
@@ -156,6 +158,7 @@ class SemanticContractTests(unittest.TestCase):
             names,
         )
         versions = {name: 1 for name in semantic_names | failover_names}
+        versions["landing-failover-config.v2.schema.json"] = 2
         versions["context-manifest.v2.schema.json"] = 2
         versions["landing-backend-capability.v2.schema.json"] = 2
         versions["landing-backend-capability.v3.schema.json"] = 3

@@ -7,11 +7,9 @@ import json
 from pathlib import Path
 import socketserver
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 
-from getzilla_factory.contracts import canonical_json
 from getzilla_factory.landing_failover import FailoverCoordinator
 from getzilla_factory.landing_failover_cli import main
 from getzilla_factory.landing_failover_config import FailoverConfig

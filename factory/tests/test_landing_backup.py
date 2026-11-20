@@ -167,7 +167,8 @@ class LandingBackupTests(HostFixture):
         store=self.reopen_store()
         item=source()
         store.create_or_replay(LandingJobRecord(item,'accepted',None,None),command_key=item.job_id,request_digest=item.input_digest)
-        database=store.database_path;store.close()
+        database=store.database_path
+        store.close()
         with sqlite3.connect(database) as connection:
             connection.execute('DROP TABLE shared_control_bindings')
             connection.execute('DROP TABLE shared_control_clock')
