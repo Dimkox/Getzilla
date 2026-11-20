@@ -9,6 +9,7 @@ from unittest import mock
 
 import getzilla
 from getzilla import harnesses, verification_plan, verification_tool_workspace, verification_policy_source
+from getzilla import security_research_catalog
 from tests.test_batch_composition_joins import _Registry, pure
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ class HookCompositionJoinTests(unittest.TestCase):
     def test_hook_interpreters_and_dispatch_bytes_change_actual_policy_binding(self):
         sources = {'scripts/getzilla_cli.py':b'owned dispatcher', 'scripts/getzilla_hook.py':b'owned hook'}
         modules = {'harnesses.py':b'owned renderer'}
+        catalogs = {'catalog': b'owned research conditions', 'image': b'owned image conditions'}
         class Source:
             def __init__(self, name): self.name = name
             def exists(self): return self.name in sources
@@ -40,6 +42,8 @@ class HookCompositionJoinTests(unittest.TestCase):
                                   side_effect=lambda name, package:SimpleNamespace(filename=name.removeprefix('.')+'.py')), \
                 mock.patch.object(verification_policy_source, '_module_source',
                                   side_effect=lambda module:modules.get(module.filename,module.filename.encode())), \
+                mock.patch.object(security_research_catalog, 'catalog_bytes', side_effect=lambda: catalogs['catalog']), \
+                mock.patch.object(security_research_catalog, 'image_conditions_bytes', side_effect=lambda: catalogs['image']), \
                 mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
             baseline = verification_plan.policy_binding(Path('owned-hook-root'))
             self.assertTrue(set(sources) <= baseline['inputs'].keys())
@@ -51,6 +55,12 @@ class HookCompositionJoinTests(unittest.TestCase):
                 sources[name]=old
             modules['harnesses.py']+=b' changed'
             self.assertNotEqual(verification_plan.policy_binding(Path('owned-hook-root'))['digest'],baseline['digest'])
+            modules['harnesses.py']=b'owned renderer'
+            for name in catalogs:
+                old = catalogs[name]
+                catalogs[name] += b' changed'
+                self.assertNotEqual(verification_plan.policy_binding(Path('owned-hook-root'))['digest'],baseline['digest'])
+                catalogs[name] = old
 
     def test_hook_dispatcher_has_exact_native_policy_owner(self):
         model=json.loads((ROOT/'architecture/system.yaml').read_bytes())
