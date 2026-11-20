@@ -6,6 +6,8 @@ This local store does not prove deployment-wide or native-host enforcement.
 """
 
 from dataclasses import asdict, dataclass
+from contextvars import ContextVar
+
 import hashlib
 import math
 import re
@@ -13,6 +15,8 @@ import re
 from .contracts import canonical_json
 from .landing_contracts import strict_json_object
 from .landing_provider import LandingProviderError
+
+SHARED_DISPATCH_GUARD = ContextVar("shared_landing_dispatch_guard", default=None)
 
 OPERATIONS = frozenset({"paid-inference", "paid-image", "paid-video"})
 from importlib.resources import files
@@ -207,6 +211,9 @@ class PaidExecutionAdmission:
         )
 
     def dispatch(self, reservation, input_digest, request_digest=None, provider=None, model=None):
+        guard = SHARED_DISPATCH_GUARD.get()
+        if guard is not None:
+            guard(self, input_digest, provider, model)
         return dispatch(
             self.store, self.account_id, self.task_id, reservation, input_digest, request_digest, provider, model
         )
@@ -298,7 +305,12 @@ def _authority(store, account_id, task_id):
     task = PaidTaskV1(**strict_json_object(task[0]))
     account.validate()
     task.validate()
-    now = store._clock().timestamp()
+    # Callers commit one fresh time observation before entering this possibly
+    # failing transaction. Never observe a later clock only to roll it back.
+    clock = store._connection.execute("SELECT highwater FROM shared_control_clock WHERE singleton=1").fetchone()
+    if clock is None:
+        _deny("paid_authority_clock_required")
+    now = clock[0]
     if row[1] != 0:
         _deny("paid_disabled")
     if not account.starts_at <= now < min(account.expires_at, task.deadline_at):
@@ -325,6 +337,7 @@ def reserve(
         or not all(_positive(v) for v in (input_units, output_units))
     ):
         _deny("paid_request_invalid")
+    store.authority_time()
     with store._transaction():
         account, task, now = _authority(store, account_id, task_id)
         if credential_ref != task.credential_ref or source_identity != task.source_identity:
@@ -387,6 +400,7 @@ def reserve(
 
 
 def dispatch(store, account_id, task_id, reservation, input_digest, request_digest, provider, model):
+    store.authority_time()
     with store._transaction():
         account, task, now = _authority(store, account_id, task_id)
         if input_digest != task.input_digest:

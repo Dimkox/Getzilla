@@ -136,3 +136,32 @@ def _trusted_source(path: Path, *, repository_root: Path) -> None:
     metadata = (path / ".git").lstat()
     if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
         raise SettingsError("landing source must be an independent checkout")
+
+
+def compose_owned_shared_profile(owned, settings, *, profile_id, configure_paid_authority,
+                                 credential_loader, factory_service, transport=None):
+    """Compose another permitted executor inside the existing writer owner.
+
+    The owner supplies its finite authority and loader. This function never opens
+    a database, reads a caller credential, or serializes an admission object.
+    """
+    from .factory_stop import require_factory_service
+    from .landing_http import HttpLandingProfile
+    from .landing_live_executors import compose_landing_live_provider, compose_landing_live_qwen, compose_landing_live_grok
+    from .paid_admission import PaidExecutionAdmission
+    if type(owned) is not OwnedLandingRuntime or owned.store is None:
+        raise SettingsError('shared durable owner required')
+    require_factory_service(factory_service)
+    profile = HttpLandingProfile.for_provider(profile_id,available=True)
+    admission = configure_paid_authority(owned.store,profile)
+    if type(admission) is not PaidExecutionAdmission or admission.store is not owned.store:
+        raise SettingsError('shared durable paid authority required')
+    compose = compose_landing_live_qwen if profile.provider_id == 'qwen' else compose_landing_live_grok if profile.provider_id == 'grok' else compose_landing_live_provider
+    service = compose(
+        credential_loader=credential_loader,admission=admission,factory_service=factory_service,
+        binding=implemented_live_binding(enabled=True),profile=profile,
+        source_repository=settings.landing_source_path,scratch_root=settings.landing_scratch_path,
+        output_directory=settings.landing_output_path,blobs=owned.service._blobs,store=owned.store,
+        transport=transport,clock=None,
+    )
+    return service,admission
