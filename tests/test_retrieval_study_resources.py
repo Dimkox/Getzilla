@@ -5,6 +5,17 @@ import unittest
 
 
 class StudyResourceTests(unittest.TestCase):
+    def test_tmpfs_name_and_exact_protections_are_required(self):
+        owner = self.owner()
+        valid = self.fixture()['HostConfig']['Tmpfs']['/tmp']
+        for tmpfs in ({}, {'/var/tmp': valid}, {'/tmp': valid, '/extra': valid},
+                      {'/tmp': valid.replace(',noexec', '')},
+                      {'/tmp': valid.replace('mode=700', 'mode=1777')}):
+            item = self.fixture()
+            item['HostConfig']['Tmpfs'] = tmpfs
+            with self.subTest(tmpfs=tmpfs), self.assertRaises(ValueError):
+                self.check(owner, item)
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_resources')

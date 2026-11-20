@@ -102,7 +102,7 @@ def serve(nonce, incoming, outgoing, *, deadline=None):
         try:
             emit({'status': 'unavailable', 'reason': 'owned_worker_unavailable'})
         except Exception:
-            pass
+            return 125
         return 125
     finally:
         if 'native' in state:

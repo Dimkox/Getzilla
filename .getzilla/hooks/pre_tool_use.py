@@ -1122,7 +1122,8 @@ def main() -> None:
             try:
                 record_degraded('pre_tool_use', 'invalid-tool-request')
             except Exception:
-                pass
+                emit(permission_output(False, _INVALID_TOOL_REQUEST))
+                return
             emit(permission_output(False, _INVALID_TOOL_REQUEST))
             return
         record_degraded('pre_tool_use', error)

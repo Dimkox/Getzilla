@@ -35,7 +35,7 @@ def main():
         version=(ROOT/'VERSION').read_text().strip()
         client_event(Path(os.environ.get('GETZILLA_STATE_HOME',str(Path.home()/'.getzilla'))),version,os.environ,ready=True,send=send)
     except Exception:
-        pass  # Optional telemetry never changes installation outcome.
+        return  # Optional telemetry never changes installation outcome.
 
 if __name__=='__main__':
     main()

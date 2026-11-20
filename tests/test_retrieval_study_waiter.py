@@ -3,10 +3,22 @@ import importlib
 import io
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 class StudyWaiterTests(unittest.TestCase):
+    def test_failed_unavailable_emission_returns_failure_without_dispatch(self):
+        owner = self.owner()
+        outgoing = Mock()
+        outgoing.write.side_effect = OSError('private broken pipe')
+        with patch.object(owner, '_inside_readback', side_effect=ValueError('private readback')), \
+                patch.object(owner, '_dispatch') as dispatch:
+            self.assertEqual(owner.serve('a' * 64, io.BytesIO(), outgoing), 125)
+        outgoing.write.assert_called_once_with(
+            b'{"status":"unavailable","reason":"owned_worker_unavailable"}\n')
+        outgoing.flush.assert_not_called()
+        dispatch.assert_not_called()
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_worker_entry')

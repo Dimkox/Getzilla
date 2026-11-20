@@ -177,7 +177,8 @@ class ContainerExecutor:
                 '--security-opt', 'no-new-privileges', '--user', '65534:65534',
                 '--cpus', str(cpus), '--memory', str(self.spec['memory_mb']) + 'm',
                 '--memory-swap', str(self.spec['memory_mb']) + 'm', '--pids-limit', str(self.spec['pids']),
-                '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777',
+                # Container-private tmpfs declaration, not a host temporary file.
+                '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777',  # nosec B108
                 '--mount', f'type=bind,src={snapshot},dst=/workspace,readonly',
                 '--workdir', working, '--env', 'HOME=/tmp/home', '--env', 'TMPDIR=/tmp',
                 '--env', 'CI=true', '--env', f'JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount={cpus}',
