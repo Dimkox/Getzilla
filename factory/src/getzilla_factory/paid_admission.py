@@ -6,6 +6,9 @@ This local store does not prove deployment-wide or native-host enforcement.
 """
 
 from dataclasses import asdict, dataclass
+from contextvars import ContextVar
+
+SHARED_DISPATCH_GUARD = ContextVar("shared_landing_dispatch_guard", default=None)
 import hashlib
 import math
 import re
@@ -207,6 +210,9 @@ class PaidExecutionAdmission:
         )
 
     def dispatch(self, reservation, input_digest, request_digest=None, provider=None, model=None):
+        guard = SHARED_DISPATCH_GUARD.get()
+        if guard is not None:
+            guard(self, input_digest, provider, model)
         return dispatch(
             self.store, self.account_id, self.task_id, reservation, input_digest, request_digest, provider, model
         )
@@ -298,7 +304,7 @@ def _authority(store, account_id, task_id):
     task = PaidTaskV1(**strict_json_object(task[0]))
     account.validate()
     task.validate()
-    now = store._clock().timestamp()
+    now = store._clock_highwater()
     if row[1] != 0:
         _deny("paid_disabled")
     if not account.starts_at <= now < min(account.expires_at, task.deadline_at):
@@ -325,6 +331,7 @@ def reserve(
         or not all(_positive(v) for v in (input_units, output_units))
     ):
         _deny("paid_request_invalid")
+    store.authority_time()
     with store._transaction():
         account, task, now = _authority(store, account_id, task_id)
         if credential_ref != task.credential_ref or source_identity != task.source_identity:
@@ -387,6 +394,7 @@ def reserve(
 
 
 def dispatch(store, account_id, task_id, reservation, input_digest, request_digest, provider, model):
+    store.authority_time()
     with store._transaction():
         account, task, now = _authority(store, account_id, task_id)
         if input_digest != task.input_digest:

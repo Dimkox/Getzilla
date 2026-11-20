@@ -215,7 +215,8 @@ class PaidAdmissionTests(unittest.TestCase):
         calls = []
         executor = qwen_landing_executor(credential_loader=key, admission=self.admission,
             transport=httpx.MockTransport(lambda request: calls.append(request)))
-        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability):
+        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability), \
+                patch('getzilla_factory.factory_stop.require_stop_capability_async', new=__import__('unittest.mock',fromlist=['AsyncMock']).AsyncMock(return_value=capability)):
             with self.assertRaisesRegex(LandingProviderError, 'factory_stop_changed') as error:
                 executor.run(_request(executor))
         self.assertFalse(error.exception.dispatched)
@@ -240,7 +241,8 @@ class PaidAdmissionTests(unittest.TestCase):
             return httpx.Response(200, headers={'Content-Type': 'application/json'}, stream=WaitingBody())
         executor = qwen_landing_executor(api_key='synthetic', admission=self.admission,
             transport=httpx.MockTransport(post))
-        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability):
+        with patch('getzilla_factory.factory_stop.require_stop_capability', return_value=capability), \
+                patch('getzilla_factory.factory_stop.require_stop_capability_async', new=__import__('unittest.mock',fromlist=['AsyncMock']).AsyncMock(return_value=capability)):
             with self.assertRaisesRegex(LandingProviderError, 'factory_stop_changed') as error:
                 executor.run(_request(executor))
         self.assertTrue(error.exception.dispatched)
@@ -265,7 +267,7 @@ class PaidAdmissionTests(unittest.TestCase):
         self.store.close()
         path = Path(self.tmp.name) / "state/landing.sqlite3"
         with sqlite3.connect(path) as db:
-            for table in ("paid_reservations", "paid_prices", "paid_tasks", "paid_accounts"):
+            for table in ("shared_control_bindings", "shared_control_clock", "paid_reservations", "paid_prices", "paid_tasks", "paid_accounts"):
                 db.execute("DROP TABLE " + table)
             db.execute("PRAGMA user_version=2")
         with patch.object(module, "PAID_SCHEMA", module.PAID_SCHEMA + ";INVALID SQL;"):
@@ -350,7 +352,7 @@ class PaidAdmissionTests(unittest.TestCase):
         self.store.close()
         path = Path(self.tmp.name) / "state/landing.sqlite3"
         with sqlite3.connect(path) as db:
-            for table in ("paid_reservations", "paid_prices", "paid_tasks", "paid_accounts"):
+            for table in ("shared_control_bindings", "shared_control_clock", "paid_reservations", "paid_prices", "paid_tasks", "paid_accounts"):
                 db.execute("DROP TABLE " + table)
             db.execute("ALTER TABLE landing_jobs DROP COLUMN observation_json")
             db.execute("PRAGMA user_version=1")

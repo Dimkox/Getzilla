@@ -29,7 +29,8 @@ from .landing_service import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+from .shared_landing_contracts import CONTROL_SCHEMA, CONTROL_COLUMNS, SharedControlBindingV1
 from .paid_admission import SCHEMA as PAID_SCHEMA, COLUMNS as PAID_COLUMNS
 MIGRATION_003_EXPAND = PAID_SCHEMA
 MIGRATION_002_EXPAND = "ALTER TABLE landing_jobs ADD COLUMN observation_json BLOB"
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS landing_commands (
       REFERENCES landing_jobs (tenant_id, repository_id, job_id)
 ) STRICT;
 """
-_SCHEMA += PAID_SCHEMA
+_SCHEMA += PAID_SCHEMA + CONTROL_SCHEMA
 _EXPECTED_COLUMNS = {
     "landing_jobs": (
         ("tenant_id", "TEXT", 1, 1),
@@ -93,6 +94,7 @@ _EXPECTED_COLUMNS = {
     ),
 }
 _EXPECTED_COLUMNS.update(PAID_COLUMNS)
+_EXPECTED_COLUMNS.update(CONTROL_COLUMNS)
 _EXPECTED_FOREIGN_KEY = (
     (0, "landing_jobs", "tenant_id", "tenant_id", "NO ACTION", "NO ACTION", "NONE"),
     (1, "landing_jobs", "repository_id", "repository_id", "NO ACTION", "NO ACTION", "NONE"),
@@ -217,12 +219,24 @@ class SQLiteLandingJobStore:
         *,
         command_key: str,
         request_digest: str,
+        control_binding: SharedControlBindingV1 | None = None,
     ) -> tuple[LandingJobRecord, bool]:
         _validate_record(record)
         _validate_command(command_key, request_digest)
         source = record.source
         identity = (source.tenant_id, source.repository_id, source.job_id)
+        if control_binding is not None and type(control_binding) is not SharedControlBindingV1:
+            raise _conflict()
+        binding = control_binding.encoded() if control_binding is not None else None
         with self._transaction():
+            self._clock_highwater()
+            old_binding = self._connection.execute(
+                "SELECT binding FROM shared_control_bindings WHERE tenant_id=? AND repository_id=? AND job_id=?", identity
+            ).fetchone()
+            if old_binding is not None and old_binding[0] != binding:
+                raise _conflict()
+            if binding is not None and old_binding is None and self._select_record(identity) is not None:
+                raise _conflict()
             command = self._connection.execute(
                 """SELECT request_digest, input_digest FROM landing_commands
                     WHERE tenant_id = ? AND repository_id = ? AND job_id = ?
@@ -259,7 +273,23 @@ class SQLiteLandingJobStore:
                     self._timestamp(),
                 ),
             )
+            if binding is not None and old_binding is None:
+                self._connection.execute("INSERT INTO shared_control_bindings VALUES(?,?,?,?)", (*identity,binding))
             return current, created
+
+    def authority_time(self):
+        with self._transaction():
+            return self._clock_highwater()
+
+    def _clock_highwater(self):
+        """Call inside the same write transaction as authority admission."""
+        import math
+        now = self._clock().timestamp()
+        row = self._connection.execute("SELECT highwater FROM shared_control_clock WHERE singleton=1").fetchone()
+        if not math.isfinite(now) or row is not None and now < row[0]:
+            raise LandingServiceError('clock_rollback',503,'authority clock unavailable')
+        self._connection.execute("INSERT INTO shared_control_clock VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET highwater=excluded.highwater", (now,))
+        return now
 
     def put(self, record: LandingJobRecord) -> LandingJobRecord:
         _validate_record(record, validate_files=True)
@@ -424,11 +454,24 @@ class SQLiteLandingJobStore:
                     for statement in PAID_SCHEMA.split(";"):
                         if statement.strip():
                             self._connection.execute(statement)
+                    for statement in CONTROL_SCHEMA.split(";"):
+                        if statement.strip():
+                            self._connection.execute(statement)
                     self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif identity == (2, APPLICATION_ID):
                 _validate_schema(self._connection, version=2)
                 with self._transaction():
                     for statement in PAID_SCHEMA.split(";"):
+                        if statement.strip():
+                            self._connection.execute(statement)
+                    for statement in CONTROL_SCHEMA.split(";"):
+                        if statement.strip():
+                            self._connection.execute(statement)
+                    self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            elif identity == (3, APPLICATION_ID):
+                _validate_schema(self._connection, version=3)
+                with self._transaction():
+                    for statement in CONTROL_SCHEMA.split(";"):
                         if statement.strip():
                             self._connection.execute(statement)
                     self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -642,7 +685,7 @@ def _schema_inventory(connection: sqlite3.Connection) -> tuple[tuple[str, str], 
 
 
 def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VERSION) -> None:
-    expected_tables = tuple(sorted(("table", name) for name in _EXPECTED_COLUMNS if version >= 3 or name not in PAID_COLUMNS))
+    expected_tables = tuple(sorted(("table", name) for name in _EXPECTED_COLUMNS if (version >= 3 or name not in PAID_COLUMNS) and (version >= 4 or name not in CONTROL_COLUMNS)))
     if _schema_inventory(connection) != expected_tables:
         raise _schema_error()
     table_list = {
@@ -651,6 +694,8 @@ def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VE
         if row[0] == "main" and row[1] in _EXPECTED_COLUMNS
     }
     for table, expected in _EXPECTED_COLUMNS.items():
+        if version < 4 and table in CONTROL_COLUMNS:
+            continue
         if version < 3 and table in PAID_COLUMNS:
             continue
         if version == 1 and table == "landing_jobs":
@@ -673,6 +718,11 @@ def _validate_schema(connection: sqlite3.Connection, *, version: int = SCHEMA_VE
     )
     if foreign_keys != _EXPECTED_FOREIGN_KEY:
         raise _schema_error()
+    if version >= 4:
+        for table, expected in [('shared_control_bindings', _EXPECTED_FOREIGN_KEY), ('shared_control_clock', ())]:
+            keys = tuple(tuple(row[1:]) for row in connection.execute(f"PRAGMA foreign_key_list({table})"))
+            if keys != expected:
+                raise _schema_error()
     if version >= 3:
         expected_paid_keys = {
             'paid_accounts': (),

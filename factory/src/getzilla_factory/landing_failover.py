@@ -6,7 +6,7 @@ import time
 from .landing_contracts import MAX_INPUT_BYTES, LandingContractError, landing_digest
 from .landing_failover_config import JOB_ID
 from .landing_failover_contracts import backend_capability, validate_receipt
-from .landing_failover_transport import BackendAmbiguous, BackendRejected, BackendUnavailable, UnixLandingBackend
+from .landing_failover_transport import BackendAmbiguous, BackendRejected, BackendUnavailable, UnixLandingBackend, SharedAuthorityUnixBackend
 from .landing_http import HttpLandingProfile
 from .landing_intake import PrivateLandingBlobStore
 from .landing_normalizer import _extract_docx_text, MAX_NORMALIZED_TEXT_BYTES
@@ -18,8 +18,9 @@ MEDIA = {"text/plain": "text", "application/vnd.openxmlformats-officedocument.wo
 
 
 class FailoverCoordinator:
-    def __init__(self, config, journal, *, backend_factory=UnixLandingBackend, clock=time.time):
-        self.config, self.journal, self.backend_factory, self.clock = config, journal, backend_factory, clock
+    def __init__(self, config, journal, *, backend_factory=None, clock=time.time):
+        self.config, self.journal, self.clock = config, journal, clock
+        self.backend_factory = backend_factory or (SharedAuthorityUnixBackend if config.shared_task_id is not None else UnixLandingBackend)
 
     def submit(self, job_id, payload, media_type):
         if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
@@ -84,6 +85,8 @@ class FailoverCoordinator:
             try:
                 client = self.backend_factory(backend, config=self.config,
                                               timeout_seconds=max(1, min(330, record["deadline_at"] - int(self.clock()))))
+                if isinstance(client, SharedAuthorityUnixBackend):
+                    client.bind_attempt(record["parent_digest"],ordinal)
                 if attempt["state"] == "planned":
                     capability = client.capability()
                     expected = backend_capability(HttpLandingProfile.for_provider(backend.profile_id, available=True),

@@ -56,13 +56,19 @@ class FailoverConfig:
     retention_seconds: int
     backends: tuple[BackendSpec, ...]
     digest: str
+    shared_task_id: str | None = None
 
     @classmethod
     def from_dict(cls, value):
         fields = {"schema_version", "control_repository", "source_path", "journal_path", "actor_id",
                   "repository_id", "exact_base_sha", "exact_base_tree", "deadline_seconds", "retention_seconds", "backends"}
-        if not isinstance(value, dict) or set(value) != fields or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        shared = isinstance(value,dict) and type(value.get('schema_version')) is int and value['schema_version'] == 2
+        if shared:
+            fields.add('shared_task_id')
+        if not isinstance(value, dict) or set(value) != fields or type(value["schema_version"]) is not int or value["schema_version"] not in {1,2}:
             raise SettingsError("closed caller configuration required")
+        if shared and (type(value['shared_task_id']) is not str or not JOB_ID.fullmatch(value['shared_task_id'])):
+            raise SettingsError('explicit shared task required')
         paths = {name: absolute_path(value[name]) for name in ("control_repository", "source_path", "journal_path")}
         roots = tuple(paths.values())
         if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(roots) for b in roots[i + 1:]):
@@ -94,11 +100,14 @@ class FailoverConfig:
                 if any(leaf == root or root in leaf.parents for root in roots):
                     raise SettingsError("caller sockets and credentials must be outside data roots")
             backends.append(BackendSpec(item["profile_id"], socket, token, profile.profile_digest))
-        if len({item.socket_path for item in backends}) != len(backends) or len({item.token_file for item in backends}) != len(backends):
+        if not shared and (len({item.socket_path for item in backends}) != len(backends) or len({item.token_file for item in backends}) != len(backends)):
             raise SettingsError("independent backend identities required")
+        if shared and len({item.token_file for item in backends}) != 1:
+            raise SettingsError('shared control requires one current access identity')
         return cls(**paths, **{name: value[name] for name in (
             "actor_id", "repository_id", "exact_base_sha", "exact_base_tree", "deadline_seconds", "retention_seconds",
-        )}, backends=tuple(backends), digest=landing_digest("landing-failover-config-v1", value))
+        )}, backends=tuple(backends), digest=landing_digest("landing-failover-config-v1", value),
+           shared_task_id=value.get("shared_task_id"))
 
 
 def load_failover_config(path):

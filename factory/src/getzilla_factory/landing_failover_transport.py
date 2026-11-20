@@ -30,6 +30,7 @@ class BackendRejected(RuntimeError):
 
 
 class UnixLandingBackend:
+    capability_path = "/v4/landing-backend"
     def __init__(self, backend, *, config, timeout_seconds):
         self.backend, self.config = backend, config
         self.deadline = time.monotonic() + timeout_seconds
@@ -52,7 +53,7 @@ class UnixLandingBackend:
         if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.geteuid():
             raise BackendRejected("socket_identity")
         try:
-            return self._exchange("GET", "/v4/landing-backend", expected=200, timeout_seconds=2)
+            return self._exchange("GET", self.capability_path, expected=200, timeout_seconds=2)
         except BackendTimeout:
             raise BackendUnavailable("capability_timeout") from None
         except BackendAmbiguous as exc:
@@ -87,6 +88,9 @@ class UnixLandingBackend:
     async def _exchange_async(self, method, path, expected, payload, extra, deadline):
         if method != "GET":
             raise BackendRejected("paid_shared_authority_required")
+        return await self._perform_exchange_async(method, path, expected, payload, extra, deadline)
+
+    async def _perform_exchange_async(self, method, path, expected, payload, extra, deadline):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BackendTimeout("deadline")
@@ -117,3 +121,49 @@ class UnixLandingBackend:
             raise BackendTimeout("deadline") from exc
         except (httpx.HTTPError, OSError, ValueError) as exc:
             raise BackendAmbiguous("backend_outcome_unknown") from exc
+
+
+class SharedAuthorityUnixBackend(UnixLandingBackend):
+    """Versioned control client. It never opens the owner's authority database."""
+    capability_path = "/v1/shared-landing-control/capability"
+
+    def __init__(self, backend, *, config, timeout_seconds):
+        super().__init__(backend,config=config,timeout_seconds=timeout_seconds)
+        if config.shared_task_id is None:
+            raise BackendRejected("shared_task_required")
+        self.headers.update({"X-Shared-Task-ID":config.shared_task_id,
+                             "X-Expected-Profile-Digest":backend.profile_digest,
+                             "X-Expected-Actor-ID":config.actor_id})
+        self.binding = None
+
+    def bind_attempt(self, parent_digest, ordinal):
+        self.binding = (parent_digest,ordinal)
+
+    def submit(self, child_id,payload,media_type):
+        import base64
+        from .contracts import canonical_json
+        from .shared_landing_contracts import MAX_SHARED_INPUT_BYTES
+        if not isinstance(payload,bytes) or not 1 <= len(payload) <= MAX_SHARED_INPUT_BYTES:
+            raise BackendRejected('shared_input_bound')
+        if self.binding is None:
+            raise BackendRejected("shared_binding_required")
+        parent,ordinal = self.binding
+        document = {"schema_version":1,"task_id":self.config.shared_task_id,
+            "parent_digest":parent,"ordinal":ordinal,"profile_digest":self.backend.profile_digest,
+            "source_head":self.config.exact_base_sha,"source_tree":self.config.exact_base_tree,
+            "media_type":media_type,"payload_base64":base64.b64encode(payload).decode('ascii')}
+        return self._exchange("POST","/v1/shared-landing-control/jobs/"+child_id,
+            expected=202,payload=canonical_json(document),extra={"Content-Type":"application/json"})
+
+    def observe(self,child_id):
+        return self._exchange("GET","/v1/shared-landing-control/jobs/"+child_id,expected=200)
+
+    async def _exchange_async(self,method,path,expected,payload,extra,deadline):
+        if method not in {"GET","POST"} or not path.startswith('/v1/shared-landing-control/'):
+            raise BackendRejected("shared_control_protocol")
+        # An absent child after an ambiguous POST is UNKNOWN, never rejection
+        # that could be treated as a new attempt by another transport.
+        try:
+            return await self._perform_exchange_async(method,path,expected,payload,extra,deadline)
+        except BackendRejected:
+            raise

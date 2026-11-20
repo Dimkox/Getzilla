@@ -289,6 +289,8 @@ class LandingApplicationService:
         media_type: str,
         chunks: Iterable[bytes],
         actor: Actor,
+        control_binding=None,
+        control_source=None,
     ) -> LandingSubmitResult:
         self._authorize(actor, repository_id)
         if exact_base_sha != TARGET_BASE_SHA or exact_base_tree != TARGET_BASE_TREE:
@@ -296,8 +298,10 @@ class LandingApplicationService:
         media_kind = _media_kind(media_type)
         with self._lock:
             existing = self._store.find(actor.actor_id, repository_id, job_id)
-            received_at = existing.source.received_at if existing else self._now()
-            expires_at = existing.source.expires_at if existing else received_at + timedelta(days=1)
+            if control_source is not None and (type(control_source) is not LandingInputV1 or control_binding is None):
+                raise LandingServiceError('shared_source_invalid',422,'shared source invalid')
+            received_at = existing.source.received_at if existing else (control_source.received_at if control_source is not None else self._now())
+            expires_at = existing.source.expires_at if existing else (control_source.expires_at if control_source is not None else received_at + timedelta(days=1))
             try:
                 source = self._blobs.accept(
                     job_id=job_id,
@@ -314,12 +318,16 @@ class LandingApplicationService:
                 )
             except LandingContractError as exc:
                 raise _service_error(exc) from exc
+            if control_source is not None and source != control_source:
+                self._purge(source,'rejected')
+                raise LandingServiceError('shared_source_mismatch',409,'shared source mismatch')
             accepted = LandingJobRecord(source, "accepted", None, None)
             try:
                 accepted, created = self._store.create_or_replay(
                     accepted,
                     command_key=job_id,
                     request_digest=source.input_digest,
+                    **({"control_binding": control_binding} if control_binding is not None else {}),
                 )
             except Exception:
                 self._purge(source, "rejected")
