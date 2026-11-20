@@ -513,15 +513,34 @@ class SourceWorkflowSmokeTests(unittest.TestCase):
     def test_own_linux_host_keeps_the_required_namespace_admission(self) -> None:
         import yaml
         current = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']
-        self.assertEqual(current['runs-on'], 'ubuntu-22.04')
+        self.assertEqual(current['runs-on'], 'ubuntu-24.04')
         frozen = subprocess.check_output(['git','show',
             'a927eac9a5170941eca0d167741dab619e550f2b:'+ci_gate.SOURCE_WORKFLOW_PATH],cwd=ROOT)
         previous = yaml.safe_load(frozen)['jobs']['linux']
         def admission(job):
             return next(step for step in job['steps'] if '/usr/bin/bwrap --unshare-all' in step.get('run',''))
-        self.assertEqual(admission(current),admission(previous))
+        self.assertIn('profile bwrap /usr/bin/bwrap flags=(unconfined)', admission(current)['run'])
+        self.assertIn('userns,', admission(current)['run'])
+        self.assertIn('sudo apparmor_parser -r /etc/apparmor.d/bwrap', admission(current)['run'])
+        self.assertNotIn('sysctl', admission(current)['run'])
+        required = '/usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / -- /usr/bin/true'
+        self.assertIn(required, admission(previous)['run'])
+        self.assertIn(required, admission(current)['run'])
         self.assertFalse(admission(current).get('continue-on-error',False))
         self.assertFalse(current.get('continue-on-error',False))
+
+    @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
+    def test_own_linux_supplies_protected_grammar_and_explicit_osv_database(self) -> None:
+        import yaml
+        steps = yaml.safe_load((ROOT/ci_gate.SOURCE_WORKFLOW_PATH).read_text())['jobs']['linux-core']['steps']
+        frontends = next(s for s in steps if s['name'] == 'Admit protected syntax frontends')
+        scan = next(s for s in steps if s['name'].startswith('OpenGrep taint rules'))
+        self.assertLess(steps.index(frontends), steps.index(scan))
+        self.assertIn('python3.12 php8.3-cli', frontends['run'])
+        self.assertIn('with syntax_frontend(language)', frontends['run'])
+        self.assertNotIn('continue-on-error', frontends)
+        osv = next(s for s in steps if s['name'].startswith('Known vulnerabilities'))
+        self.assertEqual(osv['run'], 'python scripts/getzilla_vulns.py --online --db "$RUNNER_TEMP/getzilla-osv"')
 
     @unittest.skipUnless(importlib.util.find_spec('yaml'), 'PyYAML is not installed')
     def test_own_linux_admits_fixed_node_before_the_real_profile_and_core(self) -> None:
