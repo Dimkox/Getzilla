@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import AbstractSet, Literal, NamedTuple, TypeAlias
 
 from .python_source_proof import binding_events, binding_owner, namespace_is_closed
+from .python_test_runner import check_cancellation
 
 LiteralKey: TypeAlias = tuple[str, object]
 QueueState = Literal[
@@ -1123,11 +1124,13 @@ class _Interpreter:
         self.scope_stack: list[_FunctionScope] = []
 
     def _statement(self) -> None:
+        check_cancellation()
         self.statement_count += 1
         if self.statement_count > self.statement_limit:
             raise QueueAnalysisLimit("queue statement limit exceeded")
 
     def _value(self, value: AbstractValue) -> AbstractValue:
+        check_cancellation()
         self.value_count += 1 + len(value.entries)
         if self.value_count > self.value_limit:
             raise QueueAnalysisLimit("queue value limit exceeded")
@@ -1908,6 +1911,7 @@ def analyze_queue_tree(
     complete_module: bool = False,
 ) -> QueueTreeAnalysis:
     """Analyze values; only full-source callers may opt into module provenance."""
+    check_cancellation()
     if allow_local_ipc:
         tree = stdlib_exception_projection(tree, complete_module=complete_module)
         tree = local_byte_channel_projection(tree)

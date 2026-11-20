@@ -301,6 +301,13 @@ class Cancellation:
 
 
 _active_cancellation: Cancellation | None = None
+
+
+def check_cancellation() -> None:
+    """Poll only at caller-selected safe boundaries; signal handlers never raise."""
+    if _active_cancellation is not None:
+        _active_cancellation.check()
+
 _TERM_GRACE = 0.25
 _KILL_REAP_TIMEOUT = 2.0
 

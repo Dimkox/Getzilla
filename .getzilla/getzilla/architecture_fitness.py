@@ -51,6 +51,7 @@ from .queue_provenance import (QueueAnalysisLimit, analyze_queue_tree, literal_p
                                QueueRefusalCapture as _QueueRefusalCapture, queue_refusal_text as _queue_limit_text)  # noqa: F401 canonical scan patch point
 from .python_source_proof import binding_events, binding_owner as binding_owner, literal_import_reads, namespace_is_closed
 from . import verification_journal as diagnostics
+from .python_test_runner import check_cancellation
 
 FITNESS_CATEGORIES = (
     "background_job",
@@ -522,6 +523,7 @@ class _QueueBudget:
         self._source(_QueueSourceFootprint(path, hashlib.sha256(value).hexdigest(), len(value), nodes))
 
     def _source(self, item: _QueueSourceFootprint) -> None:
+        check_cancellation()
         key = (item.path, item.digest)
         previous = self.sources.get(key)
         # Every inspected source counts, including the importer, declarations
@@ -551,6 +553,7 @@ class _QueueBudget:
             frame['work'][key] = max(cost, frame['work'].get(key, 0))
 
     def step(self, *, request: bool = False, cost: int = 1) -> None:
+        check_cancellation()
         self.actual_work += cost
         if not request:
             self.summary_work += cost
