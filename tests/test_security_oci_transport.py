@@ -29,6 +29,31 @@ def port_for(objects, reference, calls):
 
 
 class OciTransportContracts(OwnedOciCase):
+    def test_https_enforces_tls12_floor_and_preserves_stricter_defaults(self):
+        from types import SimpleNamespace
+
+        transport = self.module('security_oci_transport')
+        for initial, expected in (
+            (transport.ssl.TLSVersion.MINIMUM_SUPPORTED, transport.ssl.TLSVersion.TLSv1_2),
+            (transport.ssl.TLSVersion.TLSv1, transport.ssl.TLSVersion.TLSv1_2),
+            (transport.ssl.TLSVersion.TLSv1_3, transport.ssl.TLSVersion.TLSv1_3),
+        ):
+            context = SimpleNamespace(minimum_version=initial)
+
+            def observe_context(*args, **kwargs):
+                self.assertIs(kwargs['context'], context)
+                self.assertEqual(context.minimum_version, expected)
+                raise RuntimeError('stop before socket creation')
+
+            with (self.subTest(initial=initial),
+                  mock.patch.object(transport.ssl, 'create_default_context', return_value=context),
+                  mock.patch.object(transport.http.client, 'HTTPSConnection', side_effect=observe_context),
+                  mock.patch.object(transport.socket, 'socket') as socket,
+                  self.assertRaisesRegex(RuntimeError, 'stop before socket creation')):
+                transport._https('https://registry-1.docker.io/v2/owned', headers={}, timeout=1,
+                                 budget=SimpleNamespace(check=lambda: None), network_selection=owned_network())
+            socket.assert_not_called()
+
     def test_cleanup_failures_release_all_fds_and_never_delete_foreign_lock(self):
         import os
         transport = self.module('security_oci_transport')
@@ -194,6 +219,8 @@ class OciTransportContracts(OwnedOciCase):
                 def close(self):
                     pass
             class Context:
+                minimum_version = transport.ssl.TLSVersion.TLSv1_2
+
                 def wrap_socket(self, raw, *, server_hostname, do_handshake_on_connect):
                     observations.append(('sni', server_hostname, do_handshake_on_connect))
                     return Peer()
