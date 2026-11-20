@@ -72,7 +72,7 @@
     },
     {
       "path": "worker.py",
-      "sha256": "2905c05b26a9df7622ab19b64576bf14fc095fa9419d33cfbcd570701abb3a54",
+      "sha256": "c1d2c5f7ed3215353ad35f7ede74aae6e1b77e44117f35c1c7212aafee74e81d",
       "mode": 420,
       "mutable": false
     }
