@@ -500,6 +500,9 @@ print(json.dumps({'sha256':source.TRUSTED_ADAPTER_SHA256,'loader':type(source.__
     def test_source_policy_binds_closed_loader_helper_actual_body(self):
         from unittest.mock import patch
         from getzilla import verification_policy_source as policy
+        from getzilla import closed_loader_source as helper
+        self.assertIs(policy._module_source, helper.module_source)
+        self.assertIs(policy.zipimport, helper.zipimport)
         before = policy.implementation_source_binding()
         self.assertIn('closed_loader_source.py', before)
         original = policy._module_source

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import importlib
+import zipimport as zipimport
 from .closed_loader_source import module_source as _module_source
 
 
