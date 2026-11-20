@@ -34,6 +34,8 @@ def ranking_metrics(function_ids, judgments):
     return {'positive_functions': len(positives),
             'recall_at_5': len(top5) / len(positives) if positives else None,
             'mrr_at_10': (1 / first if first else 0.0) if positives else None,
+            'recall_at_5_ratio': [len(top5), len(positives)] if positives else None,
+            'mrr_at_10_ratio': ([1, first] if first else [0, 1]) if positives else None,
             'original_positions': original_positions,
             'unjudged_positions_at_10': unjudged,
             'judgment_status': 'partial' if unjudged else 'judged'}

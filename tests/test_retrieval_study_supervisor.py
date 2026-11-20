@@ -1,6 +1,7 @@
 import importlib
 import pickle
 import io
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
@@ -30,6 +31,17 @@ class StudySupervisorTests(unittest.TestCase):
         for fake in ({'native_executed': True}, object.__new__(owner.StudyInspectionResultRef)):
             with self.subTest(kind=type(fake)), self.assertRaises(ValueError):
                 owner.check_study_inspection_result(fake, object())
+
+    def test_rank_deadline_cannot_restart_the_inspection_or_review_budget(self):
+        owner = self.owner()
+        now = time.monotonic()
+        rank = SimpleNamespace(operation='rank_public_study', original_deadline=now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 100.), now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 2.), now + 2.)
+        for value in (None, now - 1., float('inf'), 'caller timestamp'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                owner._bound_execution_deadline(SimpleNamespace(
+                    operation='rank_public_study', original_deadline=value), now + 100.)
 
     def test_raw_data_cannot_start_a_container_when_operation_owner_unavailable(self):
         owner = self.owner()
@@ -61,7 +73,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_failed_owned_start_retains_failure_and_actual_cleanup_not_repeat(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         admission = SimpleNamespace(consume=Mock())
         native = Mock()
         native.start.side_effect = ValueError('controlled unavailable')
@@ -76,7 +88,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_other_active_or_unconfirmed_model_owner_refuses(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         for status, cleanup in (('running', 'not_required'), ('failed', 'unconfirmed')):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 backend.admit_resources({'records': {'x': {'backend': {'kind': backend.kind},
