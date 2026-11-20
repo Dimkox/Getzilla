@@ -121,7 +121,9 @@ def run(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             raise GraphError('INVALID_HISTORY_CONFIG') from None
         return 0, {'schema': 'getzilla-graph-cli-v1', 'command': 'history',
                    'history': mine_history(root, architecture=architecture, config=config, base=args.base, end=args.end)}
-    store = GraphStore(Path(args.cache) if args.cache else root / DEFAULT_CACHE)
+    baseline, scope, omitted = discover_scope(root)
+    current_input = make_graph_input(baseline, scope, _config(args.config), omitted=omitted)
+    store = GraphStore(Path(args.cache) if args.cache else root / DEFAULT_CACHE, readonly=args.command != 'build')
     try:
         envelope: dict[str, Any] = {'schema': 'getzilla-graph-cli-v1', 'command': args.command,
                                     'cache_rebuilt_reason': store.rebuilt_reason}
@@ -129,8 +131,6 @@ def run(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
         if args.command == 'export':
             envelope['export'] = None if previous is None else previous.export()
             return 0, envelope
-        baseline, scope, omitted = discover_scope(root)
-        current_input = make_graph_input(baseline, scope, _config(args.config), omitted=omitted)
         if args.command == 'status':
             state = 'missing' if previous is None else (
                 'current' if previous.input_identity == current_input.identity else 'stale')

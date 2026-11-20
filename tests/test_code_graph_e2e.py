@@ -50,6 +50,7 @@ class GraphEndToEndTests(unittest.TestCase):
             target = self.project / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding='utf-8')
+        self.project.chmod(0o700)
         git(self.project, 'init', '-q', '-b', 'main')
         git(self.project, 'add', '-A')
         git(self.project, 'commit', '-q', '-m', 'project')

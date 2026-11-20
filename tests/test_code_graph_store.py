@@ -15,7 +15,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / '.getzilla')]
 from getzilla.code_graph.builder import build_generation  # noqa: E402
 from getzilla.code_graph.cli import discover_scope  # noqa: E402
 from getzilla.code_graph.models import GraphConfig, GraphError, make_graph_input  # noqa: E402
-from getzilla.code_graph.store import STORE_SCHEMA, GraphStore, build_full_index  # noqa: E402
+from getzilla.code_graph.store import GraphStore, build_full_index  # noqa: E402
 from tests.code_graph_support import graph_input  # noqa: E402
 
 V1 = {'a.py': 'def f():\n    pass\n', 'b.py': 'from a import f\nf()\n'}
@@ -64,24 +64,25 @@ class GraphStoreTests(unittest.TestCase):
         self.assertEqual(store.active_id(), old.generation_id)
         self.assertEqual(store.read_active().export(), old.export())
 
-    def test_corrupt_cache_rebuilds(self) -> None:
-        self.path.parent.mkdir(parents=True)
-        self.path.write_bytes(b'not a database' * 100)
-        store = self.store()
-        self.assertEqual(store.rebuilt_reason, 'CORRUPT_CACHE')
-        self.assertIsNone(store.read_active())
-        generation = build_full_index(graph_input(V1), store)
-        self.assertEqual(store.read_active().generation_id, generation.generation_id)
+    def test_unrecognized_cache_is_preserved(self) -> None:
+        self.path.parent.mkdir(parents=True, mode=0o700)
+        content = b'not a database' * 100
+        self.path.write_bytes(content)
+        with self.assertRaises(GraphError) as caught:
+            self.store()
+        self.assertEqual(caught.exception.reason_code, 'CACHE_UNRECOGNIZED')
+        self.assertEqual(self.path.read_bytes(), content)
 
-    def test_schema_mismatch_invalidates(self) -> None:
+    def test_schema_mismatch_is_preserved(self) -> None:
         store = self.store()
         build_full_index(graph_input(V1), store)
         store.db.execute("UPDATE meta SET value = 'getzilla-code-graph-store-v0' WHERE key = 'schema'")
         store.close()
-        reopened = self.store()
-        self.assertEqual(reopened.rebuilt_reason, 'SCHEMA_MISMATCH')
-        self.assertIsNone(reopened.read_active())
-        self.assertEqual(reopened.db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0], STORE_SCHEMA)
+        before = self.path.read_bytes()
+        with self.assertRaises(GraphError) as caught:
+            self.store()
+        self.assertEqual(caught.exception.reason_code, 'CACHE_SCHEMA_MISMATCH')
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_tampered_generation_rejected(self) -> None:
         store = self.store()
