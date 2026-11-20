@@ -4,6 +4,8 @@ A source report, diagnostic status or imported JSON never issues this reference.
 Native delivery comes only from the fixed supervisor's actual result owner.
 """
 from pathlib import Path
+import math
+import time
 from .. import state
 from ..receipts import get_receipt, write_receipt
 from ..execution_store import load_registry
@@ -46,7 +48,15 @@ def _native(operation, result):
     return projection, observed
 
 
+def _original_deadline(observed):
+    deadline = getattr(observed, 'original_deadline', None)
+    _require(type(deadline) is float and math.isfinite(deadline) and time.monotonic() < deadline,
+             'public_inspection_original_deadline')
+    return deadline
+
+
 def _completed(observed):
+    _original_deadline(observed)
     _require(observed.execution_status == 'succeeded' and observed.cleanup_status == 'confirmed'
              and observed.native_execution_observation == 'native-completed'
              and observed.image_id is not None and hex_digest(observed.resource_readback_digest),
@@ -115,15 +125,18 @@ def _witness_public_inspection(root, registration_path, phase_a, operation, nati
     reports = _publications(capture, registration['reviews'])
     budget = ScientificBudget(capture.deadline)
     facts = validate_inspection_manifest(_json(raw), _binding(root, operation, projection, observed, a_facts, reports), budget=budget)
-    capture.recheck()
-    _native(operation, native_result)
+    def recheck():
+        capture.recheck()
+        _completed(_native(operation, native_result)[1])
+    recheck()
     details = {'assurance': reviews.ASSURANCE, 'profile': reviews._PRODUCTION.profile,
         'statement': 'AUTOMATED COORDINATOR directly observed the listed independent inspection deliveries; no human or security approval.',
         'context': capture.context, 'physical_root': list(capture.physical_root), 'source_binding': list(capture.source_binding),
         'policy_sha256': capture.policy, 'module_manifest_sha256': capture.manifest,
         'phase_a_sha256': phase_a._receipt_digest, 'operation_digest': projection.operation_digest,
         'conditions_sha256': projection.conditions_sha256, 'manifest_sha256': observed.report_sha256,
-        'native_execution_id': observed.execution_id, 'resource_readback_digest': observed.resource_readback_digest,
+        'native_execution_id': observed.execution_id, 'original_deadline': _original_deadline(observed),
+        'resource_readback_digest': observed.resource_readback_digest,
         'facts': facts, 'publications': registration['reviews'],
         'dependencies': list(capture.dependencies.values())}
     previous = get_receipt(root, capture.route['route_id'], KIND)
@@ -132,9 +145,10 @@ def _witness_public_inspection(root, registration_path, phase_a, operation, nati
         receipt = previous
     else:
         write_receipt(root, KIND, 'observed', details=details, expected_context=capture.context,
-                      interrupt_check=capture.recheck)
+                      interrupt_check=recheck)
         receipt = get_receipt(root, capture.route['route_id'], KIND)
     _require(receipt is not None and receipt['details'] == details)
+    recheck()
     result = object.__new__(OperatorWitnessedPublicInspection)
     for key, value in (('_issuer', _ISSUER), ('_root', str(capture.root)), ('_receipt_sha256', digest(receipt)),
         ('_a', phase_a), ('_operation', operation), ('_result', native_result)):
@@ -161,9 +175,11 @@ def _current(reference, phase_a):
     projection, observed = _native(reference._operation, reference._result)
     _completed(observed)
     _require(observed.report_sha256 == data['manifest_sha256'] and projection.phase_a_sha256 == phase_a._receipt_digest
-             and observed.resource_readback_digest == data['resource_readback_digest'])
+             and observed.resource_readback_digest == data['resource_readback_digest']
+             and _original_deadline(observed) == data['original_deadline'])
     capture.dependencies = {row['path']: row for row in data['dependencies']}
     capture.recheck()
+    _completed(observed)
     return capture, receipt, observed
 
 
@@ -172,6 +188,12 @@ def consume_public_inspection(reference, phase_a):
     return {'assurance': reviews.ASSURANCE, 'witness_sha256': reference._receipt_sha256,
             'manifest_sha256': receipt['details']['manifest_sha256'], 'facts': receipt['details']['facts'],
             'ranking_permitted': False}
+
+
+def public_inspection_deadline(reference, phase_a):
+    """Original live execution clock, rederived from the genuine result owner."""
+    _, _, observed = _current(reference, phase_a)
+    return _original_deadline(observed)
 
 
 def reviewed_public_inspection_manifest(reference, phase_a):

@@ -66,11 +66,14 @@ changed registration, principal or task in the same workspace. Failed and
 unknown attempts do not release that claim.
 
 The entire scientific sequence, including review waiting, must fit the original
-14,400-second experiment deadline. The owner must derive the original deadline
-from the genuine inspection result and existing execution record, then restrict
-RANK to that deadline. A fresh RANK execution timeout alone does not establish
-this condition. Until that cross-operation owner port is present, the full
-sequence is unavailable; a caller-supplied timestamp cannot fill the gap.
+14,400-second experiment deadline. The positive B owner revalidates the original monotonic deadline from the
+genuine inspection result, whose supervisor derived it from the original
+existing execution. RANK obtains that same deadline through
+`public_inspection_deadline(b, a)` and the supervisor takes the minimum of it
+and its own execution deadline. Review waiting consumes this budget; expiry
+refuses positive B publication and RANK. A registration timestamp cannot
+replace this current opaque-owner join. Actual operation and native inspection
+facts are still required; this source interface does not establish them.
 Two-second source and query deadlines remain independent and cannot be renewed
 by review completion, heartbeat, process replacement or a longer job ceiling.
 

@@ -55,6 +55,7 @@ class PublicStudyOperationProjection:
     hard_timeout_seconds: int
     execution_intent: str
     execution_label: str
+    original_deadline: float | None = None
 
 
 @dataclass(frozen=True)
@@ -290,7 +291,15 @@ def _register_public_study_operation(root, operation, registration_path, phase_a
     display = ('162holdout ' + scientific) if operation == RANK else ('162inspect ' + operation_digest)
     projection = replace(projection, execution_intent=intent, execution_label=display)
     if operation == RANK:
+        from .public_study_inspection import public_inspection_deadline
+        projection = replace(projection, original_deadline=public_inspection_deadline(phase_b, phase_a))
         _holdout_claim(root, capture.route, display, operation_digest)
+    def recheck():
+        capture.recheck()
+        if operation == RANK:
+            _require(public_inspection_deadline(phase_b, phase_a) == projection.original_deadline,
+                     'public_study_original_deadline')
+    recheck()
     docker = _docker(projection.docker_executable, projection.docker_sha256, capture.deadline)
     exports = []
     try:
@@ -310,9 +319,9 @@ def _register_public_study_operation(root, operation, registration_path, phase_a
             _require(previous['details'] == details, 'public_study_operation_conflict')
             receipt = previous
         else:
-            capture.recheck()
+            recheck()
             write_receipt(root, KINDS[operation], 'observed', details=details,
-                          expected_context=capture.context, interrupt_check=capture.recheck)
+                          expected_context=capture.context, interrupt_check=recheck)
             receipt = get_receipt(root, capture.route['route_id'], KINDS[operation])
         _require(receipt is not None and receipt['details'] == details)
         reference = _issue(capture, receipt, composition, phase_a, phase_b, conditions, exports,
@@ -358,10 +367,14 @@ def _check_public_study_operation(reference, composition):
     for snapshot in reference._exports:
         check_study_export(snapshot)
     if projection.operation == RANK:
-        from .public_study_inspection import consume_public_inspection
+        from .public_study_inspection import consume_public_inspection, public_inspection_deadline
         facts = consume_public_inspection(reference._b, reference._a)
+        _require(public_inspection_deadline(reference._b, reference._a) == projection.original_deadline,
+                 'public_study_original_deadline')
         _require(facts['witness_sha256'] == projection.phase_b_sha256)
         _holdout_claim(capture.root, capture.route, projection.execution_label, projection.operation_digest)
+    else:
+        _require(projection.original_deadline is None, 'public_study_original_deadline')
     return projection
 
 
