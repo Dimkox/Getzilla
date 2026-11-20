@@ -637,10 +637,32 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
     return result
 
 
+def _git_registration_absent(root: Path) -> bool:
+    """Prove only exact leaf absence; present metadata is not Git qualification."""
+    with fsx.ReadOnlyBoundRoot(root) as binding:
+        with binding.parent('.git') as (parent, name, check):
+            try:
+                fsx.lstat_at(parent, name)
+            except FileNotFoundError:
+                check()
+                try:
+                    fsx.lstat_at(parent, name)
+                except FileNotFoundError:
+                    check()
+                    return True
+                raise ValueError('Git registration appeared during observation')
+            check()
+    return False
+
+
 def _git_read(root: Path, arguments: list[str]) -> tuple[int, bytes]:
-    if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree'] and not (root/'.git').exists():
-        return 1, b''
     try:
+        # A proven Gitless source has an inventory, but no parent Git identity.
+        # Do not invoke Git discovery there, or turn unsafe/unavailable metadata
+        # into absence. Present registrations still use the hardened reader.
+        if _git_registration_absent(root):
+            code = 1 if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree'] else 128
+            return code, b''
         code, output, _ = run_git_read(
             root, arguments, stdout_limit=MAX_GIT_BYTES, stderr_limit=4096,
             timeout=GIT_TIMEOUT_SECONDS,
