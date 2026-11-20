@@ -296,14 +296,14 @@ class LandingApplicationService:
         if exact_base_sha != TARGET_BASE_SHA or exact_base_tree != TARGET_BASE_TREE:
             raise LandingServiceError("source_identity", 409, "landing source identity mismatch")
         media_kind = _media_kind(media_type)
-        with self._lock:
+        with self._lock, self._blobs.submission_guard():
             existing = self._store.find(actor.actor_id, repository_id, job_id)
             if control_source is not None and (type(control_source) is not LandingInputV1 or control_binding is None):
                 raise LandingServiceError('shared_source_invalid',422,'shared source invalid')
             received_at = existing.source.received_at if existing else (control_source.received_at if control_source is not None else self._now())
             expires_at = existing.source.expires_at if existing else (control_source.expires_at if control_source is not None else received_at + timedelta(days=1))
             try:
-                source = self._blobs.accept(
+                source, owns_intake = self._blobs.accept_for_submission(
                     job_id=job_id,
                     tenant_id=actor.actor_id,
                     repository_id=repository_id,
@@ -315,12 +315,10 @@ class LandingApplicationService:
                     chunks=chunks,
                     received_at=received_at,
                     expires_at=expires_at,
+                    expected_source=control_source,
                 )
             except LandingContractError as exc:
                 raise _service_error(exc) from exc
-            if control_source is not None and source != control_source:
-                self._purge(source,'rejected')
-                raise LandingServiceError('shared_source_mismatch',409,'shared source mismatch')
             accepted = LandingJobRecord(source, "accepted", None, None)
             try:
                 accepted, created = self._store.create_or_replay(
@@ -330,7 +328,18 @@ class LandingApplicationService:
                     **({"control_binding": control_binding} if control_binding is not None else {}),
                 )
             except Exception:
-                self._purge(source, "rejected")
+                if owns_intake:
+                    # A failed result can follow a committed create. The shared
+                    # intake guard keeps this authoritative check and cleanup
+                    # in one cut across profiles. Unknown ownership retains input.
+                    try:
+                        current = self._store.find(actor.actor_id, repository_id, job_id)
+                        unreferenced = (current is None or current.source.quarantine_ref_digest
+                                        != source.quarantine_ref_digest)
+                    except Exception:
+                        unreferenced = False
+                    if unreferenced:
+                        self._purge(source, "rejected")
                 raise
             if not created:
                 if accepted.state in _TERMINAL_STATES or accepted.state == 'cancelled':
@@ -559,7 +568,7 @@ def _service_error(error: LandingContractError) -> LandingServiceError:
         return LandingServiceError(error.code, 413, "landing input too large")
     if error.code == "media_type":
         return LandingServiceError(error.code, 415, "landing media type unsupported")
-    if error.code in {"idempotency_conflict", "quarantine_collision"}:
+    if error.code in {"idempotency_conflict", "quarantine_collision", "shared_source_mismatch"}:
         return LandingServiceError(error.code, 409, "landing input conflicts")
     return LandingServiceError(error.code, 422, "landing input rejected")
 
