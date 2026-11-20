@@ -46,9 +46,11 @@ def archive_entries(raw: bytes, *, canonical: bool = False) -> dict[str, tuple[b
                 path_parts(name)
                 logical = '.getzilla/' + name
                 resource = re.fullmatch(r'templates/baseline/blobs/([a-f0-9]{64})\.txt', name)
+                data = name in {'getzilla/research_conditions_v1.json',
+                                'getzilla/research_image_conditions_v1.json'}
                 code = re.fullmatch(r'getzilla/(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.py', name)
                 mode = member.external_attr >> 16
-                if (not (resource or code) or '\\' in name or logical in result or member.is_dir()
+                if (not (resource or code or data) or '\\' in name or logical in result or member.is_dir()
                         or stat.S_IFMT(mode) not in (0, stat.S_IFREG) or stat.S_IMODE(mode) != 0o644
                         or member.flag_bits & 1 or member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
                         or member.file_size > MAX_FILE_BYTES):

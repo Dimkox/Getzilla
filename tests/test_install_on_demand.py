@@ -598,6 +598,7 @@ class FreshSelectionTests(unittest.TestCase):
             INSTALL._materialize_new(ROOT, target, include_dependencies=False, include_optional=False,
                                      selection=INSTALL.PayloadSelection(('codex',), engine_archive=True))
             for relative in ('scripts/install_into.py', 'factory/pyproject.toml',
+                             '.getzilla/getzilla/_payload_engine.py',
                              '.getzilla/config/hooks.json', '.getzilla/config/codex-hooks.json',
                              *[str(p.relative_to(ROOT)).replace(os.sep, '/') for p in (ROOT / '.getzilla/agents').glob('*.toml')]):
                 destination = source / relative
@@ -862,6 +863,26 @@ class FreshSelectionTests(unittest.TestCase):
                     self.assertFalse((target / '.claude').exists())
                     self.assertEqual((ROOT / MANIFEST).read_bytes(), source_manifest)
 
+    def test_archive_fixed_json_resources_keep_closed_paths_and_nonexecutability(self) -> None:
+        import io
+        import zipfile
+        def encoded(name, mode):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+                entry = zipfile.ZipInfo(name)
+                entry.external_attr = mode << 16
+                archive.writestr(entry, b'{"public":true}\n')
+            return buffer.getvalue()
+        for name in ('getzilla/research_conditions_v1.json', 'getzilla/research_image_conditions_v1.json'):
+            with self.subTest(name=name):
+                self.assertEqual(INSTALL.archive_entries(encoded(name, 0o644)),
+                                 {'.getzilla/'+name: (b'{"public":true}\n', 0o644)})
+                for mode in (0o600, 0o664, 0o755, stat.S_IFLNK | 0o644):
+                    with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'UNSAFE_ASSET_ARCHIVE_MEMBER'):
+                        INSTALL.archive_entries(encoded(name, mode))
+        with self.assertRaisesRegex(ValueError, 'UNSAFE_ASSET_ARCHIVE_MEMBER'):
+            INSTALL.archive_entries(encoded('getzilla/unrecognized.json', 0o644))
+
     def test_fresh_install_records_exact_selection_and_actual_file_ownership(self) -> None:
         from getzilla.component_state import mode_matches, read_state
         with tempfile.TemporaryDirectory() as tmp:
@@ -878,7 +899,12 @@ class FreshSelectionTests(unittest.TestCase):
                     self.assertEqual(report['selection']['agents'], list(agents))
                     records = state.manifest['components']
                     owned = {path: proof for record in records.values() for path, proof in record['owned'].items()}
-                    self.assertEqual(set(owned), {entry['path'] for entry in report['entries']} - {MANIFEST})
+                    self.assertEqual(set(owned), {entry['path'] for entry in report['entries']}
+                                     - {MANIFEST, INSTALL.OWNERSHIP_PATH})
+                    registry = json.loads((target / INSTALL.OWNERSHIP_PATH).read_bytes())
+                    self.assertEqual({row['path'] for row in registry['files']},
+                                     {entry['path'] for entry in report['entries']} - {INSTALL.OWNERSHIP_PATH})
+                    self.assertNotIn(INSTALL.OWNERSHIP_PATH, owned)
                     for path, proof in owned.items():
                         artifact = target / path
                         self.assertEqual(proof['sha256'], hashlib.sha256(artifact.read_bytes()).hexdigest(), path)
