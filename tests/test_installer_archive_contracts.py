@@ -58,15 +58,19 @@ class ArchiveContractTests(unittest.TestCase):
                 if command[0] == './configure':
                     self.assertEqual((cwd/'subprojects/git-gui/git-gui.sh').read_bytes(), b'owned')
                     self.assertEqual((cwd/'subprojects/gitk/gitk').read_bytes(), b'owned')
+                    (cwd/'config.mak.autogen').write_text('NO_CURL=\n')
                     prefix = Path(command[1].removeprefix('--prefix='))
                     (prefix/'bin').mkdir(parents=True)
                     (prefix/'bin/git').write_bytes(b'owned inert executable')
                 return subprocess.CompletedProcess(command, 0, 'git version 2.56.1', '')
-            path = install_source(target, raw, Path(owned), run=run)
-            self.assertEqual(install_source(target, raw, Path(owned), run=run), path)
-            path.write_bytes(b'user change')
-            with self.assertRaisesRegex(ValueError, 'conflict'):
-                install_source(target, raw, Path(owned), run=lambda *a, **kw: self.fail('user bytes must stay'))
+            with patch('getzilla.architecture_diff._run_capped', return_value=(0, b'fetch\noption\n\n', b'')) as probe:
+                path = install_source(target, raw, Path(owned), run=run)
+                self.assertEqual(install_source(target, raw, Path(owned), run=run), path)
+                path.write_bytes(b'user change')
+                with self.assertRaisesRegex(ValueError, 'conflict'):
+                    install_source(target, raw, Path(owned), run=lambda *a, **kw: self.fail('user bytes must stay'))
+            self.assertTrue(probe.called)
+            self.assertTrue(all(call.kwargs['stdin_data'] == b'capabilities\n\n' for call in probe.call_args_list))
 
     def test_directory_alias_rejects_non_git_and_open_or_ambiguous_subtrees(self):
         cases = [

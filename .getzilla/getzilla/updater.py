@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
+from . import STACK_DIR
 from .release_transport import (  # noqa: F401 compatibility exports preserve exact release contract
     Result,
     _replace_bytes,
@@ -182,7 +183,7 @@ def update_agents(run: Runner, which: Callable[[str], str | None] = shutil.which
     for command in (*NPM_AGENTS, 'claude', 'grok'):
         if not which(command):
             continue
-        report = install_software(root, Path(__file__).resolve().parents[2], agent=command,
+        report = install_software(root, STACK_DIR.parent, agent=command,
                                   fetch=fetch or _release_fetch, run=native, which=which)
         for row in report['components']:
             results.append(Result('agent:'+command+':'+row['component'],
@@ -193,7 +194,7 @@ def update_agents(run: Runner, which: Callable[[str], str | None] = shutil.which
 def update_jscpd(run: Runner, which: Callable[[str], str | None] = shutil.which, *, root=None, fetch=None) -> list[Result]:
     from .managed_environment import execute
     from .managed_software import install_software
-    report = install_software(root or home_dir(), Path(__file__).resolve().parents[2], tools=('jscpd',),
+    report = install_software(root or home_dir(), STACK_DIR.parent, tools=('jscpd',),
                               fetch=fetch or _release_fetch, run=execute if run is _default_runner else run, which=which)
     return [Result('tool:'+row['component'], 'ok' if row['status'] == 'complete' else 'fail', json.dumps(row))
             for row in report['components']]
