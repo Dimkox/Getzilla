@@ -17,7 +17,11 @@
     }
   ],
   "approvals": {
-    "required_scopes": []
+    "required_scopes": [
+      "scope_and_design_approval",
+      "migration_or_external_write_approval",
+      "production_action_approval"
+    ]
   },
   "change_id": "20261013-task-a89867",
   "contracts": {
@@ -25,13 +29,38 @@
     "json_schema": [],
     "openapi": []
   },
-  "forbidden_outcomes": [],
+  "forbidden_outcomes": [
+    {
+      "id": "FORBID-001",
+      "statement": "Do not mutate existing consumers, access real consumer production state or credentials, or perform external delivery from this source-only package.",
+      "evidence": [
+        {
+          "test": "tests/test_installer.py"
+        },
+        {
+          "receipt": "code_review"
+        }
+      ]
+    },
+    {
+      "id": "FORBID-002",
+      "statement": "Do not infer ownership from a path name, discard unrelated requirements, evidence, AGENTS or CI, or treat a quarantine plan as cleanup authority.",
+      "evidence": [
+        {
+          "test": "tests/test_install_migration.py"
+        },
+        {
+          "test": "tests/test_installer.py"
+        }
+      ]
+    }
+  ],
   "invariants": [],
   "objective": {
     "id": "OBJ-001",
     "statement": "Fix Getzilla issue #75 consumer installation migration: classify requirements, evidence, unrelated user changes and generated metadata; maintain exact install ownership; preserve AGENTS and CI; plan read-only dirty trees without generic cleanup; recoverable explicit quarantine and avoid egg-info/cache in consumer source. Source-only isolated leaf; do not access real consumer production state or credentials. Bounded regressions only; no full PR run or external delivery before parent all-issue integration.",
-    "success_metric": "UNKNOWN",
-    "target": "UNKNOWN"
+    "success_metric": "Existing-consumer planning preserves requirements, evidence, AGENTS, CI and other user bytes; bounded inventory and exact ownership keep conflicts and quarantine plan-only approval explicit, with generated metadata excluded from the payload.",
+    "target": "Issue #75 read-only consumer planning, exact installation ownership, migration preservation and recoverable quarantine planning."
   },
   "observability": [],
   "risk": {

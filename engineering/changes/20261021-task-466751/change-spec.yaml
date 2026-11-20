@@ -10,7 +10,10 @@
     {"id": "AC-008", "statement": "Only strict integer attestation versions 1 and 2 are supported. Any selected opt-in command requires v2. V2 command exit codes are strict integers. V2 argv has 1 to 128 nonempty strings of at most 4096 characters. V2 requires both metadata keys and permits a null spec digest. V1 identities and raw envelope replay remain unchanged.", "evidence": [{"test": "trust-ci/tests/test_signing.py"}, {"test": "trust-ci/tests/test_runner.py"}, {"test": "trust-ci/tests/test_api.py"}, {"test": "trust-ci/tests/test_eu_audit_integration.py"}]}
   ],
   "approvals": {
-    "required_scopes": []
+    "required_scopes": [
+      "scope_and_design_approval",
+      "production_action_approval"
+    ]
   },
   "change_id": "20261021-task-466751",
   "contracts": {
