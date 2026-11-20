@@ -1,6 +1,7 @@
 """Canonical Git observations use owned ordinary fixtures, never callbacks."""
 from contextlib import nullcontext
 from pathlib import Path, PureWindowsPath
+import os
 import subprocess
 import tempfile
 import unittest
@@ -141,6 +142,26 @@ class GitReadViewTests(unittest.TestCase):
             for arguments in malformed:
                 with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                     git.run_git_read(self.root, arguments)
+
+    @unittest.skipUnless(os.name == 'posix', 'owned symbolic temporary alias fixture')
+    def test_private_metadata_normalizes_temporary_parent_alias(self):
+        physical = Path(self.directory.name)/'physical-temp'
+        physical.mkdir(mode=0o700)
+        alias = Path(self.directory.name)/'temporary-alias'
+        alias.symlink_to(physical, target_is_directory=True)
+        calls = []
+        run = git._run_capped
+        def inspect(command, **options):
+            for part in command:
+                if part.startswith('--git-dir='):
+                    calls.append(Path(part.split('=', 1)[1]))
+            return run(command, **options)
+        with patch.object(tempfile, 'tempdir', str(alias)), \
+                patch.object(git, '_run_capped', side_effect=inspect):
+            self.assertEqual(git._git(self.root, ['rev-parse', 'HEAD']), self.head.encode()+b'\n')
+        self.assertTrue(calls)
+        self.assertTrue(all(path.parent == physical for path in calls))
+        self.assertFalse(list(physical.iterdir()), 'private temporary metadata was retained')
 
     def test_read_runner_rejects_writes_without_entering_child(self):
         with patch.object(git, '_run_capped', side_effect=AssertionError('child must not run')):
