@@ -196,6 +196,7 @@ class _Owner:
         self._native_completed = False
         self.records = []
         self.report_artifact = None
+        self.inspection_facts = {'tokenizers': {}, 'conformance': {}, 'windows': [], 'lengths': {}}
 
     def current(self):
         from .. import execution
@@ -446,14 +447,15 @@ class _Owner:
     def _request(self, stage, payload, *, source_cuts=(), query_deadline=None):
         """Trusted fixed driver only; never expose a generic caller encode API."""
         from .public_study_operation import admit_public_study_stage
-        allowed = {'inspect_native_import': ('native-import', 180),
-                   'inspect_tokenizer': ('load-tokenizer', 180),
-                   'inspect_windows': ('windows', 2), 'inspect_runtime': ('load-model', 180),
-                   'inspect_release': ('release', 2),
-                   'rank_encode': ('encode', 2), 'rank_score': ('score', 2),
-                   'rank_release': ('release', 2)}
+        allowed = {'inspect_native_import': (('native-import',), 180),
+                   'inspect_tokenizer': (('load-tokenizer',), 180),
+                   'inspect_windows': (('windows', 'inspect-length'), 2),
+                   'inspect_runtime': (('load-model', 'probe', 'packing-probe'), 180),
+                   'inspect_release': (('release',), 2),
+                   'rank_encode': (('encode', 'prepare-index'), 2), 'rank_score': (('score',), 2),
+                   'rank_release': (('release',), 2)}
         if (stage not in allowed or type(payload) is not dict
-                or payload.get('op') != allowed[stage][0]
+                or payload.get('op') not in allowed[stage][0]
                 or {'nonce', 'sequence'} & set(payload)):
             raise RetrievalError('study_stage_unavailable')
         if not self._request_lock.acquire(blocking=False):
@@ -497,6 +499,17 @@ class _Owner:
             check_live_study_resource(self.reference, self.projection)
             if stage == 'inspect_native_import':
                 self._native_completed = True
+            actual = result['result']
+            if payload['op'] == 'load-tokenizer':
+                self.inspection_facts['tokenizers'][payload['model']] = actual
+            elif payload['op'] == 'probe':
+                self.inspection_facts['conformance'][payload['model']] = actual
+            elif payload['op'] == 'windows':
+                self.inspection_facts['windows'].extend(actual['windows'])
+            elif payload['op'] == 'inspect-length':
+                self.inspection_facts['lengths'][payload['model'], payload['corpus'], payload['window_id']] = actual
+            elif payload['op'] == 'packing-probe':
+                self.inspection_facts['packing'] = actual
             self.records.append({'stage': stage, 'sequence': self.sequence,
                                  'result_digest': digest(result['result'])})
             return result['result']
@@ -556,7 +569,7 @@ def check_live_study_resource(reference, projection):
         owner.start_ticks, owner.projection.image_id, owner.readback_digest, owner.pid_scope)
 
 
-def _capture_inspection_observation(owner, source_cuts):
+def _capture_inspection_observation(owner, source_cuts, *, _scientific=False):
     """Capture only actual owner observations, never a caller-authored B manifest.
 
 This intentionally incomplete observation definition cannot qualify Phase B.
@@ -575,10 +588,26 @@ The fixed scientific driver must separately complete its registered manifest.
         'observations': owner.records,
         'native_execution_observation': ('native-completed' if owner._native_completed else
             'attempted-outcome-unknown' if owner._native_start_dispatched else 'not-released')}
+    if _scientific:
+        from .study_driver import _ports
+        from .study_inspection_manifest import assemble
+        ports = _ports()
+        inputs = ports.reviewed_public_study_inputs(owner.operation_ref)
+        facts = owner.inspection_facts
+        payload = assemble(inputs, owner.projection,
+            catalog=ports.reviewed_public_study_catalog(owner.operation_ref),
+            graphs=ports.reviewed_public_study_graphs(owner.operation_ref),
+            tokenizers=facts['tokenizers'], conformance=facts['conformance'],
+            windows=facts['windows'], lengths=facts['lengths'], packing=facts['packing'],
+            execution_id=owner.execution_id, readback_digest=owner.readback_digest)
     raw = json.dumps(payload, sort_keys=True, allow_nan=False, separators=(',', ':')).encode() + b'\n'
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise RetrievalError('study_inspection_output_exceeded')
-    with _log_folder(owner.projection.root) as (folder, directory):
+    from contextlib import nullcontext
+    existing = getattr(owner.backend, 'run_artifact_context', None)
+    context = (nullcontext((existing._folder, existing._directory)) if existing is not None
+               else _log_folder(owner.projection.root))
+    with context as (folder, directory):
         with _create_log(directory, '001.log') as output:
             offset = 0
             while offset < len(raw):
@@ -592,6 +621,11 @@ The fixed scientific driver must separately complete its registered manifest.
     if artifact['sha256'] != hashlib.sha256(raw).hexdigest():
         raise RetrievalError('study_inspection_output_unavailable')
     owner.report_artifact = artifact
+
+
+def _capture_scientific_inspection(owner, source_cuts):
+    """No caller manifest/flags: reconstruct from this actual owner's responses."""
+    return _capture_inspection_observation(owner, source_cuts, _scientific=True)
 
 
 def _inspection_result_after_terminal(owner):
@@ -645,6 +679,10 @@ class _Backend:
 
     def __init__(self, operation_ref, projection):
         self.operation_ref, self.projection, self.owner = operation_ref, projection, None
+        self.steps = (('inspection', 0),) if projection.operation == 'inspect_public_artifacts' else tuple(
+            (model, index) for model in ('minilm', 'bge_m3') for index in range(3))
+        self.step = 0
+        self.artifact_anchor = None
 
     def admit_resources(self, registry, request):
         from ..execution_store import TERMINAL
@@ -657,6 +695,7 @@ class _Backend:
     def dispatch(self, root, admission, request):
         admission.consume(root, request)
         self.owner = _Owner(self.operation_ref, self.projection, admission, request)
+        self.owner.backend = self
         try:
             self.owner.start()
         except Exception:
@@ -668,6 +707,23 @@ class _Backend:
             self.owner.close()
             raise
         return None
+
+    def advance(self, reference):
+        if (self.owner is None or reference is not self.owner.reference
+                or self.step + 1 >= len(self.steps)):
+            raise RetrievalError('study_process_step_unavailable')
+        previous = self.owner
+        previous.current()
+        if not previous.close():
+            raise RetrievalError('study_cleanup_unconfirmed')
+        self.step += 1
+        self.owner = _Owner(self.operation_ref, self.projection, previous.admission, previous.request)
+        self.owner.backend, self.owner.records = self, previous.records
+        try:
+            return self.owner.start()
+        except BaseException:
+            self.owner.close()
+            raise
 
     def cancel(self, root, admission):
         admission.consume(root)
@@ -703,13 +759,19 @@ def owned_study_runtime(operation_ref):
         failed = True
         raise
     finally:
+        owner = backend.owner
         confirmed = owner.close()
+        caller = execution.trusted_caller(projection.root, execution_id=owner.execution_id)
+        record = execution.get(projection.root, caller, owner.execution_id)
         output = None
         if owner.report_artifact is not None:
             size = owner.report_artifact['size']
             output = {'artifact': owner.report_artifact,
                       'preview': 'Actual bounded inspection observation stored.',
                       'observed_bytes': size, 'retained_bytes': size, 'dropped_bytes': 0,
+                      'complete_output': False}
+        elif backend.artifact_anchor is not None:
+            output = {'artifact': backend.artifact_anchor, 'preview': 'Immutable study run artifacts.',
                       'complete_output': False}
         execution.record_event(projection.root, owner.admission.token,
             owner.execution_id, record['revision'], owner.admission.execution_generation,

@@ -61,7 +61,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_failed_owned_start_retains_failure_and_actual_cleanup_not_repeat(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         admission = SimpleNamespace(consume=Mock())
         native = Mock()
         native.start.side_effect = ValueError('controlled unavailable')
@@ -76,7 +76,7 @@ class StudySupervisorTests(unittest.TestCase):
 
     def test_other_active_or_unconfirmed_model_owner_refuses(self):
         owner = self.owner()
-        backend = owner._Backend(object(), object())
+        backend = owner._Backend(object(), SimpleNamespace(operation='inspect_public_artifacts'))
         for status, cleanup in (('running', 'not_required'), ('failed', 'unconfirmed')):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 backend.admit_resources({'records': {'x': {'backend': {'kind': backend.kind},

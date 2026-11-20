@@ -19,7 +19,8 @@ import time
 MAX_FRAME = 1048576
 HEARTBEAT_SECONDS = 5
 STAGE_SECONDS = {'native-import': 180, 'load-tokenizer': 180, 'windows': 2,
-                 'load-model': 180, 'encode': 2, 'score': 2, 'release': 2}
+                 'load-model': 180, 'probe': 2, 'packing-probe': 2, 'inspect-length': 2,
+                 'encode': 2, 'prepare-index': 2, 'score': 2, 'release': 2}
 
 
 def _pairs(pairs):

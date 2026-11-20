@@ -56,6 +56,15 @@ class StudyDispatchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             owner._codec_bytes('/other/codec')
 
+    def test_warm_score_requires_prepared_index_and_cannot_rebuild_it(self):
+        owner = self.owner()
+        state = {'native_ready': True, 'query': ('q', 'small', 'inert', []), 'session': object()}
+        with self.assertRaisesRegex(ValueError, 'study_index_incomplete'):
+            owner.dispatch(self.request(op='score', corpus='small', query_id='q'), state)
+        state.update(window_counter=InertLineCounter(), prepared={'small': object()})
+        with self.assertRaisesRegex(ValueError, 'study_windows_unavailable'):
+            owner.dispatch(self.request(op='windows', corpus='small', path='x.py', raw='', functions=[]), state)
+
     def test_tokenizer_identity_is_actual_held_bytes_not_access_time(self):
         owner = self.owner()
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,3 +83,14 @@ class StudyDispatchTests(unittest.TestCase):
             with patch('os.open', side_effect=redirect_open), patch('os.stat', side_effect=redirect_stat):
                 result = owner._tokenizer('minilm', state)
             self.assertEqual(result['tokenizer_sha256'], sha(b'{}'))
+
+    def test_packing_probe_uses_only_fixed_inert_bytes_and_complete_codec_count(self):
+        from tests.test_retrieval_study_context import ByteCounter
+        owner = self.owner()
+        result = owner.dispatch(self.request(op='packing-probe'),
+                                {'native_ready': True, 'codec': ByteCounter()})
+        self.assertEqual(result['2048'], result['8192'])
+        self.assertEqual(result['2048']['source_positions'], (1, 2))
+        with self.assertRaises(ValueError):
+            owner.dispatch(self.request(op='packing-probe', text='unlisted'),
+                           {'native_ready': True, 'codec': ByteCounter()})
