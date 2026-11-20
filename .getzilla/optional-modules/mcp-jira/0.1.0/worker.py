@@ -7,12 +7,47 @@ import selectors
 import sys
 import time
 
-# Resolve the current installed/source Core without loading optional code on
-# ordinary Core startup. The launch itself is explicit and source admitted.
+# Bind only this module's installed/source Core. Never borrow an ancestor Core.
 HERE=Path(__file__).resolve().parent
-for parent in HERE.parents:
-    if (parent/'getzilla/__init__.py').is_file():
-        sys.path.insert(0,str(parent));break
+
+
+def _bind_core():
+    if HERE.name == 'mcp-jira' and HERE.parent.name == 'modules':
+        stack = HERE.parent.parent
+    elif HERE.parent.name == 'mcp-jira' and HERE.parent.parent.name == 'optional-modules':
+        stack = HERE.parent.parent.parent
+    else:
+        raise RuntimeError('worker_core_layout')
+    if stack.name != '.getzilla':
+        raise RuntimeError('worker_core_layout')
+    package = stack / 'getzilla'
+    initializer = package / '__init__.py'
+    archive = stack / 'getzilla.zip'
+    if not initializer.is_file():
+        raise RuntimeError('worker_core_missing')
+    if archive.exists() and (not archive.is_file() or any(path.name != '__init__.py' for path in package.glob('*.py'))):
+        raise RuntimeError('worker_core_ambiguous')
+    engine = archive / 'getzilla' if archive.is_file() else package
+    expected_paths = {str(package), str(engine)}
+    for name, loaded in tuple(sys.modules.items()):
+        if name == 'getzilla' or name.startswith('getzilla.'):
+            origin = getattr(getattr(loaded, '__spec__', None), 'origin', None)
+            if not isinstance(origin, str) or not Path(origin).resolve().is_relative_to(engine):
+                if name != 'getzilla' or origin != str(initializer):
+                    raise RuntimeError('worker_core_foreign')
+    core = sys.modules.get('getzilla')
+    if core is None:
+        core_spec = importlib.util.spec_from_file_location('getzilla', initializer, submodule_search_locations=[str(package)])
+        core = importlib.util.module_from_spec(core_spec)
+        sys.modules['getzilla'] = core
+        core_spec.loader.exec_module(core)
+    if (getattr(core, '__file__', None) != str(initializer)
+            or getattr(core, 'STACK_DIR', None) != stack
+            or set(getattr(core, '__path__', ())) != expected_paths):
+        raise RuntimeError('worker_core_foreign')
+
+
+_bind_core()
 from getzilla import execution,execution_store,state,managed_execution as managed
 from getzilla import supervised_execution as supervisor
 spec=importlib.util.spec_from_file_location('getzilla_mcp_worker',HERE/'__init__.py',submodule_search_locations=[str(HERE)])
