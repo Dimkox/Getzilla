@@ -53,6 +53,14 @@ _DATABASE_CLASSES = {
     "test_execution_persistence_postgres.FreshClusterArtifactAttestorMigrationTests": "FACTORY_FRESH_CLUSTER_DATABASE_URL must name an empty disposable PG17 cluster",
     "test_postgres_fixture_reset.FixtureResetPostgresTests": "requires exact disposable PostgreSQL",
     "test_retrieval_access_postgres.RetrievalAccessPostgresTests": "owned disposable PostgreSQL is required",
+    "test_access_release_postgres.AccessReleasePostgresTests": "owned disposable PostgreSQL is required",
+    "test_factory_stop.FactoryStopAuthorityTests": "requires bound disposable PostgreSQL",
+    "test_factory_stop_migration.FactoryStopMigrationTests": "requires explicitly bound disposable PostgreSQL",
+    "test_result_grade_postgres.ResultGradePostgresTests": "owned disposable PostgreSQL required",
+}
+_DATABASE_CASES = {
+    "test_landing_failover_cli.UnixCallerTests.test_absent_primary_real_unix_secondary_lost_post_recovers_existing_winner":
+        "shared-control positive requires bound disposable PostgreSQL; legacy POST stays blocked",
 }
 _LINUX_CASES = frozenset({
     "test_real_child_has_fixed_identity_health_logs_and_bounded_shutdown",
@@ -332,6 +340,8 @@ def skip_allowance(identifier: str, context: dict) -> tuple[str, str] | None:
     group, _, method = case.rpartition(".")
     if group in _DATABASE_CLASSES and context["unit_database_bindings"] == "scrubbed":
         return "separate-disposable-postgres", _DATABASE_CLASSES[group]
+    if case in _DATABASE_CASES and context["unit_database_bindings"] == "scrubbed":
+        return "separate-disposable-postgres", _DATABASE_CASES[case]
     if (case == 'test_retrieval_receiver.RetrievalReceiverTests.test_real_unarmed_receiver_denies_payload_and_retirement_without_logging_source'
             and context.get('unix_peer_credentials') is False):
         return 'unsupported-owned-uds-profile', 'requires local POSIX peer credentials'
