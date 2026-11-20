@@ -121,7 +121,7 @@ class QueueDepthDiagnosticTests(unittest.TestCase):
                     result = self.resolve(cache, budget=budget)
                     self.assertEqual(result.state, 'resolved')
                     self.assertEqual(result.height, count)
-                    self.assertEqual(result.modules, frozenset(f'toy.m{i}' for i in range(count)))
+                    self.assertEqual(result.source_modules, frozenset(f'toy.m{i}' for i in range(count)))
                     self.assertEqual(len(budget.sources), count)
         cache = self.graph(8)
         active = {f'toy.m{i}' for i in range(8)}
@@ -135,7 +135,7 @@ class QueueDepthDiagnosticTests(unittest.TestCase):
         snapshot = SimpleNamespace(rules={'background_job_policies': [{'id': 'TOY-JOBS'}]},
                                    system={'nodes': [], 'edges': []})
         with patch.object(fit, '_python_paths', return_value=paths), \
-                patch.object(fit, '_queue_module_inventory', return_value=SimpleNamespace(paths=())), \
+                patch.object(fit, '_queue_module_inventory', return_value=self.cache({})), \
                 patch.object(fit, '_module_package', return_value=''), \
                 patch.object(fit, 'read_diff_file', return_value=b'import owned\n'), \
                 patch.object(fit, '_queue_signals', side_effect=error):
