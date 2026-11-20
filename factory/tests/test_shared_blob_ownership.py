@@ -121,3 +121,29 @@ class SharedBlobOwnershipTests(unittest.TestCase):
         self.assertEqual(['synthetic_store_failure'],failures)
         self.assertEqual(1,len(results));self.assertTrue(results[0].created)
         self.assertEqual([],self.store.paid_audit('account'))
+
+    def test_commit_then_raise_retains_durable_job_input_without_dispatch(self):
+        self.blobs.purge(self.expected,reason='rejected')
+        original=self.store.create_or_replay
+        committed=[]
+        def commit_then_raise(*arguments,**keywords):
+            original(*arguments,**keywords)
+            committed.append(self.snapshot())
+            raise RuntimeError('lost store acknowledgement')
+        with patch.object(self.store,'create_or_replay',side_effect=commit_then_raise),patch.object(self.service,'_process') as process:
+            with self.assertRaisesRegex(RuntimeError,'lost store acknowledgement'):
+                self.submit()
+            process.assert_not_called()
+        self.assertEqual(committed[0],self.snapshot())
+        self.assertEqual('accepted',self.store.get(self.expected.tenant_id,self.expected.repository_id,self.expected.job_id).state)
+        self.assertEqual([],self.store.paid_audit('account'))
+
+    def test_failed_authoritative_lookup_retains_unknown_intake_and_original_error(self):
+        self.blobs.purge(self.expected,reason='rejected')
+        with patch.object(self.store,'find',side_effect=[None,RuntimeError('lookup unavailable')]),patch.object(self.store,'create_or_replay',side_effect=RuntimeError('original store failure')),patch.object(self.service,'_process') as process:
+            with self.assertRaisesRegex(RuntimeError,'original store failure'):
+                self.submit()
+            process.assert_not_called()
+        self.assertEqual(b'fixture',self.blobs.read(self.expected,tenant_id=self.expected.tenant_id,repository_id=self.expected.repository_id,job_id=self.expected.job_id))
+        for table in ('landing_jobs','landing_commands','shared_control_bindings','paid_reservations'):
+            self.assertEqual(0,self.store._connection.execute('SELECT count(*) FROM '+table).fetchone()[0])

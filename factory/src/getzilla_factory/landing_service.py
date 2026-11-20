@@ -329,7 +329,17 @@ class LandingApplicationService:
                 )
             except Exception:
                 if owns_intake:
-                    self._purge(source, "rejected")
+                    # A failed result can follow a committed create. The shared
+                    # intake guard keeps this authoritative check and cleanup
+                    # in one cut across profiles. Unknown ownership retains input.
+                    try:
+                        current = self._store.find(actor.actor_id, repository_id, job_id)
+                        unreferenced = (current is None or current.source.quarantine_ref_digest
+                                        != source.quarantine_ref_digest)
+                    except Exception:
+                        unreferenced = False
+                    if unreferenced:
+                        self._purge(source, "rejected")
                 raise
             if not created:
                 if accepted.state in _TERMINAL_STATES or accepted.state == 'cancelled':
