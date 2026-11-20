@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import unittest
@@ -32,6 +33,21 @@ RESULT_ADMISSION_CONTRACT = (
     Path(__file__).resolve().parents[1]
     / "contracts/openapi/factory-result-admission.v1.json"
 )
+SUCCESSOR_CONTRACT = (
+    Path(__file__).resolve().parents[1]
+    / "contracts/openapi/factory-access-workflow.v1.json"
+)
+
+EXPECTED_SUCCESSOR_OPERATIONS = {
+    ("/v1/access/source-read", "post"): "prepareAccessSourceRead",
+    ("/v1/access/release", "post"): "releaseAccessSourceRead",
+    ("/v1/access/authority", "post"): "updateAccessAuthority",
+    ("/v1/access/result-retirement", "post"): "retireAccessResult",
+    ("/v1/access/result-retirement/{envelope_digest}", "get"): "getAccessResultRetirement",
+    ("/v2/workflow/intake-bindings", "post"): "getWorkflowIntakeBindings",
+    ("/v2/workflow/ready", "post"): "getWorkflowReady",
+    ("/v2/workflow/context", "post"): "getWorkflowContext",
+}
 
 
 EXPECTED_CONTROL_OPERATIONS = {
@@ -212,6 +228,12 @@ class CheckedOpenApiContractTests(unittest.TestCase):
         cls.documents = (cls.document, cls.semantic_document)
 
     def test_exact_runtime_operation_inventory_has_stable_unique_ids(self):
+        successor = json.loads(SUCCESSOR_CONTRACT.read_text(encoding="utf-8"))
+        successor_operations = dict(_operations(successor))
+        self.assertEqual(
+            {key: value.get("operationId") for key, value in successor_operations.items()},
+            EXPECTED_SUCCESSOR_OPERATIONS,
+        )
         control_operations = dict(_operations(self.document))
         semantic_operations = dict(_operations(self.semantic_document))
         result_admission_operations = dict(_operations(self.result_admission_document))
@@ -259,9 +281,101 @@ class CheckedOpenApiContractTests(unittest.TestCase):
             set(EXPECTED_OPERATIONS).union(
                 set(EXPECTED_LANDING_OPERATIONS),
                 set(EXPECTED_RESULT_ADMISSION_OPERATIONS),
+                set(EXPECTED_SUCCESSOR_OPERATIONS),
                 *(set(items) for items in execution_operations)
             ),
         )
+        runtime_ids = {
+            (route.path, method.lower()): route.operation_id
+            for route in app.routes
+            for method in getattr(route, "methods", ())
+            if (route.path, method.lower()) in EXPECTED_SUCCESSOR_OPERATIONS
+        }
+        self.assertEqual(runtime_ids, EXPECTED_SUCCESSOR_OPERATIONS)
+        predecessor_ids = {value["operationId"] for document in (
+            self.document, self.semantic_document, self.landing_document,
+            self.result_admission_document, *self.execution_documents
+        ) for value in dict(_operations(document)).values()}
+        successor_ids = list(EXPECTED_SUCCESSOR_OPERATIONS.values())
+        self.assertEqual(len(successor_ids), len(set(successor_ids)))
+        self.assertFalse(predecessor_ids.intersection(successor_ids))
+
+    def test_successor_schema_references_resolve_and_request_envelopes_are_closed(self):
+        document = json.loads(SUCCESSOR_CONTRACT.read_text(encoding="utf-8"))
+        for value in _walk(document):
+            if not isinstance(value, dict) or "$ref" not in value:
+                continue
+            reference = value["$ref"]
+            self.assertTrue(reference.startswith("#/components/schemas/"), reference)
+            target = document
+            for token in reference[2:].split("/"):
+                target = target[token.replace("~1", "/").replace("~0", "~")]
+            self.assertIsInstance(target, dict)
+        for (path, method), operation in _operations(document):
+            if method == "post":
+                schema = _resolve_schema(document, operation["requestBody"]["content"]["application/json"]["schema"])
+                self.assertIs(schema["additionalProperties"], False, path)
+                self.assertEqual(operation["security"], [{"bearerAuth": []}])
+                self.assertTrue(operation["x-required-scope"])
+
+    def test_successor_native_schemas_retain_canonical_owner_bytes_and_open_context_boundary(self):
+        document = json.loads(SUCCESSOR_CONTRACT.read_text(encoding="utf-8"))
+        schemas = document["components"]["schemas"]
+        owners = {
+            "NativeSpecV1": "change-spec-v1.schema.json",
+            "NativeSpecV2": "change-spec.schema.json",
+            "WorkflowGraph": "workflow-task-graph-v1.schema.json",
+            "WorkflowSource": "workflow-source-v1.schema.json",
+        }
+        for name, filename in owners.items():
+            expected = json.loads((Path(__file__).resolve().parents[2] / "schemas" / filename).read_text())
+            expected.pop("$schema", None)
+            expected.pop("$id", None)
+            for value in _walk(expected):
+                if isinstance(value, dict) and value.get("$ref", "").startswith("#/"):
+                    value["$ref"] = "#/components/schemas/" + name + value["$ref"][1:]
+            self.assertEqual(schemas[name], expected, name)
+        # The generic trusted producer accepts extra context members. Do not
+        # promise a closed native-only response for every WorkflowBoundary.
+        self.assertIs(schemas["WorkflowContext"]["additionalProperties"], True)
+        self.assertEqual(set(schemas["WorkflowContext"]["required"]), {
+            "goal", "specification", "decisions", "requirements", "base_sha",
+            "head_sha", "verification", "limits",
+        })
+
+    def test_successor_closed_fields_match_actual_authority_and_api_parsers(self):
+        document = json.loads(SUCCESSOR_CONTRACT.read_text())
+        schemas = document["components"]["schemas"]
+        source = Path(__file__).resolve().parents[1] / "src/getzilla_factory"
+        authority = ast.parse((source / "access_authority.py").read_text())
+        snapshot = next(node for node in authority.body if isinstance(node, ast.FunctionDef) and node.name == "_snapshot")
+        closed = {
+            call.args[0].id: ast.literal_eval(call.args[1])
+            for call in ast.walk(snapshot)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == "_closed" and isinstance(call.args[1], ast.Set)
+        }
+        for variable, name in (("payload", "AccessAuthority"), ("source", None), ("destination", None), ("group", None)):
+            schema = schemas[name] if name else schemas["AccessAuthority"]["properties"][variable + "s"]["items"]
+            self.assertEqual(set(schema["properties"]), closed[variable])
+            self.assertEqual(set(schema["required"]), closed[variable])
+            self.assertIs(schema["additionalProperties"], False)
+        actor_fields = next(
+            ast.literal_eval(node.value) for node in snapshot.body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "fields" for target in node.targets)
+        )
+        self.assertEqual(set(schemas["AccessActor"]["properties"]), actor_fields)
+        api = ast.parse((source / "api.py").read_text())
+        for function_name, schema_name in (
+            ("access_source_read", "SourceReadRequest"),
+            ("access_release", "ReleaseRequest"),
+            ("update_access_authority", "AuthorityUpdate"),
+            ("access_result_retirement", "RetirementRequest"),
+            ("workflow_context", "ContextRequest"),
+        ):
+            function = next(node for node in ast.walk(api) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name)
+            call = next(node for node in ast.walk(function) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_closed")
+            self.assertEqual(set(schemas[schema_name]["properties"]), ast.literal_eval(call.args[1]))
 
     def test_landing_openapi_operation_ids_match_the_always_visible_runtime_routes(self):
         contract = {

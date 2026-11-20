@@ -304,7 +304,7 @@ def create_app(
         redoc_url=None,
     )
 
-    @app.post('/v1/access/source-read', tags=['execution'])
+    @app.post('/v1/access/source-read', tags=['execution'], operation_id='prepareAccessSourceRead')
     async def access_source_read(request: Request, authorization: str | None = Header(None)):
         session = authenticator.access_session(authorization, 'source:read')
         if access_service is None:
@@ -318,7 +318,7 @@ def create_app(
         return await run_in_threadpool(access_service.prepare, session, _grant(body['grant']),
             _digest(body['packet_digest'], 'packet_digest'), body['sources'], body['destination_id'])
 
-    @app.post('/v1/access/release', tags=['execution'])
+    @app.post('/v1/access/release', tags=['execution'], operation_id='releaseAccessSourceRead')
     def access_release(payload: dict, authorization: str | None = Header(None)):
         session = authenticator.access_session(authorization, 'source:release')
         if access_service is None:
@@ -334,7 +334,7 @@ def create_app(
                   503 if code.endswith('unavailable') else 403)
         return _error_response('unavailable' if status == 503 else 'denied', code, code, status)
 
-    @app.post('/v1/access/authority', tags=['control'])
+    @app.post('/v1/access/authority', tags=['control'], operation_id='updateAccessAuthority')
     def update_access_authority(payload: dict, authorization: str | None = Header(None)):
         session = authenticator.access_session(authorization, 'factory:access-admin')
         body = _closed(payload, {'expected_revision', 'authority'})
@@ -349,7 +349,7 @@ def create_app(
             raise HTTPException(status, code) from None
         return {'revision': revision}
 
-    @app.post('/v1/access/result-retirement', tags=['control'])
+    @app.post('/v1/access/result-retirement', tags=['control'], operation_id='retireAccessResult')
     async def access_result_retirement(request: Request, authorization: str | None = Header(None)):
         session = authenticator.access_session(authorization, 'factory:access-admin')
         if access_service is None:
@@ -365,7 +365,7 @@ def create_app(
         return await run_in_threadpool(access_service.retire_retrieval, session,
             _digest(body['envelope_digest'], 'envelope_digest'), reason=body['reason'])
 
-    @app.get('/v1/access/result-retirement/{envelope_digest}', tags=['control'])
+    @app.get('/v1/access/result-retirement/{envelope_digest}', tags=['control'], operation_id='getAccessResultRetirement')
     async def access_result_retirement_observation(envelope_digest: str, authorization: str | None = Header(None)):
         session = authenticator.access_session(authorization, 'factory:access-admin')
         if access_service is None:
@@ -930,20 +930,20 @@ def create_app(
         )
         return JSONResponse(_json({"grant": grant}), headers={"X-Correlation-ID": correlation})
 
-    @app.post("/v2/workflow/intake-bindings", tags=["execution"])
+    @app.post("/v2/workflow/intake-bindings", tags=["execution"], operation_id="getWorkflowIntakeBindings")
     def workflow_intake_bindings(payload: dict, authorization: str | None = Header(None)):
         actor = authenticator.authenticate(authorization, "task:execute")
         _closed(payload, set())
         return _json(service.workflow_intake_bindings(actor=actor))
 
-    @app.post("/v2/workflow/ready", tags=["execution"])
+    @app.post("/v2/workflow/ready", tags=["execution"], operation_id="getWorkflowReady")
     def workflow_ready(payload: dict, authorization: str | None = Header(None)):
         actor = authenticator.authenticate(authorization, "task:execute")
         payload = _closed(payload, set(), optional={"node_key"})
         node_key = _text(payload["node_key"], "node_key", maximum=64) if "node_key" in payload else None
         return _json(service.workflow_ready(node_key=node_key, actor=actor))
 
-    @app.post("/v2/workflow/context", tags=["execution"])
+    @app.post("/v2/workflow/context", tags=["execution"], operation_id="getWorkflowContext")
     def workflow_context(payload: dict, authorization: str | None = Header(None)):
         actor = authenticator.authenticate(authorization, "task:execute")
         payload = _closed(payload, {"grant"})

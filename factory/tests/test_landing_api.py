@@ -454,6 +454,7 @@ class LandingApiTests(PaidProtocolTestCase):
             and path.name != "paid-execution-authority.v1.schema.json"
             and path.name != "factory-result-admission.v1.json"
             and path.name != "factory-execution.v3.json"
+            and path.name != "factory-access-workflow.v1.json"
             and path.name != "bb-backend-profile.v1.schema.json"
             and path.name != "bb-lifecycle-observation.v1.schema.json"
             and path.name != "prediction-explanation.v1.schema.json"
