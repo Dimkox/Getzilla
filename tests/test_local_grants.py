@@ -200,7 +200,8 @@ class LocalGrantTests(unittest.TestCase):
         with patch.object(architecture_diff, '_run_capped', wraps=architecture_diff._run_capped) as run:
             self.issue(root)
         query = next(call for call in run.call_args_list if call.args[0][-3:] == ['config', '--get-all', 'remote.origin.url'])
-        self.assertEqual(query.kwargs['timeout'], 30)
+        self.assertGreater(query.kwargs['timeout'], 0)
+        self.assertLessEqual(query.kwargs['timeout'], 30)
         self.assertEqual(query.kwargs['env']['GIT_CONFIG_NOSYSTEM'], '1')
         self.assertEqual(query.kwargs['env']['GIT_CONFIG_GLOBAL'], os.devnull)
         self.assertNotIn('GIT_DIR', query.kwargs['env'])

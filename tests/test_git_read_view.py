@@ -1,8 +1,11 @@
 """Canonical Git observations use owned ordinary fixtures, never callbacks."""
-from pathlib import Path
+from contextlib import nullcontext
+from pathlib import Path, PureWindowsPath
 import subprocess
 import tempfile
 import unittest
+import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from getzilla import architecture_diff as git
@@ -101,3 +104,45 @@ class GitReadViewTests(unittest.TestCase):
                 with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                     git.run_git_read(self.root, arguments)
         self.assertEqual(self.command('config', 'user.name'), b'Fixture\n')
+
+
+class WindowsGitReadPathProjectionTests(unittest.TestCase):
+    def test_private_directory_translation_preserves_original_native_identity(self):
+        original = SimpleNamespace(root=PureWindowsPath(r'D:\a\Project'),
+            git_directory=PureWindowsPath(r'D:\canonical\.git\worktrees\linked'),
+            common_directory=PureWindowsPath(r'D:\canonical\.git'))
+        view = SimpleNamespace(path=PureWindowsPath(r'C:\Users\Runner\Temp\getzilla-git-read-owned'))
+        arguments = ['rev-parse', '--absolute-git-dir', '--show-toplevel', '--is-bare-repository']
+        for spelling in ('C:/Users/Runner/Temp/getzilla-git-read-owned',
+                         r'C:\Users\Runner\Temp\getzilla-git-read-owned',
+                         'c:/users/runner/temp/GETZILLA-GIT-READ-OWNED'):
+            with self.subTest(spelling=spelling):
+                emitted = spelling.encode()+b'\r\nD:/a/Project\r\nfalse\r\n'
+                child = (['git'], {}, (), time.monotonic()+30, original, view)
+                with patch.object(git.fsx, 'WINDOWS', True), \
+                        patch.object(git, '_read_git_child', return_value=nullcontext(child)), \
+                        patch.object(git, '_run_capped', return_value=(0, emitted, b'')):
+                    code, output, error = git.run_git_read(original.root, arguments)
+                    self.assertEqual(code, 0)
+                    self.assertEqual(error, b'')
+                    self.assertEqual(output.splitlines()[0], str(original.git_directory).encode())
+                    self.assertTrue(git._reported_git_paths_match(output, original.git_directory, original.root))
+                    for query, expected in ((['rev-parse', '--git-common-dir'], original.common_directory),
+                            (['rev-parse', '--git-path', 'index'], original.git_directory/'index'),
+                            (['rev-parse', '--git-path', 'objects'], original.common_directory/'objects')):
+                        self.assertEqual(git.run_git_read(original.root, query)[1], str(expected).encode()+b'\n')
+
+    def test_foreign_private_directory_and_similar_prefix_cannot_become_original(self):
+        original = SimpleNamespace(root=PureWindowsPath(r'D:\a\Project'),
+            git_directory=PureWindowsPath(r'D:\canonical\.git\worktrees\linked'))
+        view = SimpleNamespace(path=PureWindowsPath(r'C:\Temp\getzilla-git-read-owned'))
+        arguments = ['rev-parse', '--absolute-git-dir', '--show-toplevel', '--is-bare-repository']
+        for foreign in ('C:/Temp/getzilla-git-read-owned-foreign', 'C:/elsewhere/getzilla-git-read-owned'):
+            emitted = foreign.encode()+b'\nD:/a/Project\nfalse\n'
+            child = (['git'], {}, (), time.monotonic()+30, original, view)
+            with self.subTest(foreign=foreign), patch.object(git.fsx, 'WINDOWS', True), \
+                    patch.object(git, '_read_git_child', return_value=nullcontext(child)), \
+                    patch.object(git, '_run_capped', return_value=(0, emitted, b'')):
+                output = git.run_git_read(original.root, arguments)[1]
+                self.assertEqual(output, emitted)
+                self.assertFalse(git._reported_git_paths_match(output, original.git_directory, original.root))

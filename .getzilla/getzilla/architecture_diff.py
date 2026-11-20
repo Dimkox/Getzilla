@@ -4,6 +4,7 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import ntpath
 import os
 import queue
 import re
@@ -742,10 +743,10 @@ def _reported_git_paths_match(output: bytes, git_directory: Path, repository: Pa
     if len(lines) != 3 or lines[2] != b"false":
         return False
     try:
-        reported = [os.path.normcase(os.fsdecode(line)) for line in lines[:2]]
+        reported = [ntpath.normcase(os.fsdecode(line)) for line in lines[:2]]
     except UnicodeDecodeError:
         return False
-    return reported == [os.path.normcase(str(git_directory)), os.path.normcase(str(repository))]
+    return reported == [ntpath.normcase(str(git_directory)), ntpath.normcase(str(repository))]
 
 
 def _config_identities(directories: tuple[Path, ...], guard=None) -> tuple[object, ...]:
@@ -957,7 +958,20 @@ def run_git_read(root, arguments, *, stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_l
             pass_fds=descriptors)
         code, output, error = result
         if code == 0 and arguments[:1] == ['rev-parse']:
-            output = output.replace(os.fsencode(view.path), os.fsencode(original.git_directory))
+            if fsx.WINDOWS:
+                # Git emits forward slashes even when the held path uses native
+                # backslashes. Translate only an exact metadata-directory line;
+                # a foreign or merely prefixed path must retain its identity.
+                private = ntpath.normcase(str(view.path))
+                translated = []
+                for line in output.splitlines(keepends=True):
+                    body = line.rstrip(b'\r\n')
+                    if ntpath.normcase(os.fsdecode(body)) == private:
+                        line = os.fsencode(original.git_directory) + line[len(body):]
+                    translated.append(line)
+                output = b''.join(translated)
+            else:
+                output = output.replace(os.fsencode(view.path), os.fsencode(original.git_directory))
             if arguments == ['rev-parse', '--git-common-dir']:
                 output = os.fsencode(original.common_directory)+b'\n'
             if len(arguments) == 3 and arguments[:2] == ['rev-parse', '--git-path']:
