@@ -381,6 +381,8 @@ def _git_environment() -> dict[str, str]:
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
     }
     if fsx.WINDOWS and os.environ.get("SYSTEMROOT"):
         # Windows processes need SystemRoot to load system libraries; it names no config.
@@ -762,7 +764,7 @@ def _config_identities(directories: tuple[Path, ...], guard=None) -> tuple[objec
 
 
 def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
-                 _deadline: float | None = None) -> _GitBinding:
+                 _deadline: float | None = None, _probe: bool = True) -> _GitBinding:
     try:
         native = isinstance(_guard,NativeGitGraph)
         def info(path):
@@ -845,29 +847,14 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
             _qualify_git_configuration(binding, _guard,_deadline=_deadline)
             binding.verify(_guard, strict_directories=True)
             _guard.seal()
-        probed = _PROBED_BINDINGS.get()
-        probe_key = (*_binding_key(binding, _guard), _config_identities((git_directory, common_directory), _guard))
-        if probed is not None and probe_key in probed:
-            binding.verify(_guard, strict_directories=True)
+        if not _probe:
             return binding
-        child = _native_git_child(binding,_guard) if native else None
-        returncode, output, _error = _run_capped(
-            _git_command(["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
-                         safe_directory=child['root'] if native else repository,
-                         git_directory=child['git'] if native else git_directory,
-                         work_tree=child['root'] if native else None),
-            cwd=child['root'] if native else repository,
-            env=child['env'] if native else _git_environment(),
-            pass_fds=child['fds'] if native else (),stdout_limit=16_384,
-            stderr_limit=65_536, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS,_deadline),
-        )
-        binding.verify(_guard, strict_directories=True)
-        expected_git = Path(os.readlink(child['git'])) if native else git_directory
-        expected_root = Path(os.readlink(child['root'])) if native else repository
-        if returncode or not _reported_git_paths_match(output,expected_git,expected_root):
+        code, output, _ = run_git_read(repository,
+            ["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
+            binding=binding, guard=_guard, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS, _deadline),
+            stdout_limit=16_384)
+        if code or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
-        if probed is not None:
-            probed.add(probe_key)
         return binding
     except ArchitectureError:
         raise
@@ -927,6 +914,64 @@ def _guarded_git_arguments(arguments: list[str], stdin_data: bytes | None) -> bo
     return False
 
 
+@contextlib.contextmanager
+def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
+    from .git_read_view import GitReadView, validate_arguments
+    validate_arguments(arguments)
+    deadline = time.monotonic() + timeout
+    binding = binding or _git_binding(root, _probe=False)
+    def parse_config(raw):
+        code, output, _ = _run_capped(
+            _git_command(['config', '--null', '--no-includes', '--list', '--file=-']),
+            cwd=Path(Path(root).anchor), env=_git_environment(), stdout_limit=16_384,
+            stderr_limit=4096, timeout=_bounded_git_timeout(timeout, deadline), stdin_data=raw)
+        if code or output and not output.endswith(b'\0'):
+            raise ValueError('Git configuration syntax unavailable')
+        return [tuple(record.decode('utf-8', 'strict').split('\n', 1))
+                for record in output.split(b'\0')[:-1]]
+    with GitReadView(binding, parse_config, deadline, guard) as view:
+        environment = _git_environment()
+        environment['GIT_COMMON_DIR'] = str(view.path)
+        environment['GIT_OBJECT_DIRECTORY'] = str(view.path/'objects')
+        command = _git_command(arguments, safe_directory=binding.root,
+                               git_directory=view.path, work_tree=binding.root)
+        command[1:1] = ['--attr-source='+view.empty_tree, '-c', 'protocol.allow=never']
+        if arguments[:1] in (['status'], ['diff']):
+            inventory = _git_command(['ls-files', '--stage', '-z'], safe_directory=binding.root,
+                git_directory=view.path, work_tree=binding.root)
+            code, entries, _ = _run_capped(inventory, cwd=binding.root, env=environment,
+                stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
+                timeout=_bounded_git_timeout(timeout, deadline), pass_fds=view.pass_fds)
+            if code or any(entry.startswith(b'160000 ') for entry in entries.split(b'\0')):
+                raise ValueError('Git submodule observations unavailable')
+        yield command, environment, view.pass_fds, deadline, binding, view
+
+
+def run_git_read(root, arguments, *, stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=65_536,
+                 timeout=30, stdin_data=None, binding=None, guard=None):
+    with _read_git_child(root, arguments, binding=binding, guard=guard, timeout=timeout) as child:
+        command, environment, descriptors, deadline, original, view = child
+        result = _run_capped(command, cwd=original.root, env=environment,
+            stdout_limit=stdout_limit, stderr_limit=stderr_limit,
+            timeout=_bounded_git_timeout(timeout, deadline), stdin_data=stdin_data,
+            pass_fds=descriptors)
+        code, output, error = result
+        if code == 0 and arguments[:1] == ['rev-parse']:
+            output = output.replace(os.fsencode(view.path), os.fsencode(original.git_directory))
+            if arguments == ['rev-parse', '--git-common-dir']:
+                output = os.fsencode(original.common_directory)+b'\n'
+            if len(arguments) == 3 and arguments[:2] == ['rev-parse', '--git-path']:
+                name = arguments[2]
+                if name in {'HEAD', 'index'}:
+                    target = original.git_directory/name
+                elif name in {'objects', 'refs', 'config', 'packed-refs', 'shallow'}:
+                    target = original.common_directory/name
+                else:
+                    raise ValueError('Git metadata path observation unsupported')
+                output = os.fsencode(target)+b'\n'
+        return code, output, error
+
+
 def run_git_bounded(
     root: Path,
     arguments: list[str],
@@ -946,15 +991,9 @@ def run_git_bounded(
     if _scope.guard is not None and not native and not guarded:
         raise ArchitectureError("Git operation binding read graph is unsupported", code="git")
     try:
-        child = _native_git_child(binding,_scope.guard) if native else None
-        returncode, output, error = _run_capped(
-            _git_command(arguments,safe_directory=child['root'] if native else binding.root,
-                         git_directory=child['git'] if native else binding.git_directory,
-                         work_tree=child['root'] if native else binding.root),
-            cwd=child['root'] if native else binding.root,env=child['env'] if native else _git_environment(),
-            pass_fds=child['fds'] if native else (),stdout_limit=limit,
-            stderr_limit=65_536, timeout=_scope.remaining(), stdin_data=stdin_data,
-        )
+        returncode, output, error = run_git_read(root, arguments, binding=binding,
+            guard=_scope.guard, stdout_limit=limit, stderr_limit=65_536,
+            timeout=_scope.remaining(), stdin_data=stdin_data)
     except OSError as exc:
         raise ArchitectureError("Git object operation is unavailable", code="git") from exc
     finally:
@@ -1393,25 +1432,29 @@ def _stream_git_blob(root: Path, object_id: str, expected_size: int, path: str,
         raise ArchitectureError("Git operation binding read graph is unsupported", code="git")
     timeout = _scope.remaining()
     try:
-        process = subprocess.Popen(  # nosec B603
-            _git_command(["cat-file", "blob", object_id], safe_directory=binding.root,
-                         git_directory=binding.git_directory, work_tree=binding.root),
-            cwd=binding.root,
-            env=_git_environment(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            **fsx.process_group_kwargs(),
-        )
-        if fsx.WINDOWS:
-            returncode, digest, total, binary, stderr = _drain_blob_threaded(
-                process, expected_size=expected_size, path=path, timeout=timeout
+        with _read_git_child(root, ["cat-file", "blob", object_id], binding=binding,
+                             guard=_scope.guard, timeout=timeout) as child:
+            command, environment, descriptors, deadline, _, _ = child
+            timeout = _bounded_git_timeout(timeout, deadline)
+            process = subprocess.Popen(  # nosec B603
+                command,
+                cwd=binding.root,
+                env=environment,
+                pass_fds=descriptors,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                **fsx.process_group_kwargs(),
             )
-        else:
-            returncode, digest, total, binary, stderr = _drain_blob_selector(
-                process, expected_size=expected_size, path=path, timeout=timeout
-            )
+            if fsx.WINDOWS:
+                returncode, digest, total, binary, stderr = _drain_blob_threaded(
+                    process, expected_size=expected_size, path=path, timeout=timeout
+                )
+            else:
+                returncode, digest, total, binary, stderr = _drain_blob_selector(
+                    process, expected_size=expected_size, path=path, timeout=timeout
+                )
     except OSError as exc:
         raise ArchitectureError("Git blob stream is unavailable", code="git") from exc
     finally:

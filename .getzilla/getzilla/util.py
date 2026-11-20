@@ -52,19 +52,9 @@ def find_root(start: str | Path | None = None) -> Path:
     for candidate in [current, *current.parents]:
         if (candidate / '.getzilla').is_dir():
             return candidate
-    try:
-        proc = _observed_run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            cwd=current,
-            text=True,
-            encoding='utf-8',
-            capture_output=True,
-            check=False,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return Path(proc.stdout.strip()).resolve()
-    except OSError:
-        pass
+    for candidate in [current, *current.parents]:
+        if (candidate / '.git').exists():
+            return candidate
     return current
 
 
@@ -213,13 +203,22 @@ def command_exists(name: str) -> bool:
     return find_tool(name) is not None
 
 
+def _git_observation(root, arguments, *, timeout=30):
+    from .architecture_diff import run_git_read
+    code, output, error = run_git_read(root, list(arguments), timeout=timeout)
+    return subprocess.CompletedProcess(['git', *arguments], code, output, error)
+
+
 def git_output(root: Path, *args: str) -> str | None:
     if not command_exists('git'):
         return None
-    proc = run(['git', *args], cwd=root, timeout=30)
+    try:
+        proc = _git_observation(root, args)
+    except (OSError, ValueError):
+        return None
     if proc.returncode != 0:
         return None
-    return proc.stdout.strip()
+    return proc.stdout.decode('utf-8', 'replace').strip()
 
 
 def git_head(root: Path) -> str | None:
@@ -255,10 +254,8 @@ def _git_paths(root: Path, *args: str) -> set[str] | None:
     try:
         # -z emits filesystem bytes, not quoted text. Binary mode also avoids
         # newline translation changing legal carriage returns in filenames.
-        proc = _observed_run(
-            ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        proc = _git_observation(root, args, timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     # An unsuccessful or malformed inventory cannot establish untracked ownership.
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
@@ -270,10 +267,8 @@ def _git_name_status(root: Path, *args: str) -> list[dict[str, str]] | None:
     try:
         # Name-status records use one NUL-delimited field per status/path.  A
         # rename or copy has an additional original-path field.
-        proc = _observed_run(
-            ['git', *args], cwd=root, capture_output=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        proc = _git_observation(root, args, timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
         return None
@@ -438,9 +433,8 @@ def file_sha256(path: Path, *, strict_root: Path | None = None) -> str:
 def _grant_index_entries(root: Path, excluded: set[str]) -> bytes:
     """Bind staged blobs separately: worktree bytes can conceal a different index."""
     try:
-        proc = _observed_run(['git', 'ls-files', '--stage', '-z'], cwd=root,
-                              capture_output=True, timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = _git_observation(root, ['ls-files', '--stage', '-z'], timeout=60)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise ValueError('cannot establish grant index inventory') from exc
     if proc.returncode != 0 or (proc.stdout and not proc.stdout.endswith(b'\0')):
         raise ValueError('cannot establish grant index inventory')

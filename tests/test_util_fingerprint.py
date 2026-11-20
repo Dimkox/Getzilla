@@ -278,19 +278,19 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(before, util.tree_fingerprint(self.root))
 
     def test_failed_timed_out_or_malformed_tracking_inventory_keeps_candidates(self) -> None:
-        original_run = subprocess.run
+        original_run = util._git_observation
         for code, output in ((1, b''), ('timeout', b''), ('oserror', b''), (0, b'unterminated')):
             with self.subTest(code=code, output=output):
-                def failed_inventory(args, **kwargs):
-                    if args[:3] == ['git', 'ls-files', '--cached']:
+                def failed_inventory(root, args, **kwargs):
+                    if list(args[:2]) == ['ls-files', '--cached']:
                         if code == 'timeout':
                             raise subprocess.TimeoutExpired(args, 60)
                         if code == 'oserror':
                             raise OSError('Git unavailable')
                         return subprocess.CompletedProcess(args, code, output, b'failure')
-                    return original_run(args, **kwargs)
+                    return original_run(root, args, **kwargs)
 
-                with patch.object(subprocess, 'run', side_effect=failed_inventory):
+                with patch.object(util, '_git_observation', side_effect=failed_inventory):
                     before = util.tree_fingerprint(self.root)
                     for rel in ('.qwen/tmp/probe', '.getzilla/runtime/probe'):
                         path = self.write(rel)
@@ -316,14 +316,14 @@ class FingerprintTests(unittest.TestCase):
             self.assert_bound(tracked, before)
 
     def test_failed_diff_does_not_authorize_scratch_filtering(self) -> None:
-        original_run = subprocess.run
+        original_run = util._git_observation
 
-        def failed_diff(args, **kwargs):
-            if args[:2] == ['git', 'diff']:
+        def failed_diff(root, args, **kwargs):
+            if list(args[:1]) == ['diff']:
                 return subprocess.CompletedProcess(args, 1, b'', b'failure')
-            return original_run(args, **kwargs)
+            return original_run(root, args, **kwargs)
 
-        with patch.object(subprocess, 'run', side_effect=failed_diff):
+        with patch.object(util, '_git_observation', side_effect=failed_diff):
             before = util.tree_fingerprint(self.root)
             self.write('.qwen/tmp/probe')
             self.assert_bound('.qwen/tmp/probe', before)

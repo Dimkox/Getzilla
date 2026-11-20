@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import fsx
-from .architecture_diff import ArchitectureError, _git_command, _git_environment, _run_capped
+from .architecture_diff import ArchitectureError, run_git_read
 from .receipts import RECEIPT_KINDS
 from .spec import MAX_SPEC_BYTES, SpecError, _bounded_walk, _parse_canonical_json, parse_yaml_subset, validate_spec
 from .state import (CLOSED_CHANGE_STATUSES, serialized_task, require_route_owner,
@@ -638,14 +638,15 @@ def inspect_package(root: Path, route: dict[str, Any] | None, active: dict[str, 
 
 
 def _git_read(root: Path, arguments: list[str]) -> tuple[int, bytes]:
+    if arguments == ['rev-parse', '--show-prefix', '--is-inside-work-tree'] and not (root/'.git').exists():
+        return 1, b''
     try:
-        code, output, _ = _run_capped(
-            _git_command(arguments, safe_directory=root), cwd=root,
-            env=_git_environment(), stdout_limit=MAX_GIT_BYTES, stderr_limit=4096,
+        code, output, _ = run_git_read(
+            root, arguments, stdout_limit=MAX_GIT_BYTES, stderr_limit=4096,
             timeout=GIT_TIMEOUT_SECONDS,
         )
         return code, output
-    except (ArchitectureError, OSError) as exc:
+    except (ArchitectureError, OSError, ValueError) as exc:
         raise InspectionError('git_unavailable', 'bounded Git query failed or exceeded a limit') from exc
 
 
