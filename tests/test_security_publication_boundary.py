@@ -34,9 +34,10 @@ assert not hasattr(SnapshotReader,'write')
         import tempfile
         root=Path(__file__).resolve().parents[1]
         sys.path.insert(0,str(root/'.getzilla'))
-        from tests.test_security_data import publish, EXPANDED_NOW
+        from tests.test_security_data import publish
         common=Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],cwd=root,text=True).strip())
-        if not common.is_absolute():common=(root/common).resolve()
+        if not common.is_absolute():
+            common=(root/common).resolve()
         with tempfile.TemporaryDirectory(dir=common.parent/'.getzilla/runtime') as tmp:
             publish(Path(tmp))
             code="""import sys

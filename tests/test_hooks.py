@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / '.getzilla'))
 
 from getzilla.receipts import validate_evidence, write_receipt
 from getzilla.router import build_route
-from getzilla.state import add_approval, approvals_path, get_active_route
+from getzilla.state import add_approval, approvals_path, get_active_route, set_active_route
 from tests._support import activate_owned_route
 import subprocess
 

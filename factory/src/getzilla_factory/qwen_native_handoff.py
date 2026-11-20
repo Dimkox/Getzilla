@@ -37,7 +37,8 @@ class NativeHandoffError(ValueError):
 
 
 def _require(value, code='native_handoff_unavailable'):
-    if not value: raise NativeHandoffError(code)
+    if not value:
+        raise NativeHandoffError(code)
 
 
 def _pairs(pairs):
@@ -112,7 +113,8 @@ class QwenNativeHandoff:
     def close(self):
         descriptor=getattr(self,'_namespace',None)
         if descriptor is not None:
-            os.close(descriptor);self._namespace=None
+            os.close(descriptor)
+            self._namespace=None
 
     def _profile(self):
         selected=self._registry.resolve(self._selection,role='reader')
@@ -146,7 +148,8 @@ class QwenNativeHandoff:
             request=_json(raw)
             fields={'contract','operation_id','request_digest','envelope_digest','repository_id','task_id','run_id','fence','packet_digest','attempt_id','result_envelope'}
             _require(type(request) is dict and set(request)==fields)
-            p=self._prepared;record=p.envelope
+            p=self._prepared
+            record=p.envelope
             _require(request['contract']=='adaptive-factory.native-result-handoff/v1'
                      and request['result_envelope']==record.to_dict() and request['envelope_digest']==record.record_digest
                      and type(request['request_digest']) is str and len(request['request_digest'])==64
@@ -193,7 +196,8 @@ class QwenNativeHandoff:
                 'request_digest':request['request_digest'],'envelope_digest':record.record_digest})
             return {'status':'delivered','operation_id':request['operation_id'],'request_digest':request['request_digest'],
                     'envelope_digest':record.record_digest,'postcondition_digest':observation},response
-        except NativeHandoffError: raise
+        except NativeHandoffError:
+            raise
         except Exception:
             raise NativeHandoffError('native_handoff_unknown') from None
         finally:
@@ -211,34 +215,45 @@ class QwenNativeHandoff:
                 _require(byte and len(data)<8192)
                 data.extend(byte)
             return bytes(data[:-2])
-        first=line();headers={};total=len(first)
+        first=line()
+        headers={}
+        total=len(first)
         for _ in range(33):
-            item=line();total+=len(item)+2
+            item=line()
+            total+=len(item)+2
             _require(total<=8192)
-            if not item:break
+            if not item:
+                break
             _require(b':' in item and item[:1] not in {b' ',b'\t'})
-            key,value=item.split(b':',1);key=key.lower()
+            key,value=item.split(b':',1)
+            key=key.lower()
             _require(key not in headers and len(headers)<32)
             headers[key]=value.strip()
-        else:raise NativeHandoffError('native_handoff_invalid_frame')
+        else:
+            raise NativeHandoffError('native_handoff_invalid_frame')
         _require(b'transfer-encoding' not in headers)
         size=headers.get(b'content-length',b'')
         _require(size.isdigit() and len(size)<=7)
-        count=int(size);limit=MAX_OUTPUT if response else MAX_FRAME
+        count=int(size)
+        limit=MAX_OUTPUT if response else MAX_FRAME
         _require(0<count<=limit)
         raw=bytearray()
         while len(raw)<count:
-            remaining=deadline-time.monotonic();_require(remaining>0)
+            remaining=deadline-time.monotonic()
+            _require(remaining>0)
             peer.settimeout(remaining)
-            chunk=peer.recv(min(4096,count-len(raw)));_require(chunk)
+            chunk=peer.recv(min(4096,count-len(raw)))
+            _require(chunk)
             raw.extend(chunk)
         return first,headers,bytes(raw)
 
     def _send(self, body, deadline):
-        remaining=deadline-time.monotonic();_require(remaining>0)
+        remaining=deadline-time.monotonic()
+        _require(remaining>0)
         # Literal IP, fixed port/path. No DNS, proxy, redirect or retry machinery.
         with socket.create_connection(('127.0.0.1',11434),timeout=min(1,remaining)) as peer:
-            remaining=deadline-time.monotonic();_require(remaining>0)
+            remaining=deadline-time.monotonic()
+            _require(remaining>0)
             peer.settimeout(remaining)
             peer.sendall(b'POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:11434\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body)
             first,headers,raw=self._read_http(peer,deadline,response=True)
@@ -269,10 +284,12 @@ class QwenNativeHandoff:
         _require(not os.path.lexists(path))
         deadline=min(self._prepared.deadline,time.monotonic()+timeout)
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
-            server.bind(str(path));os.chmod(path,0o600)
+            server.bind(str(path))
+            os.chmod(path,0o600)
             identity=path.lstat()
             try:
-                server.listen(1);server.settimeout(max(.001,deadline-time.monotonic()))
+                server.listen(1)
+                server.settimeout(max(.001,deadline-time.monotonic()))
                 peer,_=server.accept()
                 with peer:
                     import struct
@@ -288,9 +305,12 @@ class QwenNativeHandoff:
                              and headers.get(b'x-operation-id')==headers[b'idempotency-key'])
                     result,output=self.forward(raw,absolute_deadline=deadline)
                     body=json.dumps(result,separators=(',',':')).encode()
-                    remaining=deadline-time.monotonic();_require(remaining>0);peer.settimeout(remaining)
+                    remaining=deadline-time.monotonic()
+                    _require(remaining>0)
+                    peer.settimeout(remaining)
                     peer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body)
                     return output
             finally:
                 current=path.lstat()
-                if (current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino):path.unlink()
+                if (current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino):
+                    path.unlink()

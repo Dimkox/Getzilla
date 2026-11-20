@@ -1,5 +1,4 @@
 from __future__ import annotations
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -13,7 +12,8 @@ class CompleteTermVariantTests(unittest.TestCase):
  def fixture(self):return json.loads((ROOT/'tests/fixtures/security-license-go-reviewed-terms.json').read_text())
  def test_complete_original_files_recognized_without_trimming(self):
   for sha,row in self.fixture()['files'].items():
-   body=row['text'];self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),sha)
+   body=row['text']
+   self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),sha)
    identified=texts.recognized_license(body)
    ids=(identified,) if identified else texts.recognized_license_bundle(body)
    self.assertEqual(ids,tuple(row['identifiers']),sha)
@@ -27,7 +27,8 @@ class CompleteTermVariantTests(unittest.TestCase):
   self.assertEqual(chosen,['Apache-2.0'])
   retained,_=licenses._license_evidence(files,component,ids,chosen)
   self.assertEqual(set(retained[0]['recognized_licenses']),{'Apache-2.0','GPL-2.0-or-later'})
-  with self.assertRaises(ValueError):go.component_from_terms('unbound',{'LICENSE.code':row['text'].encode()},expression='Apache-2.0')
+  with self.assertRaises(ValueError):
+      go.component_from_terms('unbound',{'LICENSE.code':row['text'].encode()},expression='Apache-2.0')
  def test_unknown_corpus_and_extra_views_are_not_silently_cleared(self):
   self.assertEqual(len(licenses.ALLOWED),6)
   for row in self.fixture()['deferred'].values():
@@ -35,7 +36,8 @@ class CompleteTermVariantTests(unittest.TestCase):
    self.assertIsNone(texts.recognized_license_bundle(row['text']))
   for row in self.fixture()['files'].values():
    if row.get('autoallow') is False or row['expression']=='BSD-2-Clause-Views':
-    with self.assertRaises(ValueError):licenses._select_expression(row['expression'],list(licenses.ALLOWED))
+    with self.assertRaises(ValueError):
+        licenses._select_expression(row['expression'],list(licenses.ALLOWED))
 
  def test_complete_root_does_not_drop_unknown_corpus_or_nonlegal_files(self):
   row=next(r for r in self.fixture()['files'].values() if r['expression']=='MIT')

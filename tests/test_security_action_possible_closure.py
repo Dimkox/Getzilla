@@ -131,7 +131,8 @@ class PossibleClosureTests(unittest.TestCase):
         finding=output['details'][0]
         with patch('getzilla.security_data._clock',return_value=owned.NOW):
             self.assertTrue(finding_consistent(finding,list(ALLOWED),_select_expression))
-            changed=copy.deepcopy(finding);changed['exact_runtime_membership_proved']=True
+            changed=copy.deepcopy(finding)
+            changed['exact_runtime_membership_proved']=True
             self.assertFalse(finding_consistent(changed,list(ALLOWED),_select_expression))
             with patch.dict(actions._VERIFIED_ACTION_FAMILIES,{},clear=True):
                 self.assertFalse(finding_consistent(finding,list(ALLOWED),_select_expression))

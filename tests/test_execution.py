@@ -3,20 +3,18 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import subprocess
 import os
 import multiprocessing
 import json
 from pathlib import Path
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 
 from getzilla import execution as execution, execution_store as store, state
 from getzilla.agent_lifecycle import start_agent
-from getzilla.router import build_route
 
 
 from tests.execution_contract_support import CountingBackend, FakeClock, owned_route, observe_saved_attempt

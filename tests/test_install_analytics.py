@@ -18,9 +18,12 @@ class AnalyticsTests(unittest.TestCase):
         self.event = {'token':self.token, 'event_id':'a'*32, 'event':'getzilla_install_complete', 'version':'2.3.1', 'os':'Linux', 'occurred_at':self.now+20}
     def test_invalid_expired_declined_malformed(self):
         for edit in ({'token':'bad'},{'unexpected':'secret'},{'occurred_at':True},{'os':'path/private'}):
-            with self.assertRaises(ValueError): collect(self.store, self.event|edit, now=self.now+21)
-        with self.assertRaises(ValueError): collect(self.store,self.event,now=self.now+90000)
-        with self.assertRaises(ValueError): self.store.issue(consent=False,now=self.now,identifiers={},source={})
+            with self.assertRaises(ValueError):
+                collect(self.store, self.event|edit, now=self.now+21)
+        with self.assertRaises(ValueError):
+            collect(self.store,self.event,now=self.now+90000)
+        with self.assertRaises(ValueError):
+            self.store.issue(consent=False,now=self.now,identifiers={},source={})
     def test_duplicate_upgrade_keeps_actual_time_and_source(self):
         self.assertTrue(collect(self.store,self.event,now=self.now+21))
         self.assertFalse(collect(self.store,self.event|{'version':'3.0'},now=self.now+22))
@@ -55,7 +58,8 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(sent[0]['occurred_at'],sent[1]['occurred_at'])
         self.assertEqual(set(sent[0]),set(self.event))
 
-if __name__=='__main__': unittest.main()
+if __name__=='__main__':
+    unittest.main()
 
 class InstallerIntegrationTests(unittest.TestCase):
     def test_bash_completion_rejects_failed_doctor(self):
@@ -88,7 +92,8 @@ main
             run=subprocess.run(['bash','-c',source+overrides],env=env,capture_output=True)
             self.assertEqual(run.returncode,3,run.stderr)
             self.assertFalse((Path(tmp)/'events').exists())
-            env['DOCTOR_RESULT']='0'; env['AGENT_RESULT']='1'
+            env['DOCTOR_RESULT']='0'
+            env['AGENT_RESULT']='1'
             self.assertEqual(subprocess.run(['bash','-c',source+overrides],env=env,capture_output=True).returncode,3)
             self.assertFalse((Path(tmp)/'events').exists())
             env['AGENT_RESULT']='0'
@@ -109,7 +114,8 @@ class PowerShellRuntimeTests(unittest.TestCase):
     def test_powershell_final_readiness(self):
         import shutil
         import subprocess
-        if not shutil.which('pwsh'): self.skipTest('PowerShell host unavailable')
+        if not shutil.which('pwsh'):
+            self.skipTest('PowerShell host unavailable')
         root=Path(__file__).resolve().parents[1]
         source=(root/'scripts/install.ps1').read_text()
         segment=source[source.index("    $PythonText = $Python -join ' '"):source.index("    Write-Host 'Next:'")]
@@ -143,20 +149,24 @@ function Invoke-Python($python,$arguments) {
 class BoundaryTests(AnalyticsTests):
     def test_revocation_and_consent_scope(self):
         self.store.revoke(self.token)
-        with self.assertRaises(ValueError): collect(self.store,self.event,now=self.now+21)
+        with self.assertRaises(ValueError):
+            collect(self.store,self.event,now=self.now+21)
         token=self.store.issue(consent=True,now=self.now,identifiers={},source={})
         self.store.db.execute('UPDATE tokens SET record=?',(json.dumps({'consent':False,'scope':'other'}),))
         self.store.db.commit()
-        with self.assertRaises(ValueError): collect(self.store,self.event|{'token':token},now=self.now+21)
+        with self.assertRaises(ValueError):
+            collect(self.store,self.event|{'token':token},now=self.now+21)
     def test_transport_parent_deadline_and_no_ready(self):
         import importlib.util
         from unittest.mock import patch
         import subprocess
         path=Path(__file__).resolve().parents[1]/'scripts/getzilla_install_analytics.py'
         spec=importlib.util.spec_from_file_location('install_analytics_cli',path)
-        module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         with patch.object(sys,'argv',[str(path)]),patch.object(module.subprocess,'run') as run:
-            module.main(); run.assert_not_called()
+            module.main()
+            run.assert_not_called()
         with patch.object(sys,'argv',[str(path),'--ready']),patch.object(module.subprocess,'run',side_effect=subprocess.TimeoutExpired('test',4)) as run:
             module.main()
             self.assertEqual(run.call_args.kwargs['timeout'],4)

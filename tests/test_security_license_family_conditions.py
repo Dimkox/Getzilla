@@ -36,23 +36,29 @@ class FamilyConditionsTests(unittest.TestCase):
         record,component,_=self.fixture()
         mutations=[('sha256','0'*64),('kind','image'),('origin',dict(kind='release-source/v1'))]
         for key,value in mutations:
-            changed=copy.deepcopy(record);changed[key]=value
+            changed=copy.deepcopy(record)
+            changed[key]=value
             self.assertEqual(conditions.allowed_for(changed,component,list(licenses.ALLOWED),selected_internal=True,source_modules=self.source_modules),list(licenses.ALLOWED))
         for key,value in [('id','other'),('expression','MPL-2.0'),('license_paths',[])]:
-            changed=copy.deepcopy(component);changed[key]=value
+            changed=copy.deepcopy(component)
+            changed[key]=value
             self.assertEqual(conditions.allowed_for(record,changed,list(licenses.ALLOWED),selected_internal=True,source_modules=self.source_modules),list(licenses.ALLOWED))
-        changed=copy.deepcopy(component);changed['files'][0]['sha256']='0'*64
+        changed=copy.deepcopy(component)
+        changed['files'][0]['sha256']='0'*64
         self.assertEqual(conditions.allowed_for(record,changed,list(licenses.ALLOWED),selected_internal=True,source_modules=self.source_modules),list(licenses.ALLOWED))
 
     def test_raw_future_and_redistribution_stay_denied(self):
         record,component,_=self.fixture()
         allowed=conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=False)
-        with self.assertRaises(ArtifactError):licenses._select_expression(component['expression'],allowed)
+        with self.assertRaises(ArtifactError):
+            licenses._select_expression(component['expression'],allowed)
         self.assertEqual(len(licenses.ALLOWED),6)
-        with self.assertRaises(ArtifactError):licenses._select_expression('X11',list(licenses.ALLOWED))
+        with self.assertRaises(ArtifactError):
+            licenses._select_expression('X11',list(licenses.ALLOWED))
         self.assertEqual(licenses._select_expression('X11',['X11'])[0],['X11'])
         self.assertEqual(conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=True),list(licenses.ALLOWED))
-        changed=copy.deepcopy(self.source_modules);changed[0]['h1']='h1:other'
+        changed=copy.deepcopy(self.source_modules)
+        changed[0]['h1']='h1:other'
         self.assertEqual(conditions.allowed_for(record,component,list(licenses.ALLOWED),selected_internal=True,source_modules=changed),list(licenses.ALLOWED))
 
     def test_every_fixture_matches_exact_recognition_and_profile(self):
@@ -81,7 +87,9 @@ class FamilyConditionsTests(unittest.TestCase):
                     owned={item['path'] for item in component['files']}
                     files={p:b for p,b in evidence['files'].items() if p in owned}
                     full,attribution=licenses._license_evidence(files,component,ids,chosen)
-                    selected.extend(chosen);terms.extend(full);notices.extend(attribution)
+                    selected.extend(chosen)
+                    terms.extend(full)
+                    notices.extend(attribution)
                 finding=dict(kind='tool',reference=record['subject']['reference'],status='pass',
                     selected_expression=' AND '.join(sorted(set(selected))),distribution='internal',
                     **evidence['binding'],family_record=record,
@@ -92,7 +100,9 @@ class FamilyConditionsTests(unittest.TestCase):
                 from unittest import mock
                 with mock.patch.dict(go._VERIFIED_FAMILIES, {}, clear=True):
                     self.assertFalse(finding_consistent(finding,list(licenses.ALLOWED),licenses._select_expression))
-                changed=copy.deepcopy(finding);changed['license_files'][0]['sha256']='0'*64
+                changed=copy.deepcopy(finding)
+                changed['license_files'][0]['sha256']='0'*64
                 self.assertFalse(finding_consistent(changed,list(licenses.ALLOWED),licenses._select_expression))
-                proof=artifacts/record['components']['path'];proof.write_bytes(proof.read_bytes()+b' ')
+                proof=artifacts/record['components']['path']
+                proof.write_bytes(proof.read_bytes()+b' ')
                 self.assertFalse(finding_consistent(finding,list(licenses.ALLOWED),licenses._select_expression))

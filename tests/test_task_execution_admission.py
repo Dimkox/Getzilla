@@ -1,9 +1,6 @@
 """Legacy verdicts cannot create a parallel execution ledger or dispatch twice."""
-from pathlib import Path
 import json
-import tempfile
 import unittest
-from unittest.mock import patch
 from tests._support import PROJECT, project_copy, run_hook, activate_owned_route
 import sys
 sys.path.insert(0, str(PROJECT / '.getzilla'))

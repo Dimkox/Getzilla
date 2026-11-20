@@ -23,8 +23,12 @@ class StaticLockOwnerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as directory:
    root=Path(directory)
    for relative in ['scripts/getzilla_sync_lock_validation.py','trust-ci/lock_profile_validation.py','.getzilla/getzilla/lock_profile_validation.py']:
-    destination=root/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.write_bytes((ROOT/relative).read_bytes())
-   mirror=root/'.getzilla/getzilla/lock_profile_validation.py';mirror.write_bytes(mirror.read_bytes()+b'\n# stale\n');before=mirror.read_bytes()
+    destination=root/relative
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    destination.write_bytes((ROOT/relative).read_bytes())
+   mirror=root/'.getzilla/getzilla/lock_profile_validation.py'
+   mirror.write_bytes(mirror.read_bytes()+b'\n# stale\n')
+   before=mirror.read_bytes()
    result=subprocess.run([sys.executable,str(root/'scripts/getzilla_sync_lock_validation.py'),'--check'],capture_output=True,text=True)
    self.assertNotEqual(result.returncode,0)
    self.assertEqual(mirror.read_bytes(),before)

@@ -7,14 +7,11 @@ Directory handles deny delete sharing; file handles deny write sharing.
 from __future__ import annotations
 
 import ctypes as C
-import contextlib
-import hashlib
 import itertools
 import json
 import os
 import re
 import threading
-import uuid
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
 
