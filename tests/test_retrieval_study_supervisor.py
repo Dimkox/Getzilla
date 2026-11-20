@@ -23,12 +23,14 @@ class StudySupervisorTests(unittest.TestCase):
                 actual.admission = SimpleNamespace(execution_generation='generation')
                 actual.backend = SimpleNamespace(run_artifact_context=output)
                 actual.current = Mock(return_value={'execution_generation': 'generation',
-                    'execution_status': 'running', 'output': {'artifact': None}})
+                    'execution_status': 'running', 'output': None})
                 with patch.object(owner, '_operation', return_value=projection), \
                         patch.dict(owner._LIVE, {123: actual}, clear=True):
                     observed = owner.reserved_study_output_directory(operation, 'fixture')
                     self.assertEqual(root / observed.relative_path, output._folder)
                     self.assertEqual(observed.inode, output._folder.stat().st_ino)
+                    actual.current.return_value['output'] = {'artifact': None}
+                    self.assertEqual(owner.reserved_study_output_directory(operation, 'fixture'), observed)
                     with self.assertRaises(ValueError):
                         owner.reserved_study_output_directory(operation, 'other-execution')
                     output.write('not-empty.json', {})

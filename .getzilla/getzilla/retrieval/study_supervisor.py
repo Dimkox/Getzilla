@@ -78,8 +78,10 @@ def reserved_study_output_directory(operation_ref, execution_id):
     if owner.projection != projection:
         raise RetrievalError('study_reserved_output_unavailable')
     record = owner.current()
+    output_record = record['output']
     if (record['execution_generation'] != owner.admission.execution_generation
-            or record['execution_status'] != 'running' or record['output']['artifact'] is not None):
+            or record['execution_status'] != 'running'
+            or output_record is not None and output_record.get('artifact') is not None):
         raise RetrievalError('study_reserved_output_unavailable')
     from .study_run_artifacts import RunArtifacts
     from .. import fsx
