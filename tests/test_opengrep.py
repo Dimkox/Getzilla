@@ -87,6 +87,23 @@ class OpengrepCheckTests(unittest.TestCase):
         original_run = scanner._run
         self._core_calls = []
 
+        def fixture_frontend(language, *, deadline=None):
+            # Report-decoder fixtures use the test interpreter's real compile
+            # helper. OS custody/version qualification belongs to SyntaxProfileTests.
+            self.assertEqual(language, 'python')
+            executable = Path(sys.executable).resolve(strict=True)
+            descriptor = os.open(executable, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                identity = scanner._identity(os.fstat(descriptor))
+                with os.fdopen(os.dup(descriptor), 'rb') as stream:
+                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                return scanner.SyntaxFrontend(
+                    executable, descriptor, identity, digest, language,
+                    f'fixture-{sys.implementation.name}-{sys.version_info.major}.{sys.version_info.minor}')
+            except BaseException:
+                os.close(descriptor)
+                raise
+
         def fixture_core(command, root, environment, deadline, **options):
             if '-json_nodots' not in command:
                 return original_run(command, root, environment, deadline, **options)
@@ -132,6 +149,7 @@ class OpengrepCheckTests(unittest.TestCase):
              mock.patch('getzilla.util.user_tool_dirs', return_value=[]), \
              mock.patch('getzilla.util.environment_scripts_dir', return_value=None), \
              mock.patch('getzilla.opengrep_releases.verify_active', side_effect=ValueError('fixture has no qualified managed release')), \
+             mock.patch.object(scanner, 'syntax_frontend', side_effect=fixture_frontend), \
              mock.patch.object(scanner, '_bootstrap_core', return_value=Path('/usr/bin/true').read_bytes()), \
              mock.patch.object(scanner, '_run', side_effect=fixture_core):
             return V._opengrep(self.root)
@@ -152,6 +170,28 @@ class OpengrepCheckTests(unittest.TestCase):
         self.assertTrue((self.bin / 'ran').exists())
         self.assertTrue(result.command[0].startswith('/proc/self/fd/'))
         self.assertIn('-json_nodots', result.command)
+
+    def test_report_fixture_parses_without_the_exact_os_frontend_installation(self) -> None:
+        from getzilla import security_opengrep as scanner
+        (self.root / 'app.py').write_text('raise RuntimeError("fixture source must not execute")\n')
+        unavailable = ('/nonexistent/protected/python3.12', ('-I', '-S', '--version'),
+                       'Python 3.12.', 'python3.12')
+        with mock.patch.dict(scanner._FRONTENDS, {'python': unavailable}):
+            result = self._run({'results': [], 'errors': []})
+        self.assertEqual(result.status, 'pass', result.summary)
+        self.assertEqual(len(self._core_calls), 1)
+
+    def test_report_fixture_still_rejects_invalid_syntax_before_core(self) -> None:
+        from getzilla import security_opengrep as scanner
+        (self.root / 'app.py').write_text('def broken(:\n  pass\n')
+        unavailable = ('/nonexistent/protected/python3.12', ('-I', '-S', '--version'),
+                       'Python 3.12.', 'python3.12')
+        with mock.patch.dict(scanner._FRONTENDS, {'python': unavailable}):
+            result = self._run({'results': [], 'errors': []})
+        self.assertEqual(result.status, 'fail')
+        self.assertIn('syntax_incomplete', result.summary)
+        self.assertEqual(self._core_calls, [])
+        self.assertFalse((self.bin / 'ran').exists())
 
     def test_skips_without_the_binary_or_the_rules(self) -> None:
         self.assertEqual((self._run(None).status, self._run(None).summary), ('skip', 'opengrep not available'))
