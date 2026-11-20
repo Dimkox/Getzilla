@@ -38,11 +38,11 @@ class StudyOnnxWorkerTests(unittest.TestCase):
     def test_fixed_cpu_single_thread_and_exact_inspected_signature(self):
         owner = self.owner()
         ort, seen = self.setup_runtime()
-        owner._open_session('/model/onnx/model.onnx', self.contract(owner), ort)
+        owner._open_session('/model/minilm/onnx/model.onnx', self.contract(owner), ort)
         self.assertEqual(seen['providers'], ['CPUExecutionProvider'])
         self.assertEqual(seen['options'].intra_op_num_threads, 1)
         self.assertEqual(seen['options'].inter_op_num_threads, 1)
-        self.assertEqual(seen['path'], '/model/onnx/model.onnx')
+        self.assertEqual(seen['path'], '/model/minilm/onnx/model.onnx')
 
     def test_already_pooled_wrong_dtype_or_provider_refuse(self):
         owner = self.owner()
@@ -50,7 +50,7 @@ class StudyOnnxWorkerTests(unittest.TestCase):
                        {'providers': ['CUDAExecutionProvider']}):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, 'onnx_contract_mismatch'):
                 ort, _ = self.setup_runtime(**kwargs)
-                owner._open_session('/model/onnx/model.onnx', self.contract(owner), ort)
+                owner._open_session('/model/minilm/onnx/model.onnx', self.contract(owner), ort)
 
     def test_missing_signature_does_not_infer_names_or_dimension(self):
         owner = self.owner()
@@ -75,7 +75,7 @@ class StudyOnnxWorkerTests(unittest.TestCase):
                                                  shape=list(pooled))])
         ort = SimpleNamespace(SessionOptions=SimpleNamespace,
                               InferenceSession=lambda *args, **kwargs: session)
-        self.assertIs(owner._open_session('/model/onnx/model.onnx', contract, ort), session)
+        self.assertIs(owner._open_session('/model/bge_m3/onnx/model.onnx', contract, ort), session)
 
     def test_import_is_inert_and_no_optional_package_is_loaded_by_status(self):
         owner = self.owner()

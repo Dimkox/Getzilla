@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from getzilla.retrieval.contracts import sha
 
@@ -100,3 +101,15 @@ class StudyArtifactTests(unittest.TestCase):
                     owner.check_study_export(snapshot)
             finally:
                 snapshot.close()
+
+    def test_insufficient_actual_fd_headroom_refuses_without_raising_limits(self):
+        owner = self.owner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'data').write_bytes(b'inert')
+            with patch('resource.getrlimit', return_value=(8, 8)), \
+                    patch('resource.setrlimit') as change_limit:
+                with self.assertRaisesRegex(ValueError, 'artifact_file_descriptor_budget'):
+                    with owner.HeldArtifacts(root, (('data', 5, sha(b'inert')),)):
+                        pass
+            change_limit.assert_not_called()
