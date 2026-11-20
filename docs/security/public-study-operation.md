@@ -94,3 +94,15 @@ The original INSPECT execution deadline is obtained only from its genuine superv
 Before `000.log` exists, the same storage API permits only a current owned running execution with no bound artifact and the supervisor’s genuine original reserved output directory. That directory must be the same held, owned, empty 0700 runtime/par child. It is counted and revalidated without accepting a caller path. The fixed driver preflights the exact serialized marker bytes before writing, then immediately captures and binds the marker; subsequent checks use the ordinary protected-artifact path. Missing reservations, foreign owners/folders, nonempty bootstrap directories and missing terminal artifacts refuse.
 
 The fixed candidate scope conservatively includes the entire project-relative `.getzilla/runtime/par` metadata tree. Failed and orphaned run files and unrelated diagnostic logs in this candidate therefore count toward the same 12 GiB/100,000-entry/30-second bound. Nested current-run roots and hardlinked inodes count once. This can overcount and refuse; it does not scan other projects or other worktrees’ par trees, read log contents, accept caller-selected roots, or establish output provenance from filenames.
+
+
+All three registered exports must be `worker`, `software` and `model` under the
+same fresh child of `.getzilla/runtime/study-export-preparations`. The inert
+preparer creates that child exclusively; registration accepts no arbitrary or
+mixed-child export roots. The whole fixed preparation container is mandatory in
+the storage scope. Its absence refuses operation storage observation, and all
+failed attempts, orphan children and unrelated files beneath it count. The exact
+legacy `.getzilla/runtime/scratch/study-exports-20261120-v1` root additionally
+counts when present, with no-follow and before/after identity checks; absence is
+checked again and creates no directory. This changes no byte, entry, depth or
+deadline bound, creates no storage ledger and grants no native execution.

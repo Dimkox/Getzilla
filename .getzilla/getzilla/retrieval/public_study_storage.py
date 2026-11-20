@@ -20,7 +20,48 @@ CANONICAL_ROOTS = (
     'scratch/research-metadata-snapshot-20261120-v1',
 )
 CANDIDATE_ROOTS = ('par', 'owned-public-review-v4', 'scratch/research-owned-inputs-v1',
-                   'scratch/research-owned-inputs-v2')
+                   'scratch/research-owned-inputs-v2', 'study-export-preparations')
+
+
+EXPORT_PREPARATIONS = 'study-export-preparations'
+LEGACY_EXPORT = 'scratch/study-exports-20261120-v1'
+
+
+def fixed_export_attempt(runtime):
+    """Closed path shape; fresh child creation belongs to the inert preparer."""
+    from .evaluation_inputs import checked_relative
+    attempts = set()
+    for field, view in (('model_root', 'model'), ('software_root', 'software'), ('worker_root', 'worker')):
+        relative = runtime[field]
+        checked_relative(relative)
+        parts = Path(relative).parts
+        _require(len(parts) == 5 and parts[:3] == ('.getzilla', 'runtime', EXPORT_PREPARATIONS)
+                 and parts[4] == view, 'public_study_export_unavailable')
+        attempts.add(parts[3])
+    _require(len(attempts) == 1, 'public_study_export_unavailable')
+    return next(iter(attempts))
+
+
+@contextmanager
+def retained_legacy_exports(runtime, *, deadline):
+    """Fixed old failed root only; never caller roots or a storage ledger."""
+    parent_path = runtime / 'scratch'
+    with _directory(parent_path) as parent:
+        before = _identity(os.fstat(parent))
+        _require(not before[2] & 0o022, 'public_study_storage_unavailable')
+        def observe():
+            _require(time.monotonic() < deadline, 'public_study_storage_unavailable')
+            try:
+                info = os.stat('study-exports-20261120-v1', dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                     and not info.st_mode & 0o022, 'public_study_storage_unavailable')
+            return _identity(info)
+        original = observe()
+        yield [] if original is None else [('candidate:' + LEGACY_EXPORT, runtime / LEGACY_EXPORT)]
+        _require(observe() == original and _identity(os.fstat(parent)) == before
+                 and _identity(parent_path.lstat()) == before, 'public_study_storage_changed')
 
 
 @dataclass(frozen=True)
@@ -169,9 +210,10 @@ def study_storage_observation(operation, execution_id):
         ('worker', projection.worker_root), ('software', projection.software_root), ('model', projection.model_root))]
     roots.append(('execution:' + execution_id, output_directory))
     deadline = time.monotonic() + MAX_SECONDS
-    observation = _observe(roots, deadline=deadline)
-    check_public_study_operation(operation)
-    _require(load_registry(root) == registry
-             and _output_directory(root, operation, execution_id, record) == (output_directory, output_binding),
-             'public_study_storage_changed')
-    return observation
+    with retained_legacy_exports(runtime, deadline=deadline) as legacy:
+        observation = _observe(roots + legacy, deadline=deadline)
+        check_public_study_operation(operation)
+        _require(load_registry(root) == registry
+                 and _output_directory(root, operation, execution_id, record) == (output_directory, output_binding),
+                 'public_study_storage_changed')
+        return observation

@@ -6,6 +6,7 @@ import pickle
 import shutil
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from getzilla.retrieval import public_study_operation as owner
 from getzilla.retrieval import research_use_conditions as conditions_owner
@@ -35,7 +36,8 @@ class PublicStudyOperationTests(unittest.TestCase):
             condition_ref = conditions_owner._require_public_research_use(root, condition_path, condition_composition)
             self.addCleanup(conditions_owner.close_public_research_use, condition_ref)
             facts = conditions_owner._check_public_research_use(condition_ref, condition_composition)
-            prefix = '.getzilla/runtime/operation-fixture-exports'
+            (root / '.getzilla/runtime/study-export-preparations').mkdir(mode=0o700)
+            prefix = '.getzilla/runtime/study-export-preparations/operation-fixture-exports'
             outer = root / prefix
             outer.mkdir(mode=0o700)
             def export(name, files, source=None):
@@ -77,6 +79,17 @@ class PublicStudyOperationTests(unittest.TestCase):
                 'phase_a_sha256': phase_a._receipt_digest, 'phase_b_sha256': None,
                 'conditions_sha256': facts['conditions_sha256'],
                 'artifact_manifest_sha256': facts['artifact_manifest_sha256'], 'graph_observations': None, 'runtime': runtime}
+            if mutation in {'arbitrary_export', 'mixed_child_export'}:
+                request['runtime']['model_root'] = (
+                    '.getzilla/runtime/scratch/unregistered-model' if mutation == 'arbitrary_export'
+                    else '.getzilla/runtime/study-export-preparations/foreign-child/model')
+                rejected = save('.getzilla/runtime/operation-invalid-export.json', request)['path']
+                with patch.object(owner, 'snapshot_study_export', side_effect=AssertionError('export access forbidden')), \
+                        patch.object(owner, '_docker', side_effect=AssertionError('runtime access forbidden')):
+                    with self.assertRaisesRegex(ValueError, 'public_study_export_unavailable'):
+                        owner._register_public_study_operation(root, owner.INSPECT, rejected, phase_a,
+                            condition_ref, None, composition)
+                return
             registration = save('.getzilla/runtime/operation-fixture-registration.json', request)['path']
             ref = owner._register_public_study_operation(root, owner.INSPECT, registration, phase_a,
                 condition_ref, None, composition)
@@ -159,3 +172,9 @@ class PublicStudyOperationTests(unittest.TestCase):
 
     def test_existing_registry_reserves_even_an_unfinished_contract_claim(self):
         self.roundtrip('claim')
+
+    def test_arbitrary_export_root_refuses_before_export_or_runtime_access(self):
+        self.roundtrip('arbitrary_export')
+
+    def test_mixed_child_export_refuses_before_export_or_runtime_access(self):
+        self.roundtrip('mixed_child_export')

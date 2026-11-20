@@ -204,6 +204,8 @@ def _runtime(request, conditions, root, composition, *, operation_digest, regist
         checked_relative(runtime[field])
         _require(runtime[field].startswith('.getzilla/runtime/'), 'public_study_export_unavailable')
     _require(len({runtime[field] for field in ('model_root', 'software_root', 'worker_root')}) == 3)
+    from .public_study_storage import fixed_export_attempt
+    fixed_export_attempt(runtime)
     expected_image = conditions['image']['config']['digest']
     _require(runtime['inspection_image_id'] == expected_image and runtime['inference_image_id'] == expected_image,
              'public_study_unregistered_image')
