@@ -31,6 +31,31 @@ from factory.tests.test_landing_normalizer import draft
 
 
 class BackendContractVersionTests(unittest.TestCase):
+    def test_published_v1_contracts_stay_frozen_while_current_pdf_uses_v3(self):
+        from getzilla_factory.landing_media import PDF_DECODER_DIGEST, PDF_PYPDF_VERSION
+        directory = Path(__file__).parents[1] / 'contracts'
+        # Accepted v1 bytes at e99548d7 are historical facts, not runtime pins.
+        historical = {
+            'jsonschema/landing-backend-capability.v1.schema.json':
+                '6ece032b101344e4f2923b5c274164983539c75a731bc2248fd3a59b70808b16',
+            'openapi/landing-failover.v1.json':
+                'd316ac7942ac47fc4cf99e340f2098dd5521aef92a68af9dfcc1a7c521bb8dde',
+        }
+        for relative, digest in historical.items():
+            with self.subTest(contract=relative):
+                self.assertEqual(hashlib.sha256((directory / relative).read_bytes()).hexdigest(), digest)
+        current = json.loads((directory / 'jsonschema/landing-backend-capability.v3.schema.json').read_bytes())
+        self.assertEqual(PDF_PYPDF_VERSION, '6.21.4')
+        self.assertEqual({item['pdf_parser_version'] for item in current['properties']['profile']['enum']},
+                         {PDF_PYPDF_VERSION})
+        self.assertEqual({item['pdf_decoder_digest'] for item in current['properties']['profile']['enum']},
+                         {PDF_DECODER_DIGEST})
+        for facts in current['properties']['profile']['enum']:
+            profile = HttpLandingProfile.for_provider(facts['profile_id'], available=True)
+            document = backend_capability(profile, 'public-actor', TARGET_REPOSITORY_ID,
+                                          TARGET_BASE_SHA, TARGET_BASE_TREE)
+            Draft202012Validator(current).validate(document)
+
     def test_current_successor_is_sealed_v3_and_legacy_profiles_stay_frozen(self):
         profile = HttpLandingProfile.for_provider("qwen-intl", available=True)
         document = backend_capability(profile, "public-actor", TARGET_REPOSITORY_ID, TARGET_BASE_SHA, TARGET_BASE_TREE)
