@@ -254,7 +254,10 @@
     }
   ],
   "approvals": {
-    "required_scopes": []
+    "required_scopes": [
+      "scope_and_design_approval",
+      "production_action_approval"
+    ]
   },
   "change_id": "20261013-task-e2e30c",
   "contracts": {
@@ -265,17 +268,170 @@
     "openapi": []
   },
   "forbidden_outcomes": [
-    "Close a live acceptance criterion using source tests alone.",
-    "Run the full qualifying gate before combined source repairs and independent reviews.",
-    "Write production, revoke credentials, change deployed policy or execute paid calls without exact separate authority.",
-    "Reuse historical PASS as fresh combined-candidate verification."
+    {
+      "id": "FORBID-001",
+      "statement": "Close a live acceptance criterion using source tests alone.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "FORBID-002",
+      "statement": "Run the full qualifying gate before combined source repairs and independent reviews.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "FORBID-003",
+      "statement": "Write production, revoke credentials, change deployed policy or execute paid calls without exact separate authority.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "FORBID-004",
+      "statement": "Reuse historical PASS as fresh combined-candidate verification.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
   ],
   "invariants": [
-    "Missing mandatory execution controls deny before side effects; partial allow output cannot survive failed hook execution.",
-    "Paid authority is distinct from generic external-write consent; account/task worst-case reservations survive uncertain outcomes and journal upgrades.",
-    "Unknown consumer ownership preserves bytes; a quarantine plan is not cleanup or deletion authority.",
-    "Trust CI installation consumes the complete frozen dependency graph and artifact hashes.",
-    "Local tests and reviews cannot replace exact-head external checks or human security approval."
+    {
+      "id": "INV-001",
+      "statement": "Missing mandatory execution controls deny before side effects; partial allow output cannot survive failed hook execution.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "INV-002",
+      "statement": "Paid authority is distinct from generic external-write consent; account/task worst-case reservations survive uncertain outcomes and journal upgrades.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "INV-003",
+      "statement": "Unknown consumer ownership preserves bytes; a quarantine plan is not cleanup or deletion authority.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "INV-004",
+      "statement": "Trust CI installation consumes the complete frozen dependency graph and artifact hashes.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    },
+    {
+      "id": "INV-005",
+      "statement": "Local tests and reviews cannot replace exact-head external checks or human security approval.",
+      "evidence": [
+        {
+          "receipt": "verification"
+        },
+        {
+          "receipt": "code_review"
+        },
+        {
+          "receipt": "security_review"
+        },
+        {
+          "receipt": "release_review"
+        }
+      ]
+    }
   ],
   "objective": {
     "id": "OBJ-001",
