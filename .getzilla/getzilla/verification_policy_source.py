@@ -63,6 +63,23 @@ def implementation_source_binding() -> dict:
         identity = name[:-3].replace('/', '.').removesuffix('.__init__')
         module = importlib.import_module('.' + identity, __package__)
         implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
+    # These are actual decision/authority owners, not merely the public facade
+    # or the worker inventory's declarations. Importing them starts no observer.
+    for name in (
+        'retrieval/public_study_operation.py', 'retrieval/public_study_inspection.py',
+        'retrieval/public_study_graphs.py', 'retrieval/public_study_storage.py',
+        'retrieval/study_artifacts.py', 'retrieval/study_resources.py',
+        'retrieval/study_worker_inventory.py', 'retrieval/study_supervisor.py',
+        'retrieval/study_kernel.py', 'retrieval/study_docker_process.py',
+        'retrieval/study_waiter_process.py', 'retrieval/study_waiter_kernel.py',
+        'retrieval/study_windows.py', 'retrieval/research.py',
+        'retrieval/contracts.py', 'retrieval/budget.py',
+        'retrieval/evaluation_inputs.py', 'retrieval/evaluation_inputs_io.py',
+        'execution.py', 'execution_store.py', 'execution_output.py', 'optional_modules.py',
+    ):
+        identity = name[:-3].replace('/', '.')
+        module = importlib.import_module('.' + identity, __package__)
+        implementation[name] = hashlib.sha256(_module_source(module)).hexdigest()
     from .security_research_catalog import catalog_bytes, image_conditions_bytes
     implementation['research_conditions_v1.json'] = hashlib.sha256(catalog_bytes()).hexdigest()
     implementation['research_image_conditions_v1.json'] = hashlib.sha256(image_conditions_bytes()).hexdigest()
