@@ -67,6 +67,8 @@ def _deadline(owner, start, limit):
 
 
 def _storage(ports, owner, additional=0):
+    if type(additional) is not int or additional < 0:
+        raise RetrievalError('study_storage_budget_exceeded')
     from .public_study_storage import study_storage_observation
     observed = study_storage_observation(owner.operation_ref, owner.execution_id)
     if (type(observed.logical_bytes) is not int or observed.logical_bytes < 0
@@ -105,6 +107,7 @@ def _bind_output(owner, output):
     raw = json.dumps({'definition': 'issue162-owned-run-output-v1',
         'execution_id': owner.execution_id, 'operation_digest': owner.projection.operation_digest},
         sort_keys=True).encode() + b'\n'
+    owner.backend.run_artifact_context = output
     _storage(_ports(), owner, additional=len(raw))
     with _create_log(output._directory, '000.log') as stream:
         if stream.write(raw) != len(raw):
@@ -315,7 +318,8 @@ def _rank(ports, owner, inputs, catalog, functions, graphs, output):
                     elapsed = time.monotonic() - start
                     if time.monotonic() >= stop:
                         raise RetrievalError('study_query_deadline')
-                    observations.add(model, iteration, key, result, seconds=elapsed)
+                    observations.add(model, iteration, key, result, seconds=elapsed,
+                                     absolute_deadline=stop, query_started=start)
                 except Exception:
                     # A failed owner may already be retired. Never reacquire
                     # permission or repeat work merely to write a diagnostic;

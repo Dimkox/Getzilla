@@ -4,6 +4,7 @@ from __future__ import annotations
 from fractions import Fraction
 import math
 import json
+import time
 
 from .budget import RetrievalError
 from .contracts import digest
@@ -46,7 +47,8 @@ class Observations:
             raise RetrievalError('study_query_scope_unavailable')
         self.query_ids, self._rows = tuple(query_ids), {}
 
-    def add(self, model, iteration, query_id, result, *, seconds, error=None):
+    def add(self, model, iteration, query_id, result, *, seconds, error=None,
+            absolute_deadline=None, query_started=None):
         key = model, iteration, query_id
         if (model not in MODELS or type(iteration) is not int or not 0 <= iteration < WARM_PASSES
                 or query_id not in self.query_ids or key in self._rows
@@ -54,9 +56,19 @@ class Observations:
                 or result is not None and type(result) is not dict
                 or error is not None and type(error) is not str):
             raise RetrievalError('study_observation_conflict')
+        if absolute_deadline is not None or query_started is not None:
+            if (type(absolute_deadline) is not float or type(query_started) is not float
+                    or not math.isfinite(absolute_deadline) or not math.isfinite(query_started)
+                    or not query_started < absolute_deadline or time.monotonic() >= absolute_deadline):
+                raise RetrievalError('study_query_deadline')
         frozen = json.loads(json.dumps(result, ensure_ascii=False, allow_nan=False))
-        self._rows[key] = {'result': frozen, 'seconds': seconds, 'error': error,
-                           'digest': digest({'result': result, 'error': error})}
+        checksum = digest({'result': frozen, 'error': error})
+        if absolute_deadline is not None:
+            now = time.monotonic()
+            if now >= absolute_deadline:
+                raise RetrievalError('study_query_deadline')
+            seconds = now - query_started
+        self._rows[key] = {'result': frozen, 'seconds': seconds, 'error': error, 'digest': checksum}
 
     def first(self, model, query_id):
         return json.loads(json.dumps(self._rows.get((model, 0, query_id)), allow_nan=False))

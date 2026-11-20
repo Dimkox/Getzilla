@@ -13,6 +13,30 @@ from getzilla.retrieval.study_run_artifacts import RunArtifacts, serialized_payl
 
 
 class StudyDriverTests(unittest.TestCase):
+    def test_bootstrap_marker_and_summary_preflight_before_retaining_bytes(self):
+        from getzilla.retrieval import study_supervisor as supervisor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with RunArtifacts(root, byte_limit=4096) as output:
+                held = SimpleNamespace(projection=SimpleNamespace(root=root,
+                    operation='inspect_public_artifacts', operation_digest='a' * 64),
+                    operation_ref=object(), execution_id='inert', reference=object(),
+                    backend=SimpleNamespace(run_artifact_context=output), report_artifact=None,
+                    readback_digest=None, pid_scope='docker-daemon', records=[],
+                    _native_completed=False, _native_start_dispatched=False)
+                with patch('getzilla.retrieval.public_study_storage.study_storage_observation',
+                           return_value=SimpleNamespace(logical_bytes=12 * 1024**3 - 1)), \
+                        patch('getzilla.retrieval.public_study_operation.admit_public_study_stage'), \
+                        patch('getzilla.execution_output.capture_artifact') as capture:
+                    with self.assertRaisesRegex(ValueError, 'study_storage_budget_exceeded'):
+                        driver._bind_output(held, output)
+                    self.assertIs(held.backend.run_artifact_context, output)
+                    self.assertEqual(tuple(output._folder.iterdir()), ())
+                    with self.assertRaisesRegex(ValueError, 'study_storage_budget_exceeded'):
+                        supervisor._capture_inspection_observation(held, ())
+                    self.assertEqual(tuple(output._folder.iterdir()), ())
+                    capture.assert_not_called()
+
     def test_shared_storage_preflight_uses_the_exact_retained_utf8_bytes(self):
         payload = {'inert': 'я'}
         raw = serialized_payload(payload)

@@ -2,12 +2,58 @@ import importlib
 import pickle
 import io
 import time
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
 
 
 class StudySupervisorTests(unittest.TestCase):
+    def test_bootstrap_storage_directory_is_actual_unique_empty_owned_context(self):
+        owner = self.owner()
+        from getzilla.retrieval.study_run_artifacts import RunArtifacts
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            operation = object()
+            projection = SimpleNamespace(root=root)
+            with RunArtifacts(root, byte_limit=4096) as output:
+                actual = object.__new__(owner._Owner)
+                actual.operation_ref, actual.execution_id, actual.projection = operation, 'fixture', projection
+                actual.admission = SimpleNamespace(execution_generation='generation')
+                actual.backend = SimpleNamespace(run_artifact_context=output)
+                actual.current = Mock(return_value={'execution_generation': 'generation',
+                    'execution_status': 'running', 'output': {'artifact': None}})
+                with patch.object(owner, '_operation', return_value=projection), \
+                        patch.dict(owner._LIVE, {123: actual}, clear=True):
+                    observed = owner.reserved_study_output_directory(operation, 'fixture')
+                    self.assertEqual(root / observed.relative_path, output._folder)
+                    self.assertEqual(observed.inode, output._folder.stat().st_ino)
+                    with self.assertRaises(ValueError):
+                        owner.reserved_study_output_directory(operation, 'other-execution')
+                    output.write('not-empty.json', {})
+                    with self.assertRaises(ValueError):
+                        owner.reserved_study_output_directory(operation, 'fixture')
+
+    def test_bootstrap_directory_refuses_a_replaced_named_inode(self):
+        owner = self.owner()
+        from getzilla.retrieval.study_run_artifacts import RunArtifacts
+        with tempfile.TemporaryDirectory() as temporary:
+            root, operation = Path(temporary), object()
+            projection = SimpleNamespace(root=root)
+            with RunArtifacts(root, byte_limit=4096) as output:
+                actual = object.__new__(owner._Owner)
+                actual.operation_ref, actual.execution_id, actual.projection = operation, 'fixture', projection
+                actual.admission = SimpleNamespace(execution_generation='generation')
+                actual.backend = SimpleNamespace(run_artifact_context=output)
+                actual.current = Mock(return_value={'execution_generation': 'generation',
+                    'execution_status': 'running', 'output': {'artifact': None}})
+                output._folder.rename(output._folder.with_name('retained-original'))
+                output._folder.mkdir(mode=0o700)
+                with patch.object(owner, '_operation', return_value=projection), \
+                        patch.dict(owner._LIVE, {123: actual}, clear=True), self.assertRaises(ValueError):
+                    owner.reserved_study_output_directory(operation, 'fixture')
+
     def owner(self):
         try:
             return importlib.import_module('getzilla.retrieval.study_supervisor')
