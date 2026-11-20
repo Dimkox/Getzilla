@@ -163,8 +163,8 @@ class _FrozenProfileFile:
     def read_bytes(self):
         return self.body
 
-    def read_text(self):
-        return self.body.decode('utf-8')
+    def read_text(self, encoding='utf-8'):
+        return self.body.decode(encoding)
 
 
 class _FrozenProfileRoot:

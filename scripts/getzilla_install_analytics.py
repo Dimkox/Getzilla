@@ -32,7 +32,7 @@ def main():
             if response.status != 202:
                 raise OSError('not accepted')
     try:
-        version=(ROOT/'VERSION').read_text().strip()
+        version=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
         client_event(Path(os.environ.get('GETZILLA_STATE_HOME',str(Path.home()/'.getzilla'))),version,os.environ,ready=True,send=send)
     except Exception:
         return  # Optional telemetry never changes installation outcome.

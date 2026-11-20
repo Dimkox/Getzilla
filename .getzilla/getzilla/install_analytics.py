@@ -145,19 +145,19 @@ def _send_locked(folder, version, env, send, now):
         except FileExistsError:
             pass
         else:
-            with os.fdopen(fd,'w') as stream:
+            with os.fdopen(fd,'w',encoding='utf-8',newline='\n') as stream:
                 json.dump(dict(event_id=secrets.token_hex(16),occurred_at=now,version=version,attempts=0,delivered=False),stream)
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 2048:
             return False
-        record=json.loads(path.read_text())
+        record=json.loads(path.read_text(encoding='utf-8'))
         if record['delivered'] or record['attempts'] >= 3 or not 0 <= now-record['occurred_at'] <= 72*3600:
             return False
         record['attempts']+=1
-        path.write_text(json.dumps(record))
+        path.write_text(json.dumps(record),encoding='utf-8',newline='\n')
         payload=dict(token=env['GETZILLA_INSTALL_TOKEN'],event_id=record['event_id'],event=EVENT,version=record['version'],os=platform.system(),occurred_at=record['occurred_at'])
         send(payload)
         record['delivered']=True
-        path.write_text(json.dumps(record))
+        path.write_text(json.dumps(record),encoding='utf-8',newline='\n')
         return True
     except (OSError,ValueError,KeyError,TypeError):
         return False

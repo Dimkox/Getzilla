@@ -191,7 +191,7 @@ def _closure(lock: dict, profile: str, environment: dict | None = None) -> set[t
 def _rows(path: Path) -> dict[tuple[str, str], set[str]]:
     rows = {}
     pending = ""
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding='utf-8').splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -234,9 +234,9 @@ def _pins(requirements: list[str]) -> set[tuple[str, str]]:
 def check(root: Path) -> list[str]:
     errors = []
     try:
-        lock = tomllib.loads((root / "uv.lock").read_text())
-        project = tomllib.loads((root / "pyproject.toml").read_text())
-        binding = json.loads((root / BINDING).read_text())
+        lock = tomllib.loads((root / "uv.lock").read_text(encoding='utf-8'))
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding='utf-8'))
+        binding = json.loads((root / BINDING).read_text(encoding='utf-8'))
         if set(binding["profiles"]) != set(PROFILES) or binding["schema_version"] != 1:
             raise ValueError("unknown lock profile contract")
         locked_root = next(package for package in lock["package"] if package["source"].get("editable") == ".")
