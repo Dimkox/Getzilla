@@ -391,5 +391,47 @@ class FactoryNativeAccessTests(unittest.TestCase):
 
 
 
+class CommittedQueueWindowTests(unittest.TestCase):
+    def pending(self, deadline=102.0):
+        from getzilla_factory.access_release import _NativeQueue
+        queue = _NativeQueue()
+        prepared = SimpleNamespace(identifier='owned-pending', deadline=deadline,
+                                   authority=(None, None, None, 'owned-scope'))
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.0):
+            entry = queue._cut(prepared, None)
+        return queue, entry
+
+    def test_pending_commit_delay_does_not_consume_committed_dispatch_window(self):
+        queue, entry = self.pending()
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.4):
+            self.assertEqual(queue._ready(), ())
+            queue._finish_commit(entry, 'd' * 64)
+            self.assertEqual(queue._ready(), (entry,))
+        self.assertAlmostEqual(entry.expires, 100.65)
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.5):
+            with self.assertRaises(AccessError):
+                queue._finish_commit(entry, 'd' * 64)
+        self.assertAlmostEqual(entry.expires, 100.65)
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.66):
+            self.assertEqual(queue._ready(), ())
+            with self.assertRaises(AccessError):
+                queue._cut(entry.prepared, entry)
+
+    def test_committed_window_never_renews_original_capture_deadline(self):
+        queue, entry = self.pending(deadline=100.5)
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.4):
+            queue._finish_commit(entry, 'd' * 64)
+        self.assertEqual(entry.expires, 100.5)
+        self.assertEqual(entry.prepared.deadline, 100.5)
+
+    def test_expired_pending_capture_cannot_become_ready(self):
+        queue, entry = self.pending(deadline=100.5)
+        with patch('getzilla_factory.access_release.time.monotonic', return_value=100.5):
+            with self.assertRaises(AccessError):
+                queue._finish_commit(entry, 'd' * 64)
+        self.assertEqual(entry.state, 'pending')
+        self.assertFalse(queue.wakeup.is_set())
+
+
 if __name__ == '__main__':
     unittest.main()
