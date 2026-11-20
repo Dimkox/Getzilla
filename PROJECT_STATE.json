@@ -91,10 +91,12 @@
       431,
       432,
       433,
-      434
+      434,
+      435,
+      436
     ],
-    "issue_inventory_count": 66,
-    "issue_inventory_observed_at": "2026-11-19",
+    "issue_inventory_count": 68,
+    "issue_inventory_observed_at": "2026-11-20",
     "branch": "integration/all-fixes-20261117",
     "open_pull_requests_to_reconcile": [
       425,
@@ -105,7 +107,7 @@
     "target_version": "2.3.1",
     "source_base": "e99548d7cefca730cfad63c2f8cea1afe67bacd8",
     "status": "all_issues_integration_in_progress_full_qualification_merge_release_and_claw_acceptance_pending",
-    "owner_scope": "Resolve all 64 originally inventoried open issues and integration regressions #433 and #434, outstanding commits and open PRs through one combined PR, full verification, merge and release; production target is Claw.",
+    "owner_scope": "Resolve all 64 originally inventoried open issues and integration regressions #433, #434, #435 and #436, outstanding commits and open PRs through one combined PR, full verification, merge and release; production target is Claw.",
     "production_target": {
       "name": "Claw",
       "authority_basis": "Explicit owner target selection in the current delivery session; exact operation/resource grants and technical prerequisites still apply.",
@@ -120,7 +122,9 @@
     "initial_issue_inventory_count": 64,
     "discovered_regressions": [
       433,
-      434
+      434,
+      435,
+      436
     ]
   },
   "historical_pr79_continuation": {
