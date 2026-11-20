@@ -155,6 +155,12 @@ def _pairs_from_pyproject(text: str) -> Iterable[tuple[str, str]]:
     requirements.extend(build_requires)
     for group in (project.get('optional-dependencies') or {}).values():
         requirements.extend(group or [])
+    development = data.get('dependency-groups', {})
+    if not isinstance(development, dict):
+        raise ValueError('malformed dependency groups')
+    for group in development.values():
+        if isinstance(group, list):
+            requirements.extend(item for item in group if isinstance(item, str))
     yield from _pairs_from_requirements('\n'.join(str(item) for item in requirements))
 
 
@@ -576,10 +582,27 @@ def _strict_manifest_pairs(name: str, text: str, ecosystem: str, parse, texts: d
         tools = data.get('tool', {})
         if type(tools) is not dict or type(tools.get('poetry', {})) is not dict or type(tools.get('uv', {})) is not dict:
             raise ValueError('malformed dependency tool declarations')
-        if ('dependency-groups' in data
-                or any(key in tools.get('uv', {}) for key in ('sources', 'index', 'default-index', 'index-url', 'extra-index-url', 'find-links', 'no-index'))
+        if (any(key in tools.get('uv', {}) for key in ('sources', 'index', 'default-index', 'index-url', 'extra-index-url', 'find-links', 'no-index'))
                 or any(key in tools.get('poetry', {}) for key in ('dependencies', 'dev-dependencies', 'group', 'source'))):
             raise ValueError('dependency declarations or source overrides require a qualified resolver')
+        development = data.get('dependency-groups', {})
+        if not isinstance(development, dict):
+            raise ValueError('malformed dependency groups')
+        # Collect every marker branch. Only direct literal pins need no resolver.
+        from .lock_profile_validation import _marker_tree
+        for requirements in development.values():
+            if not isinstance(requirements, list):
+                raise ValueError('malformed dependency group')
+            for requirement in requirements:
+                if not isinstance(requirement, str) or len(requirement.splitlines()) != 1:
+                    raise ValueError('dependency group requires a qualified resolver')
+                pin, separator, marker = requirement.partition(';')
+                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?==[A-Za-z0-9][A-Za-z0-9.+!_-]*', pin.strip()):
+                    raise ValueError('dependency group requires an exact pin')
+                if separator:
+                    if not marker.strip():
+                        raise ValueError('empty dependency marker')
+                    _marker_tree(marker.strip())
         groups = project.get('optional-dependencies', {})
         if not isinstance(groups, dict):
             raise ValueError('malformed dependency groups')

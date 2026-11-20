@@ -157,6 +157,18 @@ class CollectTests(unittest.TestCase):
         })
         self.assertEqual(len(deps), 3)
 
+    def test_strict_group_inventory_counts_all_platforms_and_refuses_unresolved_groups(self):
+        def collect(group):
+            text = '[project]\nname="fixture"\n[dependency-groups]\ndev=' + group
+            return KV._strict_manifest_pairs('pyproject.toml', text, 'PyPI', KV._pairs_from_pyproject, {}, 'pyproject.toml')
+
+        self.assertEqual(collect("""['sample[extra]==1.2', 'other==2; sys_platform == "win32"']"""),
+                         [('sample', '1.2'), ('other', '2')])
+        for group in ('["sample>=1"]', '[{include-group="other"}]', '["sample==1;"]',
+                      """['sample==1; unknown_marker == "linux"']""", '"sample==1"'):
+            with self.subTest(group=group), self.assertRaises(ValueError):
+                collect(group)
+
     def test_build_only_backend_pin_is_collected(self) -> None:
         tmp, root = _repo({'pyproject.toml': '[build-system]\nrequires = ["setuptools==75.8.0"]\n'})
         with tmp:
