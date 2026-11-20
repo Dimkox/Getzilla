@@ -86,6 +86,7 @@ class StudyInspectionResultObservation:
     execution_status: str
     cleanup_status: str
     native_execution_observation: str
+    original_deadline: float
 
 
 def _operation(reference):
@@ -167,6 +168,21 @@ def _start_ticks(pid):
     return raw.rsplit(b')', 1)[1].split()[19].decode('ascii')
 
 
+def _bound_execution_deadline(projection, execution_deadline):
+    original = getattr(projection, 'original_deadline', None)
+    if projection.operation == 'rank_public_study':
+        if type(original) is not float or not math.isfinite(original):
+            raise RetrievalError('study_original_deadline_unavailable')
+        deadline = min(execution_deadline, original)
+    elif projection.operation == 'inspect_public_artifacts' and original is None:
+        deadline = execution_deadline
+    else:
+        raise RetrievalError('study_original_deadline_unavailable')
+    if time.monotonic() >= deadline:
+        raise RetrievalError('study_original_deadline_expired')
+    return deadline
+
+
 class _Owner:
     def __init__(self, operation_ref, projection, admission, request):
         self.operation_ref, self.projection = operation_ref, projection
@@ -182,7 +198,7 @@ class _Owner:
         live = execution._LIVE.get((str(projection.root.resolve()), admission.execution_id))
         if live is None or live[2] != admission.execution_generation:
             raise RetrievalError('study_execution_not_current')
-        self.deadline = live[1]
+        self.deadline = _bound_execution_deadline(projection, live[1])
         self.stack = ExitStack()
         self.reference = None
         self._channel_lock = threading.Lock()
@@ -671,7 +687,7 @@ def check_study_inspection_result(reference, operation_ref):
         raw, len(raw), owner.readback_digest, projection.image_id, projection.registration_sha256,
         record['execution_status'], record['cleanup_status'],
         'native-completed' if owner._native_completed else
-        'attempted-outcome-unknown' if owner._native_start_dispatched else 'not-released')
+        'attempted-outcome-unknown' if owner._native_start_dispatched else 'not-released', owner.deadline)
 
 
 class _Backend:

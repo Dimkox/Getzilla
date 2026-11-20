@@ -1,6 +1,7 @@
 import importlib
 import pickle
 import io
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, Mock
@@ -30,6 +31,17 @@ class StudySupervisorTests(unittest.TestCase):
         for fake in ({'native_executed': True}, object.__new__(owner.StudyInspectionResultRef)):
             with self.subTest(kind=type(fake)), self.assertRaises(ValueError):
                 owner.check_study_inspection_result(fake, object())
+
+    def test_rank_deadline_cannot_restart_the_inspection_or_review_budget(self):
+        owner = self.owner()
+        now = time.monotonic()
+        rank = SimpleNamespace(operation='rank_public_study', original_deadline=now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 100.), now + 5.)
+        self.assertEqual(owner._bound_execution_deadline(rank, now + 2.), now + 2.)
+        for value in (None, now - 1., float('inf'), 'caller timestamp'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                owner._bound_execution_deadline(SimpleNamespace(
+                    operation='rank_public_study', original_deadline=value), now + 100.)
 
     def test_raw_data_cannot_start_a_container_when_operation_owner_unavailable(self):
         owner = self.owner()

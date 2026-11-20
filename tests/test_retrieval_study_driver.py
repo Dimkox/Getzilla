@@ -40,9 +40,12 @@ class StudyDriverTests(unittest.TestCase):
                       for i in range(80))
         inputs = SimpleNamespace(dataset=({}, {'tasks': tasks}, {'queries': queries}, {}))
         calls, advances, persisted = [], [], []
+        self.last_calls, self.last_advances = calls, advances
         owner = SimpleNamespace(deadline=time.monotonic() + 10000, operation_ref=object())
         def request(stage, payload, **kwargs):
             calls.append((stage, payload, kwargs))
+            if getattr(self, 'fail_query', False) and payload['op'] == 'score':
+                raise ValueError('controlled owned query failure')
             return {'rankings': {'exact_symbol': [], 'bm25': []}, 'packing': {}}
         owner._request = request
         def advance(reference):
@@ -79,6 +82,13 @@ class StudyDriverTests(unittest.TestCase):
                          [row['query_id'] for row in queries])
         self.assertTrue(all(row[2]['source_cuts'] == ('first-actual-cut', 'second-actual-cut')
                             for row in scored))
+
+    def test_owned_query_failure_stops_without_repeat_or_second_model(self):
+        self.fail_query = True
+        with self.assertRaisesRegex(ValueError, 'controlled owned query failure'):
+            self.test_all_fixed_query_passes_and_six_fresh_process_steps_without_native()
+        self.assertEqual(len([row for row in self.last_calls if row[1]['op'] == 'score']), 1)
+        self.assertEqual(len(self.last_advances), 2)
 
 
 if __name__ == '__main__':
