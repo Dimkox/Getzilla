@@ -19,6 +19,11 @@ def _identity(info):
 
 
 class HeldArtifacts:
+    """Acquisition has a finite I/O deadline; check() is lifetime-neutral custody.
+
+The execution/operation/source owners enforce their own original deadlines.
+Metadata snapshots never extend or replace any of those permits.
+"""
     def __init__(self, root, files, *, deadline=None, _verify_hash=True):
         self._stack = ExitStack()
         self._bindings = []
@@ -26,8 +31,14 @@ class HeldArtifacts:
         self._closed = False
         self.hashes_verified = _verify_hash
         self._deadline = time.monotonic() + 180 if deadline is None else deadline
+        self._opened = 0
         try:
             self._tick()
+            import resource
+            limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+            present = len(os.listdir('/proc/self/fd'))
+            self._fd_headroom = (8256 if limit == resource.RLIM_INFINITY
+                                 else max(0, limit - present - 64))
             root = Path(root)
             if (not root.is_absolute() or '..' in root.parts or type(files) is not tuple
                     or not 1 <= len(files) <= 4096):
@@ -89,7 +100,7 @@ class HeldArtifacts:
             self.check()
         except BaseException as error:
             self.close()
-            if isinstance(error, (OSError, TypeError)):
+            if isinstance(error, (OSError, TypeError, AttributeError, ImportError)):
                 raise RetrievalError('artifact_custody_unavailable') from None
             raise
 
@@ -98,9 +109,11 @@ class HeldArtifacts:
             raise RetrievalError('artifact_deadline')
 
     def _open(self, path, *, directory):
+        self._fd_budget()
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
                              | os.O_NONBLOCK | (os.O_DIRECTORY if directory else 0))
         self._stack.callback(os.close, descriptor)
+        self._opened += 1
         self._qualified(os.fstat(descriptor), directory)
         return descriptor
 
@@ -112,10 +125,12 @@ class HeldArtifacts:
             raise RetrievalError('artifact_custody_unavailable')
 
     def _child(self, parent, name, *, directory):
+        self._fd_budget()
         before = os.stat(name, dir_fd=parent, follow_symlinks=False)
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
                              | os.O_NONBLOCK | (os.O_DIRECTORY if directory else 0), dir_fd=parent)
         self._stack.callback(os.close, descriptor)
+        self._opened += 1
         after = os.fstat(descriptor)
         self._qualified(after, directory)
         if _identity(before) != _identity(after):
@@ -125,6 +140,10 @@ class HeldArtifacts:
         identity = _identity(after)[:5] if directory else _identity(after)
         self._bindings.append((parent, name, descriptor, identity, directory))
         return descriptor
+
+    def _fd_budget(self):
+        if self._opened >= self._fd_headroom:
+            raise RetrievalError('artifact_file_descriptor_budget')
 
     def check(self):
         if self._closed:

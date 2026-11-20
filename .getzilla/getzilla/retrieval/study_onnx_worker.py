@@ -59,7 +59,8 @@ class ModelContract:
 
 
 def _open_session(graph_path, contract, ort):
-    if type(contract) is not ModelContract or graph_path != '/model/onnx/model.onnx':
+    if (type(contract) is not ModelContract
+            or graph_path != f'/model/{contract.model}/onnx/model.onnx'):
         raise RetrievalError('onnx_contract_mismatch')
     try:
         options = ort.SessionOptions()
