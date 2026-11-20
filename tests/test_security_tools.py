@@ -492,6 +492,19 @@ class SecurityToolTests(unittest.TestCase):
         self.assertEqual(result.status, 'fail')
         self.assertTrue(any(item.get('code') == 'secret-input-unavailable' for item in result.details))
 
+    def test_native_benchmark_exception_is_bound_to_content_and_path(self):
+        from getzilla.verification import _secret_scan
+        relative = security_tools._REVIEWED_BENCHMARK_PATH
+        source = (Path(__file__).resolve().parents[1] / relative).read_bytes()
+        destination = self.root / relative
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(source)
+        self.assertEqual(_secret_scan(self.root, [relative]).status, 'pass')
+        destination.write_bytes(source[:-1] + b'!')
+        self.assertEqual(_secret_scan(self.root, [relative]).status, 'fail')
+        (self.root / 'other.json').write_bytes(source)
+        self.assertEqual(_secret_scan(self.root, ['other.json']).status, 'fail')
+
     def test_unknown_or_corrupt_source_blocks_without_requesting_a_custom_codec(self):
         requested = []
 

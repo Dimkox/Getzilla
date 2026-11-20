@@ -36,6 +36,9 @@ TRIVY_DB_URL = 'ghcr.io/aquasecurity/trivy-db:2'
 MAX_REPORT = 64 * 1024 * 1024
 MAX_SOURCE_FILE = 16 * 1024 * 1024
 MAX_SOURCE_TOTAL = 256 * 1024 * 1024
+_REVIEWED_BENCHMARK_PATH = 'engineering/benchmarks/issue162/results/large-results.json'
+_REVIEWED_BENCHMARK_SIZE = 3_244_376
+_REVIEWED_BENCHMARK_SHA256 = '4f64f31130d92b5477168a0aa97749273e2a46e2043176884d32b28c00067838'
 _DIGEST_IMAGE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}\Z')
 _SAST_SUFFIXES = {'.py', '.php', '.js', '.jsx', '.ts', '.tsx', '.java', '.go', '.rb', '.rs', '.c', '.cc', '.cpp', '.cs'}
 _SAST_EXCLUDED = {'tests', 'fixtures', 'engineering', 'examples', 'dist', 'packages', 'vendor', 'node_modules'}
@@ -652,9 +655,13 @@ def _secret_input_core(root: Path, files: list[str], trusted_root: Path, *, file
             gaps.append({'code': 'disposition-config-invalid', 'message': 'reviewed disposition binding unavailable'})
         stage = 'input'
         for relative in files:
-            raw = _regular(root / relative, limit=min(file_limit, MAX_SOURCE_TOTAL - total))
+            reviewed_report = native and relative == _REVIEWED_BENCHMARK_PATH
+            limit = _REVIEWED_BENCHMARK_SIZE if reviewed_report else file_limit
+            raw = _regular(root / relative, limit=min(limit, MAX_SOURCE_TOTAL - total))
             total += len(raw)
             digest = hashlib.sha256(raw).hexdigest()
+            if reviewed_report and len(raw) > file_limit and digest != _REVIEWED_BENCHMARK_SHA256:
+                raise SecurityDataError("oversized benchmark report differs from reviewed content")
             try:
                 views = [(_secret_text(relative, raw), False)]
             except (ValueError, SyntaxError, LookupError):
