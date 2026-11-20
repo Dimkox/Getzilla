@@ -102,3 +102,10 @@ class StudySupervisorTests(unittest.TestCase):
         self.assertEqual(env['OMP_NUM_THREADS'], '1')
         with self.assertRaises(ValueError):
             owner._container_environment(['PATH=a', 'PATH=b'])
+
+    def test_actual_environment_order_is_not_authority_and_duplicates_refuse(self):
+        owner = self.owner()
+        self.assertEqual(owner._observed_environment(['PATH=fixed', 'OMP_NUM_THREADS=1']),
+                         owner._observed_environment(['OMP_NUM_THREADS=1', 'PATH=fixed']))
+        with self.assertRaises(ValueError):
+            owner._observed_environment(['PATH=fixed', 'PATH=other'])
