@@ -8,7 +8,6 @@ This local store does not prove deployment-wide or native-host enforcement.
 from dataclasses import asdict, dataclass
 from contextvars import ContextVar
 
-SHARED_DISPATCH_GUARD = ContextVar("shared_landing_dispatch_guard", default=None)
 import hashlib
 import math
 import re
@@ -16,6 +15,8 @@ import re
 from .contracts import canonical_json
 from .landing_contracts import strict_json_object
 from .landing_provider import LandingProviderError
+
+SHARED_DISPATCH_GUARD = ContextVar("shared_landing_dispatch_guard", default=None)
 
 OPERATIONS = frozenset({"paid-inference", "paid-image", "paid-video"})
 from importlib.resources import files
