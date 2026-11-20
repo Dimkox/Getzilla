@@ -81,6 +81,9 @@ class FailoverCoordinator:
                            "child_id": child, "state": "planned", "receipt": None}
                 record["attempts"].append(attempt)
                 self.journal.save(record)
+            # A resumed dispatching attempt has no proof its POST response was
+            # delivered. It may recover a winner, but cannot authorize fallback.
+            ambiguous_delivery = attempt['state'] == 'dispatching'
             client = None
             try:
                 client = self.backend_factory(backend, config=self.config,
@@ -101,7 +104,7 @@ class FailoverCoordinator:
                     try:
                         client.submit(attempt["child_id"], payload, record["request"]["media_type"])
                     except BackendAmbiguous:
-                        pass  # Only the same child may now be observed.
+                        ambiguous_delivery = True  # Only this child may be observed.
                 receipt = client.observe(attempt["child_id"])
                 observation, artifact = self._bind_receipt(record, attempt, receipt)
                 attempt["receipt"] = receipt
@@ -118,6 +121,10 @@ class FailoverCoordinator:
                     return self._finish(record, "artifact_ready", "selected")
                 if not receipt["terminal"] or observation is None:
                     return self._finish(record, "needs_human", "outcome_unknown", purge=False)
+                if self.config.shared_task_id is not None and (
+                    ambiguous_delivery or observation.usage_status not in {'reported','not_dispatched'}
+                ):
+                    return self._finish(record,'needs_human','outcome_unknown',purge=False)
                 if (receipt["phase"] == "provider" and receipt["artifact"] is None
                         and receipt["state"] in {"provider_unavailable", "needs_human"}
                         and observation.category in FALLBACK_CATEGORIES):

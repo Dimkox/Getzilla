@@ -305,7 +305,12 @@ def _authority(store, account_id, task_id):
     task = PaidTaskV1(**strict_json_object(task[0]))
     account.validate()
     task.validate()
-    now = store._clock_highwater()
+    # Callers commit one fresh time observation before entering this possibly
+    # failing transaction. Never observe a later clock only to roll it back.
+    clock = store._connection.execute("SELECT highwater FROM shared_control_clock WHERE singleton=1").fetchone()
+    if clock is None:
+        _deny("paid_authority_clock_required")
+    now = clock[0]
     if row[1] != 0:
         _deny("paid_disabled")
     if not account.starts_at <= now < min(account.expires_at, task.deadline_at):

@@ -293,3 +293,94 @@ class SharedUnknownTransportTests(unittest.TestCase):
                     resumed=caller.resume('unknown-child')
                     self.assertEqual('outcome_unknown',resumed['reason'])
                     self.assertEqual(['GET','POST','GET','GET'],[item[0] for item in server.requests])
+
+
+class SharedReviewedRegressionTests(unittest.TestCase):
+    setUp = SharedControlBoundaryTests.setUp
+
+    def test_observe_refuses_reconfigured_actual_paid_task_and_source(self):
+        from getzilla_factory.paid_admission import PaidTaskV1,PaidAccountV1,PaidPriceV1,PaidExecutionAdmission
+        from getzilla_factory.landing_contracts import strict_json_object,LandingInputV1
+        key=next(iter(self.control.tasks));installed=self.control.tasks[key]
+        bound=SharedControlBindingV1('user-a','account','paid-child','logical','a'*64,0,
+            self.document['profile_digest'],installed.credential_digest,self.expected.exact_base_sha,self.expected.exact_base_tree)
+        self.store.create_or_replay(LandingJobRecord(self.expected,'accepted',None,None),command_key=self.expected.job_id,request_digest=self.expected.input_digest,control_binding=bound)
+        self.assertEqual(200,self.client.get(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers).status_code)
+        account=PaidAccountV1(**strict_json_object(self.store._connection.execute("SELECT authority FROM paid_accounts").fetchone()[0]))
+        task=PaidTaskV1(**strict_json_object(self.store._connection.execute("SELECT authority FROM paid_tasks").fetchone()[0]))
+        price=PaidPriceV1(**strict_json_object(self.store._connection.execute("SELECT price FROM paid_prices").fetchone()[0]))
+        replacement=replace(task,task_id='replacement-paid')
+        self.store.install_paid_authority(account,replacement,(price,))
+        new_admission=PaidExecutionAdmission(self.store,'account','replacement-paid','loader','c'*64)
+        self.control.tasks[key]=replace(installed,admission=new_admission)
+        self.assertEqual(403,self.client.get(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers).status_code)
+        facts=self.expected.to_dict();facts.pop('input_digest');facts['job_id']='different-preapproved-child'
+        self.control.tasks[key]=replace(installed,expected_source=LandingInputV1.from_facts(facts))
+        self.assertEqual(403,self.client.get(f'/v1/shared-landing-control/jobs/{self.expected.job_id}',headers=self.headers).status_code)
+
+
+class SharedClockReviewedRegressionTests(unittest.TestCase):
+    setUp = paid_tests.PaidAdmissionTests.setUp
+
+    def test_second_authority_observation_is_durable_before_expiry_denial(self):
+        from getzilla_factory.paid_admission import PaidExecutionAdmission
+        from getzilla_factory.landing_sqlite_store import SQLiteLandingJobStore
+        initial=self.now
+        future=initial+timedelta(seconds=301)
+        ticks=iter((initial,future))
+        self.store._clock=lambda:next(ticks)
+        reservation=self.admission.reserve('qwen','qwen-plus','paid-inference','d'*64,50,20)
+        with self.assertRaisesRegex(Exception,'paid_expired'):
+            self.admission.dispatch(reservation,'a'*64,'d'*64,'qwen','qwen-plus')
+        path=self.store.database_path;self.store.close()
+        self.store=SQLiteLandingJobStore(path.parent,repository_root=__import__('pathlib').Path(self.tmp.name)/'repo',clock=lambda:initial)
+        self.admission=PaidExecutionAdmission(self.store,'account','task','consumer-key','c'*64)
+        with self.assertRaisesRegex(Exception,'clock_rollback'):
+            self.admission.reserve('qwen','qwen-plus','paid-inference','e'*64,50,20)
+
+    def test_failed_binding_conflict_retains_new_clock_highwater(self):
+        item=source()
+        record=LandingJobRecord(item,'accepted',None,None)
+        binding=SharedControlBindingV1(item.tenant_id,'account','task','logical','a'*64,0,'b'*64,'e'*64,item.exact_base_sha,item.exact_base_tree)
+        self.store.create_or_replay(record,command_key=item.job_id,request_digest=item.input_digest,control_binding=binding)
+        initial=self.now;self.now+=timedelta(seconds=10)
+        with self.assertRaisesRegex(Exception,'idempotency_conflict'):
+            self.store.create_or_replay(record,command_key=item.job_id,request_digest=item.input_digest,control_binding=replace(binding,account_id='different'))
+        self.now=initial
+        with self.assertRaisesRegex(Exception,'clock_rollback'):
+            self.store.create_or_replay(record,command_key=item.job_id,request_digest=item.input_digest,control_binding=binding)
+
+
+class SharedAmbiguousReviewedRegressionTests(unittest.TestCase):
+    def test_ambiguous_or_unknown_spend_receipt_never_authorizes_next_paid_child(self):
+        import tempfile
+        from pathlib import Path
+        from factory.tests.test_landing_failover import configuration,ScriptedBackends
+        from factory.tests.test_paid_admission import SCRATCH
+        from getzilla_factory.landing_failover import FailoverCoordinator
+        from getzilla_factory.landing_failover_config import FailoverConfig
+        from getzilla_factory.landing_failover_journal import CallerJournal
+        from getzilla_factory.landing_failover_transport import BackendAmbiguous
+        for dropped in (False,True):
+            with self.subTest(dropped=dropped),tempfile.TemporaryDirectory(dir=SCRATCH) as temporary:
+                document=configuration(Path(temporary),count=2)
+                document.update(schema_version=2,shared_task_id='logical')
+                document['backends'][1]['token_file']=document['backends'][0]['token_file']
+                config=FailoverConfig.from_dict(document)
+                script=ScriptedBackends({'qwen-intl':'transport','grok-vision':'success'})
+                def factory(backend,**kwargs):
+                    client=script.factory(backend,**kwargs)
+                    submit=client.submit
+                    def ambiguous(*arguments):
+                        submit(*arguments)
+                        if dropped:
+                            raise BackendAmbiguous('lost response')
+                    client.submit=ambiguous
+                    return client
+                with CallerJournal(config) as journal:
+                    caller=FailoverCoordinator(config,journal,backend_factory=factory)
+                    result=caller.submit('ambiguous',b'brief','text/plain')
+                    self.assertEqual(('needs_human','outcome_unknown'),(result['state'],result['reason']))
+                    self.assertEqual(['qwen-intl'],script.calls)
+                    self.assertEqual('outcome_unknown',caller.resume('ambiguous')['reason'])
+                    self.assertEqual(['qwen-intl'],script.calls)

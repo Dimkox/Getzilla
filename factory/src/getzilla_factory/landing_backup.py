@@ -143,7 +143,7 @@ def _snapshot(database, destination, identity, budget):
             source.execute("PRAGMA user_version").fetchone()[0],
         )
         if actual != identity and not (
-            identity == (APPLICATION_ID, SCHEMA_VERSION) and actual in {(APPLICATION_ID, 1), (APPLICATION_ID, 2)}
+            identity == (APPLICATION_ID, SCHEMA_VERSION) and actual in {(APPLICATION_ID, 1), (APPLICATION_ID, 2), (APPLICATION_ID, 3)}
         ):
             raise BackupError("snapshot_schema")
         target = sqlite3.connect(destination, timeout=5)

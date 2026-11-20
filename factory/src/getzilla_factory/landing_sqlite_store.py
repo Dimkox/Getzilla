@@ -228,8 +228,8 @@ class SQLiteLandingJobStore:
         if control_binding is not None and type(control_binding) is not SharedControlBindingV1:
             raise _conflict()
         binding = control_binding.encoded() if control_binding is not None else None
+        self.authority_time()
         with self._transaction():
-            self._clock_highwater()
             old_binding = self._connection.execute(
                 "SELECT binding FROM shared_control_bindings WHERE tenant_id=? AND repository_id=? AND job_id=?", identity
             ).fetchone()

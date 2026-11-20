@@ -167,15 +167,28 @@ class SharedAuthorityControl:
         session = self._session(authorization)
         actor = self.authenticator.access_authority.actor(session)
         installed = self._select(actor,task_id,profile)
+        if job != installed.expected_source.job_id or repository != installed.expected_source.repository_id:
+            raise HTTPException(403,'shared child denied')
         record = self.owned.store.get(actor.actor_id,repository,job)
+        if record.source != installed.expected_source:
+            raise HTTPException(403,'shared child denied')
         self._check(installed,session,repository,record.source.exact_base_sha,record.source.exact_base_tree)
         row = self.owned.store._connection.execute(
             'SELECT binding FROM shared_control_bindings WHERE tenant_id=? AND repository_id=? AND job_id=?',
             (actor.actor_id,repository,job)).fetchone()
         if row is None:
             raise HTTPException(404,'shared child absent')
-        bound = strict_json_object(row[0])
-        if bound['control_task_id'] != task_id or bound['profile_digest'] != profile:
+        try:
+            bound = SharedControlBindingV1(**strict_json_object(row[0]))
+            bound.encoded()
+        except (TypeError,ValueError,LandingServiceError):
+            raise HTTPException(403,'shared child denied') from None
+        expected = SharedControlBindingV1(actor.actor_id,installed.admission.account_id,
+            installed.admission.task_id,task_id,bound.parent_digest,bound.ordinal,profile,
+            installed.credential_digest,installed.expected_source.exact_base_sha,installed.expected_source.exact_base_tree)
+        child = 'fo-'+landing_digest('landing-failover-child-v1',
+            {'parent':bound.parent_digest,'ordinal':bound.ordinal,'profile':profile})[:48]
+        if bound != expected or child != job:
             raise HTTPException(403,'shared child denied')
         return installed.service.attempt_status(job,repository_id=repository,actor=actor)
 

@@ -160,6 +160,28 @@ class LandingBackupTests(HostFixture):
         path.write_bytes(raw)
         return hashlib.sha256(raw).hexdigest()
 
+    def test_preupgrade_v3_snapshot_restores_then_migrates_without_replay(self):
+        from getzilla_factory.landing_service import LandingJobRecord
+        from getzilla_factory.landing_sqlite_store import _validate_schema
+        from factory.tests.test_landing_sqlite_store import source
+        store=self.reopen_store()
+        item=source()
+        store.create_or_replay(LandingJobRecord(item,'accepted',None,None),command_key=item.job_id,request_digest=item.input_digest)
+        database=store.database_path;store.close()
+        with sqlite3.connect(database) as connection:
+            connection.execute('DROP TABLE shared_control_bindings')
+            connection.execute('DROP TABLE shared_control_clock')
+            connection.execute('PRAGMA user_version=3')
+            _validate_schema(connection,version=3)
+        saved=self.save()
+        self.assertEqual('snapshot_saved',saved['status'])
+        self.move_old_roots()
+        restored=landing_backup.restore_snapshot(self.config,self.snapshot,saved['manifest_sha256'])
+        self.assertFalse(restored['provider_replay'])
+        upgraded=self.reopen_store()
+        self.assertEqual(4,upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual('needs_human',upgraded.get(item.tenant_id,item.repository_id,item.job_id).state)
+
     def test_round_trip_restores_inactive_sqlite_and_artifacts_without_replay(self):
         saved = self.save()
         self.assertEqual("snapshot_saved", saved["status"])
