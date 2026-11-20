@@ -84,6 +84,7 @@ class NeutralHooksTests(unittest.TestCase):
             install_into.materialize_new(ROOT, root, selection=install_into.PayloadSelection(('codex',), engine_archive=True))
             self.assertFalse((root / '.grok').exists())
             self.assertTrue((root / '.getzilla/getzilla.zip').is_file())
+            self.assertFalse((root / '.getzilla/getzilla/policy.py').exists())
             child = root / 'src'
             child.mkdir()
             hook = json.loads((root / '.codex/hooks.json').read_bytes())['hooks']['PreToolUse'][0]['hooks'][0]
@@ -101,6 +102,28 @@ class NeutralHooksTests(unittest.TestCase):
                     self.assertEqual(verdict, {})
                 else:
                     self.assertIn(expected, json.dumps(verdict).lower())
+
+    def test_archived_engine_missing_policy_still_denies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'consumer'
+            install_into.materialize_new(
+                ROOT, root, selection=install_into.PayloadSelection(('codex',), engine_archive=True))
+            archive = root / '.getzilla/getzilla.zip'
+            with zipfile.ZipFile(archive) as source:
+                members = [(item, source.read(item)) for item in source.infolist()
+                           if item.filename != 'getzilla/policy.py']
+            with zipfile.ZipFile(archive, 'w') as target:
+                for item, content in members:
+                    target.writestr(item, content)
+            child = root / 'src'
+            child.mkdir()
+            proc = subprocess.run(
+                [sys.executable, str(root / '.getzilla/hooks/pre_tool_use.py'), '--harness', 'codex'],
+                cwd=child, input=json.dumps({'cwd': str(root), 'session_id': 'neutral-test',
+                    'tool_name': 'Bash', 'tool_input': {'command': 'echo hello'}}),
+                text=True, capture_output=True, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_non_grok_install_has_no_grok_files_and_has_shared_sources(self):
         payload = {entry.path: entry for entry in install_into.build_payload(
