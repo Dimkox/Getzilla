@@ -130,6 +130,9 @@ class LocalGrantTests(unittest.TestCase):
         self.assertTrue(self.valid(other, 'external-write'))
         registration = other/'.git'
         registration.chmod(registration.stat().st_mode | stat.S_IWRITE)
+        # Git marks this file hidden on Windows; opening it with 'w' can fail
+        # even after clearing read-only. Replace the registration instead.
+        registration.unlink()
         registration.write_text('gitdir: ../missing\n', encoding='utf-8')
         self.assertFalse(self.valid(other, 'external-write'))
         original = root/'.git'

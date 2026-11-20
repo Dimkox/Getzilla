@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -13,6 +14,7 @@ import stat
 import sys
 sys.dont_write_bytecode = True
 import time
+import zipimport
 from pathlib import Path
 from typing import Any
 
@@ -995,6 +997,22 @@ def _progress_loop(current_tool: str, current_input: dict[str, Any], payload: di
         return None
 
 
+def _local_policy_source_present() -> bool:
+    """Accept only this installation's loose or zipimport policy source."""
+    stack = Path(__file__).resolve().parents[1]
+    if (stack / 'getzilla/policy.py').is_file():
+        return True
+    try:
+        spec = importlib.util.find_spec('getzilla.policy')
+        expected = stack / 'getzilla.zip/getzilla/policy.py'
+        return (spec is not None and spec.origin is not None
+                and Path(spec.origin).resolve() == expected.resolve()
+                and isinstance(spec.loader, zipimport.zipimporter)
+                and isinstance(spec.loader.get_data(spec.origin), bytes))
+    except (ImportError, OSError, ValueError, AttributeError):
+        return False
+
+
 def main() -> None:
     current_tool, current_input = '', {}
     classified = False
@@ -1006,7 +1024,7 @@ def main() -> None:
             raise ValueError('invalid-tool-request')
         current_input = tool_input(payload)
         classified = True
-        if not (Path(__file__).resolve().parents[1] / 'getzilla/policy.py').is_file():
+        if not _local_policy_source_present():
             _deny(payload, current_tool, current_input, 'Mandatory policy module is missing.')
             return
         try:
