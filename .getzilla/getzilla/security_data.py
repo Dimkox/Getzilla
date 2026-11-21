@@ -109,15 +109,23 @@ def _json(data: bytes) -> dict[str, Any]:
 
 
 def osv_aliases(record: dict[str, Any]) -> list[str]:
-    """Validate identifiers used for exception and CVE matching without coercion."""
+    """Keep strict alias admission; rejected shape diagnostics contain hashes only."""
+    from .security_osv_diagnostics import alias_rejection
+    def rejected(index=None):
+        detail = alias_rejection(record, index)
+        error = SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers' + '; ' + json.dumps(detail, sort_keys=True))
+        error.osv_alias_detail = detail
+        return error
     if not isinstance(record, dict):
-        raise SecurityDataError('OSV aliases require a record object')
-    aliases = record.get('aliases', [])
+        raise rejected()
+    aliases = record.get('aliases')
     if aliases is None:
         return []
-    if (not isinstance(aliases, list) or not all(
-            isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9:_.-]+', alias) for alias in aliases)):
-        raise SecurityDataError('OSV aliases must be an array of valid vulnerability identifiers')
+    if not isinstance(aliases, list):
+        raise rejected()
+    for index, alias in enumerate(aliases):
+        if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9:_.-]+', alias):
+            raise rejected(index)
     return list(aliases)
 
 
@@ -252,6 +260,14 @@ def osv_coverage(payload: bytes, ecosystem: str) -> dict[str, Any]:
             if not record_ids or not covered:
                 raise ValueError(f'empty OSV archive or missing {ecosystem} coverage')
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, zlib.error, EOFError, RuntimeError) as exc:
+        from .security_osv_diagnostics import snapshot_alias_message
+        alias_message = snapshot_alias_message(ecosystem, exc, current_member, current_id)
+        if alias_message is not None:
+            error = SecurityDataError(alias_message)
+            # Retain the original bounded hash-only record across exception
+            # wrapping, before the updater's smaller human log projection.
+            error.osv_snapshot_detail = json.loads(alias_message.removeprefix('aliases: '))
+            raise error from exc
         location = ''.join(f' {label}_sha256={hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()}'
                            for label, value in (('member', current_member), ('id', current_id)) if value is not None)
         raise SecurityDataError(f'invalid OSV snapshot for {ecosystem}: {exc}{location}') from exc

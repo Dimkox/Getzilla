@@ -313,7 +313,7 @@ class CoreTestRun:
     coverage_export: ProcessResult | None = None
 
 
-def _stop(process: subprocess.Popen) -> None:
+def _stop(process: subprocess.Popen, *, grace_seconds: float | None = None) -> None:
     """Stop only the session or Job Object created by execute; repeated calls are safe."""
     job = fsx.owned_job(process)
     if os.name == 'posix':
@@ -326,7 +326,7 @@ def _stop(process: subprocess.Popen) -> None:
         else:
             # Also terminate descendants when their group leader already exited.
             diagnostics.ownership_mark('grace')
-            deadline = time.monotonic() + _TERM_GRACE
+            deadline = time.monotonic() + (_TERM_GRACE if grace_seconds is None else grace_seconds)
             while time.monotonic() < deadline:
                 process.poll()
                 try:
@@ -456,13 +456,21 @@ def _output_file(retained: dict[str, ProcessResult | CleanupMetadata], label: st
 
 
 @diagnostics.observed('owned-command', stage='command')
-def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT) -> ProcessResult:
+def execute(command: list[str], root: Path, environment: dict[str, str], *, timeout: int = TIMEOUT,
+            termination_grace: float | None = None) -> ProcessResult:
     """Bound output and stop this invocation's process tree on interruption."""
     diagnostics.ownership_mark('execute')
     run = diagnostics.current()
     if run:
         environment = run.child_environment(environment)
     started = time.monotonic()
+    if termination_grace is not None and not 0 < termination_grace <= 180:
+        raise RunnerError('termination grace must be bounded by 180 seconds')
+    def stop(process):
+        if termination_grace is None:
+            _stop(process)
+        else:
+            _stop(process, grace_seconds=termination_grace)
     retained: dict[str, ProcessResult | CleanupMetadata] = {}
     with _cancellation() as cancelled, _output_file(retained, 'stdout', cancelled,
             file_stage='stdout_capture_file', directory_stage='stdout_capture_directory') as stdout, \
@@ -504,7 +512,7 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         except BaseException as exc:
             diagnostics.retain_stop(exc, replace(stop_metadata, decision='primary_exception'))
             try:
-                _stop(process)
+                stop(process)
             except Exception as cleanup:
                 _retain_cleanup(exc, _cleanup_failure('owned_stop_reap', cleanup))
                 exc.add_note(f'owned process cleanup failed: {cleanup}')
@@ -513,7 +521,7 @@ def execute(command: list[str], root: Path, environment: dict[str, str], *, time
         stop_metadata = (diagnostics.child_stop(original_returncode) if stop_metadata.decision == 'unavailable' else stop_metadata)
         retained['stop_metadata'] = stop_metadata
         try:
-            _stop(process)
+            stop(process)
         except Exception as exc:
             cleanup_metadata = _merge_cleanup(cleanup_metadata, _cleanup_failure('owned_stop_reap', exc))
             retained['cleanup_metadata'] = cleanup_metadata
@@ -914,6 +922,7 @@ def _run_directory(prefix: str, retained: dict[str, ProcessResult]):
 
 
 @diagnostics.entrypoint('core-tests')
+@diagnostics.observed('core-controller', stage='run')
 def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
     measured = mode in {'pr', 'release'}
     workers, engine = select_engine(workers, measured)
@@ -971,9 +980,11 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             if workers and engine == 'coverage-unittest-parallel':
                 test_files = _unittest_files(root)
                 workers = min(workers, len(test_files))
-                tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
+                with diagnostics.span('core-test-process', stage='run'):
+                    tests = _parallel_coverage_unittest(root, config, data_file, workers, environment, test_files=test_files)
             else:
-                tests = execute(command, root, environment)
+                with diagnostics.span('core-test-process', stage='run'):
+                    tests = execute(command, root, environment)
                 if engine != 'pytest-xdist':
                     tests = _unittest_result(tests, result_file)
             diagnostics.record_core_stop(tests)
@@ -993,9 +1004,11 @@ def run_core_tests(root: Path, mode: str, workers: int) -> CoreTestRun:
             else:
                 exporting = False
                 try:
-                    coverage = execute(coverage_command, root, environment, timeout=120)
+                    with diagnostics.span('core-coverage-report', stage='run'):
+                        coverage = execute(coverage_command, root, environment, timeout=120)
                     exporting = True
-                    exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
+                    with diagnostics.span('core-coverage-export', stage='run'):
+                        exported = execute([sys.executable, '-m', 'coverage', 'json', f'--rcfile={config}', '-o', str(report_file)], root, environment, timeout=120)
                 except RunCancelled as exc:
                     exc.core_run = CoreTestRun(tests, exc.result, workers, versions, facts, progress,
                                               exc.result if exporting else None)

@@ -9,6 +9,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.getzilla'))
 from tests.branch_support import git
 
 class CiEvidenceTests(unittest.TestCase):
+    def test_live_export_rejects_missing_manifest_and_omits_unselected_authority(self):
+        from getzilla import ci_evidence
+        self.assertTrue(hasattr(ci_evidence, 'export_live_evidence'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'observations'
+            source.mkdir()
+            with self.assertRaises(ValueError):
+                ci_evidence.export_live_evidence(source, root / 'missing')
+            payload = b'actual test output'
+            (source / 'command.log').write_bytes(payload)
+            (source / 'private-grants.json').write_text('do not export')
+            (source / 'manifest.json').write_text(json.dumps({'schema': 'getzilla-live-acceptance-v1',
+                'files': [{'path': 'command.log', 'sha256': hashlib.sha256(payload).hexdigest()}]}))
+            ci_evidence.export_live_evidence(source, root / 'export')
+            self.assertEqual({path.name for path in (root / 'export').iterdir()}, {'manifest.json', 'command.log'})
+
     def test_archive_exports_exact_referenced_immutable_verification_blob(self):
         from getzilla.ci_evidence import export_local_evidence
         from getzilla.receipts import MAX_RECEIPT_BYTES, write_receipt

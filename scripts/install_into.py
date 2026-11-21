@@ -51,6 +51,7 @@ MANAGED_DIRS = (
 MANAGED_FILES = (
     "scripts/getzilla_search_gateway.py",
     "docs/search-gateway.md",
+    "docs/isolated-ci-acceptance.md",
     "scripts/getzilla_design_reference.py",
     "docs/design-reference.md",
     *sorted(FACTORY_SUPPORT_FILES),
@@ -78,6 +79,10 @@ MANAGED_FILES = (
     "scripts/getzilla_audit_bundle.py",
     "scripts/getzilla_compliance.py",
     "scripts/getzilla_vulns.py",
+    "scripts/getzilla_security.py",
+    "scripts/getzilla_live.py",
+    "scripts/getzilla_live_lifecycle.py",
+    "scripts/getzilla_ci_admission.py",
     "scripts/getzilla_review.py",
     "scripts/getzilla_approve.py",
     "scripts/getzilla_components.py",
