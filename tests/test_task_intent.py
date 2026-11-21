@@ -368,6 +368,19 @@ class TaskIntentTests(unittest.TestCase):
             self.assertFalse(allowed)
             self.assertIn('scope_sync_required', reason)
 
+    def test_configured_tool_criterion_is_not_duplicated_by_the_native_python_runner(self):
+        from getzilla.verification_plan import _native_obligations
+        with project_copy(git=True) as root:
+            route = self.task(root)
+            (root / '.getzilla-verification.json').write_text(json.dumps({'schema_version': 1, 'checks': [{
+                'id': 'browser-contract', 'tool': 'playwright', 'commands': [['node', 'run-browser-tests.js']],
+                'criteria': {'AC-001': ['tests/test_intent_contract.py']}}]}))
+            obligations = _native_obligations(root, 'pr', route, {})
+            named = {item['id']: item for item in obligations}
+            self.assertNotIn('AC-001:tests', named)
+            self.assertIn('AC-002:tests', named)
+            self.assertEqual(named['tool:browser-contract']['expected_tests'], ['tests/test_intent_contract.py'])
+            self.assertEqual(named['tool:browser-contract']['requirement_ids'], ['AC-001'])
 
     def test_absolute_windows_question_path_cannot_masquerade_as_relative_scope(self):
         with project_copy(git=True) as root:

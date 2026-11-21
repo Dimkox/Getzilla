@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests._support import write_current_verification
+
 import json
 import importlib.util
 import os
@@ -1433,6 +1435,61 @@ class HookTests(unittest.TestCase):
             run_hook(root, 'post_tool_use.py', {'cwd': str(root), 'tool_name': 'Write', 'tool_input': {}})
             receipt = json.loads((root / f".getzilla/runtime/receipts/{route['route_id']}/code_review.json").read_text())
             self.assertTrue(receipt['stale'])
+
+    def test_stop_keeps_unfinished_task_despite_current_evidence(self) -> None:
+        with project_copy(git=True, source_only_runtime=True) as root:
+            from tests.test_package_status import PackageStatusTests
+            from getzilla.receipts import validate_evidence
+            _, _, _, package = PackageStatusTests().prepare(root, complete=True)
+            (package / 'tasks.md').write_text('# Tasks\n\n- [ ] Deliver the remaining fixture change.\n', encoding='utf-8')
+            (root / 'feature.txt').write_text('changed')
+            review = prepare_review_source(root)
+            current = get_active_route(root)
+            self.assertTrue(current['delivery_expected'])
+            for kind in current['required_evidence']:
+                if kind != 'verification':
+                    write_receipt(root, kind, 'pass', **review)
+            write_current_verification(root)
+            current = get_active_route(root)
+            self.assertEqual(validate_evidence(root, current), [])
+            code, data, err = run_hook(root, 'stop_gate.py', {
+                'cwd': str(root), 'session_id': current['session_id'], 'stop_hook_active': False,
+                'hook_event_name': 'Stop', 'reason': 'end_turn',
+            }, harness='grok')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(data.get('decision'), 'block', data)
+            self.assertIn('Deliver the remaining fixture change', data['reason'])
+            self.assertEqual(get_active_route(root), current, 'Stop must retain unfinished owned work')
+
+
+    def test_parent_contract_stop_allows_current_evidence(self) -> None:
+        with project_copy(git=True, source_only_runtime=True) as root:
+            from tests.test_package_status import PackageStatusTests
+            from getzilla.continuity import scope_gaps
+            from getzilla.package_status import inspect_package
+            from getzilla.receipts import validate_evidence
+            route, active, _, package = PackageStatusTests().prepare(root, complete=True)
+            (package / 'tasks.md').write_text('# Tasks\n\n- [x] Deliver the fixture change.\n', encoding='utf-8')
+            (root / 'feature.txt').write_text('changed')
+            review = prepare_review_source(root)
+            current = get_active_route(root)
+            self.assertTrue(current['delivery_expected'])
+            self.assertNotIn(current.get('status'), {'done', 'cancelled'})
+            for kind in current['required_evidence']:
+                if kind != 'verification':
+                    write_receipt(root, kind, 'pass', **review)
+            write_current_verification(root)
+            current = get_active_route(root)
+            self.assertEqual(scope_gaps(root, current), [])
+            self.assertEqual(validate_evidence(root, current), [])
+            self.assertEqual(inspect_package(root, current, active)['pending_tasks_count'], 0)
+            code, data, err = run_hook(root, 'stop_gate.py', {
+                'cwd': str(root), 'session_id': current['session_id'], 'stop_hook_active': False,
+                'hook_event_name': 'Stop', 'reason': 'end_turn',
+            }, harness='grok')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(data, {}, err)
+            self.assertEqual(get_active_route(root), current, 'Stop is not an explicit completion request')
 
 
 if __name__ == '__main__':

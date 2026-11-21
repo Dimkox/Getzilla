@@ -1,6 +1,7 @@
 """Owned root Stop must not lose unfinished work even without a success claim."""
 from __future__ import annotations
 
+
 import json
 import os
 import shutil

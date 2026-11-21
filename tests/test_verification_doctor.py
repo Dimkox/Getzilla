@@ -921,8 +921,7 @@ class VerificationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {item['name'] for item in report['checks']},
-                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract',
-                 'source-stability', 'task-context', 'quality-gate'},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-licenses', 'security-container-images'},
             )
 
     def test_pr_mode_keeps_eligible_landing_inventory_on_full_path(self) -> None:
@@ -2036,6 +2035,89 @@ class VerificationTests(unittest.TestCase):
             names = _names(results)
             self.assertIn('pytest', names)
             self.assertNotIn('python-unittest', names)
+
+
+    def test_parent_contract_focused_verification_runs_only_landing_contract_and_reports_scope(self) -> None:
+        with project_copy(git=True) as root:
+            base = subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'], cwd=root, text=True, encoding='utf-8'
+            ).strip()
+            activate_owned_route(root, {
+                'route_id': 'focused-static-landing',
+                'base_commit': base,
+                'quality_profiles': ['base', 'contracts'],
+                'delivery_expected': False,
+            })
+            landing = root / 'side-projects/seo-landings/winston-wolfe/index.html'
+            landing.parent.mkdir(parents=True)
+            landing.write_text('<!doctype html>\n', encoding='utf-8')
+            focused_test = root / 'tests/test_winston_wolfe_seo_landing.py'
+            focused_test.parent.mkdir(parents=True, exist_ok=True)
+            focused_test.write_text(
+                'import unittest\n'
+                '\n'
+                'class LandingContract(unittest.TestCase):\n'
+                '    def test_contract(self):\n'
+                '        self.assertTrue(True)\n'
+                '\n'
+                'if __name__ == "__main__":\n'
+                '    unittest.main()\n',
+                encoding='utf-8',
+            )
+
+            report = verify(root, mode='focused-static-seo-landing', record=False)
+
+            self.assertEqual(report['status'], 'pass')
+            self.assertEqual(report['verification_scope']['profile'], 'static-seo-landing')
+            self.assertEqual(
+                report['verification_scope']['focused_tests'],
+                ['tests/test_winston_wolfe_seo_landing.py'],
+            )
+            self.assertEqual(
+                {item['name'] for item in report['checks']},
+                {'required-plan', 'git-diff-check', 'scope-selection', 'static-seo-landing-contract', 'source-stability', 'task-context', 'quality-gate', 'secret-scan', 'known-vulnerabilities', 'opengrep', 'bandit', 'security-inventory', 'security-kev', 'security-epss', 'security-malicious-packages', 'security-licenses', 'security-container-images'},
+            )
+
+
+    def test_parent_contract_verify_records_receipt_for_active_route(self) -> None:
+        with project_copy(git=True, source_only_runtime=True) as root:
+            route = build_route(root, 'Review current code', 's1').to_dict()
+            route['quality_profiles'] = ['base']
+            activate_owned_route(root, route)
+            synchronize_fixture_scope(root)
+            report = verify(root, mode='pr', record=True)
+            self.assertEqual(report['status'], 'pass', report)
+            receipt = root / f".getzilla/runtime/receipts/{route['route_id']}/verification.json"
+            self.assertTrue(receipt.is_file())
+            from getzilla.verification_plan import report_gaps
+            self.assertEqual(report_gaps(root, report), [])
+            fast = verify(root, mode='fast', record=False)
+            self.assertEqual(fast['status'], 'fail', 'a full task cannot qualify with fast evidence')
+            self.assertIn('required-qualifying-mode', {item['code'] for item in _check(fast, 'quality-gate')['details']})
+
+
+    def test_parent_contract_factory_postgres_exit_outer_timeout_exceeds_bounded_inner_timeout(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "disposable_exit_verifier_timeout_contract",
+            ROOT / "factory/tests/run_disposable_exit.py",
+        )
+        runner = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(runner)
+
+        outer = verification_module._LIVE_FACTORY_OUTER_TIMEOUT_SECONDS
+        self.assertEqual(720, runner._FULL_SUITE_TIMEOUT_SECONDS)
+        with patch.object(verification_module, '_command_check', return_value=CheckResult(
+                'factory-postgres-exit', 'fail', 'bounded command observation')) as command:
+            verification_module._live_cell(ROOT, 'factory', 1500)
+        actual_command = command.call_args
+        self.assertEqual(actual_command.args[3], outer)
+        self.assertEqual(actual_command.args[2][-2:], ['--timeout-seconds', '1500'])
+        self.assertEqual(actual_command.kwargs['termination_grace'], 180)
+        self.assertLess(runner._FULL_SUITE_TIMEOUT_SECONDS, 1500)
+        self.assertGreaterEqual(outer, 1500 + actual_command.kwargs['termination_grace'])
+        self.assertLessEqual(outer, 30 * 60)
+
 
 
 class TrustedHistoricalRangeTests(unittest.TestCase):

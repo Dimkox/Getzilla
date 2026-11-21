@@ -1,6 +1,9 @@
 """Fault controls for the actual verifier/owned runner/receipt boundaries."""
 from __future__ import annotations
 
+from getzilla import state
+from tests._support import write_current_verification
+
 import contextlib
 import hashlib
 import io
@@ -35,8 +38,25 @@ def project_copy(*, git: bool = False, verification_fixture: bool = False):
 
 
 @contextlib.contextmanager
-def routed_fixture(*, legacy=False, verification_fixture=False):
+def routed_fixture(*, legacy=False, verification_fixture=False, test_result=None):
+    if test_result is not None and test_result not in {'pass', 'fail'}:
+        raise ValueError('owned recovery test result must be pass or fail')
     with project_copy(git=True, verification_fixture=verification_fixture) as root:
+        if test_result is not None:
+            # Original parent semantics: execute a real owned suite; never
+            # replace the verifier result or an evidence validator.
+            tests = root / 'tests'
+            tests.mkdir(exist_ok=True)
+            (tests / '__init__.py').write_text('', encoding='utf-8')
+            (tests / 'test_recovery_result.py').write_text(
+                'import unittest\n\nclass Result(unittest.TestCase):\n'
+                '    def test_result(self):\n        print("retained", end="")\n'
+                f'        self.assertTrue({test_result == "pass"!r})\n', encoding='utf-8')
+            (root / '.coveragerc').write_text(
+                '[run]\nbranch = True\nsource = tests\n\n[report]\nfail_under = 100\n', encoding='utf-8')
+            (root / '.gitignore').write_text('.getzilla/runtime/\n__pycache__/\n.coverage\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'tests', '.coveragerc', '.gitignore'], cwd=root, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'actual recovery test suite'], cwd=root, check=True)
         route = build_route(root, 'Fix verifier recovery', 'recovery').to_dict()
         route['delivery_lane'] = 'full'  # exercise publication faults, without small-diff admission
         if legacy:
@@ -76,7 +96,6 @@ def routed_fixture(*, legacy=False, verification_fixture=False):
 
 def owned_current_report(root, *, captured=''):
     """Freeze and review the fixture, then execute its current native producer plan."""
-    from getzilla import state
     review = prepare_review_source(root)
     report = owned_verification_report(root, captured=captured)
     if report['check_status'] != 'pass':
@@ -370,6 +389,30 @@ class VerifierRecoveryTests(unittest.TestCase):
             self.assertEqual(report['mode'], 'focused-static-seo-landing')
             self.assertIn('verification_scope', report)
             self.assertEqual(report['checks'][-1]['name'], 'receipt-recording')
+
+
+    def test_parent_contract_receipt_failure_keeps_completed_verdict_and_report(self):
+        for error in (OSError('disk full'), RuntimeError('invalid receipt binding'),
+                      ValueError('malformed report'), TypeError('invalid report field')):
+            for verdict in ('pass', 'fail'):
+                with self.subTest(error=type(error).__name__, verdict=verdict), routed_fixture(test_result=verdict) as (root, _):
+                    observed_checks = []
+
+                    def publication_fault(*args, **kwargs):
+                        observed_checks.extend(json.loads(json.dumps(kwargs['details']['checks'])))
+                        raise error
+
+                    with patch.object(verifier, 'write_receipt', side_effect=publication_fault):
+                        report = verifier.verify(root, mode='pr')
+                    self.assertEqual(report['status'], 'fail')
+                    self.assertEqual(report['check_status'], verdict)
+                    self.assertEqual(report['checks'][-1]['name'], 'receipt-recording')
+                    original = next(check for check in report['checks'] if check['name'] == 'python-unittest')
+                    self.assertEqual(original['status'], verdict)
+                    self.assertTrue(original['stdout'])
+                    self.assertEqual(report['checks'][:-1], observed_checks)
+                    json.dumps(report, ensure_ascii=True)
+
 
 
 class OwnedRunnerRecoveryTests(unittest.TestCase):
@@ -865,7 +908,7 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             receipt = receipts.get_receipt(root, route['route_id'], 'verification')
             self.assertEqual(receipt['details'], report)
             self.assertEqual(receipts.validate_evidence(root, route),
-                ['verification: current required plan or individual evidence is unavailable or stale'])
+                ['verification: required-plan-unavailable: required_plan: current required plan and evidence could not be established'])
 
     def test_large_verification_report_preserves_complete_logs_and_scope(self):
         with routed_fixture(legacy=True) as (root, route):
@@ -903,13 +946,12 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(len(report['changed_files']), len(paths))
             self.assertEqual(report['checks'][0]['stdout'], captured)
             self.assertEqual(receipts.validate_evidence(root, route),
-                ['verification: current required plan or individual evidence is unavailable or stale'])
+                ['verification: required-plan-unavailable: required_plan: current required plan and evidence could not be established'])
             with (root / 'VERSION').open('a', encoding='utf-8') as handle:
                 handle.write('\nstale product edit\n')
             self.assertIn('verification: stale after repository changes', receipts.validate_evidence(root, route))
 
     def test_current_oversized_report_preserves_qualified_checks_and_bounded_logs(self):
-        from getzilla import state
         from getzilla.verification_plan import report_gaps
         with routed_fixture(legacy=True, verification_fixture=True) as (root, route):
             report = owned_current_report(root, captured='owned diagnostic\n' * 600)
@@ -1158,6 +1200,76 @@ class DurableReceiptRecoveryTests(unittest.TestCase):
             self.assertEqual(receipt['details']['docs_state_scope'], report['docs_state_scope'])
             self.assertEqual(receipt['details']['checks'], report['checks'])
             self.assertEqual(receipt['tree_fingerprint'], report['tree_fingerprint'])
+
+
+    def test_parent_contract_large_scope_metadata_roundtrips_through_bounded_report(self):
+        with routed_fixture(legacy=True) as (root, route):
+            verification_only_legacy_route(root, route)
+            report = write_current_verification(root)
+            fingerprint = report['tree_fingerprint']
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            paths = [f'engineering/changes/20260918-historical-delivery-provenance-and-acceptance-123abc/evidence/historical-{index:05d}-source-contract.md' for index in range(1442)]
+            scope = {'profile': 'full-pr-suite', 'eligible': False, 'evidence_kind': 'verification:full-pr', 'reason_code': 'unsafe-file-status', 'reason': 'renamed historical inventory requires full verification', 'changed_paths_digest': 'a' * 64, 'checked_files': paths, 'rejected_files': paths[:488], 'skipped_checks': [], 'status_channels': {'comparison': 'trusted', 'staged': 'trusted', 'unstaged': 'trusted', 'untracked': 'trusted'}}
+            # Expand diagnostic transport fields only. The current required plan
+            # and all actually executed mandatory results stay intact.
+            report.update(changed_files=paths, changed_file_inventory={'bases': [{'base': head, 'target': head}], 'union_count': len(paths), 'status_channels': scope['status_channels']}, docs_state_scope=scope)
+            self.assertEqual(len(scope['checked_files']), 1442)
+            self.assertEqual(len(scope['rejected_files']), 488)
+            self.assertGreater(len(json.dumps(report, ensure_ascii=True, separators=(',', ':')).encode()), receipts.MAX_RECEIPT_BYTES)
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
+            self.assertEqual(report['status'], 'pass', report['checks'][-1])
+            receipt = receipts.get_receipt(root, route['route_id'], 'verification')
+            self.assertEqual(receipt['details'], report)
+            self.assertEqual(receipts.validate_evidence(root, route), [])
+            report['checks'] = [item for item in report['checks'] if item['name'] != 'security-inventory']
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
+            self.assertTrue(any('required-check-missing' in gap for gap in receipts.validate_evidence(root, route)))
+
+
+    def test_parent_contract_large_verification_report_preserves_complete_logs_and_scope(self):
+        with routed_fixture(legacy=True) as (root, route):
+            verification_only_legacy_route(root, route)
+            report = write_current_verification(root)
+            fingerprint = report['tree_fingerprint']
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+            paths = [f'engineering/changes/example/evidence/checked-{index:05d}.md' for index in range(1500)]
+            captured = 'captured output\n' * 750  # Each log respects the actual 12,000-character capture bound.
+            skipped_checks = [check['name'] for check in report['checks'] if check['status'] == 'skip']
+            self.assertTrue(skipped_checks, 'retain actual source-derived exclusions in the transport fixture')
+            scope = {'profile': 'full-pr', 'eligible': False, 'evidence_kind': 'verification:full-pr', 'reason_code': 'unsafe-file-status', 'changed_paths_digest': 'a' * 64, 'checked_files': paths, 'skipped_checks': skipped_checks}
+            # Inject bounded log payloads at the storage seam without inventing
+            # checker verdicts or replacing the executed obligation bindings.
+            for check in report['checks'][:9]:
+                check['stdout'] = captured
+            report.update(changed_files=paths, changed_file_inventory={'bases': [{'base': head, 'target': head}], 'union_count': len(paths)}, docs_state_scope=scope)
+            self.assertGreater(len(json.dumps(report).encode()), receipts.MAX_RECEIPT_BYTES)
+            verifier._record_verification_receipt(root, report, fingerprint, expected_context=observed_context(root))
+            self.assertEqual(report['status'], 'pass', report['checks'][-1])
+            receipt = receipts.get_receipt(root, route['route_id'], 'verification')
+            self.assertIsNotNone(receipt)
+            self.assertLessEqual((receipts.receipt_dir(root, route['route_id']) / 'verification.json').stat().st_size, receipts.MAX_RECEIPT_BYTES)
+            self.assertEqual(receipt['tree_fingerprint'], fingerprint)
+            self.assertEqual(receipt['git_head'], head)
+            details = receipt['details']
+            self.assertEqual(details['changed_file_inventory']['bases'], report['changed_file_inventory']['bases'])
+            for field in ('profile', 'evidence_kind', 'reason_code', 'changed_paths_digest', 'skipped_checks'):
+                self.assertEqual(details['docs_state_scope'][field], scope[field])
+            self.assertEqual([(item['name'], item['status'], item['summary']) for item in details['checks']], [(item['name'], item['status'], item['summary']) for item in report['checks']])
+            self.assertEqual(details['changed_files'], paths)
+            self.assertEqual(details['docs_state_scope'], scope)
+            self.assertEqual(details, report)
+            reference = receipt['details_reference']
+            artifact_bytes = (root / reference['path']).read_bytes()
+            self.assertEqual(reference['bytes'], len(artifact_bytes))
+            self.assertEqual(reference['sha256'], hashlib.sha256(artifact_bytes).hexdigest())
+            self.assertEqual(json.loads(artifact_bytes)['details'], report)
+            self.assertEqual(len(report['changed_files']), len(paths))
+            self.assertEqual(report['checks'][0]['stdout'], captured)
+            self.assertEqual(receipts.validate_evidence(root, route), [])
+            with (root / 'VERSION').open('a', encoding='utf-8') as handle:
+                handle.write('\nstale product edit\n')
+            self.assertIn('verification: stale after repository changes', receipts.validate_evidence(root, route))
+
 
 class Low336PublicationFixtureTests(unittest.TestCase):
     def test_publication_fault_never_writes_surrounding_checkout_report(self):

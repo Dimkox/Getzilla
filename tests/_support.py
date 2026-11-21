@@ -201,7 +201,7 @@ def public_source_copy(source: Path | None = None) -> Iterator[Path]:
 
 @contextlib.contextmanager
 def project_copy(*, git: bool = False, minimal_runtime: bool = False,
-                 verification_fixture: bool = False) -> Iterator[Path]:
+                 verification_fixture: bool = False, source_only_runtime: bool = False) -> Iterator[Path]:
     """Copy a full or minimal synthetic project with isolated scanner inputs."""
     with _test_directory() as tmp, _scanner_environment(minimal_runtime), _session_environment():
         # Tests can explicitly substitute a Gitless synthetic PROJECT. Keep its
@@ -229,16 +229,23 @@ def project_copy(*, git: bool = False, minimal_runtime: bool = False,
                 if verification_fixture and Path(directory) == PROJECT / '.getzilla/config':
                     # The named closed providers below replace these fixture-only
                     # host tool installations. Default project copies retain both.
-                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt'})
+                    # This opted-in metadata fixture owns an empty security world;
+                    # optional CI payload images must not enter its initial commit.
+                    omitted.add('ci-images.json')
                 if Path(directory) == PROJECT / '.getzilla/runtime':
                     # Runtime can contain the fixture destination or a changing review snapshot.
                     # Exclude it before descending; deleting copied state afterward is too late.
                     omitted.update(name for name in names if name not in {'.gitkeep', '.gitignore'})
-                if minimal_runtime and not verification_fixture and Path(directory) == PROJECT / '.getzilla/getzilla':
+                if (minimal_runtime and not verification_fixture and not source_only_runtime
+                        and Path(directory) == PROJECT / '.getzilla/getzilla'):
                     omitted.update(name for name in names if name != '__init__.py')
-                if (minimal_runtime or verification_fixture) and Path(directory) == PROJECT / '.getzilla/sast':
+                if (minimal_runtime or verification_fixture or source_only_runtime) and Path(directory) == PROJECT / '.getzilla/sast':
                     # Dedicated native scanner tests and full-source copies retain these rules.
                     omitted.add('rules')
+                if source_only_runtime and Path(directory) == PROJECT / '.getzilla/config':
+                    # Original parent source-only declaration; no evidence grant.
+                    omitted.update({'python-quality-requirements.txt', 'python-test-requirements.txt', 'ci-images.json'})
                 return omitted
             shutil.copytree(src, root / rel, ignore=ignore, copy_function=copy_file)
         runtime = root / '.getzilla/runtime'
@@ -348,14 +355,17 @@ def owned_verification_report(root: Path, *, mode: str = 'pr', captured: str = '
         return verify(root, mode=mode, record=False, **options)
 
 
-def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
+def run_hook(root: Path, name: str, payload: dict, *, harness: str | None = None) -> tuple[int, dict, str]:
     script = root / '.getzilla/hooks' / name
     # Use the fixture even when the parent runner exposes the intact source package.
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join((str(root), str(root / '.getzilla')))
     # Bytes in both directions, as agents exchange them: UTF-8 JSON, never the console code page.
+    command = [sys.executable, str(script)]
+    if harness is not None:
+        command.extend(['--harness', harness])
     proc = subprocess.run(
-        [sys.executable, str(script)],
+        command,
         cwd=root,
         env=env,
         input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
@@ -368,6 +378,7 @@ def run_hook(root: Path, name: str, payload: dict) -> tuple[int, dict, str]:
     except json.JSONDecodeError:
         data = {}
     return proc.returncode, data, proc.stderr.decode('utf-8', errors='replace')
+
 
 
 def synchronize_fixture_scope(root: Path) -> None:
@@ -496,3 +507,25 @@ def offline_mirror(base: Path) -> Path:
     manifest = {'opengrep': opengrep, 'baseline': {component_id: commit for component_id in components}}
     (mirror / updater.MIRROR_MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     return mirror
+
+
+def write_current_verification(root: Path) -> dict:
+    """Record real current native verification for positive receipt/Stop fixtures.
+
+    Review receipts remain an explicit test seam; this helper never substitutes assertions
+    for executed checks or manufactures database evidence.
+    """
+    from getzilla.security_inventory import collect_inventory
+    from getzilla.verification import verify
+    from getzilla.verification_plan import report_gaps
+    inventory = collect_inventory(root)
+    if not inventory['complete'] or any(inventory[key] for key in ('dependencies', 'images', 'tools')):
+        raise AssertionError('current-verification fixture must have a complete source-only inventory')
+    report = verify(root, mode='pr', record=True)
+    if report['status'] != 'pass':
+        failed = [item for item in report['checks'] if item['status'] == 'fail']
+        raise AssertionError(report.get('required_plan_error') or failed)
+    gaps = report_gaps(root, report)
+    if gaps:
+        raise AssertionError(gaps)
+    return report

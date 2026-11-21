@@ -259,6 +259,7 @@ _CHANGE_PACKAGE_PREFIX = re.compile(
 )
 _SAFE_FOCUSED_FILE_STATUSES = {'A', 'M', '??'}
 _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS = 900
+_LIVE_FACTORY_OUTER_TIMEOUT_SECONDS = 1800
 
 
 def _canonical_digest(value: object) -> str:
@@ -585,7 +586,8 @@ def _workflow_artifacts_check(
         ), {"configured": True, "status": "fail", "error": str(exc)}
 
 
-def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None) -> CheckResult:
+def _command_check(root: Path, name: str, command: list[str], timeout: int = 300, *, env: dict[str, str] | None = None,
+                   termination_grace: float | None = None) -> CheckResult:
     environment = os.environ.copy()
     environment.update(env or {})
     if 'PATH' not in (env or {}):
@@ -593,7 +595,8 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         environment['PATH'] = tool_search_path(environment.get('PATH', ''))
     try:
         # The report keeps the command as written; only the launch resolves it (Windows .cmd shims).
-        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout)
+        options = {'termination_grace': termination_grace} if termination_grace is not None else {}
+        proc = execute(resolve_command(command, environment['PATH']), root, environment, timeout=timeout, **options)
     except RunCancelled as exc:
         proc = exc.result
         exc.checks = [CheckResult(
@@ -611,6 +614,7 @@ def _command_check(root: Path, name: str, command: list[str], timeout: int = 300
         stderr=(proc.stderr + ('\ncleanup failed: ' + proc.cleanup_error if proc.cleanup_error else ''))[-12000:],
         details=[{'stop': diagnostics.stop_details(proc)}],
     )
+
 
 
 _EXACT_SHA = re.compile(r'^[0-9a-fA-F]{40}$')
@@ -1307,6 +1311,10 @@ def _unittest_contract_failure(path: Path) -> str | None:
 
 
 def _focused_landing_contract(root: Path, scope: dict[str, object], *, required_plan=None) -> CheckResult:
+    if required_plan is not None:
+        refs = sorted({ref for row in required_plan['obligations'] if row['check_id'] == 'static-seo-landing-contract'
+                       for ref in row['expected_tests']})
+        scope = dict(scope, **({'required_test_refs': refs} if refs else {}))
     focused_tests = scope.get('focused_tests')
     if not isinstance(focused_tests, list) or len(focused_tests) != 1:
         return CheckResult(
@@ -1352,23 +1360,16 @@ def _focused_landing_contract(root: Path, scope: dict[str, object], *, required_
                 'message': contract_failure,
             }],
         )
-    if required_plan is not None:
-        from .criterion_tests import run_required_tests
-        value = run_required_tests(root, [relative], timeout=300)
-        return CheckResult('static-seo-landing-contract', value['status'], value['summary'], details=value['details'])
-    command = [
-        sys.executable,
-        '-m',
-        'unittest',
-        'discover',
-        '-s',
-        path.parent.relative_to(root).as_posix(),
-        '-p',
-        path.name,
-    ]
-    result = _command_check(root, 'static-seo-landing-contract', command, 300)
+    from .criterion_tests import run_required_tests
+    refs = scope.get('required_test_refs') or [relative]
+    if not isinstance(refs, list) or any(not isinstance(ref, str) or ref.split('::', 1)[0] != relative for ref in refs):
+        return CheckResult('static-seo-landing-contract', 'fail', 'required test references exceed the selected landing contract')
+    observed = run_required_tests(root, refs, timeout=300)
+    observed['name'] = 'static-seo-landing-contract'
+    result = CheckResult(**observed)
     result.summary = f'{result.summary}; test={relative}'
     return result
+
 
 
 @diagnostics.observed('git-diff-check')
@@ -1899,12 +1900,13 @@ def _trivy_config(root: Path) -> CheckResult | None:
 
 @diagnostics.observed('known-vulnerabilities')
 def _known_vulnerabilities(root: Path) -> CheckResult:
-    report = known_vulnerability_check(root)
-    details = list(report['details'])
-    for item in report['details']:
-        if item.get('kind') == 'security-result':
-            details.extend(_vulnerability_detail(finding) for finding in item.get('findings', [])[:200])
-    return CheckResult('known-vulnerabilities', report['status'], report['summary'], details=details)
+    result = known_vulnerability_check(root)
+    # The full structured evidence is authoritative. Only its text projection
+    # is bounded for display; no finding, exception or source proof is dropped.
+    findings = result['details'][0]['findings']
+    result['details'].extend(_vulnerability_detail(item) for item in findings[:200])
+    return CheckResult(**result)
+
 
 
 def _vulnerability_detail(item: dict[str, object]) -> dict[str, str]:
@@ -2182,6 +2184,7 @@ def _focused_python(
     replaced_runner: str = 'python-unittest',
     *,
     dispatch: _CheckDispatch | None = None,
+    mode: str = 'fast',
 ) -> list[CheckResult]:
     """Run the admitted lockstep modules instead of full discovery or coverage measurement.
 
@@ -2221,7 +2224,9 @@ def _focused_python(
         'skip',
         'focused documentation/state profile changes no factory runtime path',
     ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
+
 
 
 @diagnostics.observed('python')
@@ -2297,6 +2302,7 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
             scope or {},
             'pytest' if uses_pytest_runner else 'python-unittest',
             dispatch=dispatch,
+            mode=mode,
         )
     names = ['pytest' if uses_pytest_runner else 'python-unittest']
     if mode in {'pr', 'release'}:
@@ -2318,10 +2324,13 @@ def _python_checks(root: Path, mode: str, scope: dict[str, object] | None, resul
         dispatch.run('factory-postgres-exit', lambda: (
             CheckResult('factory-postgres-exit', 'skip', 'repository-sandbox has no nested-container/database capability')
             if os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox' else
-            _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
-                           _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS)
+            (_live_cell(root, 'factory', 1500)[0] if (root / 'scripts/getzilla_live.py').is_file() else
+             _command_check(root, 'factory-postgres-exit', [sys.executable, str(factory_exit.relative_to(root))],
+                            _FACTORY_POSTGRES_EXIT_TIMEOUT_SECONDS))
         ))
+    _dispatch_additional_live(root, mode, dispatch)
     return results
+
 
 
 
@@ -2549,6 +2558,18 @@ def _verify_focused_static_seo_landing(
     if scope.get('eligible') is True:
         results.append(_focused_landing_contract(root, scope, required_plan=required_plan))
 
+    if required_plan is not None:
+        dispatch = _CheckDispatch(results, FOCUSED_STATIC_SEO_LANDING_MODE, required_plan=required_plan)
+        for name, callback in [('secret-scan', lambda: _secret_scan(root, files)),
+                               ('known-vulnerabilities', lambda: _known_vulnerabilities(root)),
+                               ('opengrep', lambda: _opengrep(root)), ('bandit', lambda: _bandit(root))]:
+            dispatch.run(name, callback)
+        if _semgrep_config(root) is not None:
+            dispatch.run('semgrep', lambda: _semgrep(root))
+        if _trivy_config_present(root):
+            dispatch.run('trivy-config', lambda: _trivy_config(root))
+        _dispatch_required_obligations(root, state, dispatch)
+
     final_fingerprint = tree_fingerprint(root)
     source_stable = final_fingerprint == checked_fingerprint
     results.append(
@@ -2601,6 +2622,7 @@ def _verify_focused_static_seo_landing(
         _record_verification_receipt(root, report, final_fingerprint, interrupt_check=cancellation.check,
                                      expected_context=state.context if state else None)
     return report
+
 
 
 def _docs_state_status_inventory(
@@ -2869,25 +2891,19 @@ def verify(root: Path, mode: str = 'pr', profiles: list[str] | None = None, reco
 
 
 def _required_quality_gate(root, mode, profiles, results, required_plan, docs_scope=None):
-    """Failed admission cannot supply fresh bindings; other paths still rederive them."""
+    """Both local admission and stored receipt consumers require fresh, explicit bindings."""
     from .verification_plan import current_required_plan
     from .expanded_security import validate_data_source
-    hard_failure = any(isinstance(item, CheckResult) and item.status in {'fail', 'cancelled'} for item in results)
     current = None
-    if not hard_failure:
-        try:
-            observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
-            if observed == required_plan:
-                current = observed['binding']
-        except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
-            pass
-    decision = evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
+    try:
+        observed = current_required_plan(root, mode=mode, profiles=profiles, docs_scope=docs_scope)
+        if observed == required_plan:
+            current = observed['binding']
+    except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
+        pass
+    return evaluate_quality_gate(mode=mode, checks=results, docs_scope=docs_scope,
         required_plan=required_plan, current_binding=current, now_utc=datetime.now(timezone.utc),
         data_source_validator=lambda source, *, now: validate_data_source(source, root=root, now=now))
-    if hard_failure:
-        decision.details.append({'severity': 'info', 'code': 'required-plan-revalidation-unexecuted',
-            'path': 'required_plan', 'message': 'Final plan revalidation not executed after a prior failed or cancelled check; current binding unavailable.'})
-    return decision
 
 
 def _capture_required_plan(root, mode, profiles, state, docs_scope=None):
@@ -2997,6 +3013,8 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
     # Retain the primary refusal before any subsequent consumer can cancel.
     state.results.append(architecture_inputs)
     dispatch = _CheckDispatch(state.results, mode, docs_scope, keep_going=keep_going, required_plan=required_plan)
+    if required_plan is None and mode in {'pr', 'release'} and not keep_going:
+        dispatch.blocked_by = 'required-plan'
     if required_check_refused(architecture_inputs, mode=mode, docs_scope=docs_scope) and not keep_going:
         dispatch.blocked_by = architecture_inputs.name
     dispatch.add(_docs_state_scope_check(docs_scope))
@@ -3210,3 +3228,93 @@ def _verification_run(root: Path, mode: str, profiles: list[str] | None, record:
                                      expected_context=state.context)
     cancellation.check()
     return report
+
+
+def _live_cell(root: Path, cell: str, budget: int) -> list[CheckResult]:
+    from .live_acceptance import CELLS
+    import uuid
+    names = CELLS[cell]
+    output = root / '.getzilla/runtime/live' / (cell + '-' + uuid.uuid4().hex)
+    result = _command_check(root, names[0], [sys.executable, 'scripts/getzilla_live.py', '--cell', cell,
+                            '--output', str(output), '--timeout-seconds', str(budget)],
+                            budget + 300, termination_grace=180)
+    try:
+        record = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
+        checks = record['checks']
+        from .live_acceptance import evidence_name, _held_bytes
+        files = record.get('files')
+        if (not isinstance(files, list) or not 1 <= len(files) <= 128
+                or any(not isinstance(row, dict) or set(row) != {'path', 'sha256'}
+                       or not isinstance(row['path'], str) or Path(row['path']).name != row['path']
+                       or not evidence_name(row['path']) for row in files)
+                or len({row['path'] for row in files}) != len(files)):
+            raise ValueError('live retained-file index is incomplete or malformed')
+        for row in files:
+            if hashlib.sha256(_held_bytes(output / row['path'])).hexdigest() != row['sha256']:
+                raise ValueError('live retained component bytes changed')
+        from .live_acceptance import read_document, valid_binding, validate_components, _producer_digest
+        binding = read_document(output / 'invocation.json')
+        if (not valid_binding(binding) or record.get('binding') != binding
+                or binding['cell'] != cell or binding['head'] != git_head(root)
+                or binding['tree'] != _git(root, ['rev-parse', 'HEAD^{tree}']).decode('ascii').strip()
+                or binding['producer_sha256'] != _producer_digest(root, cell)
+                or cell != 'factory' and not validate_components(output, cell, binding)):
+            raise ValueError('live source or sealed component identity differs')
+        if (record.get('status') != 'pass' or {item['id'] for item in checks} != set(names)
+                or len(checks) != len(names) or any(item['status'] != 'pass' for item in checks)):
+            raise ValueError('live component evidence did not pass')
+    except (OSError, ValueError, KeyError, TypeError):
+        result.status = 'fail'
+        result.summary += '; live evidence missing or failed'
+    return [CheckResult(name, result.status, result.summary, command=result.command,
+                        stdout=result.stdout, stderr=result.stderr,
+                        details=[{'kind': 'live-acceptance-observation', 'cell': cell,
+                                  'manifest': str(output / 'manifest.json'), 'authority': 'local observation only'}])
+            for name in names]
+
+
+
+def _dispatch_additional_live(root: Path, mode: str, dispatch: _CheckDispatch) -> None:
+    if mode not in {'pr', 'release'} or not (root / 'scripts/getzilla_live.py').is_file():
+        return
+    installed = (root / '.getzilla/AGBP_SYNC.json').is_file()
+    for cell, names, budget in (('trust-ci', ['trust-ci-postgres', 'trust-ci-postgres-restart'], 1200),
+                                ('lifecycle', ['factory-lifecycle'], 900)):
+        if installed or os.environ.get('GETZILLA_VERIFY_CAPABILITY') == 'repository-sandbox':
+            reason = CONSUMER_INFRA_SKIP if installed else 'repository-sandbox has no nested-container/database capability'
+            dispatch.batch(names, lambda names=names, reason=reason: [CheckResult(name, 'skip', reason) for name in names])
+        else:
+            dispatch.batch(names, lambda cell=cell, budget=budget: _live_cell(root, cell, budget))
+
+
+
+def _expanded_security_checks(root: Path) -> list[CheckResult]:
+    from .expanded_security import run_checks
+    return [CheckResult(**item) for item in run_checks(root)]
+
+
+
+def _dispatch_required_obligations(root: Path, state: _RunState, dispatch) -> None:
+    plan = state.required_plan
+    if plan is None:
+        return
+    for name in ('python-unittest', 'coverage'):
+        selected = [item for item in plan['obligations'] if item['check_id'] == name]
+        if selected and all(item['applicability'] == 'not_applicable' for item in selected) and not any(
+                check.name == name for check in state.results):
+            def observe_absence(name=name):
+                uses_pytest, has_unittest = python_check_selection(root)
+                return CheckResult(name, 'fail' if uses_pytest or has_unittest else 'skip',
+                    'Python discovery inputs changed after planning' if uses_pytest or has_unittest
+                    else 'no native Python discovery inputs', details=[{
+                        'kind': 'native-python-applicability', 'uses_pytest': uses_pytest,
+                        'has_unittest_files': has_unittest}])
+            dispatch.run(name, observe_absence)
+    names = sorted({item['check_id'] for item in plan['obligations'] if item['check_id'].startswith('security-')})
+    if names:
+        dispatch.batch(names, lambda: _expanded_security_checks(root))
+    refs = sorted({ref for item in plan['obligations'] if item['check_id'] == 'criterion-tests'
+                   for ref in item['expected_tests']})
+    if refs:
+        from .criterion_tests import run_required_tests
+        dispatch.run('criterion-tests', lambda: CheckResult(**run_required_tests(root, refs)))

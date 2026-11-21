@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import runpy
+from unittest import mock
+
 import io
 import copy
 import json
@@ -362,6 +366,36 @@ class VerifierDetailTests(unittest.TestCase):
         self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
 
 
+    def test_parent_contract_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'name': 'known-vulnerabilities', 'status': 'fail', 'summary': '1 known vulnerability',
+                  'details': [{'kind': 'security-result', 'findings': [finding.to_dict()], 'accepted': [],
+                               'data_sources': [{'source_id': 'osv:PyPI', 'content_sha256': 'a' * 64}]}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=report):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        [structured, detail] = result.details
+        self.assertEqual(structured['findings'], [finding.to_dict()])
+        self.assertEqual(structured['data_sources'][0]['content_sha256'], 'a' * 64)
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+
 class QualityGateTests(unittest.TestCase):
     def test_only_the_no_pins_skip_reason_is_admitted(self) -> None:
         from types import SimpleNamespace
@@ -467,7 +501,10 @@ class NativeAliasTests(unittest.TestCase):
                 try:
                     KV._describe(self.record(aliases=aliases), self.dependency)
                 except KV.VulnerabilityError as error:
-                    self.assertEqual(str(error), 'OSV aliases must be null or a list of valid identifiers')
+                    prefix, detail = str(error).split('; ', 1)
+                    self.assertEqual(prefix, 'OSV aliases must be null or a list of valid identifiers')
+                    self.assertEqual(json.loads(detail), error.osv_alias_detail)
+                    self.assertEqual(error.osv_alias_detail['kind'], 'osv-alias-rejection')
                 except (TypeError, ValueError):
                     self.fail('malformed aliases escaped as an untyped error')
                 else:
@@ -531,6 +568,59 @@ class NativeAliasTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), data)
             [finding] = KV.query_offline([self.dependency], Path(database))
             self.assertEqual(finding.aliases, [])
+
+
+
+
+class AcceptedVerifierDetailTests(unittest.TestCase):
+    def test_findings_render_package_advisory_and_manifest_for_the_text_report(self) -> None:
+        # scripts/getzilla_verify.py prints "{severity} {path}: {message}" for each detail.
+        from unittest.mock import patch
+        from getzilla import verification
+        finding = KV.Finding(
+            dependency=KV.Dependency('PyPI', 'jinja2', '3.1.2', 'requirements.txt'),
+            vuln_id='GHSA-h5c8-rqwp-cp95', aliases=['CVE-2024-22195'],
+            summary='Jinja vulnerable to HTML attribute injection', severity='MODERATE', fixed=['3.1.3'],
+        )
+        report = {'status': 'fail', 'summary': '1 known vulnerabilities in 1 pinned packages (OSV API)',
+                  'findings': [finding.to_dict()], 'accepted': []}
+        structured = {'name': 'known-vulnerabilities', 'status': report['status'], 'summary': report['summary'],
+                      'details': [{'kind': 'security-result', 'findings': report['findings'], 'accepted': report['accepted']}]}
+        with patch.object(verification, 'known_vulnerability_check', return_value=structured):
+            result = verification._known_vulnerabilities(ROOT)
+        self.assertEqual(result.status, 'fail')
+        detail = result.details[-1]
+        self.assertEqual(detail['severity'], 'MODERATE')
+        self.assertEqual(detail['path'], 'requirements.txt')
+        self.assertEqual(
+            detail['message'],
+            'jinja2==3.1.2 GHSA-h5c8-rqwp-cp95 (CVE-2024-22195): '
+            'Jinja vulnerable to HTML attribute injection; fixed in 3.1.3',
+        )
+        self.assertEqual(detail['package'], 'jinja2')
+        self.assertEqual(detail['id'], 'GHSA-h5c8-rqwp-cp95')
+
+
+
+class CliTests(unittest.TestCase):
+    def test_actions_annotations_keep_advisory_specific_fix_versions(self) -> None:
+        dependency = KV.Dependency('npm', 'example', '1.2.0', 'package-lock.json')
+        report = {'status': 'fail', 'summary': 'two findings', 'accepted': [], 'findings': [
+            KV.Finding(dependency, 'OSV-A', fixed=['1.2.5', '2.0.1']).to_dict(),
+            KV.Finding(dependency, 'OSV-B', fixed=[]).to_dict(),
+        ]}
+        output = io.StringIO()
+        with mock.patch.object(KV, 'scan', return_value=report), \
+                mock.patch('getzilla.util.find_root', return_value=ROOT), \
+                mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), \
+                mock.patch.object(sys, 'argv', ['getzilla_vulns.py']), \
+                mock.patch('sys.stdout', output), self.assertRaises(SystemExit) as stopped:
+            runpy.run_path(str(ROOT / 'scripts/getzilla_vulns.py'), run_name='__main__')
+        self.assertEqual(stopped.exception.code, 1)
+        annotation = next(line for line in output.getvalue().splitlines() if line.startswith('::error'))
+        self.assertIn('OSV-A: fixed in 1.2.5, 2.0.1', annotation)
+        self.assertIn('OSV-B: no fixed version published', annotation)
+        self.assertNotIn('upgrade to >=', output.getvalue())
 
 
 if __name__ == '__main__':

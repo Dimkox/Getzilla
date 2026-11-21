@@ -1,6 +1,11 @@
 """Owned contract controls; only opted-in tiny projects execute native runners."""
 from __future__ import annotations
 
+from tests._support import prepare_review_source, project_copy, write_current_verification
+from getzilla import state, verification_plan
+from getzilla.spec import canonical_spec_digest
+from getzilla.util import git_head
+
 import copy
 import contextlib
 from datetime import datetime, timezone
@@ -372,148 +377,118 @@ class NativeSecurityProjectionTests(unittest.TestCase):
         self.assertTrue(plan_gaps(plan, wrong, **kwargs))
 
 
-class FailedAdmissionEfficiencyTests(unittest.TestCase):
-    """New closed plan/source worlds, without project copies or native producers."""
+class NativePlanIntegrationTests(unittest.TestCase):
+    def legacy_project(self, root):
+        from tests.test_verification_scope import VerifyDocsStateScopeEndToEndTests
+        git, base = VerifyDocsStateScopeEndToEndTests()._repo(root)
+        package = root / state.get_active_change(root)['path']
+        spec_path = package / 'change-spec.yaml'
+        spec = json.loads(spec_path.read_text())
+        test = root / 'tests/test_required_case.py'
+        test.write_text('import unittest\n\n\nclass Required(unittest.TestCase):\n    def test_actual(self):\n        self.assertEqual(2 + 2, 4)\n')
+        spec['acceptance_criteria'][0]['evidence'] = [{'test': 'tests/test_required_case.py::Required::test_actual'}]
+        spec_path.write_text(json.dumps(spec))
+        git('add', '.')
+        git('commit', '-qm', 'typed legacy criterion')
+        return git, base, spec_path
 
-    @contextlib.contextmanager
-    def world(self):
-        from getzilla import expanded_security, verification_plan
-        with tempfile.TemporaryDirectory(prefix='owned-final-admission-',
-                dir=Path(__file__).resolve().parents[1] / '.getzilla/runtime') as directory:
+    def test_real_compiler_retains_legacy_selected_criteria_and_document_binding(self):
+        with tempfile.TemporaryDirectory(prefix='plan-legacy-') as directory:
             root = Path(directory)
-            payload = root / 'owned-source.txt'
-            payload.write_bytes(b'owned source\n')
-            source = {'source_id': 'owned', 'acquisition': {
-                'last_verified_sync_utc': datetime.now(timezone.utc).isoformat()}}
-            row = verification_plan.obligation('security-inventory')
-            row['data_sources'] = [source]
-            with mock.patch.object(verification_plan, 'policy_binding', return_value={'digest': 'a' * 64}):
-                plan = verification_plan.build_required_plan(root, mode='fast',
-                    context={'owner': 'owned'}, source={'head': 'b' * 40},
-                    inventory={'digest': 'c' * 64}, risk={}, selection={}, extra_obligations=[row])
-            result = verification.CheckResult('security-inventory', 'pass', 'owned observation', details=[{
-                'kind': 'security-result', 'schema_version': 1, 'family': 'inventory',
-                'outcome': 'pass', 'data_sources': [source]}])
-            verification_plan.bind_result(plan, result)
-            calls = []
-            def validate(value, *, root, now):
-                calls.append(value)
-                return value == source and (root / 'owned-source.txt').read_bytes() == b'owned source\n'
-            with mock.patch.object(expanded_security, 'validate_data_source', side_effect=validate), \
-                    mock.patch('subprocess.Popen', side_effect=AssertionError('child forbidden')):
-                yield root, plan, result, calls
+            _, _, spec_path = self.legacy_project(root)
+            plan = verification_plan.current_required_plan(root, mode='pr')
+            criterion = next(item for item in plan['obligations'] if item['id'] == 'AC-001:tests')
+            self.assertEqual(criterion['expected_tests'], ['tests/test_required_case.py::Required::test_actual'])
+            self.assertEqual(criterion['requirement_ids'], ['AC-001'])
+            self.assertEqual(plan['binding']['context']['package']['spec_digest'],
+                             canonical_spec_digest(json.loads(spec_path.read_text())))
+            self.assertEqual(plan['binding']['source']['head'], git_head(root))
+            spec = json.loads(spec_path.read_text())
+            spec['acceptance_criteria'][0]['statement'] = 'A revised requirement must invalidate prior proof.'
+            spec_path.write_text(json.dumps(spec))
+            later = verification_plan.current_required_plan(root, mode='pr')
+            self.assertNotEqual(plan['binding']['context'], later['binding']['context'])
 
-    def admission(self, root, plan, results):
-        return verification._required_quality_gate(root, 'fast', ['base'], results, plan)
+    def test_legacy_native_verify_executes_exact_criterion_and_rejects_stale_proof(self):
+        from getzilla.verification import verify
+        with tempfile.TemporaryDirectory(prefix='verify-legacy-') as directory:
+            root = Path(directory)
+            _, _, spec_path = self.legacy_project(root)
+            report = verify(root, mode='pr', record=False)
+            self.assertEqual(report['status'], 'pass', report.get('required_plan_error') or
+                             [item for item in report['checks'] if item['status'] == 'fail'])
+            self.assertEqual(verification_plan.report_gaps(root, report), [])
+            criterion = next(item for item in report['checks'] if item['name'] == 'criterion-tests')
+            detail = next(item for item in criterion['details'] if item.get('kind') == 'criterion-test-execution')
+            self.assertIn('tests/test_required_case.py::Required::test_actual', detail['verified_references'])
+            spec = json.loads(spec_path.read_text())
+            spec['acceptance_criteria'][0]['statement'] = 'The criterion changed after execution.'
+            spec_path.write_text(json.dumps(spec))
+            self.assertTrue(verification_plan.report_gaps(root, report))
 
-    def test_prior_hard_failure_does_not_reacquire_or_claim_a_current_binding(self):
-        from getzilla import verification_plan
-        with self.world() as (root, plan, original, validators):
-            for status in ('fail', 'cancelled'):
-                for variant in ('valid', 'absent', 'malformed', 'stale-context', 'bad-digest'):
-                    with self.subTest(status=status, variant=variant):
-                        supplied = copy.deepcopy(plan)
-                        if variant == 'absent':
-                            supplied = None
-                        elif variant == 'malformed':
-                            supplied = {}
-                        elif variant == 'stale-context':
-                            supplied['binding']['context'] = {'owner': 'foreign'}
-                        elif variant == 'bad-digest':
-                            supplied['digest'] = '0' * 64
-                        result = copy.deepcopy(original)
-                        result.status = status
-                        results = [result]
-                        before = copy.deepcopy(results)
-                        with mock.patch.object(verification_plan, 'current_required_plan',
-                                return_value=copy.deepcopy(plan)) as producer, \
-                                mock.patch.object(verification, 'evaluate_quality_gate',
-                                    wraps=verification.evaluate_quality_gate) as consumer:
-                            gate = self.admission(root, supplied, results)
-                        self.assertEqual(producer.call_count, 0)
-                        self.assertEqual(gate.status, 'fail')
-                        self.assertIsNone(consumer.call_args.kwargs['current_binding'])
-                        self.assertIs(consumer.call_args.kwargs['required_plan'], supplied)
-                        self.assertIs(consumer.call_args.kwargs['checks'], results)
-                        self.assertTrue(callable(consumer.call_args.kwargs['data_source_validator']))
-                        self.assertIn('required-plan-unavailable', [x['code'] for x in gate.details])
-                        diagnostic = [x for x in gate.details if x['code'] == 'required-plan-revalidation-unexecuted']
-                        self.assertEqual(len(diagnostic), 1)
-                        self.assertIn('not executed', diagnostic[0]['message'])
-                        self.assertEqual(results, before)
-                        observed_validators = list(validators)
-                        validators.clear()
-                        expected = verification.evaluate_quality_gate(**consumer.call_args.kwargs)
-                        self.assertEqual(gate.status, expected.status)
-                        self.assertEqual(gate.details[:-1], expected.details)
-                        self.assertEqual(validators, observed_validators)
-                        validators.clear()
+    def test_modern_attachment_cannot_use_the_legacy_adapter(self):
+        from tests.test_task_intent import TaskIntentTests
+        with project_copy(git=True) as root:
+            route = TaskIntentTests().task(root)
+            orphan = {key: value for key, value in route.items() if key != 'change_id'}
+            with self.assertRaisesRegex(ValueError, 'not attached'):
+                verification_plan._native_obligations(root, 'pr', orphan, {})
 
-    def test_success_rederives_and_validates_the_owned_source(self):
-        from getzilla import verification_plan
-        with self.world() as (root, plan, result, validators):
-            for changed in (False, True):
-                with self.subTest(changed=changed):
-                    if changed:
-                        (root / 'owned-source.txt').write_bytes(b'changed owned source\n')
-                    with mock.patch.object(verification_plan, 'current_required_plan',
-                            return_value=copy.deepcopy(plan)) as producer:
-                        gate = self.admission(root, plan, [result])
-                    producer.assert_called_once_with(root, mode='fast', profiles=['base'], docs_scope=None)
-                    self.assertEqual(gate.status, 'fail' if changed else 'pass', gate.details)
-                    self.assertNotIn('required-plan-revalidation-unexecuted', [x['code'] for x in gate.details])
-                    if changed:
-                        self.assertIn('required-data-source-stale', [x['code'] for x in gate.details])
-            self.assertEqual(len(validators), 2)
+    def test_legacy_adapter_rejects_mismatched_identity_and_unsafe_optional_inputs(self):
+        with tempfile.TemporaryDirectory(prefix='plan-legacy-fences-') as directory:
+            root = Path(directory)
+            _, _, spec_path = self.legacy_project(root)
+            route = state.get_active_route(root)
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                verification_plan._plan_documents(root, {**route, 'change_id': '20261004-different-change'})
+            spec = json.loads(spec_path.read_text())
+            spec['change_id'] = '20261004-different-change'
+            spec_path.write_text(json.dumps(spec))
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                verification_plan._plan_documents(root, route)
+            spec['change_id'] = '20261004-scope-fixture'
+            spec_path.write_text(json.dumps(spec))
+            for name in ('state.json', 'requirements.md'):
+                path = spec_path.parent / name
+                with self.subTest(name=name):
+                    try:
+                        path.symlink_to(root / 'absent-input')
+                    except (OSError, NotImplementedError) as exc:
+                        self.skipTest('symlink creation is unavailable: ' + str(exc))
+                    try:
+                        with self.assertRaises((OSError, ValueError)):
+                            verification_plan._plan_documents(root, route)
+                    finally:
+                        path.unlink()
 
-    def test_unknown_unsupported_and_incomplete_statuses_still_rederive(self):
-        from getzilla import verification_plan
-        with self.world() as (root, plan, original, validators):
-            for status in ('unknown', 'unsupported', 'incomplete', 'skip'):
-                with self.subTest(status=status):
-                    result = copy.deepcopy(original)
-                    result.status = status
-                    with mock.patch.object(verification_plan, 'current_required_plan',
-                            return_value=copy.deepcopy(plan)) as producer:
-                        gate = self.admission(root, plan, [result])
-                    producer.assert_called_once()
-                    self.assertEqual(gate.status, 'fail')
-                    self.assertNotIn('required-plan-revalidation-unexecuted', [x['code'] for x in gate.details])
-            self.assertEqual(len(validators), 4)
-
-    def test_current_context_policy_source_and_plan_mismatches_still_refuse(self):
-        from getzilla import verification_plan
-        with self.world() as (root, plan, result, _validators):
-            for field in ('context', 'source', 'policy', 'digest', 'malformed'):
-                with self.subTest(field=field):
-                    observed = copy.deepcopy(plan)
-                    if field in ('context', 'source', 'policy'):
-                        observed['binding'][field] = {'owned_changed': True}
-                        observed['digest'] = verification_plan.digest({k: v for k, v in observed.items() if k != 'digest'})
-                    elif field == 'digest':
-                        observed['digest'] = '0' * 64
-                    else:
-                        observed = {}
-                    with mock.patch.object(verification_plan, 'current_required_plan', return_value=observed) as producer:
-                        gate = self.admission(root, plan, [result])
-                    producer.assert_called_once()
-                    self.assertEqual(gate.status, 'fail')
-                    self.assertIn('required-plan-unavailable', [x['code'] for x in gate.details])
-                    self.assertNotIn('required-plan-revalidation-unexecuted', [x['code'] for x in gate.details])
-            malformed = copy.deepcopy(plan)
-            malformed['digest'] = '0' * 64
-            with mock.patch.object(verification_plan, 'current_required_plan', return_value=malformed) as producer:
-                gate = self.admission(root, malformed, [result])
-            producer.assert_called_once()
-            self.assertEqual(gate.status, 'fail')
-            self.assertIn('required-plan-invalid', [x['code'] for x in gate.details])
-
-    def test_nonterminal_revalidation_preserves_interrupt_identity(self):
-        from getzilla import verification_plan
-        with self.world() as (root, plan, result, _validators):
-            for error in (KeyboardInterrupt(), SystemExit(23)):
-                with self.subTest(kind=type(error).__name__):
-                    with mock.patch.object(verification_plan, 'current_required_plan', side_effect=error), \
-                            self.assertRaises(type(error)) as caught:
-                        self.admission(root, plan, [result])
-                    self.assertIs(caught.exception, error)
+    def test_pending_human_intent_invalidates_real_modern_proof_until_answered(self):
+        from getzilla import continuity
+        from getzilla.task_intent import target_digest
+        from getzilla.verification import verify
+        from tests.test_package_status import PackageStatusTests
+        from tests.test_task_intent import TaskIntentTests
+        with project_copy(git=True, minimal_runtime=True, source_only_runtime=True) as root:
+            PackageStatusTests().prepare(root, complete=True)
+            (root / 'feature.txt').write_text('recoverable fixture work\n')
+            prepare_review_source(root)
+            report = write_current_verification(root)
+            helper = TaskIntentTests()
+            question = {'id': 'Q-COMPLETE', 'question': 'Which unfinished work belongs to this result?',
+                        'targets': ['AC-001'], 'paths': ['feature.txt'], 'source_ref': 'fixture-human:task'}
+            continuity.update_intent(root, helper.request(root, {'kind': 'ask', 'question': question}, 'ask-complete'))
+            self.assertTrue(verification_plan.report_gaps(root, report))
+            blocked = verify(root, mode='pr', record=False)
+            self.assertEqual(blocked['status'], 'fail')
+            self.assertTrue(any(item['name'] == 'task-context' and 'Q-COMPLETE' in item['summary']
+                                for item in blocked['checks']))
+            route = state.get_active_route(root)
+            question = route['intent_state']['questions'][0]
+            answer = {'text': 'Only the fixture work described by AC-001 belongs to this result.',
+                      'source_kind': 'human', 'source_ref': 'fixture-human:event-1',
+                      'principal': 'fixture-owner', 'event_id': 'fixture-human:event-1',
+                      'target_digest': target_digest(root, route, question)}
+            continuity.update_intent(root, helper.request(root, {'kind': 'answer', 'id': 'Q-COMPLETE',
+                                                               'answer': answer}, 'answer-complete'))
+            refreshed = write_current_verification(root)
+            self.assertNotEqual(refreshed['required_plan']['digest'], report['required_plan']['digest'])
+            self.assertTrue(verification_plan.report_gaps(root, report), 'answering cannot revive old proof')

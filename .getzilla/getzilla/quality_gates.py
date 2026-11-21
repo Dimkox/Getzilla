@@ -197,3 +197,10 @@ def evaluate_quality_gate(
     if details:
         return QualityGateDecision("fail", f"QG-01 blocked admission: {len(details)} finding(s)", details)
     return QualityGateDecision("pass", "QG-01 admission checks passed", [])
+
+
+def _plan_excludes(required_plan: dict | None, name: str) -> bool:
+    if not isinstance(required_plan, dict) or not isinstance(required_plan.get('obligations'), list):
+        return False
+    matched = [item for item in required_plan['obligations'] if isinstance(item, dict) and item.get('check_id') == name]
+    return bool(matched) and all(item.get('applicability') == 'not_applicable' and item.get('evidence') for item in matched)

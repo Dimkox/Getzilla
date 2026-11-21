@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import os
 import stat
 from pathlib import Path
@@ -35,7 +36,8 @@ def _edge_line(edge: Mapping[str, object], *, data: bool = False) -> str:
     target = _identifier("node", str(edge["to"]))
     details = [str(edge["id"]), str(edge["type"]), str(edge["protocol"])]
     if data:
-        details.extend(str(item) for item in edge.get("allowed_data", []))
+        details.extend(str(item) for item in sorted(edge.get("allowed_data", []),
+                       key=lambda item: json.dumps(item, ensure_ascii=False)))
     return f'  {source} -->|"{_escape(" | ".join(details))}"| {target}'
 
 
