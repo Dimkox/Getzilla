@@ -12,10 +12,15 @@ import unittest
 from unittest import mock
 
 import getzilla
-from getzilla import verification_plan, verification_journal, verification_policy_source
+from getzilla import verification_plan, verification_journal, verification_policy_source, security_research_catalog
 # Preload before the pure boundary.
 from getzilla import verification_tool_workspace  # noqa: F401
 from tests import _support
+
+# The immutable packaged data is an input to policy_binding, just like the
+# module source bytes. Keep those inputs available inside the no-I/O fixture.
+_CATALOG_INPUTS = {name: getattr(security_research_catalog, name)()
+                   for name in ('catalog_bytes', 'image_conditions_bytes')}
 
 _PURE = False
 
@@ -51,6 +56,8 @@ def pure():
 
     try:
         with contextlib.ExitStack() as patches:
+            for name, data in _CATALOG_INPUTS.items():
+                patches.enter_context(mock.patch.object(security_research_catalog, name, return_value=data))
             for module in modules:
                 patches.enter_context(mock.patch.object(module, '_journal_report', defer(module._journal_report)))
             with verification_journal.bind_sink(None, None):

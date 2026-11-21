@@ -34,12 +34,12 @@ class PayloadPackagingTests(unittest.TestCase):
             self.assertEqual(mirror.read_bytes(), original)
 
     def source_fixture(self, root):
-        for directory in ('.grok/agents', '.agents/skills', '.grok/cursor-rules',
+        for directory in ('.grok/agents', '.agents/skills', '.getzilla/cursor-rules', '.getzilla/config',
                           '.getzilla/getzilla', 'scripts', 'factory/src/getzilla_factory'):
             (root / directory).mkdir(parents=True, exist_ok=True)
         for relative, data in (
-            ('.grok/hooks.json', b'{"hooks":{}}'),
-            ('.grok/cursor-rules/core.toml', b'description="public rule"\nalways_apply=true\ninstructions="public fixture"\n'),
+            ('.getzilla/config/hooks.json', b'{"hooks":{}}'),
+            ('.getzilla/cursor-rules/core.toml', b'description="public rule"\nalways_apply=true\ninstructions="public fixture"\n'),
             ('scripts/install_into.py', b'# source marker only\n'),
             ('factory/pyproject.toml', b'# source marker only\n'),
             (harnesses.PAYLOAD_ENGINE, b'# first public generated fixture\n'),

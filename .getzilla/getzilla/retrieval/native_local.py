@@ -11,7 +11,6 @@ import json
 from functools import wraps
 import os
 from pathlib import Path
-import stat
 import sys
 import time
 
@@ -182,31 +181,16 @@ class _LocalHost(access.NativeAccessHost):
             baseline = {'source_kind': 'local_git', 'source_digest': source.source_digest,
                         'git': {'commit_oid': self.reader.git['head'], 'tree_oid': self.reader.git['tree']}}
         graph_input = make_graph_input(baseline, {d.path: d.original for d in source.documents}, GraphConfig())
-        with self.anchor.parent('.getzilla/index/graph.sqlite', create=True) as (parent, name):
-            descriptor = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+        cache = '.getzilla/index/graph.sqlite'
+        with self.anchor.parent(cache, create=True) as (parent, _):
+            self.anchor.check_parent(parent)
+            store = GraphStore(self.root / cache, private_parent=parent)
             try:
-                info = os.fstat(descriptor)
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
-                    raise RetrievalError('unsafe_context_index')
-                for extra in (name + '-wal', name + '-shm'):
-                    try:
-                        extra_info = os.stat(extra, dir_fd=parent, follow_symlinks=False)
-                    except FileNotFoundError:
-                        continue
-                    if (not stat.S_ISREG(extra_info.st_mode) or extra_info.st_uid != os.getuid()
-                            or stat.S_IMODE(extra_info.st_mode) != 0o600 or extra_info.st_nlink != 1):
-                        raise RetrievalError('unsafe_context_index')
-                # SQLite uses the held private parent, never an untrusted root hint.
-                store = GraphStore(Path('/proc/self/fd') / str(parent) / name)
-                try:
-                    graph, counters = current_graph(graph_input, store)
-                    rebuilt = store.rebuilt_reason
-                finally:
-                    store.close()
-                self.anchor.check_parent(parent)
+                graph, counters = current_graph(graph_input, store)
+                rebuilt = store.rebuilt_reason
             finally:
-                os.close(descriptor)
+                store.close()
+            self.anchor.check_parent(parent)
         generation = build_generation(source, budget=self.budget)
         if self.observation is not None:
             self.observation.metadata_from(source.source_identity, graph.generation_id,

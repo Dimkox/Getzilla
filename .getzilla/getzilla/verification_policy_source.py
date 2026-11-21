@@ -56,7 +56,7 @@ def implementation_source_binding() -> dict:
         'retrieval/study_tokenizer.py', 'retrieval/study_context.py', 'retrieval/study_vectors.py',
         'retrieval/study_metrics.py', 'retrieval/study_lexical.py', 'retrieval/study_worker_entry.py',
         'retrieval/study_native_entry.py', 'retrieval/study_worker_dispatch.py', 'retrieval/lines.py',
-        'security_corresponding_source.py', 'security_source_delivery.py', 'security_deliveries.py',
+        'security_source_delivery.py', 'security_deliveries.py',
         'closed_loader_source.py',
     ):
         identity = name[:-3].replace('/', '.')

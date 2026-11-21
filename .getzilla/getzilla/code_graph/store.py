@@ -78,13 +78,16 @@ def generation_from_record(body: dict[str, Any], parsed: dict[str, Any]) -> Grap
 
 
 class GraphStore:
-    def __init__(self, path: Path, *, readonly: bool = False) -> None:
+    def __init__(self, path: Path, *, readonly: bool = False, private_parent: int | None = None) -> None:
         self.readonly = readonly
         self._read_guard = None
         self.db = None
         self.rebuilt_reason: str | None = None
-        self._custody = CacheCustody(path, create=not readonly)
+        self._custody = CacheCustody(path, create=not readonly, private_parent=private_parent)
         self.path = self._custody.path
+        if private_parent is not None and not self._custody.missing:
+            # Linux native retrieval holds this directory for the lifetime of SQLite.
+            self.path = Path('/proc/self/fd') / str(self._custody.parent) / self._custody.name
         try:
             if self._custody.missing:
                 return

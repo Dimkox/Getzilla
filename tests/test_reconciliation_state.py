@@ -337,8 +337,8 @@ class ReconciliationStateTests(unittest.TestCase):
         self.route()
         self.risk_diff()
         native = state.durable_json
-        def drift(root, path, document):
-            native(root, path, document)
+        def drift(root, path, document, **options):
+            native(root, path, document, **options)
             if path.parent.name == 'routes':
                 (self.root / 'app.py').write_text('value = 99\n')
         with mock.patch.object(state, 'durable_json', drift), self.assertRaises(ValueError):

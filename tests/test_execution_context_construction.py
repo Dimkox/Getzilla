@@ -91,7 +91,7 @@ class ContextConstructionTests(unittest.TestCase):
 
     def test_replace_cannot_implicitly_clone_changed_scope_or_reuse_stored_issuer(self):
         context = self.construct()
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex((TypeError, ValueError), '_construction_token'):
             replace(context, route_id='other-public-route')
         with self.assertRaises(execution.ExecutionError):
             replace(context, route_id='other-public-route', _construction_token=context._issuer)
@@ -103,7 +103,7 @@ class ContextConstructionTests(unittest.TestCase):
         self.assertEqual(shallow, context)
         self.assertIs(shallow._issuer, context._issuer)
         self.assertFalse(hasattr(shallow, '_construction_token'))
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex((TypeError, ValueError), '_construction_token'):
             replace(shallow, agent_id='other-public-agent')
         deep = copy.deepcopy(context)
         self.assertEqual(deep.route_id, context.route_id)

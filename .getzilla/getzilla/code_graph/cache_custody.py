@@ -13,7 +13,8 @@ from .models import GraphError
 
 
 class CacheCustody:
-    def __init__(self, path: Path, *, create: bool):
+    def __init__(self, path: Path, *, create: bool, private_parent: int | None = None):
+        self.private_parent = private_parent
         self.path = Path(fsx.system_canonical(path))
         self.stack = contextlib.ExitStack()
         self.descriptor = None
@@ -24,11 +25,15 @@ class CacheCustody:
             relative = self.path.relative_to(self.path.anchor).as_posix()
             try:
                 self.parent, self.name, self.check_parent = self.stack.enter_context(
-                    root._parent(relative, create=create, before_write=self._parents))
+                    root._parent(relative, create=create and private_parent is None, before_write=self._parents))
             except FileNotFoundError:
+                if private_parent is not None:
+                    raise GraphError('CACHE_PATH_CHANGED')
                 self.missing = True
                 return
             self._parents()
+            if private_parent is not None and not os.path.samestat(os.fstat(private_parent), os.fstat(self.parent)):
+                raise GraphError('CACHE_PATH_CHANGED')
             self.created = False
             try:
                 info = fsx.lstat_at(self.parent, self.name)
@@ -65,9 +70,9 @@ class CacheCustody:
                         or parent == self.path.parent and info.st_uid != uid):
                     raise GraphError('CACHE_PATH_UNSAFE')
 
-    @staticmethod
-    def _file(info):
+    def _file(self, info):
         if (fsx.is_link(info) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or self.private_parent is not None and stat.S_IMODE(info.st_mode) != 0o600
                 or hasattr(os, 'getuid') and (info.st_uid != os.getuid() or info.st_mode & 0o022)):
             raise GraphError('CACHE_PATH_UNSAFE')
 

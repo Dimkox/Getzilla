@@ -23,11 +23,9 @@ class HistoricalReconciliationTests(unittest.TestCase):
     reconcile = support.ReviewPlanTests.reconcile
 
     def publish(self, *, ancestry=True, mutate=None):
-        # Borrow immutable local Git objects only. Never fetch a remote, load an
-        # archived module, unpack the historical archive or execute its scripts.
-        objects = Path(git(ROOT, 'rev-parse', '--git-common-dir'))
-        objects = objects if objects.is_absolute() else ROOT / objects
-        (self.root / '.git/objects/info/alternates').write_text(str(objects.resolve() / 'objects') + '\n')
+        # Keep the historical publication inside the fixture's own object store.
+        git(self.root, '-c', 'fetch.unpackLimit=100000', 'fetch', '--no-tags', '--depth=1',
+            ROOT.as_uri(), history.PUBLICATION)
         shutil.copytree(ROOT / history.PREFIX, self.root / history.PREFIX)
         if mutate:
             mutate()
@@ -214,8 +212,7 @@ class HistoricalGitCustodyTests(unittest.TestCase):
         raw = (ROOT / history.SOURCE_PATH).read_bytes()
         oid = history.SOURCE_BLOB
         path = self.root / '.git/objects' / oid[:2] / oid[2:]
-        path.parent.mkdir(exist_ok=True)
-        path.write_bytes(zlib.compress(b'blob ' + str(len(raw)).encode() + b'\0' + raw))
+        self.assertTrue(path.is_file())
         original = history._git
         def read(root, arguments, **options):
             if arguments == ['cat-file', 'blob', oid]:
@@ -224,18 +221,6 @@ class HistoricalGitCustodyTests(unittest.TestCase):
                 replacement = path.with_name('replacement')
                 replacement.write_bytes(zlib.compress(b'blob ' + str(len(changed)).encode() + b'\0' + changed))
                 os.replace(replacement, path)
-                # Git may prefer an already packed alternate over a loose
-                # duplicate. Select the fixture's owned local object only;
-                # never modify the shared historical object database.
-                alternate = self.root / '.git/objects/info/alternates'
-                saved = alternate.read_bytes()
-                alternate.unlink()
-                try:
-                    value = original(root, arguments, **options)
-                    self.assertNotEqual(value, raw)
-                    return value
-                finally:
-                    alternate.write_bytes(saved)
             return original(root, arguments, **options)
         with mock.patch.object(history, '_git', side_effect=read), self.assertRaises(ValueError):
             history.issue170_source(self.root, 'HEAD')

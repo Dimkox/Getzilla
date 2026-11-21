@@ -64,7 +64,8 @@ class PublicStudyOperationTests(unittest.TestCase):
             shutil.rmtree(worker_source)
             model = export('model', facts['artifact_files'])
             software = export('software', facts['software_files'], facts['software_root'])
-            executable = str(Path(sys.executable).resolve())
+            # The owned test port inspects this root-owned executable without running Docker.
+            executable = str(Path('/usr/bin/true').resolve())
             composition = owner._Composition('test-only-operation/v1', review_composition,
                 condition_composition, (('owned-inert-worker.py', entry),), executable)
             image = facts['image']['config']['digest']

@@ -147,7 +147,7 @@ class NativeContextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deliver_hook_context({'effective_root':str(self.root)},'grok','answer','',delivered.append)
 
-    def test_actual_git_dirty_rename_branch_and_corrupt_cache_are_fresh(self):
+    def test_git_changes_stay_fresh_and_unknown_cache_bytes_are_preserved(self):
         def git(*args):
             subprocess.run(['git', *args], cwd=self.root, check=True, capture_output=True, umask=0o077,
                            env={**os.environ, 'GIT_CONFIG_NOSYSTEM':'1', 'GIT_CONFIG_GLOBAL':os.devnull})
@@ -172,10 +172,15 @@ class NativeContextTests(unittest.TestCase):
         git('checkout','-q','--detach','HEAD~1')
         cache=self.root/'.getzilla/index/graph.sqlite'
         cache.write_bytes(b'corrupt cache fixture')
+        from getzilla.native_access import NativeAccessError
+        count = len(delivered)
+        with self.assertRaises(NativeAccessError):
+            deliver_local_context(self.root,'answer','',delivered.append)
+        self.assertEqual(len(delivered), count)
+        self.assertEqual(cache.read_bytes(), b'corrupt cache fixture')
+        cache.unlink()
         deliver_local_context(self.root,'answer','',delivered.append)
         self.assertIn('return 42',delivered[-1]['text'])
-        self.assertTrue(any(c['path']=='a.py' for c in delivered[-1]['citations']))
-        self.assertEqual(delivered[-1]['cache_rebuilt_reason'],'CORRUPT_CACHE')
 
     def test_known_uninstalled_hook_and_unknown_policy_are_refused(self):
         delivered=[]

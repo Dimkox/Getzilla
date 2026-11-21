@@ -631,12 +631,19 @@ class VerificationTests(unittest.TestCase):
                 os.environ['GETZILLA_OSV_ONLINE'] = '1'
                 requests = []
 
-                def fetch(url, body):
+                from getzilla.security_acquisition import refresh_query
+                from getzilla.security_osv_query import QueryResponse
+                database = root / '.getzilla/runtime/fixture-osv'
+                os.environ['GETZILLA_OSV_DB'] = str(database)
+
+                def transport(method, url, body, deadline, remaining):
                     query = json.loads(body)
                     requests.append((url, query))
-                    return json.dumps({'results': [{} for _ in query['queries']]}).encode('utf-8')
+                    answer = json.dumps({'results': [{} for _ in query['queries']]}).encode()
+                    return QueryResponse(method, url, body, answer, 200, url)
 
-                self.assertEqual(scan(root, fetch=fetch)['status'], 'pass')
+                self.assertEqual(refresh_query(root, database, transport=transport)['status'], 'pass')
+                self.assertEqual(scan(root)['status'], 'pass')
                 self.assertEqual(len(requests), 1)
                 self.assertIn('fixture-package', {
                     query['package']['name'] for query in requests[0][1]['queries']

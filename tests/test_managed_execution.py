@@ -135,7 +135,7 @@ class ManagedExecutionTests(unittest.TestCase):
         config.mkdir(parents=True)
         config.parent.chmod(0o755)
         config.chmod(0o755)
-        (config / 'policy.json').write_text('{}')
+        (config / 'policy.json').write_text('{"schema_version": 2}')
         (config / 'policy.json').chmod(0o644)
         owned_route(self.root, session=session)
         self.caller = execution.trusted_caller(self.root)

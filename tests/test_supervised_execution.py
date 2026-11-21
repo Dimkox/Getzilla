@@ -35,7 +35,7 @@ class SupervisedExecutionTests(unittest.TestCase):
         cfg.mkdir(parents=True)
         for p in (cfg, cfg.parent):
             p.chmod(0o755)
-        (cfg / "policy.json").write_text("{}")
+        (cfg / "policy.json").write_text('{"schema_version": 2}')
         (cfg / "policy.json").chmod(0o644)
         owned_route(self.root, session=self.session)
         self.ids = []
