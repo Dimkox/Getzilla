@@ -921,11 +921,18 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
     validate_arguments(arguments)
     deadline = time.monotonic() + timeout
     binding = binding or _git_binding(root, _probe=False)
+    native = isinstance(guard, NativeGitGraph)
+    worktree = guard.address(binding.root) if native else binding.root
+    worktree_fds = guard.pass_fds((binding.root,)) if native else ()
     def parse_config(raw):
+        volume_root = Path(Path(root).anchor)
+        # Parse stdin outside any repository while the native child starts at
+        # the owned worktree descriptor like every other Git subprocess.
         code, output, _ = _run_capped(
-            _git_command(['config', '--null', '--no-includes', '--list', '--file=-']),
-            cwd=Path(Path(root).anchor), env=_git_environment(), stdout_limit=MAX_GIT_OUTPUT_BYTES,
-            stderr_limit=4096, timeout=_bounded_git_timeout(timeout, deadline), stdin_data=raw)
+            _git_command(['-C', str(volume_root), 'config', '--null', '--no-includes', '--list', '--file=-']),
+            cwd=worktree if native else volume_root, env=_git_environment(),
+            stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
+            timeout=_bounded_git_timeout(timeout, deadline), stdin_data=raw, pass_fds=worktree_fds)
         if code or output and not output.endswith(b'\0'):
             raise ValueError('Git configuration syntax unavailable')
         return [tuple(record.decode('utf-8', 'strict').split('\n', 1))
@@ -934,25 +941,27 @@ def _read_git_child(root, arguments, *, binding=None, guard=None, timeout=30):
         environment = _git_environment()
         environment['GIT_COMMON_DIR'] = str(view.path)
         environment['GIT_OBJECT_DIRECTORY'] = str(view.path/'objects')
+        descriptors = view.pass_fds + worktree_fds
         command = _git_command(arguments, safe_directory=binding.root,
-                               git_directory=view.path, work_tree=binding.root)
+                               git_directory=view.path, work_tree=worktree)
         command[1:1] = ['--attr-source='+view.empty_tree, '-c', 'protocol.allow=never']
         if arguments[:1] in (['status'], ['diff']):
             inventory = _git_command(['ls-files', '--stage', '-z'], safe_directory=binding.root,
-                git_directory=view.path, work_tree=binding.root)
-            code, entries, _ = _run_capped(inventory, cwd=binding.root, env=environment,
+                git_directory=view.path, work_tree=worktree)
+            code, entries, _ = _run_capped(inventory, cwd=worktree, env=environment,
                 stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=4096,
-                timeout=_bounded_git_timeout(timeout, deadline), pass_fds=view.pass_fds)
+                timeout=_bounded_git_timeout(timeout, deadline), pass_fds=descriptors)
             if code or any(entry.startswith(b'160000 ') for entry in entries.split(b'\0')):
                 raise ValueError('Git submodule observations unavailable')
-        yield command, environment, view.pass_fds, deadline, binding, view
+        yield command, environment, descriptors, deadline, binding, view
 
 
 def run_git_read(root, arguments, *, stdout_limit=MAX_GIT_OUTPUT_BYTES, stderr_limit=65_536,
                  timeout=30, stdin_data=None, binding=None, guard=None):
     with _read_git_child(root, arguments, binding=binding, guard=guard, timeout=timeout) as child:
         command, environment, descriptors, deadline, original, view = child
-        result = _run_capped(command, cwd=original.root, env=environment,
+        worktree = guard.address(original.root) if isinstance(guard, NativeGitGraph) else original.root
+        result = _run_capped(command, cwd=worktree, env=environment,
             stdout_limit=stdout_limit, stderr_limit=stderr_limit,
             timeout=_bounded_git_timeout(timeout, deadline), stdin_data=stdin_data,
             pass_fds=descriptors)
@@ -1449,10 +1458,12 @@ def _stream_git_blob(root: Path, object_id: str, expected_size: int, path: str,
         with _read_git_child(root, ["cat-file", "blob", object_id], binding=binding,
                              guard=_scope.guard, timeout=timeout) as child:
             command, environment, descriptors, deadline, _, _ = child
+            guard = _scope.guard
+            worktree = guard.address(binding.root) if isinstance(guard, NativeGitGraph) else binding.root
             timeout = _bounded_git_timeout(timeout, deadline)
             process = subprocess.Popen(  # nosec B603
                 command,
-                cwd=binding.root,
+                cwd=worktree,
                 env=environment,
                 pass_fds=descriptors,
                 stdin=subprocess.DEVNULL,
