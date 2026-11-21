@@ -3678,7 +3678,7 @@ def _literal_directory_reads(root, command, patterns, directory):
 
 @_bounded_invocation(_BUDGET_MARKER)
 def shell_secret_reference(
-    root: Path, command: str, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
+    root: Path, command: str, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD, require_stable_cwd: bool = False,
 ) -> str | None:
     """First secret path a shell command names, under any quoting, nesting or option form.
 
@@ -3697,6 +3697,8 @@ def shell_secret_reference(
     if _read_cwd_uncertain(command) and any(
         _cwd_dependent_read(argv) for argv in commands
     ):
+        if require_stable_cwd:
+            return _UNKNOWN_READ_CWD
         return _literal_directory_reads(root, command, patterns, directory)
     if directory is None:
         # Explicit unknown native cwd must never become a public root-relative read.

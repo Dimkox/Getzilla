@@ -55,10 +55,10 @@ def read_protection_reason(
     directory = _execution_directory(root, execution_cwd)
     if tool == 'Bash':
         command = str(inputs.get('command', '')) if isinstance(inputs, dict) else str(inputs)
-        hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+        hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory, require_stable_cwd=True)
         if hit is None and _readings_differ(command):
             with _legacy.posix_reading():
-                hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory)
+                hit = _legacy_shell_secret_reference(root, command, patterns, execution_cwd=directory, require_stable_cwd=True)
     else:
         hit = _legacy.read_secret_reference(root, tool, inputs, patterns, execution_cwd=directory)
     return 'Read refused by the session project secret policy or unresolved execution directory.' if hit is not None else None

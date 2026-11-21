@@ -1163,7 +1163,8 @@ def main() -> None:
 
         # Selecting a workdir chooses operation authority; it cannot erase the
         # session project's independent read protections, including nested roots.
-        if context.session_root is not None and context.session_root != context.effective_root:
+        if context.session_root is not None and (context.session_root != context.effective_root
+                                                  or current_tool == 'Bash'):
             try:
                 read_reason = read_protection_reason(context.session_root, {
                     'tool_name': current_tool, 'tool_input': current_input,
