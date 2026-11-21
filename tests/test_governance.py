@@ -1754,7 +1754,9 @@ class GovernanceHandoffTests(unittest.TestCase):
         # cross-check per Git operation and one cat-file per contract (726 processes before).
         self.assertEqual(len(probes), 1)
         self.assertLess(len(blob_batches), 10)
-        self.assertLess(len(commands), 50)
+        # Each isolated Git view parses config from stdin before reading repository data.
+        repository_reads = [command for command in commands if "--file=-" not in command]
+        self.assertLess(len(repository_reads), 50)
 
     def test_handoff_has_exact_closed_immutable_v1_shape(self) -> None:
         _, snapshot, head, architecture = self._clean_fixture()
@@ -2291,7 +2293,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
             self._assert_git_binding_refused(
                 lambda: architecture_diff.run_git_bounded(root, ["rev-parse", "HEAD"]), "worktree root", root,
             )
-        self.assertEqual(observed, [foreign_head])
+        # The isolated Git view retains the original HEAD even before the postcheck.
+        self.assertEqual(observed, [(head + "\n").encode()])
 
     def test_git_binding_allows_normal_object_additions_during_read(self) -> None:
         root, head = self._repository()
@@ -2523,7 +2526,8 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
                     config.write(f"[core]\n\tworktree = {foreign}\n")
                 with self.assertRaises(ArchitectureError):
                     architecture_diff._git(root, ["rev-parse", "HEAD"])
-                self.assertEqual(len(probes), 5)
+                # The isolated view rejects core.worktree before starting rev-parse.
+                self.assertEqual(len(probes), 4)
                 # In place: Git for Windows hides .git, and Windows refuses to recreate a hidden file.
                 with (linked / ".git").open("r+b") as registration:
                     registration.write(f"gitdir: {foreign / '.git'}\n".encode())
@@ -2563,7 +2567,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         subprocess.run(["git", "replace", head, replacement_head], cwd=root, check=True)
         self.assertEqual(governance._git_output(root, ["show", f"{head}:decisions.md"], label="exact blob"), b"# decisions\n")
 
-    def test_clean_gate_refuses_filters_before_they_can_execute(self) -> None:
+    def test_clean_gate_detects_dirty_files_without_executing_repository_filters(self) -> None:
         root, head = self._repository()
         (root / ".gitattributes").write_text("decisions.md filter=hostile\n", encoding="utf-8")
         sentinel = root / "filter-ran"
@@ -2571,7 +2575,7 @@ class GovernanceInputBoundaryTests(unittest.TestCase):
         (root / "decisions.md").write_bytes(b"changed\n")
         with self.assertRaises(GovernanceError) as caught:
             governance._require_clean_exact_git_state(root, base_sha=head, head_sha=head)
-        self.assertEqual(caught.exception.code, "git")
+        self.assertEqual(caught.exception.code, "dirty")
         self.assertFalse(sentinel.exists())
 
     def test_committed_gitlink_is_not_a_regular_governance_input(self) -> None:

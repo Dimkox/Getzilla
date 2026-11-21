@@ -850,12 +850,19 @@ def _git_binding(root: Path, *, _guard: LinuxGitGuard | None = None,
             _guard.seal()
         if not _probe:
             return binding
+        probed = _PROBED_BINDINGS.get()
+        if probed is not None:
+            probe_key = (*_binding_key(binding, _guard), _config_identities((git_directory, common_directory), _guard))
+            if probe_key in probed:
+                return binding
         code, output, _ = run_git_read(repository,
             ["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
             binding=binding, guard=_guard, timeout=_bounded_git_timeout(_GIT_TIMEOUT_SECONDS, _deadline),
             stdout_limit=16_384)
         if code or not _reported_git_paths_match(output, git_directory, repository):
             raise ArchitectureError("Git directory/worktree relationship does not match root", code="git")
+        if probed is not None:
+            probed.add(probe_key)
         return binding
     except ArchitectureError:
         raise
