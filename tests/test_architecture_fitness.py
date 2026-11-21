@@ -3954,6 +3954,10 @@ class ArchitectureFitnessTests(unittest.TestCase):
         repo.git("add", "src/changed.py")
         repo.git("commit", "-qm", "query gitlink entry")
         gitlink_head = repo.git("rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "Git submodule observations unavailable"):
+            FIT.diff_architecture(repo.root, base_sha=gitlink_base, head_sha=gitlink_head)
+        # Inspect the historical gitlink separately from the current index guard.
+        repo.git("checkout", "--detach", head)
         gitlink_diff = FIT.diff_architecture(repo.root, base_sha=gitlink_base, head_sha=gitlink_head)
         with self.assertRaisesRegex(ARCHITECTURE.ArchitectureError, "not a regular file"):
             DIFF.read_diff_files(repo.root, gitlink_diff, ("src/gitlink",))
