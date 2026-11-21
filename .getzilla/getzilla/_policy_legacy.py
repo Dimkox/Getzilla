@@ -3621,6 +3621,61 @@ def _cwd_dependent_read(argv: list[str] | None) -> bool:
     return bool(_secret_path_words(argv))
 
 
+def _literal_directory_reads(root, command, patterns, directory):
+    """Check literal reads at each reachable directory of a bounded shell list."""
+    from .shell_targets import _bandit_shell_targets, _chunks_with_operators
+
+    if directory is None or not re.fullmatch(r'[A-Za-z0-9_./ =&|;\n-]+', command):
+        return _UNKNOWN_READ_CWD
+    chunks = _chunks_with_operators(command)
+    if not 1 < len(chunks) <= 16:
+        return _UNKNOWN_READ_CWD
+    success, failure = {directory}, set()
+    for chunk, operator in chunks:
+        if operator not in {'', '&&', '||', ';', '\n'}:
+            return _UNKNOWN_READ_CWD
+        active = success if operator == '&&' else failure if operator == '||' else success | failure
+        kept_success = success if operator == '||' else set()
+        kept_failure = failure if operator == '&&' else set()
+        words = chunk.split()
+        if not words:
+            return _UNKNOWN_READ_CWD
+        next_success, next_failure = set(), set()
+        for base in active:
+            if words[0] == 'cd':
+                if len(words) != 2 or words[1].startswith(('-', '/')) or not base.is_relative_to(root):
+                    return _UNKNOWN_READ_CWD
+                target = base / words[1]
+                try:
+                    resolved = target.resolve()
+                except (OSError, RuntimeError):
+                    return _UNKNOWN_READ_CWD
+                if resolved != Path(os.path.normpath(target)) or not resolved.is_relative_to(root):
+                    return _UNKNOWN_READ_CWD
+                if shell_secret_reference(root, chunk, patterns, execution_cwd=base):
+                    return _UNKNOWN_READ_CWD
+                next_success.add(resolved)
+                next_failure.add(base)
+            else:
+                if words not in (['true'], ['false']):
+                    scanner = _bandit_shell_targets(root, chunk, bases={str(base)}, unknown_base=False)
+                    plain_file_command = (words == ['ls'] or
+                                          len(words) == 2 and words[0] == 'rm' and not words[1].startswith('-'))
+                    if (scanner is None and not plain_file_command) or (scanner is not None and scanner[1]):
+                        return _UNKNOWN_READ_CWD
+                    hit = shell_secret_reference(root, chunk, patterns, execution_cwd=base)
+                    if hit is not None:
+                        return hit
+                if words != ['false']:
+                    next_success.add(base)
+                if words != ['true']:
+                    next_failure.add(base)
+        success, failure = kept_success | next_success, kept_failure | next_failure
+        if len(success | failure) > 16:
+            return _UNKNOWN_READ_CWD
+    return None
+
+
 @_bounded_invocation(_BUDGET_MARKER)
 def shell_secret_reference(
     root: Path, command: str, patterns: list[str], *, execution_cwd: object = _UNSPECIFIED_READ_CWD,
@@ -3642,7 +3697,7 @@ def shell_secret_reference(
     if _read_cwd_uncertain(command) and any(
         _cwd_dependent_read(argv) for argv in commands
     ):
-        return _UNKNOWN_READ_CWD
+        return _literal_directory_reads(root, command, patterns, directory)
     if directory is None:
         # Explicit unknown native cwd must never become a public root-relative read.
         return _UNKNOWN_READ_CWD if any(
