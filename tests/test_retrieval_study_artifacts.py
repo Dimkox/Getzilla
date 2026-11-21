@@ -17,7 +17,7 @@ class StudyArtifactTests(unittest.TestCase):
 
     def test_exact_tiny_bytes_are_held_and_replacement_refuses(self):
         owner = self.owner()
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             root = Path(temporary)
             path = root / 'model.onnx'
             path.write_bytes(b'inert')
@@ -33,7 +33,7 @@ class StudyArtifactTests(unittest.TestCase):
     def test_symlink_extra_file_wrong_hash_and_writeable_mode_refuse(self):
         owner = self.owner()
         for changed in ('symlink', 'extra', 'hash', 'mode'):
-            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
                 root = Path(temporary)
                 file = root / 'data'
                 file.write_bytes(b'inert')
@@ -52,7 +52,7 @@ class StudyArtifactTests(unittest.TestCase):
 
     def test_deadline_and_hardlinks_refuse_without_retry(self):
         owner = self.owner()
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             root = Path(temporary)
             (root / 'data').write_bytes(b'inert')
             os.link(root / 'data', root / 'alias')
@@ -66,7 +66,7 @@ class StudyArtifactTests(unittest.TestCase):
 
     def test_unrelated_sibling_changes_do_not_retag_or_expand_held_inventory(self):
         owner = self.owner()
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             parent = Path(temporary)
             root = parent / 'models'
             root.mkdir(mode=0o700)
@@ -80,7 +80,7 @@ class StudyArtifactTests(unittest.TestCase):
 
     def test_export_snapshot_is_metadata_only_with_exact_separate_dac(self):
         owner = self.owner()
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             base = Path(temporary)
             export = base / 'export'
             export.mkdir(mode=0o755)
@@ -104,7 +104,7 @@ class StudyArtifactTests(unittest.TestCase):
 
     def test_insufficient_actual_fd_headroom_refuses_without_raising_limits(self):
         owner = self.owner()
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             root = Path(temporary)
             (root / 'data').write_bytes(b'inert')
             with patch('resource.getrlimit', return_value=(8, 8)), \

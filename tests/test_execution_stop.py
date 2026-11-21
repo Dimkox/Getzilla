@@ -271,6 +271,13 @@ class ExecutionStopTests(unittest.TestCase):
         self.assertEqual(observed['source_state'], 'unavailable')
 
     def test_armed_stop_gate_blocks_new_hook_work_but_preserves_observation(self):
+        config = self.root / '.getzilla/config'
+        config.mkdir(parents=True, exist_ok=True)
+        for directory in (config.parent, config):
+            directory.chmod(0o755)
+        policy_file = config / 'policy.json'
+        policy_file.write_text('{"schema_version": 2}')
+        policy_file.chmod(0o644)
         execution.provision(self.root, self.caller)
         edit = {'tool_name': 'Edit', 'tool_input': {'file_path': 'fixture.txt'}}
         self.assertTrue(policy.evaluate_pre_tool(self.root, edit)[0])

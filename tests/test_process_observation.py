@@ -225,6 +225,8 @@ class PassiveAnnotationTests(unittest.TestCase):
         for original,old,new in ((stop,'None','1'),
                                  (stop,'else grace_seconds','else 1'),
                                  (execute,'<= 180','<= 181'),
+                                 (execute,'len(inherited_fds) > 16','len(inherited_fds) > 17'),
+                                 (execute,'**descriptor_options','**other_options'),
                                  (execute,'grace_seconds=termination_grace','grace_seconds=1')):
             changed=ast.parse(ast.unparse(original).replace(old,new,1)).body[0]
             with self.subTest(old=old),self.assertRaises(AssertionError):
@@ -250,7 +252,8 @@ class PassiveAnnotationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         seen = set()
         for path in ('.getzilla/getzilla/python_test_runner.py', 'tests/test_python_test_runner.py'):
-            tree = ast.parse((root / path).read_text())
+            from tests._stop_annotations import bind_diagnostic_imports
+            tree = bind_diagnostic_imports(ast.parse((root / path).read_text()))
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef) and node.name in expected:
                     seen.add(node.name)

@@ -1,5 +1,54 @@
 """Passive stop-annotation AST normalization for preservation controls."""
 import ast
+import hashlib
+import sys
+
+
+def bind_diagnostic_imports(tree):
+    """Resolve the runner's direct imports to their original module attributes."""
+    owners = {}
+    for item in tree.body:
+        if not isinstance(item, ast.ImportFrom) or item.level != 1:
+            continue
+        if item.module == 'verification_actions':
+            for alias in item.names:
+                if alias.asname == '_action_' + alias.name:
+                    owners[alias.asname] = ('diagnostics', alias.name)
+        if item.module == 'fsx':
+            for alias in item.names:
+                if alias.asname is None and alias.name in {'owned_job', 'owned_popen', 'WINDOWS', 'kill_process_tree'}:
+                    owners[alias.name] = ('fsx', alias.name)
+
+    class Normalize(ast.NodeTransformer):
+        def visit_Name(self, node):
+            owner = owners.get(node.id)
+            if owner is not None and isinstance(node.ctx, ast.Load):
+                return ast.Attribute(ast.Name(owner[0], ast.Load()), owner[1], node.ctx)
+            return node
+
+    return Normalize().visit(tree)
+
+
+def project_default_descriptors(node):
+    """Check the descriptor transport added in ab63340c before projecting its default."""
+    assert [arg.arg for arg in node.args.kwonlyargs[-2:]] == ['inherited_fds', 'stdin_fd']
+    assert [ast.unparse(arg.annotation) for arg in node.args.kwonlyargs[-2:]] == ['tuple[int, ...]', 'int | None']
+    assert [ast.unparse(value) for value in node.args.kw_defaults[-2:]] == ['()', 'None']
+    starts = [i for i, stmt in enumerate(node.body) if isinstance(stmt, ast.If)
+              and any(isinstance(v, ast.Name) and v.id == 'inherited_fds' for v in ast.walk(stmt.test))]
+    assert len(starts) == 1
+    start = starts[0]
+    block = ast.Module(body=node.body[start:start + 4], type_ignores=[])
+    options = {'show_empty': True} if sys.version_info >= (3, 13) else {}
+    checksum = hashlib.sha256(ast.dump(block, **options).encode()).hexdigest()
+    assert checksum == 'ecb0715f8c22ac5877cb02009cc4b456a908eaa8778fa2c4d315f19a7fec044f'
+    dispatch = [call for call in ast.walk(node) if isinstance(call, ast.Call)
+                and ast.unparse(call.func) in {'fsx.owned_popen', 'owned_popen'}]
+    assert len(dispatch) == 1
+    options_kw = dispatch[0].keywords[-1]
+    assert options_kw.arg is None and ast.unparse(options_kw.value) == 'descriptor_options'
+    del dispatch[0].keywords[-1]
+    del node.args.kwonlyargs[-2:], node.args.kw_defaults[-2:], node.body[start:start + 4]
 
 
 def strip_stop_annotations(node):
@@ -43,6 +92,8 @@ def default_cleanup_contract(node):
     field = {'_stop': 'grace_seconds', 'execute': 'termination_grace'}.get(node.name)
     if field is None:
         return node
+    if node.name == 'execute':
+        project_default_descriptors(node)
     assert node.args.kwonlyargs[-1].arg == field
     assert ast.dump(node.args.kw_defaults[-1]) == 'Constant(value=None)'
     assert ast.unparse(node.args.kwonlyargs[-1].annotation) == 'float | None'
