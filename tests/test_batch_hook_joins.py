@@ -42,9 +42,9 @@ class HookCompositionJoinTests(unittest.TestCase):
                                   side_effect=lambda name, package:SimpleNamespace(filename=name.removeprefix('.')+'.py')), \
                 mock.patch.object(verification_policy_source, '_module_source',
                                   side_effect=lambda module:modules.get(module.filename,module.filename.encode())), \
-                mock.patch.object(security_research_catalog, 'catalog_bytes', side_effect=lambda: catalogs['catalog']), \
+                pure(), mock.patch.object(security_research_catalog, 'catalog_bytes', side_effect=lambda: catalogs['catalog']), \
                 mock.patch.object(security_research_catalog, 'image_conditions_bytes', side_effect=lambda: catalogs['image']), \
-                mock.patch.object(getzilla, 'STACK_DIR', _Registry()), pure():
+                mock.patch.object(getzilla, 'STACK_DIR', _Registry()):
             baseline = verification_plan.policy_binding(Path('owned-hook-root'))
             self.assertTrue(set(sources) <= baseline['inputs'].keys())
             self.assertIn('harnesses.py', baseline['implementation'])

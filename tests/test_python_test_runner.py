@@ -883,6 +883,7 @@ class CoreWorkerAllocationTests(unittest.TestCase):
     def test_explicit_auto_keeps_its_existing_policy_in_pr_mode(self):
         with fixture(workers='auto') as root, \
              patch.object(os, 'sched_getaffinity', return_value=set(range(26)), create=True), \
+             patch.object(os, 'cpu_count', return_value=28), \
              patch.object(sys, 'platform', 'linux'), \
              patch('getzilla.cpu_budget.linux_quota_capacity', return_value=4), \
              patch.object(python_test_runner, '_parallel_process_cleanup_supported', return_value=True):
