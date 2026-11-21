@@ -21,4 +21,4 @@ getzilla-landing-state = "getzilla_factory.landing_backup:main"
 getzilla-landing-submit = "getzilla_factory.landing_failover_cli:main"
 
 [tool.setuptools.package-data]
-getzilla_factory = ["resources/*.json", "resources/*.sql", "resources/landing_pdf_worker.py"]
+getzilla_factory = ["resources/*.json", "resources/*.sql", "resources/landing_pdf_worker.py", "landing_sqlite/migrations/*.sql"]

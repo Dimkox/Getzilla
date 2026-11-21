@@ -19,11 +19,9 @@ from .landing_provider import LandingProviderError
 SHARED_DISPATCH_GUARD = ContextVar("shared_landing_dispatch_guard", default=None)
 
 OPERATIONS = frozenset({"paid-inference", "paid-image", "paid-video"})
-from importlib.resources import files
+from .landing_sqlite.migrations import migration_sql
 
-SCHEMA = (
-    files("getzilla_factory").joinpath("resources/landing-sqlite-003-paid-admission.sql").read_text(encoding="utf-8")
-)
+SCHEMA = migration_sql(3)
 
 COLUMNS = {
     "paid_accounts": (("account_id", "TEXT", 1, 1), ("authority", "BLOB", 1, 0), ("disabled", "INTEGER", 1, 0)),

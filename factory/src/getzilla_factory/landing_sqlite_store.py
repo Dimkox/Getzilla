@@ -28,45 +28,18 @@ from .landing_service import (
     _validate_transition,
 )
 
-
-SCHEMA_VERSION = 4
+from .landing_sqlite.migrations import discover_migrations
 from .shared_landing_contracts import CONTROL_SCHEMA, CONTROL_COLUMNS, SharedControlBindingV1
 from .paid_admission import SCHEMA as PAID_SCHEMA, COLUMNS as PAID_COLUMNS
+
+
+SQLITE_MIGRATIONS = discover_migrations()
+SCHEMA_VERSION = 4
 MIGRATION_003_EXPAND = PAID_SCHEMA
-MIGRATION_002_EXPAND = "ALTER TABLE landing_jobs ADD COLUMN observation_json BLOB"
+MIGRATION_002_EXPAND = SQLITE_MIGRATIONS[1].sql
 APPLICATION_ID = 0x4C354C35
 MAX_RECOVERY_BATCH = 100
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS landing_jobs (
-    tenant_id TEXT NOT NULL,
-    repository_id TEXT NOT NULL,
-    job_id TEXT NOT NULL,
-    source_json BLOB NOT NULL,
-    state TEXT NOT NULL,
-    artifact_json BLOB,
-    sealed_artifact_json BLOB,
-    provider_evidence_digest TEXT,
-    reason_code TEXT,
-    revision INTEGER NOT NULL,
-    updated_at TEXT NOT NULL,
-    observation_json BLOB,
-    PRIMARY KEY (tenant_id, repository_id, job_id)
-) STRICT;
-CREATE TABLE IF NOT EXISTS landing_commands (
-    tenant_id TEXT NOT NULL,
-    repository_id TEXT NOT NULL,
-    job_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    command_key TEXT NOT NULL,
-    request_digest TEXT NOT NULL,
-    input_digest TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (tenant_id, repository_id, job_id, action, command_key),
-    FOREIGN KEY (tenant_id, repository_id, job_id)
-      REFERENCES landing_jobs (tenant_id, repository_id, job_id)
-) STRICT;
-"""
-_SCHEMA += PAID_SCHEMA + CONTROL_SCHEMA
+_SCHEMA = ''.join(item.sql for item in SQLITE_MIGRATIONS)
 _EXPECTED_COLUMNS = {
     "landing_jobs": (
         ("tenant_id", "TEXT", 1, 1),

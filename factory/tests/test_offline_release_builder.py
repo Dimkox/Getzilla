@@ -409,6 +409,32 @@ class OfflineReleaseBuilderTests(unittest.TestCase):
         self.assertIn("site-packages/demo/__init__.py", names)
         self.assertEqual({"legal/project/LICENSE"}, {name for name in names if name.startswith("legal/")})
 
+    def test_sqlite_catalog_is_complete_and_loads_from_offline_app_only(self):
+        import shutil
+        import sys
+        source = RUNTIME.parents[0] / 'src/getzilla_factory/landing_sqlite'
+        target = self.repo / 'factory/src/getzilla_factory/landing_sqlite'
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns('__pycache__'))
+        self.commit_fixture('include checked SQLite runtime catalog')
+        result = self.build('sqlite-catalog')
+        extracted = self.base / 'sqlite-app'
+        with zipfile.ZipFile(result['archive']) as archive:
+            for original in source.rglob('*'):
+                if original.is_file() and original.suffix in ('.py', '.sql'):
+                    relative = original.relative_to(source).as_posix()
+                    name = 'app/getzilla_factory/landing_sqlite/' + relative
+                    self.assertEqual(archive.read(name), original.read_bytes())
+            archive.extractall(extracted)
+        script = self.base / 'read-offline-catalog.py'
+        script.write_text(
+            'import sys\n'
+            'sys.path.insert(0, sys.argv[1])\n'
+            'from getzilla_factory.landing_sqlite.migrations import discover_migrations\n'
+            'assert [m.version for m in discover_migrations()] == [1, 2, 3, 4]\n'
+        )
+        subprocess.run([sys.executable, '-I', '-B', str(script), str(extracted / 'app')],
+                       check=True, capture_output=True, text=True, timeout=10)
+
     def test_output_stem_with_dotted_version_is_preserved(self):
         result = self.build("factory-1.2.3")
         self.assertEqual(Path(result["archive"]).name, "factory-1.2.3.zip")

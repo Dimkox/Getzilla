@@ -1643,7 +1643,9 @@ def _migration_phase(path: str) -> tuple[str, str] | None:
         # Identity is counted even when its bytes are unreviewed and denied.
         return PurePosixPath(path).stem, "reviewed_bytes"
     match = _MIGRATION_PHASE.fullmatch(PurePosixPath(path).stem.lower()) or _MIGRATION_CANONICAL.fullmatch(PurePosixPath(path).stem.lower())
-    if match is None and path.startswith("factory/src/getzilla_factory/resources/"):
+    if match is None and path.startswith(("factory/src/getzilla_factory/resources/",
+                                       "factory/sqlite/",
+                                       "factory/src/getzilla_factory/landing_sqlite/migrations/")):
         match = re.fullmatch(r"(?P<group>[0-9]{3}_[a-z0-9_]+)", PurePosixPath(path).stem.lower())
     return None if match is None else (match.group("group"), match.groupdict().get("phase") or "legacy")
 

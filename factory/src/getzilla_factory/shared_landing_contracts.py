@@ -4,18 +4,12 @@ import re
 
 from .contracts import canonical_json
 from .landing_service import LandingServiceError
+from .landing_sqlite.migrations import migration_sql
 
 MAX_SHARED_INPUT_BYTES = 524_288
 MAX_SHARED_REQUEST_BYTES = 800_000
 
-CONTROL_SCHEMA = """
-CREATE TABLE shared_control_bindings (
- tenant_id TEXT NOT NULL, repository_id TEXT NOT NULL, job_id TEXT NOT NULL,
- binding BLOB NOT NULL, PRIMARY KEY(tenant_id,repository_id,job_id),
- FOREIGN KEY(tenant_id,repository_id,job_id) REFERENCES landing_jobs(tenant_id,repository_id,job_id)
-) STRICT;
-CREATE TABLE shared_control_clock (singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1), highwater REAL NOT NULL) STRICT;
-"""
+CONTROL_SCHEMA = migration_sql(4)
 CONTROL_COLUMNS = {
  'shared_control_bindings': (("tenant_id","TEXT",1,1),("repository_id","TEXT",1,2),("job_id","TEXT",1,3),("binding","BLOB",1,0)),
  'shared_control_clock': (("singleton","INTEGER",1,1),("highwater","REAL",1,0)),
