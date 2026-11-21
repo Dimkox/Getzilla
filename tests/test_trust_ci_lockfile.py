@@ -31,7 +31,7 @@ def locked(name: str) -> dict[str, str]:
 class TrustCiLockfileTests(unittest.TestCase):
     def test_lockfiles_pin_every_direct_dependency_and_its_transitive_set(self) -> None:
         project = tomllib.loads((TRUST_CI / 'pyproject.toml').read_text(encoding='utf-8'))['project']
-        for name, direct in (('requirements.txt', project['dependencies']),
+        for name, direct in (('requirements-runtime.txt', project['dependencies']),
                              ('requirements-test.txt', [*project['dependencies'], *project['optional-dependencies']['test']])):
             pins = locked(name)
             with self.subTest(lockfile=name):
@@ -43,11 +43,12 @@ class TrustCiLockfileTests(unittest.TestCase):
                     self.assertIn(transitive, pins)
 
     def test_images_install_only_from_the_hashed_lockfile(self) -> None:
-        for dockerfile, lockfile in (('Dockerfile.api', 'requirements.txt'), ('Dockerfile.worker', 'requirements.txt'),
-                                     ('Dockerfile.test', 'requirements-test.txt'), ('runner.Dockerfile', 'requirements-test.txt')):
+        for dockerfile, lockfile in (('Dockerfile.api', 'requirements-runtime.txt'), ('Dockerfile.worker', 'requirements-runtime.txt'),
+                                     ('Dockerfile.test', 'requirements-test.txt'), ('runner.Dockerfile', 'requirements-runner.txt')):
             text = (TRUST_CI / dockerfile).read_text(encoding='utf-8')
             with self.subTest(dockerfile=dockerfile):
-                self.assertIn(f'--require-hashes -r {lockfile}', text)
+                self.assertIn('python lock_profiles.py --check', text)
+                self.assertIn(f'--only-binary=:all: --require-hashes --no-deps -r {lockfile}', text)
                 for install in re.findall(r'pip install[^\n]*\s(?:\.|"\.\[test\]")\s*(?:\\|$)', text, re.M):
                     self.assertIn('--no-deps', install)
 

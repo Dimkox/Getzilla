@@ -13,6 +13,7 @@ import importlib
 import os
 from pathlib import Path
 import stat
+import struct
 import sys
 import time
 from types import SimpleNamespace
@@ -60,6 +61,7 @@ class Authority:
     target_branch: str = 'main'
     required_jobs: tuple = ()
     security_core: object | None = None
+    snapshot_profile: str = "legacy"
 
     def as_policy(self):
         for name in ('repository', 'runner_repository'):
@@ -70,9 +72,11 @@ class Authority:
                 raise bundle.BundleError('authority-unconfigured')
         if self.event not in ('workflow_dispatch', 'repository_dispatch'):
             raise bundle.BundleError('authority-unconfigured')
+        if type(self.snapshot_profile) is not str or self.snapshot_profile not in bundle.SNAPSHOT_PROFILES:
+            raise bundle.BundleError('authority-snapshot-profile-unconfigured')
         values = {key: value for key, value in self.__dict__.items() if key not in ('security_core', 'public_key_pem')}
         values['public_key_sha256'] = hashlib.sha256(self.public_key_pem).hexdigest()
-        return bundle.BundlePolicy(self.policy_digest, self.public_key_pem, bundle.digest(values), self.required_jobs)
+        return bundle.BundlePolicy(self.policy_digest, self.public_key_pem, bundle.digest(values), self.required_jobs, self.snapshot_profile)
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,7 @@ def read_file(path, maximum):
         os.close(fd)
 
 
-def content_manifest(root, maximum=bundle.SOURCE_BYTES):
+def content_manifest(root, maximum=bundle.SOURCE_BYTES, *, max_files=bundle.SOURCE_FILES):
     root = Path(root).absolute()
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
@@ -139,7 +143,7 @@ def content_manifest(root, maximum=bundle.SOURCE_BYTES):
             path = Path(directory) / name
             data = read_file(path, maximum - total)
             total += len(data)
-            if total > maximum or len(rows) >= 4096:
+            if total > maximum or len(rows) >= max_files or not bundle.source_size_ok(total, len(rows) + 1):
                 raise bundle.BundleError('source-limit')
             item = path.lstat()
             rows.append({'path': path.relative_to(root).as_posix(), 'bytes': len(data),
@@ -150,12 +154,20 @@ def content_manifest(root, maximum=bundle.SOURCE_BYTES):
     return rows
 
 
-def _core():
+def _core(*, policy_root=None):
     # This code's installation selects its validators, never the candidate root.
-    policy_root = Path(__file__).resolve().parents[3]
+    if policy_root is None:
+        installed = Path('/opt/getzilla-checker')
+        policy_root = installed if installed.is_dir() else Path(__file__).resolve().parents[3]
+    policy_root = Path(policy_root).absolute()
     library = policy_root / '.getzilla'
     if not (library / 'getzilla').is_dir():
         raise bundle.BundleError('accepted-validator-unavailable')
+    for name, loaded in tuple(sys.modules.items()):
+        if name == 'getzilla' or name.startswith('getzilla.'):
+            origin = getattr(loaded, '__file__', None)
+            if origin is None or not Path(origin).absolute().is_relative_to(library):
+                raise bundle.BundleError('accepted-validator-origin-mismatch')
     if str(library) not in sys.path:
         sys.path.insert(0, str(library))
     modules = {name: importlib.import_module('getzilla.' + module) for name, module in
@@ -164,28 +176,103 @@ def _core():
     return SimpleNamespace(**modules, policy_root=policy_root)
 
 
-def _snapshot_preflight(root):
-    rows = content_manifest(root, bundle.SNAPSHOT_BYTES)
-    expanded = members = 0
-    for row in rows:
-        data = read_file(Path(root) / row['path'], bundle.SNAPSHOT_BYTES)
-        import io
-        # Authoritative objects are hash-named; compatibility suffixes confer no role.
-        if zipfile.is_zipfile(io.BytesIO(data)):
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                entries = archive.infolist()
-                members += len(entries)
-                if members > 10000:
-                    raise bundle.BundleError('snapshot-member-limit')
-                for member in entries:
-                    expanded += member.file_size
-                    if member.file_size > bundle.MEMBER_BYTES or expanded > bundle.SNAPSHOT_BYTES:
-                        raise bundle.BundleError('snapshot-expanded-limit')
-        else:
-            expanded += len(data)
-            if expanded > bundle.SNAPSHOT_BYTES:
-                raise bundle.BundleError('snapshot-expanded-limit')
-    return rows
+class _SnapshotStream:
+    """Keep stdlib ZIP metadata reads bounded too; never buffer an opaque blob."""
+    def __init__(self, stream, size):
+        self.stream, self.size = stream, size
+    def read(self, size=-1):
+        if size < 0:
+            size = self.size - self.stream.tell()
+        if not 0 <= size <= bundle.MEMBER_BYTES:
+            raise bundle.BundleError('snapshot-metadata-read-limit')
+        return self.stream.read(size)
+    def seek(self, *args):
+        return self.stream.seek(*args)
+    def tell(self):
+        return self.stream.tell()
+
+
+def _snapshot_zip(stream, size, remaining_members, remaining_expanded):
+    reader = _SnapshotStream(stream, size)
+    end = zipfile._EndRecData(reader)
+    if end is None:
+        return 0, size
+    count, directory = end[zipfile._ECD_ENTRIES_TOTAL], end[zipfile._ECD_SIZE]
+    if (count > remaining_members or directory > bundle.MEMBER_BYTES
+            or count == 65535 or directory == 4294967295
+            or end[zipfile._ECD_SIGNATURE] == zipfile.stringEndArchive64):
+        raise bundle.BundleError('snapshot-member-limit')
+    start = end[zipfile._ECD_LOCATION] - directory
+    if start < 0:
+        raise bundle.BundleError('snapshot-zip-metadata')
+    reader.seek(start)
+    actual = expanded = 0
+    while reader.tell() < end[zipfile._ECD_LOCATION]:
+        header = reader.read(46)
+        if len(header) != 46 or header[:4] != b'PK\x01\x02':
+            raise bundle.BundleError('snapshot-zip-metadata')
+        member_size = struct.unpack_from('<I', header, 24)[0]
+        lengths = struct.unpack_from('<HHH', header, 28)
+        actual += 1
+        expanded += member_size
+        if actual > remaining_members or member_size > bundle.MEMBER_BYTES or expanded > remaining_expanded:
+            raise bundle.BundleError('snapshot-expanded-limit')
+        reader.seek(sum(lengths), 1)
+        if reader.tell() > end[zipfile._ECD_LOCATION]:
+            raise bundle.BundleError('snapshot-zip-metadata')
+    if actual != count:
+        raise bundle.BundleError('snapshot-zip-count')
+    return actual, expanded
+
+
+def _snapshot_preflight(root, policy=None):
+    if os.name != 'posix' or not hasattr(os, 'O_NOFOLLOW'):
+        raise bundle.BundleError('snapshot-reader-unavailable')
+    maximum = bundle.snapshot_limit(policy)
+    root = Path(root).absolute()
+    before = root.lstat()
+    if not stat.S_ISDIR(before.st_mode) or before.st_uid != os.getuid():
+        raise bundle.BundleError('snapshot-root-shape')
+    rows, total, members, expanded = [], 0, 0, 0
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort()
+        files.sort()
+        for name in dirs:
+            info = (Path(directory) / name).lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise bundle.BundleError('snapshot-directory-shape')
+        for name in files:
+            path = Path(directory) / name
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                        or info.st_size > maximum - total or len(rows) >= 4096):
+                    raise bundle.BundleError('snapshot-input-limit')
+                digest, length = hashlib.sha256(), 0
+                while True:
+                    part = stream.read(min(65536, maximum - total - length + 1))
+                    if not part:
+                        break
+                    length += len(part)
+                    if length > info.st_size or total + length > maximum:
+                        raise bundle.BundleError('snapshot-input-limit')
+                    digest.update(part)
+                if length != info.st_size:
+                    raise bundle.BundleError('snapshot-input-changed')
+                added_members, added_expanded = _snapshot_zip(stream, length, 10000-members, maximum-expanded)
+                members += added_members
+                expanded += added_expanded
+                total += length
+                if expanded > maximum:
+                    raise bundle.BundleError('snapshot-expanded-limit')
+                if _identity(info) != _identity(os.fstat(stream.fileno())) or _identity(info) != _identity(path.lstat()):
+                    raise bundle.BundleError('snapshot-input-changed')
+                rows.append({'path': path.relative_to(root).as_posix(), 'bytes': length,
+                             'mode': 0o755 if info.st_mode & 0o111 else 0o644, 'sha256': digest.hexdigest()})
+    if _identity(before) != _identity(root.lstat()):
+        raise bundle.BundleError('snapshot-root-changed')
+    return sorted(rows, key=lambda row: row['path'])
 
 
 def _source_binding(core, source, root):
@@ -224,17 +311,71 @@ def _scanner_targets(inventory, tools):
             for name, values in paths.items()}
 
 
-def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descriptors, now, core=None):
+def execution_context(authority, selector):
+    return {'kind': 'getzilla-public-execution-v1',
+        **{key: getattr(selector, key) for key in ('repository', 'repository_id', 'pr_number', 'base_sha', 'head_sha', 'tree_sha', 'run_id', 'run_attempt')},
+        **{key: getattr(authority, key) for key in ('checker_sha', 'checker_tree_sha', 'runner_repository',
+            'runner_repository_id', 'runner_sha', 'runner_tree_sha', 'workflow_id', 'workflow_blob_sha')}}
+
+
+def recompute_family_checks(core, source_root, snapshot_root, inventory, *, now, expected_source=None, public_inputs=None):
+    """Execute the pinned accepted checker, never a candidate/supplied marker.
+
+    The accepted API can evaluate offline non-image families with explicit roots.
+    It cannot yet represent an independent runner's real head in an OCI input
+    profile. Refuse that contract rather than use a daemon or forge run fields.
+    """
+    if inventory.get('images') and public_inputs is None:
+        raise bundle.BundleError('accepted-independent-image-evaluator-unavailable')
+    operation = getattr(core.report, 'evaluate', None)
+    if not callable(operation):
+        raise bundle.BundleError('accepted-full-family-evaluator-unavailable')
+    options = dict(refresh=False, provision=False, now=now)
+    if public_inputs is not None:
+        options.update(profile=public_inputs['profile'], run=public_inputs['run'],
+                       image_artifacts=public_inputs['image_artifacts'], image_selection=public_inputs['image_selection'])
+    current = operation(source_root, Path(snapshot_root) / 'database', Path(snapshot_root) / 'artifacts',
+                        Path(snapshot_root) / 'tools', **options)
+    expected = getattr(core.report, 'REQUIRED_CHECKS', ())
+    if (type(current) is not dict or current.get('schema_version') != 1
+            or current.get('kind') != 'security-expanded' or current.get('status') != 'pass'
+            or current.get('qualification_gaps') != []
+            or expected_source is not None and current.get('source') != expected_source
+            or current.get('inventory_sha256') != inventory['digest']
+            or current.get('policy_sha256') != core.security._policy_digest(core.policy_root)
+            or type(current.get('checks')) is not list or not expected
+            or len(current['checks']) != len(expected)
+            or {row.get('name') for row in current['checks']} != set(expected)):
+        raise bundle.BundleError('accepted-full-family-recomputation-refused')
+    return {row['name']: row for row in current['checks']}
+
+
+def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descriptors, now, core=None, public_context=None, image_artifacts=None, _prepared=None):
     """Real boundary validation outside pure evaluation; JSON claims never set facts."""
     value = evidence.document()
     source = evidence.source
-    def refused():
+    def refused(reason='input-validation-unavailable'):
         return bundle.ValidationFacts(bundle.digest(value['source']), policy.policy_digest, bundle.digest(value['report']),
-                                      value['report']['inventory_sha256'], (), (), ('input-validation-unavailable',), False)
+                                      value['report']['inventory_sha256'], (), (), (reason,), False)
     try:
         core = core or _core()
+        if source.mode == 'github' and public_context is not None and _prepared is None:
+            scope = getattr(core.report, 'public_input_scope', None)
+            if not callable(scope) or type(descriptors) is not dict or 'public_inputs' not in descriptors:
+                return refused('accepted-public-input-contract-unavailable')
+            binding = descriptors['public_inputs']
+            if type(binding) is not dict or binding.get('context') != public_context:
+                return refused('public-execution-context-mismatch')
+            with scope(source_root, Path(snapshot_root) / 'database', Path(snapshot_root) / 'artifacts',
+                       Path(snapshot_root) / 'tools', context=public_context, image_artifacts=image_artifacts,
+                       declared_at=binding.get('declared_at'), now=now) as prepared:
+                if prepared['binding'] != binding:
+                    return refused('public-input-binding-mismatch')
+                return validate_local_inputs(policy, evidence, source_root=source_root, snapshot_root=snapshot_root,
+                    descriptors=descriptors, now=now, core=core, public_context=public_context,
+                    image_artifacts=image_artifacts, _prepared=prepared)
         before = content_manifest(source_root)
-        inventory = core.inventory.collect_inventory(source_root)
+        inventory = _prepared['inventory'] if _prepared is not None else core.inventory.collect_inventory(source_root)
         actual_policy = core.security._policy_digest(core.policy_root)
         if actual_policy != policy.policy_digest or inventory['complete'] is not True:
             return refused()
@@ -242,7 +383,7 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             return refused()
         _source_binding(core, source, source_root)
         if snapshot_root is not None:
-            snapshots = _snapshot_preflight(snapshot_root)
+            snapshots = _snapshot_preflight(snapshot_root, policy)
             roots = {'GETZILLA_OSV_DB': str(Path(snapshot_root) / 'database'),
                      'GETZILLA_SECURITY_DB': str(Path(snapshot_root) / 'database'),
                      'GETZILLA_SECURITY_ARTIFACTS': str(Path(snapshot_root) / 'artifacts'),
@@ -251,12 +392,14 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             snapshots, roots = None, {}
         if descriptors is None:
             return refused()
-        bundle.fields(descriptors, ('checks', 'source_descriptors'))
+        bundle.fields(descriptors, ('checks', 'source_descriptors'), ('public_inputs',))
         if value['report'].get('evidence_sha256') != bundle.digest(descriptors):
             return refused()
         if snapshot_root is None:
             # Never fall back to a candidate/default runtime database/catalogue.
             return refused()
+        if _prepared is not None:
+            roots.update(_prepared['environ'])
         paired = (source.mode == 'github' and callable(getattr(core.report, 'source_binding', None))
                   and callable(getattr(core.report, 'finalize_report', None)))
         source_before = (core.report.source_binding(source_root, core.policy_root, snapshot_root)
@@ -268,8 +411,8 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             applies = obligation['applicability']
             if applies not in ('required', 'not_applicable'):
                 return refused()
-            if applies == 'required' and obligation['check_id'] not in ('security-inventory', 'known-vulnerabilities'):
-                return refused()  # No invented non-OSV qualification.
+            if source.mode == 'local' and applies == 'required' and obligation['check_id'] not in ('security-inventory', 'known-vulnerabilities'):
+                return refused()  # Preserve the read-only offline/local-feedback profile.
             ids = []
             for descriptor in obligation['data_sources']:
                 identifier = descriptor['source_id']
@@ -286,11 +429,24 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
         supplied = descriptors['checks']
         if type(supplied) is not list or len(supplied) != len(required):
             return refused()
+        fresh = None
+        if source.mode == 'github':
+            try:
+                fresh = recompute_family_checks(core, source_root, snapshot_root, inventory, now=now, expected_source=source_before, public_inputs=_prepared)
+            except bundle.BundleError as error:
+                reason = str(error)
+                allowed = {'accepted-independent-image-evaluator-unavailable',
+                           'accepted-full-family-evaluator-unavailable', 'accepted-full-family-recomputation-refused'}
+                return refused(reason if reason in allowed else 'input-validation-unavailable')
         normalized = []
         for check in supplied:
             markers = [m for m in check.get('details', []) if isinstance(m, dict) and m.get('kind') == 'security-result']
             if len(markers) != 1:
                 return refused()
+            actual = fresh.get(check.get('name')) if fresh is not None else None
+            if (fresh is not None and (type(actual) is not dict or actual.get('status') != check.get('status')
+                    or actual.get('details') != check.get('details'))):
+                return refused('accepted-full-family-result-mismatch')
             marker = markers[0]
             if check['name'] in targets:
                 coverage = marker.get('coverage', {'expected': [], 'observed': []})
@@ -304,14 +460,14 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
             if any(item != actual_descriptors.get(item.get('source_id')) for item in marker['data_sources']):
                 return refused()
             normalized.append({'name': check['name'], 'status': check['status'], 'outcome': marker['outcome'],
-                'finding_count': len(marker['findings']), 'gap_count': len(marker['gaps']),
+                'finding_count': bundle.result_finding_count(check['name'], marker), 'gap_count': len(marker['gaps']),
                 'source_ids': [row['source_id'] for row in marker['data_sources']], 'coverage_sha256': inventory['digest']})
         if sorted(normalized, key=lambda row: row['name']) != sorted(value['report']['checks'], key=lambda row: row['name']):
             return refused()
         if descriptors['source_descriptors'] != sorted(validated):
             return refused()
         integration_digest, integrated = (None, False) if source.mode == 'local' else _integration(core, source, value['integration'], source_root)
-        if content_manifest(source_root) != before or _snapshot_preflight(snapshot_root) != snapshots:
+        if content_manifest(source_root) != before or _snapshot_preflight(snapshot_root, policy) != snapshots:
             return refused()
         _source_binding(core, source, source_root)
         valid_until, checker_source = None, None
@@ -336,7 +492,7 @@ def validate_local_inputs(policy, evidence, *, source_root, snapshot_root, descr
         return refused()
 
 
-def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, candidate_root=None):
+def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, candidate_root=None, measurement=None):
     """Protected host owns observation and facts. No local-result argument exists."""
     if authority is None or authority.security_core is None or candidate_root is None or evidence is None:
         return Decision(False, ('authority-or-inputs-unconfigured',))
@@ -348,14 +504,20 @@ def evaluate(client, authority, selector, evidence, *, now, snapshot_root=None, 
         policy = authority.as_policy()
         parsed = bundle.parse_bundle(canonical_json({'version': 1, 'source': source.as_dict(), 'policy_sha256': policy.policy_digest,
             'report': evidence.report, 'binding': evidence.binding, 'integration': evidence.integration}))
-        facts = validate_local_inputs(policy, parsed, source_root=candidate_root, snapshot_root=snapshot_root,
-                                      descriptors=evidence.descriptors, now=now, core=authority.security_core)
+        if measurement is None:
+            # Direct canonical callers still perform actual full validation.
+            # The shipped worker supplies its live prepared capability instead.
+            facts = validate_local_inputs(policy, parsed, source_root=candidate_root, snapshot_root=snapshot_root,
+                                          descriptors=evidence.descriptors, now=now, core=authority.security_core)
+        else:
+            from .public_preparation import consume
+            facts = consume(measurement, source.as_dict(), evidence.report, policy, now=now)
         if facts.source_validated is not True or facts.blockers:
             return Decision(False, ('source-unvalidated',))
         observed = observe(client, authority, source)
         if facts.source_validated is not True or facts.content_digest != bundle.digest(content_manifest(candidate_root)):
             return Decision(False, ('source-changed-or-unvalidated',))
-        if (snapshot_root is None or facts.snapshot_digest != bundle.digest(_snapshot_preflight(snapshot_root)) or
+        if (snapshot_root is None or facts.snapshot_digest != bundle.digest(_snapshot_preflight(snapshot_root, policy)) or
                 authority.security_core.security._policy_digest(authority.security_core.policy_root) != policy.policy_digest):
             return Decision(False, ('snapshot-or-policy-changed',))
         _source_binding(authority.security_core, source, candidate_root)

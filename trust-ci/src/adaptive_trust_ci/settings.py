@@ -148,3 +148,23 @@ class WorkerSettings:
             worker_id=worker_id,
             poll_interval_seconds=_float('TRUST_CI_POLL_INTERVAL_SECONDS', 2.0, 0.1, 300.0),
         )
+
+
+@dataclass(frozen=True)
+class PublicApiSettings:
+    """Public ingress needs no private CI database, holdout or signing key."""
+    webhook_secret: str
+    read_token: str
+    kill_switch_path: Path
+
+    @classmethod
+    def load(cls):
+        secret = _required('TRUST_CI_WEBHOOK_SECRET')
+        if len(secret.encode()) < 32:
+            raise SettingsError('public webhook secret requires at least32bytes')
+        return cls(secret, _required('TRUST_CI_READ_TOKEN'),
+                   Path(os.environ.get('TRUST_CI_KILL_SWITCH_PATH', '/run/adaptive-trust-ci/STOP')))
+
+    @property
+    def stopped(self):
+        return self.kill_switch_path.exists()

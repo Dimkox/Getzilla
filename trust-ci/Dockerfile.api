@@ -12,10 +12,11 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/trustci trustci
 
 WORKDIR /opt/adaptive-trust-ci
-COPY pyproject.toml README.md requirements.txt ./
+COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir --require-hashes -r requirements.txt \
-    && python -m pip install --no-cache-dir --no-deps .
+RUN python lock_profiles.py --check \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r requirements-runtime.txt \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 USER 10001:10001
 EXPOSE 8080

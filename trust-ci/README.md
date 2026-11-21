@@ -12,6 +12,14 @@ The checked-in `config/policy.example.json` is configuration shape documentation
 
 The suffix is a policy epoch. A green check produced under an older policy or holdout digest cannot satisfy the current protected-branch requirement.
 
+## Pinned Python image inputs
+
+The API, worker, test and runner recipes first install only wheels with `--require-hashes`. `requirements-build.txt` pins setuptools84.1.0, which matches the project's declared build backend. The runner also uses `requirements-runner.txt` for its complete tool dependency closure; its seven existing direct versions remain unchanged. `coverage[toml]` makes pytest-cov's existing extra requirement explicit.
+
+The next command installs the local project with `--no-deps --no-build-isolation`. Pip therefore uses the already pinned backend and does not download a separate unobserved build environment. The runner keeps one heavy install RUN and the existing OpenGrep version/digest and final user/entrypoint.
+
+The security producer observes the Python base before candidate backend execution. It binds all four exact trusted recipe joins and every primary/build/runner requirements file hash to the actual owned image. Backend credit also requires the evaluator's private live result and exact installed wheel/license custody; saved JSON is not evidence of execution. These checks retain the original raw uses and do not qualify production images or other Python targets.
+
 ## Paid access
 
 Trust CI runs on owned hardware and is offered as a paid service for private repositories; public repositories use the free GitHub Actions gate that `scripts/getzilla_ci.py --write` renders. Access is granted per GitHub account, by hand after an invoice is paid: `python -m adaptive_trust_ci.customers add|remove|list` plans the owner profile change against the deployed policy without touching it (see `engineering/runbooks/getzilla-trust-ci-onboarding.md`, step 7). Accounts without a profile are rejected before enqueue, so nothing of theirs runs on the CI host.
@@ -29,6 +37,16 @@ Repository profiles are a code/config capability in this repository, pending a s
 Roll out compatible API and worker binaries first while the legacy policy remains active. Configure and verify the paired trusted roots before atomically installing the reviewed catalog and external holdouts for API and workers. Separately review the server-mounted catalog and each external holdout, drain workers, then verify each repository’s App-owned exact-SHA Check Run and signed attestation before changing branch protection. On failure, drain workers and restore the previous reviewed binaries plus legacy policy as one unit; preserve PostgreSQL jobs and attestations, and re-enqueue unavailable-digest work only at the exact SHA under the restored epoch.
 
 Local Grok hooks, prompt files, change packages, delegated local grants and `.getzilla/runtime` remain useful workflow inputs. They are not merge authority.
+
+### Optional signed command evidence and EU audit
+
+Set a command's strict boolean `attest_argv` to `true` to include its actual selected policy arguments in signed `command_results[].argv`. The runner supplies these arguments and discards executor-supplied argument metadata. Command output cannot set them. Failed commands retain their actual arguments. Synthetic integrity checks omit `argv`. An absent or `false` flag preserves the legacy policy digest, check name and v1 result shape. Setting `true` changes the selected profile's policy epoch.
+
+The runner emits attestation `schema_version: 2` if any selected repository or holdout command opts in, including when the job fails before running that command. All other profiles emit v1. V2 requires `spec_digest` and `criterion_coverage`; the digest may be null. V2 `argv`, when present, contains 1 to 128 nonempty strings of at most 4096 characters each. Keep arguments within these bounds. Only integer versions 1 and 2 are supported.
+
+For an explicitly EU-enabled repository, add the command object in [`config/eu-ai-act-audit.command.example.json`](config/eu-ai-act-audit.command.example.json) to that repository profile's `commands`. Keep it outside default and shared owner profiles. It runs `python3 scripts/getzilla_audit_bundle.py --ci-check` as a mandatory check with a 300-second limit. The Core command reads the exact base from `TRUST_CI_BASE_SHA`, evaluates release obligations from committed input, and fails when the EU opt-in is absent, disabled or skipped. It emits evidence on stdout, writes no receipt, and makes no release claim. Policy argv has no `${BASE_SHA}` expansion. A profile with any attested command must not override `TRUST_CI_*` through command `env` or `allowed_environment`.
+
+Install the compatible Core consumers and separate v2 attestation schema before enabling this producer feature. V1-only validators reject v2. Old signed envelopes remain valid and replay unchanged. V1 cannot qualify EU audit evidence, even if raw argv appears in an old envelope. Never backfill or upgrade signed envelopes. Arguments become durable signed evidence and must not contain secrets. The example fragment is source documentation; it does not change deployed policy. For rollback, disable argv opt-in to return future emissions to v1. Retain the dual reader for stored v2 envelopes and stop new v2 emission before rolling consumers back. Engineering evidence, not legal advice.
 
 ## Trust boundary
 

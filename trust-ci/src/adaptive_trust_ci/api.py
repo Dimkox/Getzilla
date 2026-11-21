@@ -21,7 +21,16 @@ def create_app(
     store: Store | None = None,
     policy: Policy | PolicyCatalog | None = None,
     trust_store: TrustStore | None = None,
+    public_ingress=None,
+    public_enabled: bool = False,
 ) -> FastAPI:
+    if public_enabled is True:
+        from .public_runtime import PublicIngress
+        if type(public_ingress) is not PublicIngress:
+            raise ValueError('canonical public ingress required; no legacy fallback')
+        return _public_app(settings, public_ingress)
+    if public_ingress is not None:
+        raise ValueError('public mode requires explicit enable')
     if policy is None:
         active_catalog = PolicyCatalog.load(settings.common.policy_path)
     elif isinstance(policy, Policy):
@@ -244,3 +253,56 @@ def _public_result(value: Any) -> dict[str, Any]:
             if isinstance(item, dict)
         ]
     return public
+
+
+async def public_webhook(settings, ingress, request, signature, event, delivery):
+    """Existing API's explicit public-mode adapter; no legacy job fallback."""
+    from .public_runtime import receive_webhook
+    if settings.stopped:
+        raise HTTPException(status_code=503, detail='global kill switch is active')
+    try:
+        return await receive_webhook(ingress, request, signature, event, delivery)
+    except ValueError as exc:
+        code = str(exc)
+        status = (401 if code == 'public-webhook-authentication-refused' else
+                  413 if code == 'public-webhook-body-bound' else
+                  403 if code == 'public-webhook-repository-mismatch' else 400)
+        raise HTTPException(status_code=status, detail='public wakeup refused') from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=408, detail='public wakeup deadline') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail='public durable wakeup unavailable') from exc
+
+
+def _public_app(settings, ingress):
+    app = FastAPI(title='Adaptive Trust CI', version='2.1.0', docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.public_ingress = ingress
+
+    @app.get('/health/live')
+    def live_public():
+        return {'status': 'live', 'mode': 'public', 'stopped': settings.stopped}
+
+    @app.get('/health/ready')
+    def ready_public():
+        if settings.stopped:
+            raise HTTPException(status_code=503, detail='global kill switch is active')
+        try:
+            ingress.queue.ready()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail='public journal unavailable') from exc
+        return {'status': 'public-ingress-ready', 'admission': 'not-a-publication-or-merge-verdict'}
+
+    @app.post('/webhooks/github')
+    async def github_public(request: Request, x_hub_signature_256: str | None = Header(default=None),
+                            x_github_event: str | None = Header(default=None),
+                            x_github_delivery: str | None = Header(default=None)):
+        return await public_webhook(settings, ingress, request, x_hub_signature_256, x_github_event, x_github_delivery)
+
+    @app.get('/public/jobs/{job_id}', dependencies=[Depends(_bearer_authorizer(settings.read_token))])
+    def public_job(job_id: str):
+        try:
+            return ingress.queue.get(job_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail='public wakeup not found') from exc
+
+    return app

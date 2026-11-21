@@ -423,7 +423,7 @@ class BoundPublicVerifier:
 
     def __init__(self, client: GitHubClient, authority: Authority, evidence: Evidence,
                  *, snapshot_root: Path | None = None, candidate_root: Path | None = None,
-                 observations: ObservationSessions | None = None):
+                 observations: ObservationSessions | None = None, measurement=None):
         from .public_admission import Evidence
         if type(evidence) is not Evidence:
             raise ValueError('canonical evidence required')
@@ -434,6 +434,7 @@ class BoundPublicVerifier:
         if observations is not None and type(observations) is not ObservationSessions:
             raise ValueError('explicit observation session allocation required')
         self.observations = observations
+        self._measurement = measurement
         value = bundle._bounded_value({'binding': evidence.binding, 'report': evidence.report,
                                      'integration': evidence.integration, 'descriptors': evidence.descriptors})
         parts, size = [], 0
@@ -477,7 +478,7 @@ class BoundPublicVerifier:
         self._verified = False
         def invoke(client):
             return evaluate(client, self._authority, selector, Evidence(**bundle),
-                            now=now, snapshot_root=self._root, candidate_root=self._candidate_root)
+                            now=now, snapshot_root=self._root, candidate_root=self._candidate_root, measurement=self._measurement)
         try:
             if self.observations is None:
                 result = invoke(self._client)

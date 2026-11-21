@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from _support import policy_data
-from adaptive_trust_ci.policy import Policy, PolicyCatalog, PolicyError
+from adaptive_trust_ci.policy import CommandSpec, Policy, PolicyCatalog, PolicyError
 
 
 def catalog_data() -> dict:
@@ -39,6 +40,104 @@ def catalog_data() -> dict:
 
 
 class PolicyTests(unittest.TestCase):
+    def test_attest_argv_default_and_false_preserve_legacy_identity(self) -> None:
+        for explicit_false in (False, True):
+            with self.subTest(explicit_false=explicit_false):
+                data = policy_data()
+                if explicit_false:
+                    for command in data['commands'] + data['holdout']['commands']:
+                        command['attest_argv'] = False
+                policy = Policy.from_dict(data)
+                self.assertEqual(policy.digest, '198a4655a16ba7fb36cfe4729e110127860b97286a12aa43f41e91ecf7a7750d')
+                self.assertEqual(policy.check_name, 'adaptive-trust-ci/verified@198a4655a16b')
+                for command in (*policy.commands, *policy.holdout.commands):
+                    self.assertIs(command.attest_argv, False)
+                    self.assertNotIn('attest_argv', command.to_dict())
+
+    def test_attest_argv_rejects_non_boolean_values(self) -> None:
+        for value in ('true', 'false', 1, 0, None, [], {}):
+            for section in ('commands', 'holdout'):
+                with self.subTest(value=value, section=section):
+                    data = policy_data()
+                    commands = data['commands'] if section == 'commands' else data['holdout']['commands']
+                    commands[0]['attest_argv'] = value
+                    with self.assertRaisesRegex(PolicyError, 'attest_argv.*bool'):
+                        Policy.from_dict(data)
+
+    def test_attest_argv_changes_only_the_selected_profile_identity(self) -> None:
+        original = PolicyCatalog.from_dict(catalog_data())
+        changed = catalog_data()
+        changed['repository_profiles'][0]['commands'][0]['attest_argv'] = True
+        updated = PolicyCatalog.from_dict(changed)
+        selected = updated.resolve_repository('Dimkox/Getzilla')
+        self.assertIs(selected.commands[0].attest_argv, True)
+        self.assertIs(selected.commands[0].to_dict()['attest_argv'], True)
+        self.assertNotEqual(selected.check_name, original.resolve_repository('Dimkox/Getzilla').check_name)
+        self.assertNotEqual(updated.digest, original.digest)
+        self.assertEqual(updated.resolve_repository('Dimkox/ii-tonya-platform').check_name,
+                         original.resolve_repository('Dimkox/ii-tonya-platform').check_name)
+
+    def test_attest_argv_direct_construction_is_strict(self) -> None:
+        for value in ('false', 0, 1, None):
+            with self.subTest(value=value), self.assertRaisesRegex(PolicyError, 'attest_argv.*bool'):
+                CommandSpec('command', ('python3', '--version'), 60, attest_argv=value)
+
+    def test_attest_argv_profiles_reject_reserved_identity_environment(self) -> None:
+        names = ('TRUST_CI_BASE_SHA', 'TRUST_CI_HEAD_SHA', 'TRUST_CI_REPOSITORY',
+                 'TRUST_CI_POLICY_DIGEST', 'TRUST_CI_FUTURE_IDENTITY')
+        for name in names:
+            for source in ('allowed_environment', 'attested_command', 'other_command', 'holdout'):
+                with self.subTest(name=name, source=source):
+                    data = policy_data()
+                    data['commands'][0]['attest_argv'] = True
+                    if source == 'allowed_environment':
+                        data['allowed_environment'] = [name]
+                    else:
+                        command = (data['holdout']['commands'][0] if source == 'holdout'
+                                   else data['commands'][source == 'other_command'])
+                        command['env'] = {name: 'forged'}
+                    with self.assertRaisesRegex(PolicyError, 'TRUST_CI_'):
+                        Policy.from_dict(data)
+
+    def test_attest_argv_holdout_opt_in_protects_identity_for_the_profile(self) -> None:
+        data = policy_data()
+        data['holdout']['commands'][0]['attest_argv'] = True
+        data['commands'][0]['env'] = {'TRUST_CI_BASE_SHA': 'forged'}
+        with self.assertRaisesRegex(PolicyError, 'TRUST_CI_'):
+            Policy.from_dict(data)
+
+    def test_legacy_environment_and_non_identity_opt_in_environment_stay_valid(self) -> None:
+        data = policy_data()
+        data['allowed_environment'] = ['TRUST_CI_BASE_SHA']
+        data['commands'][0]['env'] = {'TRUST_CI_BASE_SHA': 'legacy'}
+        self.assertEqual(Policy.from_dict(data).allowed_environment, ('TRUST_CI_BASE_SHA',))
+        data['allowed_environment'] = ['LANG']
+        data['commands'][0]['env'] = {'AUDIT_FORMAT': 'json'}
+        data['commands'][0]['attest_argv'] = True
+        self.assertEqual(Policy.from_dict(data).commands[0].env, (('AUDIT_FORMAT', 'json'),))
+
+    def test_eu_audit_command_fragment_is_explicit_required_opt_in(self) -> None:
+        config = Path(__file__).resolve().parents[1] / 'config'
+        catalog = PolicyCatalog.load(config / 'policy.example.json')
+        self.assertEqual(catalog.digest, 'c23bab5c5881cf4254e1587cebf7a14ec0a9b599d048d6a1c82b77d29fd95b04')
+        for profile in catalog.profiles:
+            self.assertNotIn('eu-ai-act-audit', [command.name for command in profile.commands])
+        fragment = json.loads((config / 'eu-ai-act-audit.command.example.json').read_text(encoding='utf-8'))
+        self.assertEqual(fragment, {
+            'name': 'eu-ai-act-audit',
+            'argv': ['python3', 'scripts/getzilla_audit_bundle.py', '--ci-check'],
+            'timeout_seconds': 300, 'required': True, 'attest_argv': True,
+        })
+        command = CommandSpec.from_dict(fragment)
+        self.assertIs(command.attest_argv, True)
+        configured = catalog_data()
+        configured['repository_profiles'][0]['commands'].append(fragment)
+        selected = PolicyCatalog.from_dict(configured).resolve_repository('Dimkox/Getzilla')
+        self.assertEqual(selected.commands[-1], command)
+        fragment['required'] = False
+        with self.assertRaisesRegex(PolicyError, 'mandatory'):
+            CommandSpec.from_dict(fragment)
+
     def test_legacy_policy_catalog_preserves_digest_and_check_name(self) -> None:
         legacy = Policy.from_dict(policy_data())
         catalog = PolicyCatalog.from_dict(policy_data())
