@@ -236,16 +236,16 @@ class BoundedHTTP:
 def split_reference(reference):
     if not isinstance(reference, str) or len(reference) > 2048 or '$' in reference:
         raise RegistryError('image reference is unresolved')
-    if '@' in reference:
-        name, selector = reference.rsplit('@', 1)
-        if not re.fullmatch(r'sha256:[0-9a-f]{64}', selector):
-            raise RegistryError('invalid immutable image digest')
-    else:
-        name, colon, selector = reference.rpartition(':')
-        if not colon or '/' in selector:
-            name, selector = reference, 'latest'
-        if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', selector):
+    name, pinned, digest = reference.partition('@')
+    if pinned and not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+        raise RegistryError('invalid immutable image digest')
+    # Only a colon after the last slash introduces an image tag.
+    tag = 'latest'
+    if ':' in name.rsplit('/', 1)[-1]:
+        name, tag = name.rsplit(':', 1)
+        if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag):
             raise RegistryError('invalid source image tag')
+    selector = digest if pinned else tag
     for prefix in ('docker.io/', 'registry-1.docker.io/'):
         name = name.removeprefix(prefix)
     if '.' in name.split('/')[0] or ':' in name or not re.fullmatch(r'[a-z0-9][a-z0-9_/-]{0,199}', name):

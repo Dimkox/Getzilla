@@ -29,6 +29,19 @@ class OwnedControls(unittest.TestCase):
             port.start()
             self.addCleanup(port.stop)
 
+    def test_registry_accepts_tag_and_digest_and_fetches_only_by_digest(self):
+        digest = 'sha256:' + '6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70'
+        for name in ('python', 'docker.io/library/python', 'registry-1.docker.io/library/python'):
+            with self.subTest(name=name):
+                self.assertEqual(registry.split_reference(f'{name}:3.12-slim-bookworm@{digest}'),
+                                 ('library/python', digest))
+        for name in ('python:', 'python:bad:tag', 'python:.bad', 'python:' + 'a' * 129,
+                     'other.example/org/python:3', 'other.example:443/org/python:3'):
+            with self.subTest(name=name), self.assertRaises(registry.RegistryError):
+                registry.split_reference(f'{name}@{digest}')
+        with self.assertRaises(registry.RegistryError):
+            registry.split_reference('python:3@sha256:invalid')
+
     def test_five_uses_keep_four_recipes_and_fixture_context_bytes(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.getzilla/runtime') as directory:
             root = Path(directory)
