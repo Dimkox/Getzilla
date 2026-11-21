@@ -8,7 +8,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '.getzilla'))
-from getzilla.code_graph.models import GraphConfig, make_graph_input
+from getzilla.code_graph.models import GraphConfig, GraphError, make_graph_input
 from getzilla.code_graph.store import GraphStore
 from tests.test_retrieval_engine import document, snapshot
 from getzilla.retrieval.extract import build_generation
@@ -58,16 +58,24 @@ class ContextIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'current_graph_unavailable'):
                 prepare_graph_packet(git_source, build_generation(git_source), b, 'choose_key')
 
-    def test_corruption_recovers_existing_store_and_stale_hash_is_refused(self):
+    def test_unknown_cache_is_preserved_and_fresh_store_rejects_stale_graph(self):
         from getzilla.retrieval.graph_packet import current_graph, prepare_graph_packet
-        self.cache.write_bytes(b'not sqlite')
+        original = b'not sqlite'
+        self.cache.write_bytes(original)
+        with self.assertRaises(GraphError) as caught:
+            GraphStore(self.cache)
+        self.assertEqual(caught.exception.reason_code, 'CACHE_UNRECOGNIZED')
+        self.assertEqual(self.cache.read_bytes(), original)
+        self.cache.unlink()
         source = snapshot(document())
         with closing(GraphStore(self.cache)) as store:
-            self.assertEqual(store.rebuilt_reason, 'CORRUPT_CACHE')
             graph, _ = current_graph(self.graph_input(source), store)
         packet = prepare_graph_packet(source, build_generation(source), graph, 'choose_key')
         self.assertEqual(packet['graph']['generation_id'], graph.generation_id)
         self.assertIn('choose_key', packet['text'])
+        changed = snapshot(document(text='def choose_key():\n    return 2\n'))
+        with self.assertRaisesRegex(ValueError, 'current_graph_unavailable'):
+            prepare_graph_packet(changed, build_generation(changed), graph, 'choose_key')
 
     def test_selected_class_and_file_spans_use_verified_original_bytes(self):
         from getzilla.retrieval.graph_packet import current_graph, prepare_graph_packet

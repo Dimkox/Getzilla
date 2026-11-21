@@ -108,7 +108,7 @@ main
         fail=source.index('throw "Getzilla installation is incomplete',start)
         self.assertLess(start,fail)
         self.assertLess(fail,call)
-        self.assertIn('catch { }',source[call:call+120])
+        self.assertRegex(source[call:], r"""'--ready'\) \} catch \{\s*Write-Verbose '[^']+'\s*\}\s*Write-Host 'Next:'""")
 
 class PowerShellRuntimeTests(unittest.TestCase):
     def test_powershell_final_readiness(self):

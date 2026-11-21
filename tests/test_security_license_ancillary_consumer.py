@@ -10,7 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".getzilla"))
-from getzilla import security_licenses as licenses
+from getzilla import security_license_contracts, security_licenses as licenses
 from getzilla.security_artifacts import ArtifactError
 
 TERMS = json.loads((ROOT / "tests/fixtures/security-license-texts.json").read_bytes())
@@ -85,9 +85,8 @@ class AncillaryConsumerTests(unittest.TestCase):
     def evaluate(self, files, declaration, metadata, identifiers):
         expected = b"owned exact reviewed ancillary declaration"
         with mock.patch.object(
-            licenses,
+            security_license_contracts,
             "reviewed_ancillary",
-            create=True,
             side_effect=lambda text: copy.deepcopy(declaration) if text.encode() == expected else None,
         ):
             return licenses._license_evidence(files, metadata, identifiers, [sorted(identifiers)[0]])
@@ -141,5 +140,5 @@ class AncillaryConsumerTests(unittest.TestCase):
 
     def test_full_reference_must_be_independently_recognized(self):
         files, path, declaration, metadata, identifiers = self.fixture()
-        with mock.patch.object(licenses, "recognized_license", return_value=None), self.assertRaises(ArtifactError):
+        with mock.patch.object(security_license_contracts, "recognized_license", return_value=None), self.assertRaises(ArtifactError):
             self.evaluate(files, declaration, metadata, identifiers)

@@ -235,28 +235,28 @@ class BuildLifetimeControls(unittest.TestCase):
             builder.prune.assert_called_once_with()
 
     def test_all_four_recipes_pin_wheel_backend_before_local_project_build(self):
-        recipes = ('Dockerfile.api', 'Dockerfile.worker', 'Dockerfile.test', 'runner.Dockerfile')
-        for recipe in recipes:
+        profiles = {'Dockerfile.api': 'runtime', 'Dockerfile.worker': 'runtime',
+                    'Dockerfile.test': 'test', 'runner.Dockerfile': 'runner'}
+        directory = ROOT / 'trust-ci'
+        for recipe, profile in profiles.items():
             with self.subTest(recipe=recipe):
-                text = (ROOT / 'trust-ci' / recipe).read_text()
-                self.assertIn('--only-binary=:all: --require-hashes', text)
-                self.assertIn('-r requirements-build.txt', text)
-                self.assertIn('--no-deps --no-build-isolation', text)
+                text = (directory / recipe).read_text()
+                install = f'--only-binary=:all: --require-hashes --no-deps -r requirements-{profile}.txt'
+                self.assertLess(text.index('python lock_profiles.py --check'), text.index(install))
+                self.assertLess(text.index(install), text.index('--no-deps --no-build-isolation .'))
                 self.assertNotIn('coverage==7.15.4', text)
-                self.assertLess(text.index('--require-hashes'), text.index('--no-build-isolation'))
-        build = ROOT / 'trust-ci/requirements-build.txt'
-        runner = ROOT / 'trust-ci/requirements-runner.txt'
-        self.assertTrue(build.is_file(), 'missing exact wheel backend lock')
-        self.assertTrue(runner.is_file(), 'missing exact runner tool closure')
-        self.assertIn('setuptools==84.1.0', build.read_text())
-        for pin in ('coverage[toml]==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
-                    'pytest-cov==7.1.0', 'ruff==0.16.2', 'bandit==1.9.4', 'tomli==2.4.1'):
-            self.assertIn(pin, runner.read_text())
+                lock = (directory / f'requirements-{profile}.txt').read_text()
+                self.assertRegex(lock, r'(?m)^setuptools==84\.1\.0 [^\n]*\n(?:    --hash=[^\n]*\n)*?'
+                                       r'    --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9')
+        runner = (directory / 'requirements-runner.txt').read_text()
+        for pin in ('coverage==7.15.4', 'pytest==9.1.1', 'pytest-xdist==3.8.0',
+                    'pytest-cov==7.1.0', 'ruff==0.16.3', 'bandit==1.9.4', 'tomli==2.5.0'):
+            self.assertIn(pin, runner)
 
     def test_runner_installs_after_exact_inputs_and_preserves_final_runtime(self):
         statements = [value for _, value in _instructions((ROOT / "trust-ci/runner.Dockerfile").read_text())]
         copy = [value for value in statements if value.startswith("COPY ")]
-        self.assertEqual(copy, ["COPY pyproject.toml README.md requirements-test.txt requirements-build.txt requirements-runner.txt ./", "COPY src ./src"])
+        self.assertEqual(copy, ["COPY pyproject.toml README.md uv.lock lock_profiles.py lock_profile_validation.py lock-profiles.json requirements-*.txt ./", "COPY src ./src"])
         run = [value for value in statements if value.startswith("RUN ")]
         self.assertEqual(len(run), 1, "avoid native full-rootfs copies between heavy install steps")
         self.assertLess(statements.index(copy[1]), statements.index(run[0]))

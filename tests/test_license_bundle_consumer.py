@@ -39,7 +39,7 @@ class BundleConsumerTests(unittest.TestCase):
         notice = "Exact reviewed test ancillary."
         ancillary = dict(kind="attribution", expression=expression, required_files={"LICENSE": item["sha256"]})
         with patch(
-            "getzilla.security_licenses.reviewed_ancillary",
+            "getzilla.security_license_contracts.reviewed_ancillary",
             side_effect=lambda text: ancillary if text == notice else None,
         ):
             terms, notices = _license_evidence(

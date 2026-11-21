@@ -1507,7 +1507,9 @@ class ArchitectureModelTests(unittest.TestCase):
         self.assertEqual("datastore", landing_sqlite["type"])
         self.assertEqual("none", landing_sqlite["runtime"]["kind"])
         self.assertEqual(
-            ["factory/src/getzilla_factory/landing_sqlite_store.py"],
+            ["factory/sqlite", "factory/src/getzilla_factory/landing_sqlite",
+             "factory/src/getzilla_factory/landing_sqlite/migrations",
+             "factory/src/getzilla_factory/landing_sqlite_store.py"],
             landing_sqlite["repository_paths"],
         )
         landing_edge = next(

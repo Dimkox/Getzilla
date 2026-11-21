@@ -44,15 +44,19 @@ class OCIInputHandoffTests(unittest.TestCase):
 
     def test_helper_only_engine_change_invalidates_independent_consumer_binding(self):
         import getzilla
-        from getzilla import verification_plan as vp
+        from getzilla import security_research_catalog, verification_plan as vp, verification_policy_source
         from getzilla import verification_tool_workspace  # pre-load outside I/O guard
 
         self.assertTrue(callable(verification_tool_workspace.checked_path))
-        tree = ast.parse((W / ".getzilla/getzilla/verification_plan.py").read_bytes())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "policy_binding")
-        names = next(
-            ast.literal_eval(n.iter) for n in function.body if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)
-        )
+        tree = ast.parse(Path(verification_policy_source.__file__).read_bytes())
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                        and n.name == "implementation_source_binding")
+        names = [name for node in function.body if isinstance(node, ast.For)
+                 and isinstance(node.target, ast.Name) and node.target.id == "name"
+                 for name in ast.literal_eval(node.iter)]
+        self.assertIn("security_oci.py", names)
+        catalog = security_research_catalog.catalog_bytes()
+        image_conditions = security_research_catalog.image_conditions_bytes()
         engine, consumer = self.root / "engine", self.root / "consumer"
         engine.mkdir()
         consumer.mkdir()
@@ -62,13 +66,15 @@ class OCIInputHandoffTests(unittest.TestCase):
         marker = consumer / "owned-source.txt"
         marker.write_text("unchanged consumer")
         modules = {}
-        for name in set(names) | {"security_oci.py"}:
+        for name in names:
             path = engine / name
+            path.parent.mkdir(exist_ok=True, parents=True)
             path.write_text("OWNED_SOURCE = 1\n")
-            module = types.ModuleType("getzilla." + name[:-3])
+            identity = name[:-3].replace("/", ".").removesuffix(".__init__")
+            module = types.ModuleType("getzilla." + identity)
             module.__file__ = str(path)
             module.__loader__ = importlib.machinery.SourceFileLoader(module.__name__, str(path))
-            modules["." + name[:-3]] = module
+            modules["." + identity] = module
 
         def owned_import(name, package=None):
             self.assertIn(name, modules, "unexpected default engine import")
@@ -76,7 +82,9 @@ class OCIInputHandoffTests(unittest.TestCase):
 
         before_consumer = hashlib.sha256(marker.read_bytes()).hexdigest()
         with (
-            patch.object(vp.importlib, "import_module", side_effect=owned_import),
+            patch.object(verification_policy_source.importlib, "import_module", side_effect=owned_import),
+            patch.object(security_research_catalog, "catalog_bytes", return_value=catalog),
+            patch.object(security_research_catalog, "image_conditions_bytes", return_value=image_conditions),
             patch.object(getzilla, "STACK_DIR", engine),
         ):
             _GUARD["root"] = str(self.root)

@@ -49,7 +49,8 @@ class GateJoins(unittest.TestCase):
             literals = {node.value for child in guards[0].body for node in ast.walk(child)
                         if isinstance(node, ast.Constant) and isinstance(node.value, str)}
             self.assertIn('ci-images.json', literals, 'empty fixture still inherits real build image inputs')
-            self.assertEqual(literals, {'ci-images.json', 'python-quality-requirements.txt', 'python-test-requirements.txt'})
+            self.assertEqual(literals, {'ci-images.json', 'python-quality-requirements.txt', 'python-test-requirements.txt',
+                                        'license-exception-inputs'})
         self.guarded(check)
 
     def test_existing_bound_helper_preserves_closed_refusal_without_analyzer(self):

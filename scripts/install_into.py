@@ -725,11 +725,11 @@ class _SourceTree:
                     f"managed source changed during enumeration: {relative}"
                 ) from exc
             if stat.S_ISDIR(metadata.st_mode) and not fsx.is_link(metadata):
-                if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} or name.endswith(".egg-info"):
-                    # Packaging/cache artifacts are not installation source.
+                if name in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}:
                     continue
-                if relative == "factory/src/getzilla_factory.egg-info":
-                    # Editable-install metadata is generated, never managed source.
+                if name.endswith(".egg-info") and not prefix.startswith("factory/src/"):
+                    # Editable metadata sits beside the package. Nested package
+                    # assets can legitimately use the same directory suffix.
                     continue
                 if any(f"{relative}/".startswith(skip) and f"{relative}/" != skip for skip in SKIP_PREFIXES):
                     # Runtime state (worktrees, receipts, caches) is never payload: do not walk or count it.
@@ -1944,9 +1944,12 @@ def _materialize_new(
 ) -> dict[str, object]:
     if selection is None:
         selection = PayloadSelection(detect_agents(target))
-    payload = (with_fresh_sync_record(build_payload(source, selection=selection), selection)
-               if prepared_payload is None else prepared_payload)
-    payload = _ownership_payload(payload)
+    if prepared_payload is None:
+        selected = build_payload(source, selection=selection)
+        payload = _ownership_payload(with_fresh_sync_record(selected, selection))
+    else:
+        # Historical restoration supplies the entire digest-verified release inventory.
+        payload = prepared_payload
     plan = _make_plan(
         source,
         target,
