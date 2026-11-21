@@ -108,7 +108,9 @@ main() {
   [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ] || final+=(--agent "$agent")
   local selected=() tool
   IFS=',' read -r -a selected <<< "${GETZILLA_TOOLS:-}"
-  for tool in "${selected[@]}"; do [ -z "$tool" ] || final+=(--tool "$tool"); done
+  for tool in "${selected[@]-}"; do
+    [ -z "$tool" ] || final+=(--tool "$tool")
+  done
   "$python" "$home/scripts/getzilla_install_managed.py" "${final[@]}" </dev/null \
     || fail "Actual managed software/PATH changed or latest metadata is unavailable."
   local doctor_status=0
