@@ -3,6 +3,8 @@ import gzip
 import io
 from email.message import Message
 import json
+import os
+import secrets
 import sys
 import tempfile
 import unittest
@@ -142,6 +144,21 @@ class ReleaseTransportTests(unittest.TestCase):
         with patch.object(updater._RELEASE_OPENER, 'open', return_value=Response(wire[:-2])):
             with self.assertRaisesRegex(ValueError, 'truncated'):
                 updater._release_fetch('https://pypi.org/pypi/owned/json')
+
+    def test_explicit_metadata_token_only_reaches_initial_github_api_request(self):
+        from getzilla.release_transport import _ReleaseRedirect
+
+        value = secrets.token_urlsafe(24)
+        github_url = 'https://api.github.com/repos/opengrep/opengrep/releases/latest'
+        asset_url = 'https://github.com/opengrep/opengrep/releases/download/v1/tool'
+        with patch.dict(os.environ, {'GETZILLA_GITHUB_METADATA_TOKEN': value}):
+            for url in (github_url, asset_url, 'https://pypi.org/pypi/owned/json'):
+                with patch.object(updater._RELEASE_OPENER, 'open', return_value=Response(b'{}', 'identity')) as opened:
+                    updater._release_fetch(url)
+                request = opened.call_args.args[0]
+                self.assertEqual(request.get_header('Authorization'), 'Bearer ' + value if url == github_url else None)
+                redirected = _ReleaseRedirect().redirect_request(request, None, 302, '', {}, asset_url)
+                self.assertIsNone(redirected.get_header('Authorization'))
 
     def test_unknown_origin_refuses_before_http_effect(self):
         with patch.object(updater._RELEASE_OPENER, 'open', side_effect=AssertionError('unexpected I/O')):

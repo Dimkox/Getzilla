@@ -117,6 +117,19 @@ class QueryTests(unittest.TestCase):
                 self.build(transport)
             self.assertLessEqual(len(calls), 2, 'a known repeated cursor must not consume the entire request budget')
 
+    def test_batch_microseconds_bind_full_precision_detail_on_replay(self):
+        def transport(method, url, body, deadline, maximum):
+            if method == 'POST':
+                answer = {'results': [{'vulns': [{'id': ID, 'modified': '2026-11-01T00:00:00.123456Z'}]}, {}]}
+            else:
+                answer = detail()
+            return self.query.QueryResponse(method, url, body, json.dumps(answer).encode(), 200, url)
+
+        payload, _, _ = self.build(transport)
+        replay = self.query.validate_transcript(payload, expected_inventory=self.inventory)
+        self.assertEqual(replay['records'][ID]['modified'], MODIFIED)
+        self.assertEqual(len(replay['hits']), 1)
+
     def test_mismatched_detail_identity_or_modified_or_aliases_refuses(self):
         for changed in ({'id': 'PUBLIC-WRONG'}, {'modified': '2026-11-01T00:00:00.123456788Z'},
                         {'aliases': [False]}):

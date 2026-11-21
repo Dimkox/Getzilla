@@ -98,6 +98,10 @@ def _release_fetch(url: str) -> bytes:
     decoded_limit = 64*1024*1024 if catalog else limit
     headers = {'User-Agent': 'Getzilla-release-resolver/1', 'Accept-Encoding': 'gzip' if catalog else 'identity'}
     request = urllib.request.Request(url, headers=headers)  # nosec B310
+    if origin.netloc == 'api.github.com' and origin.path.startswith('/repos/'):
+        metadata_token = os.environ.get('GETZILLA_GITHUB_METADATA_TOKEN')
+        if metadata_token:
+            request.add_unredirected_header('Authorization', 'Bearer ' + metadata_token)
     started = time.monotonic()
     try:
         response = _RELEASE_OPENER.open(request, timeout=20)  # nosec B310

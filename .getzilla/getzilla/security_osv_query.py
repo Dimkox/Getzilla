@@ -131,6 +131,16 @@ def check_deadline(deadline: float) -> None:
         raise SecurityDataError('query acquisition deadline exceeded')
 
 
+def _matches_modified(summary: str, detail: Any) -> bool:
+    if summary == detail:
+        return True
+    # querybatch projects the full timestamp to microseconds. Keep exact
+    # comparison when both responses include the nanosecond digits.
+    if not isinstance(detail, str) or not re.fullmatch(r'[0-9T:-]{19}\.[0-9]{9}Z', detail):
+        return False
+    return summary == detail[:-4] + 'Z'
+
+
 def _protocol(plan: list[dict[str, Any]], exchange: Callable) -> tuple[list[dict], dict[str, dict]]:
     hits, modified, pages = [], {}, 0
     for start in range(0, len(plan), QUERY_BATCH):
@@ -183,7 +193,7 @@ def _protocol(plan: list[dict[str, Any]], exchange: Callable) -> tuple[list[dict
     for identifier in sorted(modified):
         record = exchange('GET', DETAIL_URL + identifier, b'')
         if (type(record) is not dict or record.get('id') != identifier
-                or record.get('modified') != modified[identifier] or record.get('withdrawn')):
+                or not _matches_modified(modified[identifier], record.get('modified')) or record.get('withdrawn')):
             raise SecurityDataError('query detail identity changed or is unavailable')
         _timestamp(record['modified'])
         osv_aliases(record)
