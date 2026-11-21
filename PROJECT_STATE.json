@@ -12,7 +12,7 @@
     "version": "2.3.1",
     "installers": {
       "scripts/install.sh": {
-        "sha256": "e6f3e682fd4f821478ef66562320c4c20d0f2cb99386a46e6641bd02474f787a"
+        "sha256": "2a8a885f3b677053579d785c15df27d00106e0be6ecb4e312c0a8e2b4ac0e54d"
       },
       "scripts/install.ps1": {
         "sha256": "2d61a5efa2267e07be4f61016acc99d29d3ffaff0588d4d4b2ea171dd14ff5cf"

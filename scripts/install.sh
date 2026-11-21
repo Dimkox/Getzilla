@@ -315,7 +315,10 @@ install_agent() {
   [ "${GETZILLA_SKIP_AGENT:-0}" = "1" ] || arguments+=(--agent "$agent")
   local selected=()
   IFS=',' read -r -a selected <<< "${GETZILLA_TOOLS:-}"
-  for tool in "${selected[@]}"; do [ -z "$tool" ] || arguments+=(--tool "$tool"); done
+  # Bash 3.2 treats an empty array as unset under nounset.
+  for tool in "${selected[@]-}"; do
+    [ -z "$tool" ] || arguments+=(--tool "$tool")
+  done
   "$python" "$home/scripts/getzilla_install_managed.py" "${arguments[@]}" </dev/null \
     || fail "Current selected managed software is incomplete; see exact target/path/error above."
   export PATH="${GETZILLA_STATE_HOME:-$HOME/.getzilla}/bin:$PATH"
