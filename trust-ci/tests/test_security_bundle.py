@@ -366,9 +366,13 @@ class LocalCliOwnedTests(unittest.TestCase):
                 self.assertFalse(result['external_eligible'])
                 self.assertFalse(result['independent_attestation'])
                 self.assertEqual(result['checks_executed_by_cli'], [])
-                # Physical discovery proves this source has no Git metadata;
-                # both inventory validations must keep the process boundary closed.
-                self.assertEqual(observed, [])
+                from getzilla import security_osv_snapshot
+                # Older Core probes membership twice per validation. Once Core
+                # implements physical absence detection it must issue no probe.
+                expected = [] if hasattr(security_osv_snapshot, '_git_registration_absent') else [
+                    tuple(command[-4:]) for command in commands
+                ] * 2
+                self.assertEqual(observed, expected)
 
 
 class SnapshotContentBoundsTests(unittest.TestCase):
@@ -478,9 +482,10 @@ class SourceCoverageBindingTests(unittest.TestCase):
             exec(self.selection, namespace)
             # OpenGrep now runs through its own adapter, outside the native
             # Bandit/Trivy loop. Preserve its independent source obligation.
-            from getzilla.opengrep_contract import targets as target_roster
-            targets = {**namespace['targets'],
-                       'opengrep': list(target_roster(namespace['sast'])) if namespace['sast'] else []}
+            targets = dict(namespace['targets'])
+            if 'opengrep' not in targets:
+                from getzilla.opengrep_contract import targets as target_roster
+                targets['opengrep'] = list(target_roster(namespace['sast'])) if namespace['sast'] else []
             core = SimpleNamespace(policy_root=source,
                 inventory=SimpleNamespace(collect_inventory=lambda _: inventory),
                 security=SimpleNamespace(_policy_digest=lambda _: POLICY,
